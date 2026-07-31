@@ -209,54 +209,27 @@ interface SvcConnection {
     notifyRaw(method: string, params?: unknown): Promise<void>;
 
     /**
-     * Discover what's on the bus.
+     * Discover and inspect the interfaces on the bus.
      *
-     *   - With no args: returns up to 10 `{ serviceId, interfaceId }`
-     *     entries from across the whole bus.
-     *   - Filter by `interfaceId` and/or `serviceId` to narrow.
-     *   - `grep`: case-insensitive substring search over each listing's
-     *     metadata (serviceId, interfaceId, service description). Cheap — no
-     *     schema fetch. `grepAllSchemas`: same, but ALSO searches every
-     *     interface's JSON schema (method/param names, descriptions); this
-     *     fetches all candidate schemas, so it's slower — prefer `grep`.
-     *   - Reflection plumbing (`linkrpc.*`) is hidden by default; pass
-     *     `showLinkrpcInternalInterfaces: true` to include it (or filter for an
-     *     exact `linkrpc.*` interfaceId, which always shows it).
-     *   - Set `includeSchema: true` to also fetch the JSON schema for each
-     *     returned interface (one extra RPC per entry).
-     *   - Set `includeTypeScript: true` to emit a self-contained TypeScript
-     *     module re-creating the interface via `defineInterface` (zod +
-     *     linkrpc). Implies fetching the schema internally; omit
-     *     `includeSchema` unless you also need the raw JSON, since returning
-     *     both can be large.
-     *
-     *     To retrieve one module without returning the surrounding result:
-     *
-     *         const result = await con.explore({
-     *             serviceId: "vscode",
-     *             interfaceId: "vscode.execution",
-     *             includeTypeScript: true,
-     *             maxResults: 1,
-     *         });
-     *         const entry = result.entries[0];
-     *         if (!entry) throw new Error("Interface not found");
-     *         if (entry.typeScriptError) throw new Error(entry.typeScriptError);
-     *         return entry.typeScript;
-     *   - `maxResults` is the page size (default 10; pass `0` for "no limit").
-     *     Page through larger hubs with `offset`: when more matches remain, the
-     *     result carries `nextOffset` — pass it as the next call's `offset`.
-     *   - Set `requestPermission: true` to enumerate the ENTIRE hub, including
-     *     gated directories (e.g. the `hub` directory). This requests reflection
-     *     access (`linkrpc.*`) across all services in a SINGLE consent prompt and
-     *     then walks every directory — prefer this over requesting access to one
-     *     gated directory at a time. Default `false`, in which case gated
-     *     directories are reported under `ExploreResult.inaccessible` instead.
-     *
-     * `totalMatched` is the number of matches across all pages; `entries` holds
-     * this page (starting at `offset`), and `nextOffset` is present when more
-     * remain.
+     *   - `{ kind: "browse" }` lists stable virtual-document identities. Use
+     *     exact `serviceId` / `interfaceId` filters to narrow the directory.
+     *   - `{ kind: "grep", pattern }` searches the generated, self-contained
+     *     `defineInterface` source for every candidate. `pattern` is a
+     *     case-insensitive regular expression by default; set `syntax:
+     *     "literal"` for a case-insensitive substring. Results contain the
+     *     matching line, nearby source context, and enclosing member name.
+     *   - `{ kind: "inspect", serviceId, interfaceId }` returns one complete
+     *     generated source document. Set `format: "schema"` for its exact raw
+     *     wire schema instead.
+     *   - Reflection plumbing (`linkrpc.*`) is hidden unless `includeInternal`
+     *     is true or an exact internal `interfaceId` is requested.
+     *   - `requestPermission: true` requests one broad reflection grant and
+     *     walks gated directories. Without it, inaccessible branches are
+     *     reported explicitly instead of being silently omitted.
+     *   - Browse and grep use cursor pagination. Pass a returned `nextCursor`
+     *     back with the same query to continue.
      */
-    explore(args?: ExploreArgs): Promise<ExploreResult>;
+    explore(args: ExploreArgs): Promise<ExploreResult>;
 
     /**
      * List the capabilities this connection currently holds — what
@@ -406,67 +379,102 @@ interface GrantsSummary {
     readonly grants: ReadonlyArray<GrantSummary>;
 }
 
-interface ExploreArgs {
-    readonly interfaceId?: string;
+interface ExploreCommonArgs {
+    /** Exact directory-level filters, applied before browsing or searching. */
     readonly serviceId?: string;
-    readonly includeSchema?: boolean;
-    /** Emit a TypeScript module re-creating the interface. Implies fetching the schema. */
-    readonly includeTypeScript?: boolean;
-    /** Page size. Defaults to 10. `0` means "no limit" (still bounded by bus walk depth). */
-    readonly maxResults?: number;
-    /**
-     * 0-based index to start this page at. Combine with `maxResults` to page
-     * through a large hub: pass the previous result's `nextOffset` here.
-     * Defaults to 0.
-     */
-    readonly offset?: number;
-    /**
-     * Include the reflection plumbing interfaces (`linkrpc.*` — e.g.
-     * `linkrpc.directory`, `linkrpc.schemas`) in the results. Hidden by default
-     * because they exist on every service. Filtering by an exact `linkrpc.*`
-     * `interfaceId` shows it regardless.
-     */
-    readonly showLinkrpcInternalInterfaces?: boolean;
-    /**
-     * Case-insensitive substring filter over each listing's metadata
-     * (serviceId, interfaceId, service description). Cheap — no schema fetch.
-     */
-    readonly grep?: string;
-    /**
-     * Like `grep`, but also searches each interface's full JSON schema
-     * (method/param names, descriptions). Fetches every candidate schema, so
-     * it's slower than `grep`.
-     */
-    readonly grepAllSchemas?: string;
-    /**
-     * When `true`, gated directories encountered during the walk (e.g. the
-     * `hub` directory) are unlocked in-line: `explore` requests a capability
-     * for the reflection interfaces (`linkrpc.*`) across all services — a single
-     * consent — then enumerates them. Default `false`, in which case gated
-     * directories are reported under `ExploreResult.inaccessible` instead.
-     */
+    readonly interfaceId?: string;
+    /** Include reflection plumbing such as `linkrpc.directory` and `linkrpc.schemas`. */
+    readonly includeInternal?: boolean;
+    /** Request one broad reflection grant when a gated directory is encountered. */
     readonly requestPermission?: boolean;
 }
 
-interface ExploreResult {
-    /** Number of entries that matched the filters, across all pages. */
-    readonly totalMatched: number;
-    /** This page of matches (up to `maxResults`, starting at `offset`). */
-    readonly entries: ReadonlyArray<ExploreEntry>;
-    /** 0-based index this page starts at (echoes the requested `offset`). */
-    readonly offset: number;
-    /**
-     * Index to pass as `offset` to fetch the next page. Present only when more
-     * matches remain beyond this page.
-     */
-    readonly nextOffset?: number;
-    /**
-     * Directories that exist but could not be enumerated without an additional
-     * capability (e.g. a gated `hub` directory). Their services are absent from
-     * `entries`. Present only when at least one directory was gated — read the
-     * `hint` for the exact `con.requestAccess(...)` to unlock it, then explore
-     * again.
-     */
+interface ExploreBrowseArgs extends ExploreCommonArgs {
+    readonly kind: "browse";
+    /** Number of interfaces to return. Defaults to 20; maximum 100. */
+    readonly limit?: number;
+    /** Continuation cursor returned by a previous browse call. */
+    readonly cursor?: string;
+}
+
+interface ExploreGrepArgs extends ExploreCommonArgs {
+    readonly kind: "grep";
+    /** Pattern searched against generated `defineInterface` source, one line at a time. */
+    readonly pattern: string;
+    /** Defaults to `regex`. Both modes are case-insensitive. */
+    readonly syntax?: "regex" | "literal";
+    /** Number of matching virtual documents to return. Defaults to 20; maximum 100. */
+    readonly limit?: number;
+    /** Continuation cursor returned by a previous grep call. */
+    readonly cursor?: string;
+    /** Source lines included before and after each match. Defaults to 1; maximum 5. */
+    readonly contextLines?: number;
+}
+
+interface ExploreInspectArgs extends ExploreCommonArgs {
+    readonly kind: "inspect";
+    readonly serviceId: string;
+    readonly interfaceId: string;
+    /** Generated source by default; use `schema` for the raw wire schema. */
+    readonly format?: "source" | "schema";
+}
+
+type ExploreArgs = ExploreBrowseArgs | ExploreGrepArgs | ExploreInspectArgs;
+
+type ExploreResult = ExploreBrowseResult | ExploreGrepResult | ExploreInspectResult;
+
+interface ExploreListing {
+    readonly serviceId: string;
+    readonly serviceDescription?: string;
+    readonly interfaceId: string;
+    readonly interfaceHash: string;
+    readonly documentId: string;
+}
+
+interface ExploreBrowseResult {
+    readonly kind: "browse";
+    readonly total: number;
+    readonly entries: ReadonlyArray<ExploreListing>;
+    readonly nextCursor?: string;
+    readonly inaccessible?: ReadonlyArray<ExploreInaccessible>;
+}
+
+interface ExploreGrepMatch {
+    /** Matching source plus the requested surrounding context, joined with newlines. */
+    readonly searchResult: string;
+    /** Inclusive, 1-based line range of `searchResult` in the virtual document. */
+    readonly lineRange: readonly [start: number, end: number];
+    /** LinkRPC member containing every matched line in this chunk, when unambiguous. */
+    readonly member?: string;
+}
+
+interface ExploreGrepEntry extends ExploreListing {
+    readonly matches: ReadonlyArray<ExploreGrepMatch>;
+    readonly matchesTruncated?: boolean;
+}
+
+interface ExploreDocumentError {
+    readonly serviceId: string;
+    readonly interfaceId: string;
+    readonly error: string;
+}
+
+interface ExploreGrepResult {
+    readonly kind: "grep";
+    readonly pattern: string;
+    readonly syntax: "regex" | "literal";
+    readonly total: number;
+    readonly entries: ReadonlyArray<ExploreGrepEntry>;
+    readonly nextCursor?: string;
+    readonly documentErrors?: ReadonlyArray<ExploreDocumentError>;
+    readonly inaccessible?: ReadonlyArray<ExploreInaccessible>;
+}
+
+interface ExploreInspectResult extends ExploreListing {
+    readonly kind: "inspect";
+    readonly format: "source" | "schema";
+    readonly source?: string;
+    readonly schema?: unknown;
     readonly inaccessible?: ReadonlyArray<ExploreInaccessible>;
 }
 
@@ -477,19 +485,6 @@ interface ExploreInaccessible {
     readonly reason: string;
     /** Actionable next step to gain visibility into this directory. */
     readonly hint: string;
-}
-
-interface ExploreEntry {
-    readonly serviceId: string;
-    readonly interfaceId: string;
-    /** Present when `includeSchema: true` and the lookup succeeded. */
-    readonly schema?: unknown;
-    /** Present when `includeSchema: true` and the lookup failed. */
-    readonly schemaError?: string;
-    /** Present when `includeTypeScript: true` and codegen succeeded. */
-    readonly typeScript?: string;
-    /** Present when `includeTypeScript: true` and codegen (or the schema fetch) failed. */
-    readonly typeScriptError?: string;
 }
 
 // ---- console -------------------------------------------------------------

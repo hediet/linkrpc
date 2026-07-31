@@ -27,12 +27,17 @@ function _loadGuestRuntime(): string {
     const filePath = fileURLToPath(new URL("./guest/guestMain.ts?esm", import.meta.url));
     const code = readFileSync(filePath, "utf8");
     if (!filePath.endsWith(".ts")) {
-        return code;
+        return _asGuestScript(code);
     }
     const ts = createRequire(import.meta.url)("typescript") as typeof import("typescript");
-    return ts.transpileModule(code, {
+    const transpiled = ts.transpileModule(code, {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
     }).outputText;
+    return _asGuestScript(transpiled);
+}
+
+function _asGuestScript(code: string): string {
+    return code.replace(/^\s*export\s*\{\s*\};?\s*$/m, "");
 }
 
 const GUEST_RUNTIME_JS = _loadGuestRuntime();

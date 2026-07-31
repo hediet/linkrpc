@@ -1,569 +1,509 @@
 import { describe, expect, it } from "vitest";
 import {
-    createTestDisposableStore,
-    llmResult,
-    makeGatedHarness,
-    makeGatedHub,
+  createTestDisposableStore,
+  llmResult,
+  makeGatedHarness,
+  makeGatedHub,
 } from "./harness";
 
-/**
- * `con.explore(...)` exercised end-to-end against the gated hub (which serves a
- * real reflection directory). Each case asserts the full tool result the LLM
- * receives via an inline snapshot. The gated harness signs as the deterministic
- * seed-0 principal, so `endpoint` is stable across runs.
- */
 describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
-    it("explore() sees the root interfaces and reports the hub directory as gated", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
+  it("browses visible interfaces and reports gated directories", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
 
-        // The root reflection surface (hubGrantedServiceId, hubAccess,
-        // linkrpc.directory, linkrpc.schemas) is visible without any capability;
-        // the gated `hello::greeter` service is absent, and the `hub` directory
-        // is reported under `inaccessible` with a `con.requestAccess(...)` hint.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore()` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
-          {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "hubGrantedServiceId",
-                        "serviceId": "",
-                      },
-                      {
-                        "interfaceId": "hubAccess",
-                        "serviceId": "",
-                      },
-                    ],
-                    "inaccessible": [
-                      {
-                        "hint": "The "hub" directory is gated. To enumerate the whole hub in a SINGLE consent prompt, re-run explore with requestPermission, e.g. con.explore({ requestPermission: true }) — this unlocks every gated directory at once. (To unlock just this one directory instead, request its listing interface: con.requestAccess({ permissions: [{ target: { serviceId: { exact: "hub" }, interfaceId: { exact: "linkrpc.directory" }, members: [{ exact: "list" }] }, canInvoke: true }], duration: "longLived" }).)",
-                        "reason": "capability required but none provided",
-                        "serviceId": "hub",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 2,
-                  },
-                  "status": "completed",
-                },
-                "type": "text",
-              },
-            ],
-          }
-        `);
+    const response = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: { code: `async ({ con }) => con.explore({ kind: "browse" })` },
     });
 
-    it("explore({ requestPermission: true }) unlocks the gated hub directory and reveals the service", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // With requestPermission the walk requests a reflection cap (linkrpc.* on
-        // all services) through hubAccess, then enumerates the previously-gated
-        // `hub` directory — so `hello::greeter` now appears and nothing is left
-        // under `inaccessible`.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, maxResults: 0 })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(response)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "hubGrantedServiceId",
-                        "serviceId": "",
-                      },
-                      {
-                        "interfaceId": "hubAccess",
-                        "serviceId": "",
-                      },
-                      {
-                        "interfaceId": "hubServiceIdRegistry",
-                        "serviceId": "hub",
-                      },
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 4,
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "entries": [
+                  {
+                    "documentId": "linkrpc://$root/hubAccess@5560868beca678de.ts",
+                    "interfaceHash": "5560868beca678de",
+                    "interfaceId": "hubAccess",
+                    "serviceId": "",
                   },
-                  "status": "completed",
-                },
-                "type": "text",
+                  {
+                    "documentId": "linkrpc://$root/hubGrantedServiceId@0729860c2fd54fc9.ts",
+                    "interfaceHash": "0729860c2fd54fc9",
+                    "interfaceId": "hubGrantedServiceId",
+                    "serviceId": "",
+                  },
+                ],
+                "inaccessible": [
+                  {
+                    "hint": "Repeat this explore call with \`requestPermission: true\` to search all gated directories.",
+                    "reason": "capability required but none provided",
+                    "serviceId": "hub",
+                  },
+                ],
+                "kind": "browse",
+                "total": 2,
               },
-            ],
-          }
-        `);
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("unlocks gated directories and pages a stable sorted listing", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const firstResponse = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({ kind: "browse", requestPermission: true, limit: 2 })`,
+      },
+    });
+    expect(llmResult(firstResponse)).toMatchInlineSnapshot(`
+      {
+        "content": [
+          {
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "entries": [
+                  {
+                    "documentId": "linkrpc://$root/hubAccess@5560868beca678de.ts",
+                    "interfaceHash": "5560868beca678de",
+                    "interfaceId": "hubAccess",
+                    "serviceId": "",
+                  },
+                  {
+                    "documentId": "linkrpc://$root/hubGrantedServiceId@0729860c2fd54fc9.ts",
+                    "interfaceHash": "0729860c2fd54fc9",
+                    "interfaceId": "hubGrantedServiceId",
+                    "serviceId": "",
+                  },
+                ],
+                "kind": "browse",
+                "nextCursor": "2",
+                "total": 4,
+              },
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+
+    const secondResponse = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({ kind: "browse", requestPermission: true, limit: 2, cursor: "2" })`,
+      },
+    });
+    expect(llmResult(secondResponse)).toMatchInlineSnapshot(`
+      {
+        "content": [
+          {
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "entries": [
+                  {
+                    "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
+                    "interfaceHash": "6a089c5e05cb0b9c",
+                    "interfaceId": "greeter",
+                    "serviceId": "hello",
+                  },
+                  {
+                    "documentId": "linkrpc://hub/hubServiceIdRegistry@3089bc85428190dd.ts",
+                    "interfaceHash": "3089bc85428190dd",
+                    "interfaceId": "hubServiceIdRegistry",
+                    "serviceId": "hub",
+                  },
+                ],
+                "kind": "browse",
+                "total": 4,
+              },
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("supports exact service/interface filters and explicit internal interfaces", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const response = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({
+                    kind: "browse",
+                    requestPermission: true,
+                    serviceId: "hello",
+                    includeInternal: true,
+                })`,
+      },
     });
 
-    it("filters by serviceId, returning only that service's interfaces", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `serviceId` narrows the (post-unlock) listing to just `hello`, so only
-        // the greeter interface survives the filter.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, serviceId: "hello" })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(response)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 1,
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "entries": [
+                  {
+                    "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
+                    "interfaceHash": "6a089c5e05cb0b9c",
+                    "interfaceId": "greeter",
+                    "serviceId": "hello",
                   },
-                  "status": "completed",
-                },
-                "type": "text",
+                  {
+                    "documentId": "linkrpc://hello/linkrpc.defaults@f0bcf98c6733cef9.ts",
+                    "interfaceHash": "f0bcf98c6733cef9",
+                    "interfaceId": "linkrpc.defaults",
+                    "serviceId": "hello",
+                  },
+                  {
+                    "documentId": "linkrpc://hello/linkrpc.directory@29c73b0ebe5d0361.ts",
+                    "interfaceHash": "29c73b0ebe5d0361",
+                    "interfaceId": "linkrpc.directory",
+                    "serviceId": "hello",
+                  },
+                  {
+                    "documentId": "linkrpc://hello/linkrpc.schemas@e12e0c013a3dbd24.ts",
+                    "interfaceHash": "e12e0c013a3dbd24",
+                    "interfaceId": "linkrpc.schemas",
+                    "serviceId": "hello",
+                  },
+                ],
+                "kind": "browse",
+                "total": 4,
               },
-            ],
-          }
-        `);
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("greps literal text in generated defineInterface source", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const response = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({
+                    kind: "grep",
+                    requestPermission: true,
+                    pattern: "greeting",
+                    syntax: "literal",
+                })`,
+      },
     });
 
-    it("filters by an explicit linkrpc.* interfaceId despite the default hiding", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `linkrpc.*` is hidden by default, but filtering for an exact `linkrpc.*`
-        // interfaceId opts back in — so every service exposing `linkrpc.directory`
-        // (the connection root, the `hub` directory, and `hello`) is listed.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, interfaceId: "linkrpc.directory" })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(response)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "entries": [
+                  {
+                    "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
+                    "interfaceHash": "6a089c5e05cb0b9c",
+                    "interfaceId": "greeter",
+                    "matches": [
                       {
-                        "interfaceId": "linkrpc.directory",
-                        "serviceId": "",
-                      },
-                      {
-                        "interfaceId": "linkrpc.directory",
-                        "serviceId": "hub",
-                      },
-                      {
-                        "interfaceId": "linkrpc.directory",
-                        "serviceId": "hello",
+                        "lineRange": [
+                          19,
+                          21,
+                        ],
+                        "member": "hello",
+                        "searchResult": "            z.object({
+                      greeting: z.string(),
+                  }),",
                       },
                     ],
-                    "offset": 0,
-                    "totalMatched": 3,
+                    "serviceId": "hello",
                   },
-                  "status": "completed",
-                },
-                "type": "text",
+                ],
+                "kind": "grep",
+                "pattern": "greeting",
+                "syntax": "literal",
+                "total": 1,
               },
-            ],
-          }
-        `);
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("greps regex alternatives across document metadata and schema source", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const response = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({
+                    kind: "grep",
+                    requestPermission: true,
+                    serviceId: "hello",
+                    pattern: "Greets|greeting",
+                    contextLines: 0,
+                })`,
+      },
     });
 
-    it("returns an empty listing when the filter matches nothing", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // A serviceId no participant serves yields zero matches (offset 0, no
-        // nextOffset), even though the walk itself succeeded.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, serviceId: "does-not-exist" })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(response)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [],
-                    "offset": 0,
-                    "totalMatched": 0,
-                  },
-                  "status": "completed",
-                },
-                "type": "text",
-              },
-            ],
-          }
-        `);
-    });
-
-    it("pages through results with offset and nextOffset", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `maxResults` is the page size and `offset` is where the page starts.
-        // The first page reports `nextOffset` because more matches remain; the
-        // second page (starting at that offset) returns the rest and omits
-        // `nextOffset`. `totalMatched` is stable across pages.
-        const page1 = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, maxResults: 2 })` } });
-        expect(llmResult(page1)).toMatchInlineSnapshot(`
-          {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "entries": [
+                  {
+                    "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
+                    "interfaceHash": "6a089c5e05cb0b9c",
+                    "interfaceId": "greeter",
+                    "matches": [
                       {
-                        "interfaceId": "hubGrantedServiceId",
-                        "serviceId": "",
+                        "lineRange": [
+                          12,
+                          12,
+                        ],
+                        "searchResult": "        description: "Greets by name.",",
                       },
                       {
-                        "interfaceId": "hubAccess",
-                        "serviceId": "",
+                        "lineRange": [
+                          20,
+                          20,
+                        ],
+                        "member": "hello",
+                        "searchResult": "                greeting: z.string(),",
                       },
                     ],
-                    "nextOffset": 2,
-                    "offset": 0,
-                    "totalMatched": 4,
+                    "serviceId": "hello",
                   },
-                  "status": "completed",
-                },
-                "type": "text",
+                ],
+                "kind": "grep",
+                "pattern": "Greets|greeting",
+                "syntax": "regex",
+                "total": 1,
               },
-            ],
-          }
-        `);
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
 
-        const page2 = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, maxResults: 2, offset: 2 })` } });
-        expect(llmResult(page2)).toMatchInlineSnapshot(`
-          {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "hubServiceIdRegistry",
-                        "serviceId": "hub",
-                      },
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                      },
-                    ],
-                    "offset": 2,
-                    "totalMatched": 4,
-                  },
-                  "status": "completed",
-                },
-                "type": "text",
-              },
-            ],
-          }
-        `);
+  it("inspects the complete generated virtual document", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const response = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({
+                    kind: "inspect",
+                    requestPermission: true,
+                    serviceId: "hello",
+                    interfaceId: "greeter",
+                })`,
+      },
     });
 
-    it("includes linkrpc.* internal interfaces when showLinkrpcInternalInterfaces is set", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // By default `linkrpc.*` reflection plumbing is hidden. With
-        // `showLinkrpcInternalInterfaces: true` the hello service's reflection
-        // interfaces (linkrpc.directory / linkrpc.defaults / linkrpc.schemas) appear
-        // alongside its `greeter` interface.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, serviceId: "hello", showLinkrpcInternalInterfaces: true })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(response)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "linkrpc.directory",
-                        "serviceId": "hello",
-                      },
-                      {
-                        "interfaceId": "linkrpc.defaults",
-                        "serviceId": "hello",
-                      },
-                      {
-                        "interfaceId": "linkrpc.schemas",
-                        "serviceId": "hello",
-                      },
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 4,
-                  },
-                  "status": "completed",
-                },
-                "type": "text",
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
+                "format": "source",
+                "interfaceHash": "6a089c5e05cb0b9c",
+                "interfaceId": "greeter",
+                "kind": "inspect",
+                "serviceId": "hello",
+                "source": "// virtualDocument: "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts"
+      // serviceId: "hello"
+      // interfaceId: "greeter"
+      // interfaceHash: "6a089c5e05cb0b9c"
+      // discoveredFrom: "hello"
+      import { defineInterface, notificationType, requestType } from "@hediet/linkrpc";
+      import { z } from "zod";
+
+      export const greeterInterface = defineInterface(
+          {
+              id: "greeter",
+              description: "Greets by name.",
+          },
+          {
+              hello: requestType(
+                  z.object({
+                      name: z.string(),
+                  }),
+                  z.object({
+                      greeting: z.string(),
+                  }),
+              ),
+          },
+      );
+      ",
               },
-            ],
-          }
-        `);
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("inspects the exact raw wire schema", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const response = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({
+                    kind: "inspect",
+                    requestPermission: true,
+                    serviceId: "hello",
+                    interfaceId: "greeter",
+                    format: "schema",
+                })`,
+      },
     });
 
-    it("includes the greeter interface's JSON schema when includeSchema is set", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `includeSchema` fetches the greeter interface's JSON schema through the
-        // reflection surface and attaches it to the entry. Filtered to `greeter`
-        // so the snapshot stays focused on the custom interface.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, serviceId: "hello", interfaceId: "greeter", includeSchema: true })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(response)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "greeter",
-                        "schema": {
-                          "description": "Greets by name.",
-                          "hash": "6a089c5e05cb0b9c",
-                          "id": "greeter",
-                          "methods": {
-                            "hello": {
-                              "params": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "name": {
-                                    "type": "string",
-                                  },
-                                },
-                                "required": [
-                                  "name",
-                                ],
-                                "type": "object",
-                              },
-                              "result": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "greeting": {
-                                    "type": "string",
-                                  },
-                                },
-                                "required": [
-                                  "greeting",
-                                ],
-                                "type": "object",
-                              },
-                            },
+            "json": {
+              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "logs": [],
+              "result": {
+                "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
+                "format": "schema",
+                "interfaceHash": "6a089c5e05cb0b9c",
+                "interfaceId": "greeter",
+                "kind": "inspect",
+                "schema": {
+                  "description": "Greets by name.",
+                  "hash": "6a089c5e05cb0b9c",
+                  "id": "greeter",
+                  "methods": {
+                    "hello": {
+                      "params": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string",
                           },
                         },
-                        "serviceId": "hello",
+                        "required": [
+                          "name",
+                        ],
+                        "type": "object",
                       },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 1,
+                      "result": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "greeting": {
+                            "type": "string",
+                          },
+                        },
+                        "required": [
+                          "greeting",
+                        ],
+                        "type": "object",
+                      },
+                    },
                   },
-                  "status": "completed",
                 },
-                "type": "text",
+                "serviceId": "hello",
               },
-            ],
-          }
-        `);
+              "status": "completed",
+            },
+            "type": "text",
+          },
+        ],
+      }
+    `);
+  });
+
+  it("rejects missing kinds and invalid regular expressions", async ({ onTestFinished }) => {
+    const d = createTestDisposableStore(onTestFinished);
+    const client = await makeGatedHarness(await makeGatedHub(d), d);
+
+    const missingKind = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: { code: `async ({ con }) => con.explore({})` },
     });
-
-    it("includes a generated TypeScript module when includeTypeScript is set", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `includeTypeScript` re-generates a self-contained `defineInterface`
-        // module for the greeter interface from its fetched schema.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, serviceId: "hello", interfaceId: "greeter", includeTypeScript: true })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(missingKind)).toMatchInlineSnapshot(`
           {
             "content": [
               {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                        "typeScript": "import { defineInterface, notificationType, requestType } from "@hediet/linkrpc";
-          import { z } from "zod";
-
-          /**
-           * Greets by name.
-           */
-          export const greeterInterface = defineInterface(
-              {
-                  id: "greeter",
-                  description: "Greets by name.",
-              },
-              {
-                  hello: requestType(
-                      z.object({
-                          name: z.string(),
-                      }),
-                      z.object({
-                          greeting: z.string(),
-                      }),
-                  ),
-              },
-          );
+                "text": "runLinkRpcScript failed: explore requires \`kind: "browse" | "grep" | "inspect"\`.
+              at <anonymous> (eval.js:6)
           ",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 1,
-                  },
-                  "status": "completed",
-                },
                 "type": "text",
               },
             ],
+            "isError": true,
           }
         `);
+
+    const invalidRegex = await client.callTool({
+      name: "runLinkRpcScript",
+      arguments: {
+        code: `async ({ con }) => con.explore({ kind: "grep", pattern: "[" })`,
+      },
     });
-
-    it("grep filters listings by a metadata substring", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `grep` is a cheap case-insensitive substring match over serviceId,
-        // interfaceId, and service description — here "greet" matches only the
-        // `greeter` interface, no schema fetch involved.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, grep: "greet" })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
+    expect(llmResult(invalidRegex)).toMatchInlineSnapshot(`
           {
             "content": [
               {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 1,
-                  },
-                  "status": "completed",
-                },
+                "text": "runLinkRpcScript failed: Invalid grep regular expression: Invalid regular expression: /[/iu: Unterminated character class
+              at <anonymous> (eval.js:6)
+          ",
                 "type": "text",
               },
             ],
+            "isError": true,
           }
         `);
-    });
-
-    it("grep does not match terms that only appear inside the schema", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // "greeting" is the greeter's result field — it lives in the JSON schema,
-        // not in any listing's metadata, so the cheap `grep` finds nothing.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, grep: "greeting" })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
-          {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [],
-                    "offset": 0,
-                    "totalMatched": 0,
-                  },
-                  "status": "completed",
-                },
-                "type": "text",
-              },
-            ],
-          }
-        `);
-    });
-
-    it("grepAllSchemas matches terms found inside an interface's JSON schema", async ({ onTestFinished }) => {
-        const d = createTestDisposableStore(onTestFinished);
-        const gated = await makeGatedHub(d);
-        const client = await makeGatedHarness(gated, d);
-
-        // `grepAllSchemas` fetches every candidate's schema and searches it too,
-        // so the schema-only term "greeting" now surfaces the `greeter` interface.
-        const res = await client.callTool({ name: "runLinkRpcScript", arguments: { code: `async ({ con }) => con.explore({ requestPermission: true, grepAllSchemas: "greeting" })` } });
-
-        expect(llmResult(res)).toMatchInlineSnapshot(`
-          {
-            "content": [
-              {
-                "json": {
-                  "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
-                  "logs": [],
-                  "result": {
-                    "entries": [
-                      {
-                        "interfaceId": "greeter",
-                        "serviceId": "hello",
-                      },
-                    ],
-                    "offset": 0,
-                    "totalMatched": 1,
-                  },
-                  "status": "completed",
-                },
-                "type": "text",
-              },
-            ],
-          }
-        `);
-    });
+  });
 });

@@ -1,288 +1,433 @@
-import type { IRequestSender, SigningCallCtx, LinkRpcInterfaceSchema } from '@hediet/linkrpc';
+import type { LinkRpcInterfaceSchema, IRequestSender, SigningCallCtx } from '@hediet/linkrpc';
 import { generateTsInterface } from '@hediet/linkrpc';
 import { type DiscoveredListing, fetchSchema, walkHubDetailed } from '@hediet/linkrpc-client';
 
-export interface ExploreArgs {
-    readonly interfaceId?: string;
+interface ExploreCommonArgs {
+    /** Exact directory-level filters, applied before browsing or searching. */
     readonly serviceId?: string;
-    readonly includeSchema?: boolean;
-    /**
-     * Also emit a self-contained TypeScript module that re-creates the
-     * interface via `defineInterface` (zod + linkrpc). Implies fetching
-     * the schema, but you don't need to also set `includeSchema` unless
-     * you want the raw JSON alongside. For LLM-facing calls, prefer returning
-     * `result.entries[0].typeScript` directly so the surrounding response does
-     * not consume the output budget.
-     */
-    readonly includeTypeScript?: boolean;
-    /** Defaults to 10. Pass `0` for "no limit" (still capped by walk depth). */
-    readonly maxResults?: number;
-    /**
-     * 0-based index into the filtered result set to start this page at. Combine
-     * with `maxResults` (the page size) to page through a large hub: pass the
-     * `nextOffset` from the previous result to fetch the following page.
-     * Defaults to 0.
-     */
-    readonly offset?: number;
-    /**
-     * Include the reflection plumbing interfaces (`linkrpc.*` — e.g.
-     * `linkrpc.directory`, `linkrpc.schemas`, `linkrpc.defaults`) in the results.
-     * They exist on every service and rarely matter to a caller, so they are
-     * hidden by default. Filtering by an exact `linkrpc.*` {@link interfaceId}
-     * still shows it, regardless of this flag.
-     */
-    readonly showLinkrpcInternalInterfaces?: boolean;
-    /**
-     * Case-insensitive substring filter over each listing's metadata —
-     * `serviceId`, `interfaceId`, and the directory-provided `serviceDescription`.
-     * Applied after the `serviceId` / `interfaceId` filters and before paging.
-     * Cheap: uses only what the directory walk already returned (no schema
-     * fetch). For a deeper search into method/param names use
-     * {@link grepAllSchemas}.
-     */
-    readonly grep?: string;
-    /**
-     * Like {@link grep}, but also searches each interface's full JSON schema
-     * (method names, param/result field names, descriptions). This requires
-     * fetching the schema for every candidate interface, so it is markedly more
-     * expensive than {@link grep} — prefer `grep` unless you specifically need
-     * to match on schema internals. The fetched schemas are reused for
-     * `includeSchema` / `includeTypeScript` output.
-     */
-    readonly grepAllSchemas?: string;
-    /**
-     * When `true`, gated sub-directories the walk hits (e.g. the `hub`
-     * directory) are unlocked in-line: `explore` requests the minimal
-     * `linkrpc.directory::list` capability for each and continues into it,
-     * repeating for any newly-revealed gated branch. May trigger consent.
-     * Default `false` — gated directories are instead reported under
-     * {@link ExploreResult.inaccessible}.
-     */
+    readonly interfaceId?: string;
+    /** Include reflection plumbing such as `linkrpc.directory` and `linkrpc.schemas`. */
+    readonly includeInternal?: boolean;
+    /** Request one broad reflection grant when a gated directory is encountered. */
     readonly requestPermission?: boolean;
 }
 
-/**
- * Side-channel `explore` needs to honor {@link ExploreArgs.requestPermission}
- * without coupling the reflection layer to the hub's consent/session API.
- */
+export interface ExploreBrowseArgs extends ExploreCommonArgs {
+    readonly kind: 'browse';
+    /** Number of interfaces to return. Defaults to 20; maximum 100. */
+    readonly limit?: number;
+    /** Opaque continuation cursor returned by a previous browse call. */
+    readonly cursor?: string;
+}
+
+export interface ExploreGrepArgs extends ExploreCommonArgs {
+    readonly kind: 'grep';
+    /** Pattern searched against the generated `defineInterface` source, one line at a time. */
+    readonly pattern: string;
+    /** Defaults to `regex`. Both modes are case-insensitive. */
+    readonly syntax?: 'regex' | 'literal';
+    /** Number of matching virtual documents to return. Defaults to 20; maximum 100. */
+    readonly limit?: number;
+    /** Opaque continuation cursor returned by a previous grep call. */
+    readonly cursor?: string;
+    /** Source lines included before and after each match. Defaults to 1; maximum 5. */
+    readonly contextLines?: number;
+}
+
+export interface ExploreInspectArgs extends ExploreCommonArgs {
+    readonly kind: 'inspect';
+    readonly serviceId: string;
+    readonly interfaceId: string;
+    /** Generated `defineInterface` source by default; use `schema` for the raw wire schema. */
+    readonly format?: 'source' | 'schema';
+}
+
+export type ExploreArgs = ExploreBrowseArgs | ExploreGrepArgs | ExploreInspectArgs;
+
 export interface ExploreDeps {
-    /**
-     * Request a capability for the reflection interfaces (`linkrpc.*`) across
-     * all service ids — one grant that unlocks enumeration of every gated
-     * directory. Returns `true` when granted (so the walk re-lists). Invoked
-     * at most once per `explore` call.
-     */
     requestReflectionAccess(): Promise<boolean>;
 }
 
-export interface ExploreEntry {
+export interface ExploreListing {
     readonly serviceId: string;
+    readonly serviceDescription?: string;
     readonly interfaceId: string;
-    /** Present when {@link ExploreArgs.includeSchema} is true and the lookup succeeded. */
-    readonly schema?: unknown;
-    /** Set when `includeSchema` was requested but the lookup failed. */
-    readonly schemaError?: string;
-    /** Present when {@link ExploreArgs.includeTypeScript} is true and codegen succeeded. */
-    readonly typeScript?: string;
-    /** Set when `includeTypeScript` was requested but codegen failed. */
-    readonly typeScriptError?: string;
+    readonly interfaceHash: string;
+    readonly documentId: string;
 }
 
-export interface ExploreResult {
-    readonly totalMatched: number;
-    /** Up to `maxResults` entries, starting at `offset`. */
-    readonly entries: readonly ExploreEntry[];
-    /** 0-based index this page starts at (echoes the requested `offset`). */
-    readonly offset: number;
-    /**
-     * Index to pass as `offset` to fetch the next page. Present only when more
-     * matches remain beyond this page.
-     */
-    readonly nextOffset?: number;
-    /**
-     * Directories that exist but could not be enumerated without an additional
-     * capability (e.g. the gated `hub` directory). Their services are absent
-     * from `entries`. Present only when at least one directory was gated.
-     */
-    readonly inaccessible?: readonly ExploreInaccessible[];
+export interface ExploreGrepMatch {
+    /** Matching source plus the requested surrounding context, joined with newlines. */
+    readonly searchResult: string;
+    /** Inclusive, 1-based line range of `searchResult` in the virtual document. */
+    readonly lineRange: readonly [start: number, end: number];
+    /** LinkRPC member containing every matched line in this chunk, when unambiguous. */
+    readonly member?: string;
+}
+
+export interface ExploreGrepEntry extends ExploreListing {
+    readonly matches: readonly ExploreGrepMatch[];
+    /** True when this document contains more matches than were returned. */
+    readonly matchesTruncated?: boolean;
+}
+
+export interface ExploreDocumentError {
+    readonly serviceId: string;
+    readonly interfaceId: string;
+    readonly error: string;
 }
 
 export interface ExploreInaccessible {
-    /** The directory target (serviceId) that could not be enumerated. */
     readonly serviceId: string;
-    /** The error message from the denied directory lookup. */
     readonly reason: string;
-    /** Actionable next step to gain visibility into this directory. */
     readonly hint: string;
 }
 
-type Mutable<T> = { -readonly [K in keyof T]: T[K]; };
+export interface ExploreBrowseResult {
+    readonly kind: 'browse';
+    readonly total: number;
+    readonly entries: readonly ExploreListing[];
+    readonly nextCursor?: string;
+    readonly inaccessible?: readonly ExploreInaccessible[];
+}
 
-const DEFAULT_MAX_RESULTS = 10;
+export interface ExploreGrepResult {
+    readonly kind: 'grep';
+    readonly pattern: string;
+    readonly syntax: 'regex' | 'literal';
+    readonly total: number;
+    readonly entries: readonly ExploreGrepEntry[];
+    readonly nextCursor?: string;
+    readonly documentErrors?: readonly ExploreDocumentError[];
+    readonly inaccessible?: readonly ExploreInaccessible[];
+}
+
+export interface ExploreInspectResult extends ExploreListing {
+    readonly kind: 'inspect';
+    readonly format: 'source' | 'schema';
+    readonly source?: string;
+    readonly schema?: LinkRpcInterfaceSchema;
+    readonly inaccessible?: readonly ExploreInaccessible[];
+}
+
+export type ExploreResult = ExploreBrowseResult | ExploreGrepResult | ExploreInspectResult;
+
+interface CachedInterface {
+    readonly schema: LinkRpcInterfaceSchema;
+    readonly generatedSource: string;
+}
+
+interface VirtualDocument extends CachedInterface {
+    readonly listing: DiscoveredListing;
+    readonly source: string;
+}
+
+const DEFAULT_LIMIT = 20;
+const MAX_LIMIT = 100;
+const MAX_MATCHES_PER_DOCUMENT = 20;
+const interfaceCache = new WeakMap<object, Map<string, Promise<CachedInterface>>>();
 
 /**
- * Walk the hub, optionally filter, optionally enrich with per-interface JSON
- * schemas. Used by both the `runLinkRpcScript` host function (`con.explore(...)`)
- * and exposed indirectly through the MCP server's connection-API resource.
- *
- * Pass `deps` to honor {@link ExploreArgs.requestPermission}: gated directories
- * are unlocked via `deps.requestDirectoryListAccess` and folded into the walk.
- * Without `deps`, `requestPermission` is a no-op and gated directories are
- * reported under {@link ExploreResult.inaccessible}.
+ * Browse the reflected directory, grep generated interface source, or inspect
+ * one exact virtual document. Generated source is cached by the directory
+ * route and interface hash; every call still walks the live directory.
  */
 export async function explore(
     channel: IRequestSender<SigningCallCtx>,
     args: ExploreArgs,
     deps?: ExploreDeps,
 ): Promise<ExploreResult> {
-    const unlockGatedDirectory =
-        args.requestPermission === true && deps !== undefined
-            ? (_serviceId: string) => deps.requestReflectionAccess()
-            : undefined;
-    const { listings, inaccessible } = await walkHubDetailed(channel, { unlockGatedDirectory });
-
-    // Reflection plumbing (`linkrpc.*`) exists on every service and clutters the
-    // listing, so it is hidden unless explicitly asked for — either via
-    // `showLinkrpcInternalInterfaces`, or by filtering for that exact interfaceId
-    // (hiding a directly-requested interface would surprisingly return nothing).
-    const showInternal = args.showLinkrpcInternalInterfaces === true
-        || (args.interfaceId !== undefined && _isLinkrpcInternalInterface(args.interfaceId));
-
-    const filtered = listings.filter((l) => {
-        if (args.interfaceId !== undefined && l.interfaceId !== args.interfaceId) return false;
-        if (args.serviceId !== undefined && l.serviceId !== args.serviceId) return false;
-        if (!showInternal && _isLinkrpcInternalInterface(l.interfaceId)) return false;
-        return true;
-    });
-
-    // Schemas fetched during grepAllSchemas are cached here so the entry-building
-    // pass (includeSchema / includeTypeScript) reuses them instead of re-fetching.
-    const schemaCache = new Map<DiscoveredListing, FetchedSchema>();
-
-    // `grep` is a cheap metadata search (serviceId / interfaceId /
-    // serviceDescription). `grepAllSchemas` additionally searches the fetched
-    // JSON schema, so it must pull every candidate's schema first.
-    let matched = filtered;
-    if (args.grep !== undefined && args.grep !== "") {
-        const needle = args.grep.toLowerCase();
-        matched = matched.filter((l) => _listingMetadataText(l).includes(needle));
-    }
-    if (args.grepAllSchemas !== undefined && args.grepAllSchemas !== "") {
-        const needle = args.grepAllSchemas.toLowerCase();
-        const fetched = await Promise.all(matched.map((l) => _safeFetchSchema(channel, l)));
-        const next: DiscoveredListing[] = [];
-        for (let i = 0; i < matched.length; i++) {
-            const l = matched[i];
-            schemaCache.set(l, fetched[i]);
-            const schemaText = fetched[i].schema !== undefined
-                ? JSON.stringify(fetched[i].schema).toLowerCase()
-                : "";
-            if (_listingMetadataText(l).includes(needle) || schemaText.includes(needle)) {
-                next.push(l);
-            }
-        }
-        matched = next;
+    if (args === undefined || typeof args !== 'object' || !('kind' in args)) {
+        throw new Error('explore requires `kind: "browse" | "grep" | "inspect"`.');
     }
 
-    // Page over the matched set: `offset` is where this page starts, `maxResults`
-    // is the page size (default 10, `0` = no limit). `nextOffset` is set when more
-    // matches remain, so the caller can request the following page.
-    const offset = Math.max(0, args.offset ?? 0);
-    const pageSize = args.maxResults === 0
-        ? matched.length
-        : args.maxResults ?? DEFAULT_MAX_RESULTS;
-    const head = matched.slice(offset, offset + pageSize);
-    const nextOffset = offset + head.length < matched.length
-        ? offset + head.length
+    const unlockGatedDirectory = args.requestPermission === true && deps !== undefined
+        ? (_serviceId: string) => deps.requestReflectionAccess()
         : undefined;
+    const walked = await walkHubDetailed(channel, { unlockGatedDirectory });
+    const listings = _filterAndSort(walked.listings, args);
+    const inaccessible = _inaccessible(walked.inaccessible);
 
-    const entries: ExploreEntry[] = [];
-    const needsSchema = args.includeSchema === true || args.includeTypeScript === true;
-    if (needsSchema) {
-        const fetched = await Promise.all(
-            head.map((l) => schemaCache.get(l) ?? _safeFetchSchema(channel, l)),
-        );
-        for (let i = 0; i < head.length; i++) {
-            const { schema, schemaError } = fetched[i];
-            const entry: Mutable<ExploreEntry> = {
-                serviceId: head[i].serviceId,
-                interfaceId: head[i].interfaceId,
+    switch (args.kind) {
+        case 'browse': {
+            const page = _page(listings, args.limit, args.cursor);
+            return {
+                kind: 'browse',
+                total: listings.length,
+                entries: page.items.map(_toListing),
+                ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+                ...(inaccessible !== undefined ? { inaccessible } : {}),
             };
-            if (args.includeSchema) {
-                if (schema !== undefined) entry.schema = schema;
-                if (schemaError !== undefined) entry.schemaError = schemaError;
-            }
-            if (args.includeTypeScript) {
-                if (schema !== undefined) {
-                    try {
-                        entry.typeScript = generateTsInterface(schema);
-                    } catch (e) {
-                        entry.typeScriptError = (e as Error).message;
-                    }
-                } else if (schemaError !== undefined) {
-                    entry.typeScriptError = schemaError;
-                }
-            }
-            entries.push(entry);
         }
-    } else {
-        for (const l of head) {
-            entries.push({ serviceId: l.serviceId, interfaceId: l.interfaceId });
+        case 'grep': {
+            if (typeof args.pattern !== 'string' || args.pattern.length === 0) {
+                throw new Error('explore grep requires a non-empty `pattern`.');
+            }
+            const syntax = args.syntax ?? 'regex';
+            const matchesLine = _createLineMatcher(args.pattern, syntax);
+            const contextLines = _boundedInteger(args.contextLines ?? 1, 0, 5, 'contextLines');
+            const loaded = await Promise.all(listings.map(async (listing) => {
+                try {
+                    return { document: await _loadDocument(channel, listing) };
+                } catch (error) {
+                    return {
+                        error: {
+                            serviceId: listing.serviceId,
+                            interfaceId: listing.interfaceId,
+                            error: (error as Error).message,
+                        },
+                    };
+                }
+            }));
+            const entries: ExploreGrepEntry[] = [];
+            const documentErrors: ExploreDocumentError[] = [];
+            for (const item of loaded) {
+                if (item.error !== undefined) {
+                    documentErrors.push(item.error);
+                    continue;
+                }
+                const document = item.document!;
+                const matches = _grepDocument(document, matchesLine, contextLines);
+                if (matches.length === 0) continue;
+                entries.push({
+                    ..._toListing(document.listing),
+                    matches: matches.slice(0, MAX_MATCHES_PER_DOCUMENT),
+                    ...(matches.length > MAX_MATCHES_PER_DOCUMENT ? { matchesTruncated: true } : {}),
+                });
+            }
+            const page = _page(entries, args.limit, args.cursor);
+            return {
+                kind: 'grep',
+                pattern: args.pattern,
+                syntax,
+                total: entries.length,
+                entries: page.items,
+                ...(page.nextCursor !== undefined ? { nextCursor: page.nextCursor } : {}),
+                ...(documentErrors.length > 0 ? { documentErrors } : {}),
+                ...(inaccessible !== undefined ? { inaccessible } : {}),
+            };
+        }
+        case 'inspect': {
+            const listing = listings.find((item) =>
+                item.serviceId === args.serviceId && item.interfaceId === args.interfaceId,
+            );
+            if (listing === undefined) {
+                throw new Error(
+                    `Interface not found: ${args.serviceId}::${args.interfaceId}. `
+                    + 'Browse first, or set `requestPermission: true` if its directory is gated.',
+                );
+            }
+            const document = await _loadDocument(channel, listing);
+            const format = args.format ?? 'source';
+            return {
+                kind: 'inspect',
+                format,
+                ..._toListing(listing),
+                ...(format === 'source' ? { source: document.source } : { schema: document.schema }),
+                ...(inaccessible !== undefined ? { inaccessible } : {}),
+            };
+        }
+        default:
+            throw new Error(`Unknown explore kind: ${String((args as { kind?: unknown }).kind)}`);
+    }
+}
+
+function _filterAndSort(
+    listings: readonly DiscoveredListing[],
+    args: ExploreArgs,
+): DiscoveredListing[] {
+    const includeInternal = args.includeInternal === true
+        || (args.interfaceId !== undefined && _isHubrpcInternalInterface(args.interfaceId));
+    return listings
+        .filter((listing) => {
+            if (args.serviceId !== undefined && listing.serviceId !== args.serviceId) return false;
+            if (args.interfaceId !== undefined && listing.interfaceId !== args.interfaceId) return false;
+            return includeInternal || !_isHubrpcInternalInterface(listing.interfaceId);
+        })
+        .sort((a, b) =>
+            a.serviceId.localeCompare(b.serviceId)
+            || a.interfaceId.localeCompare(b.interfaceId)
+            || a.hash.localeCompare(b.hash),
+        );
+}
+
+function _toListing(listing: DiscoveredListing): ExploreListing {
+    return {
+        serviceId: listing.serviceId,
+        ...(listing.serviceDescription !== undefined
+            ? { serviceDescription: listing.serviceDescription }
+            : {}),
+        interfaceId: listing.interfaceId,
+        interfaceHash: listing.hash,
+        documentId: _documentId(listing),
+    };
+}
+
+async function _loadDocument(
+    channel: IRequestSender<SigningCallCtx>,
+    listing: DiscoveredListing,
+): Promise<VirtualDocument> {
+    let cache = interfaceCache.get(channel as object);
+    if (cache === undefined) {
+        cache = new Map();
+        interfaceCache.set(channel as object, cache);
+    }
+    const cacheKey = `${listing.discoveredFrom}\u0000${listing.interfaceId}\u0000${listing.hash}`;
+    let pending = cache.get(cacheKey);
+    if (pending === undefined) {
+        pending = (async () => {
+            const target = listing.discoveredFrom || listing.serviceId || undefined;
+            const schema = await fetchSchema(channel, listing.interfaceId, listing.hash, target);
+            return { schema, generatedSource: generateTsInterface(schema) };
+        })();
+        cache.set(cacheKey, pending);
+    }
+
+    let cached: CachedInterface;
+    try {
+        cached = await pending;
+    } catch (error) {
+        if (cache.get(cacheKey) === pending) cache.delete(cacheKey);
+        throw error;
+    }
+    const documentId = _documentId(listing);
+    return {
+        ...cached,
+        listing,
+        source: `${_documentHeader(listing, documentId)}\n${cached.generatedSource}`,
+    };
+}
+
+function _documentHeader(listing: DiscoveredListing, documentId: string): string {
+    return [
+        `// virtualDocument: ${JSON.stringify(documentId)}`,
+        `// serviceId: ${JSON.stringify(listing.serviceId)}`,
+        ...(listing.serviceDescription !== undefined
+            ? [`// serviceDescription: ${JSON.stringify(listing.serviceDescription)}`]
+            : []),
+        `// interfaceId: ${JSON.stringify(listing.interfaceId)}`,
+        `// interfaceHash: ${JSON.stringify(listing.hash)}`,
+        `// discoveredFrom: ${JSON.stringify(listing.discoveredFrom)}`,
+    ].join('\n');
+}
+
+function _documentId(listing: DiscoveredListing): string {
+    const service = listing.serviceId === '' ? '$root' : encodeURIComponent(listing.serviceId);
+    const interfaceId = encodeURIComponent(listing.interfaceId);
+    return `linkrpc://${service}/${interfaceId}@${listing.hash}.ts`;
+}
+
+function _grepDocument(
+    document: VirtualDocument,
+    matchesLine: (line: string) => boolean,
+    contextLines: number,
+): ExploreGrepMatch[] {
+    const lines = document.source.split('\n');
+    const memberAtLine = _memberMap(lines, document.schema);
+    const ranges: Array<{ start: number; end: number; matches: number[] }> = [];
+    for (let index = 0; index < lines.length; index++) {
+        if (!matchesLine(lines[index])) continue;
+        const start = Math.max(0, index - contextLines);
+        const end = Math.min(lines.length, index + contextLines + 1);
+        const previous = ranges.at(-1);
+        if (previous !== undefined && start <= previous.end) {
+            previous.end = Math.max(previous.end, end);
+            previous.matches.push(index);
+        } else {
+            ranges.push({ start, end, matches: [index] });
+        }
+    }
+    return ranges.map((range) => {
+        const members = new Set(range.matches.map((line) => memberAtLine[line]));
+        const member = members.size === 1 ? members.values().next().value : undefined;
+        return {
+            searchResult: lines.slice(range.start, range.end).join('\n'),
+            lineRange: [range.start + 1, range.end],
+            ...(member !== undefined ? { member } : {}),
+        };
+    });
+}
+
+function _memberMap(lines: readonly string[], schema: LinkRpcInterfaceSchema): Array<string | undefined> {
+    const starts: Array<{ line: number; member: string }> = [];
+    let searchFrom = 0;
+    for (const methodName of Object.keys(schema.methods)) {
+        const barePrefix = `${methodName}: `;
+        const quotedPrefix = `${JSON.stringify(methodName)}: `;
+        const line = lines.findIndex((value, index) => index >= searchFrom
+            && (value.trimStart().startsWith(barePrefix) || value.trimStart().startsWith(quotedPrefix))
+            && (value.includes('requestType(') || value.includes('notificationType(')));
+        if (line >= 0) {
+            starts.push({ line, member: methodName });
+            searchFrom = line + 1;
         }
     }
 
-    const result: Mutable<ExploreResult> = { totalMatched: matched.length, entries, offset };
-    if (nextOffset !== undefined) result.nextOffset = nextOffset;
-    if (inaccessible.length > 0) {
-        result.inaccessible = inaccessible.map((d) => ({
-            serviceId: d.serviceId,
-            reason: d.reason,
-            // Lead with the one-shot: re-running explore with
-            // `requestPermission: true` requests reflection access (`linkrpc.*`)
-            // across EVERY service in a single consent, unlocking all gated
-            // directories at once — so the walk costs at most one prompt instead
-            // of nagging per directory. The per-directory `requestAccess` is kept
-            // as a fallback for when you only want to peek at this one branch.
-            hint: `The "${d.serviceId}" directory is gated. To enumerate the whole hub in a `
-                + `SINGLE consent prompt, re-run explore with requestPermission, e.g. `
-                + `con.explore({ requestPermission: true }) — this unlocks every gated `
-                + `directory at once. (To unlock just this one directory instead, request its `
-                + `listing interface: con.requestAccess({ permissions: [{ target: { serviceId: `
-                + `{ exact: "${d.serviceId}" }, interfaceId: { exact: "linkrpc.directory" }, `
-                + `members: [{ exact: "list" }] }, canInvoke: true }], duration: "longLived" }).)`,
-        }));
+    const result = new Array<string | undefined>(lines.length);
+    for (let i = 0; i < starts.length; i++) {
+        const end = starts[i + 1]?.line ?? lines.length;
+        for (let line = starts[i].line; line < end; line++) result[line] = starts[i].member;
     }
     return result;
 }
 
-/**
- * Whether an interface is hub reflection plumbing (`linkrpc.directory`,
- * `linkrpc.schemas`, `linkrpc.defaults`, …). These are present on every service
- * and are hidden from `explore` results by default.
- */
-function _isLinkrpcInternalInterface(interfaceId: string): boolean {
-    return interfaceId.startsWith('linkrpc.');
-}
-
-/** Lower-cased metadata blob a `grep` term is matched against. */
-function _listingMetadataText(l: DiscoveredListing): string {
-    return `${l.serviceId}\u0000${l.interfaceId}\u0000${l.serviceDescription ?? ''}`.toLowerCase();
-}
-
-type FetchedSchema = { schema?: LinkRpcInterfaceSchema; schemaError?: string; };
-
-async function _safeFetchSchema(
-    channel: IRequestSender<SigningCallCtx>,
-    l: DiscoveredListing,
-): Promise<FetchedSchema> {
-    try {
-        // Route the lookup to the directory that surfaced the listing — that
-        // directory is the one that actually knows about the interface (the
-        // hub forwards aggregated entries on behalf of participants).
-        const target = l.discoveredFrom || l.serviceId || undefined;
-        const schema = await fetchSchema(channel, l.interfaceId, undefined, target);
-        return { schema };
-    } catch (e) {
-        return { schemaError: (e as Error).message };
+function _createLineMatcher(
+    pattern: string,
+    syntax: 'regex' | 'literal',
+): (line: string) => boolean {
+    if (syntax === 'literal') {
+        const needle = pattern.toLocaleLowerCase();
+        return (line) => line.toLocaleLowerCase().includes(needle);
     }
+    if (syntax !== 'regex') throw new Error(`Unknown grep syntax: ${String(syntax)}`);
+    let regex: RegExp;
+    try {
+        regex = new RegExp(pattern, 'iu');
+    } catch (error) {
+        throw new Error(`Invalid grep regular expression: ${(error as Error).message}`);
+    }
+    return (line) => regex.test(line);
+}
+
+function _page<T>(
+    items: readonly T[],
+    requestedLimit: number | undefined,
+    cursor: string | undefined,
+): { items: readonly T[]; nextCursor?: string } {
+    const limit = _boundedInteger(requestedLimit ?? DEFAULT_LIMIT, 1, MAX_LIMIT, 'limit');
+    const offset = _decodeCursor(cursor);
+    const page = items.slice(offset, offset + limit);
+    const nextOffset = offset + page.length;
+    return {
+        items: page,
+        ...(nextOffset < items.length ? { nextCursor: String(nextOffset) } : {}),
+    };
+}
+
+function _decodeCursor(cursor: string | undefined): number {
+    if (cursor === undefined) return 0;
+    if (!/^\d+$/.test(cursor)) throw new Error('Invalid explore cursor.');
+    return Number(cursor);
+}
+
+function _boundedInteger(value: number, min: number, max: number, name: string): number {
+    if (!Number.isInteger(value) || value < min || value > max) {
+        throw new Error(`explore ${name} must be an integer from ${min} to ${max}.`);
+    }
+    return value;
+}
+
+function _inaccessible(
+    directories: readonly { serviceId: string; reason: string }[],
+): ExploreInaccessible[] | undefined {
+    if (directories.length === 0) return undefined;
+    return directories.map((directory) => ({
+        serviceId: directory.serviceId,
+        reason: directory.reason,
+        hint: 'Repeat this explore call with `requestPermission: true` to search all gated directories.',
+    }));
+}
+
+function _isHubrpcInternalInterface(interfaceId: string): boolean {
+    return interfaceId.startsWith('linkrpc.');
 }

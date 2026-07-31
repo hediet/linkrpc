@@ -105,7 +105,7 @@ const con: SvcConnection = {
         return this.notifyRaw(__mkMethod(serviceId, interfaceId, member), params);
     },
     explore(args) {
-        return __hostExplore(__toJson(args ?? {}), "").then(__fromJson) as Promise<ExploreResult>;
+        return __hostExplore(__toJson(args), "").then(__fromJson) as Promise<ExploreResult>;
     },
     requestAccess(args) {
         return __hostRequestAccess(__toJson(args), "").then(__fromJson) as Promise<RequestAccessResult>;
