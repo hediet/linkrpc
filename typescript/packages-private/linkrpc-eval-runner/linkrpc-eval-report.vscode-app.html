@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="vscode-app-id" content="vscode.linkrpc-eval-report" />
+  <title>LinkRPC Evaluation Report</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body, #root { min-height: 100%; }
+    html, body {
+      margin: 0;
+      background: var(--vscode-editor-background);
+      color: var(--vscode-foreground);
+      font-family: var(--vscode-font-family);
+      font-size: var(--vscode-font-size, 13px);
+      font-weight: var(--vscode-font-weight);
+    }
+    body { line-height: 1.45; }
+    button, input { font: inherit; }
+    button {
+      border: 0;
+      padding: 0.45em 0.85em;
+      color: var(--vscode-button-foreground);
+      background: var(--vscode-button-background);
+      cursor: pointer;
+    }
+    button:hover { background: var(--vscode-button-hoverBackground); }
+    button:focus-visible, summary:focus-visible {
+      outline: 1px solid var(--vscode-focusBorder);
+      outline-offset: 2px;
+    }
+    code, pre {
+      font-family: var(--vscode-editor-font-family);
+      font-size: var(--vscode-editor-font-size, 1em);
+    }
+    .page {
+      width: min(100%, 92rem);
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 2rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--vscode-editorWidget-border);
+    }
+    .eyebrow {
+      margin-bottom: 0.35em;
+      color: var(--vscode-descriptionForeground);
+      font-size: 0.85em;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { margin-bottom: 0.25em; font-size: 1.8em; }
+    h2 { margin-bottom: 0.8em; font-size: 1.2em; }
+    h3 { margin-bottom: 0.45em; font-size: 1em; }
+    .subtitle, .muted { color: var(--vscode-descriptionForeground); }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.8em;
+      padding: 0.15em 0.55em;
+      border: 1px solid var(--vscode-editorWidget-border);
+      background: var(--vscode-editorWidget-background);
+      color: var(--vscode-descriptionForeground);
+      white-space: nowrap;
+    }
+    .chip.success {
+      border-color: var(--vscode-statusBarItem-remoteBackground);
+      background: var(--vscode-statusBarItem-remoteBackground);
+      color: var(--vscode-statusBarItem-remoteForeground);
+    }
+    .chip.error {
+      border-color: var(--vscode-statusBarItem-errorBackground);
+      background: var(--vscode-statusBarItem-errorBackground);
+      color: var(--vscode-statusBarItem-errorForeground);
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+      gap: 0.75rem;
+      margin: 1.5rem 0;
+    }
+    .metric, .panel, .call {
+      border: 1px solid var(--vscode-editorWidget-border);
+      background: var(--vscode-editorWidget-background);
+    }
+    .metric { padding: 0.9rem 1rem; }
+    .metric-value {
+      font-size: 1.45em;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .metric-label { color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+    .panel { margin-top: 1rem; padding: 1rem; }
+    .answer {
+      display: block;
+      overflow-wrap: anywhere;
+      padding: 0.8rem;
+      border: 1px solid var(--vscode-input-border, var(--vscode-editorWidget-border));
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      user-select: text;
+    }
+    .section { margin-top: 2rem; }
+    .section-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .query-list, .call-list { display: grid; gap: 0.75rem; }
+    .query-card {
+      padding: 0.9rem 1rem;
+      border-left: 0.25rem solid var(--vscode-textLink-foreground);
+      background: var(--vscode-editorWidget-background);
+    }
+    .query-card.failed { border-left-color: var(--vscode-errorForeground); }
+    .query-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .query-title {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      min-width: 0;
+    }
+    .query-index {
+      color: var(--vscode-descriptionForeground);
+      font-variant-numeric: tabular-nums;
+    }
+    .query-pattern {
+      margin: 0.6rem 0 0;
+      overflow-wrap: anywhere;
+      color: var(--vscode-textLink-foreground);
+    }
+    .operations {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin-top: 0.65rem;
+    }
+    .operation {
+      padding: 0.15em 0.45em;
+      border: 1px solid var(--vscode-editorWidget-border);
+      background: var(--vscode-textCodeBlock-background);
+      overflow-wrap: anywhere;
+    }
+    details.call > summary, details.raw > summary {
+      padding: 0.8rem 1rem;
+      cursor: pointer;
+      color: var(--vscode-foreground);
+    }
+    .call-body { padding: 0 1rem 1rem; }
+    .call-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 0.65rem;
+    }
+    pre {
+      max-height: 30rem;
+      margin: 0;
+      padding: 0.8rem;
+      overflow: auto;
+      border: 1px solid var(--vscode-editorWidget-border);
+      background: var(--vscode-textCodeBlock-background);
+      color: var(--vscode-foreground);
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .empty, .error-well {
+      padding: 1rem;
+      border: 1px solid var(--vscode-editorWidget-border);
+      background: var(--vscode-editorWidget-background);
+    }
+    .error-well {
+      border-color: var(--vscode-inputValidation-errorBorder);
+      background: var(--vscode-inputValidation-errorBackground);
+      color: var(--vscode-inputValidation-errorForeground);
+    }
+    .setup {
+      width: min(40rem, calc(100% - 2rem));
+      margin: 10vh auto;
+      padding: 1.5rem;
+      border: 1px solid var(--vscode-editorWidget-border);
+      background: var(--vscode-editorWidget-background);
+    }
+    .setup p { color: var(--vscode-descriptionForeground); }
+    @media (max-width: 45rem) {
+      .page { padding: 1rem; }
+      .hero { display: block; }
+      .hero .chips { margin-top: 1rem; }
+      .query-head { align-items: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script lang="tsx" type="module">
+    import { useEffect, useMemo, useState } from "https://esm.sh/react@18.3.1?target=es2022";
+    import { createRoot } from "https://esm.sh/react-dom@18.3.1/client?target=es2022";
+    import {
+      VsCodeAppHostClient,
+      WebEditorClient,
+    } from "../web-editors/dist/index.js";
+
+    type JsonObject = Record<string, unknown>;
+
+    interface ReportProps {
+      readonly value: unknown;
+    }
+
+    interface MetricProps {
+      readonly label: string;
+      readonly value: string | number;
+    }
+
+    interface SetupProps {
+      readonly host: HostClientLike;
+    }
+
+    interface HostClientLike {
+      configureEditorAssociation(
+        extension: string,
+        options?: { readonly dismissable?: boolean },
+      ): Promise<{
+        readonly global: { readonly registered: boolean };
+        readonly workspace: { readonly registered: boolean };
+      }>;
+    }
+
+    interface EditorClientLike {
+      getContent(): unknown;
+      onDidChangeContent(
+        listener: (event: { readonly content: unknown }) => void,
+      ): { dispose(): void };
+    }
+
+    function object(value: unknown): JsonObject | undefined {
+      return value !== null && typeof value === "object" && !Array.isArray(value)
+        ? value as JsonObject
+        : undefined;
+    }
+
+    function array(value: unknown): unknown[] {
+      return Array.isArray(value) ? value : [];
+    }
+
+    function string(value: unknown, fallback = ""): string {
+      return typeof value === "string" ? value : fallback;
+    }
+
+    function number(value: unknown): number | undefined {
+      return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+    }
+
+    function humanize(value: string): string {
+      return value
+        .split(/[-_]/g)
+        .filter(Boolean)
+        .map(part => part[0]?.toUpperCase() + part.slice(1))
+        .join(" ");
+    }
+
+    function formatNumber(value: number | undefined, digits = 0): string {
+      return value === undefined
+        ? "n/a"
+        : value.toLocaleString(undefined, {
+            maximumFractionDigits: digits,
+            minimumFractionDigits: digits,
+          });
+    }
+
+    function formatDate(value: string): string {
+      const date = new Date(value);
+      return Number.isNaN(date.valueOf()) ? value || "Unknown time" : date.toLocaleString();
+    }
+
+    function resultOperations(call: JsonObject): string[] {
+      const result = object(call.result);
+      if (!result) return [];
+      const operations = new Set<string>();
+      for (const entryValue of array(result.entries)) {
+        const entry = object(entryValue);
+        if (!entry) continue;
+        const serviceId = string(entry.serviceId);
+        const interfaceId = string(entry.interfaceId);
+        for (const matchValue of array(entry.matches)) {
+          const match = object(matchValue);
+          const member = string(match?.member);
+          if (serviceId && interfaceId && member) {
+            operations.add(`${serviceId}::${interfaceId}::${member}`);
+          }
+        }
+      }
+      if (string(result.kind) === "inspect") {
+        const serviceId = string(result.serviceId);
+        const interfaceId = string(result.interfaceId);
+        if (serviceId && interfaceId) operations.add(`${serviceId}::${interfaceId}`);
+      }
+      return [...operations];
+    }
+
+    function queryDescription(args: JsonObject): string {
+      switch (string(args.kind)) {
+        case "grep":
+          return string(args.pattern, "(missing pattern)");
+        case "inspect":
+          return `${string(args.serviceId, "?")}::${string(args.interfaceId, "?")}`;
+        case "browse": {
+          const filters = [string(args.serviceId), string(args.interfaceId)].filter(Boolean);
+          return filters.length > 0 ? filters.join("::") : "All visible interfaces";
+        }
+        default:
+          return "Invalid exploration arguments";
+      }
+    }
+
+    function Metric({ label, value }: MetricProps) {
+      return (
+        <div className="metric">
+          <div className="metric-value">{value}</div>
+          <div className="metric-label">{label}</div>
+        </div>
+      );
+    }
+
+    function QueryCard({ call, index }: { readonly call: unknown; readonly index: number }) {
+      const item = object(call) ?? {};
+      const args = object(item.arguments) ?? {};
+      const kind = string(args.kind, "invalid");
+      const failed = typeof item.error === "string";
+      const result = object(item.result);
+      const operations = resultOperations(item);
+      const total = number(result?.total);
+      return (
+        <article className={`query-card${failed ? " failed" : ""}`}>
+          <div className="query-head">
+            <div className="query-title">
+              <span className="query-index">#{index + 1}</span>
+              <strong>{humanize(kind)}</strong>
+              <span className={`chip ${failed ? "error" : "success"}`}>
+                {failed ? "failed" : "completed"}
+              </span>
+            </div>
+            {total !== undefined && <span className="muted">{total} result{total === 1 ? "" : "s"}</span>}
+          </div>
+          <code className="query-pattern">{queryDescription(args)}</code>
+          {kind === "grep" && (
+            <div className="muted">
+              {string(args.syntax, "regex")} · limit {formatNumber(number(args.limit))} · context {formatNumber(number(args.contextLines))}
+            </div>
+          )}
+          {operations.length > 0 && (
+            <div className="operations">
+              {operations.map(operation => <code className="operation" key={operation}>{operation}</code>)}
+            </div>
+          )}
+          {failed && <p className="error-well">{string(item.error)}</p>}
+        </article>
+      );
+    }
+
+    function ToolCall({ call, index }: { readonly call: unknown; readonly index: number }) {
+      const item = object(call) ?? {};
+      const args = object(item.arguments) ?? {};
+      const code = string(args.code);
+      const label = string(args.label, string(item.name, `MCP call ${index + 1}`));
+      const readsDocs = code.includes("con.getDocs(");
+      return (
+        <details className="call">
+          <summary>
+            <strong>#{index + 1} {label}</strong>
+            {readsDocs && <span className="muted"> · API bootstrap</span>}
+          </summary>
+          <div className="call-body">
+            <div className="call-meta">
+              <span className="chip">{string(item.name, "unknown tool")}</span>
+              {readsDocs && <span className="chip">full docs</span>}
+            </div>
+            <pre>{code || JSON.stringify(args, undefined, 2)}</pre>
+          </div>
+        </details>
+      );
+    }
+
+    function Report({ value }: ReportProps) {
+      const recording = object(value);
+      const input = object(recording?.input);
+      const output = object(recording?.output);
+      if (!recording || !input || !output || string(recording.functionId) !== "linkrpc-explore/copilot-cli") {
+        return (
+          <main className="page">
+            <div className="error-well">
+              <h1>Unsupported JSON document</h1>
+              <p>This editor expects a LinkRPC exploration evaluation recording.</p>
+            </div>
+          </main>
+        );
+      }
+
+      const scenarioId = string(input.scenarioId, "unknown-scenario");
+      const model = string(input.model, string(output.model, "unknown model"));
+      const sample = number(input.sampleId);
+      const answer = string(output.answer, "(no answer)");
+      const toolCalls = array(output.toolCalls);
+      const exploreCalls = array(output.exploreCalls);
+      const successfulExplores = exploreCalls.filter(call => object(call)?.result !== undefined).length;
+      const failedExplores = exploreCalls.length - successfulExplores;
+      const docsCalls = toolCalls.filter(call =>
+        string(object(object(call)?.arguments)?.code).includes("con.getDocs(")
+      ).length;
+      const metrics = object(output.metrics);
+      const usage = object(output.usage);
+      const outputTokens = number(metrics?.outputTokens) ?? number(usage?.outputTokens);
+      const cost = number(metrics?.cost);
+      const costUnit = string(metrics?.costUnit, "premium requests");
+      const contractValid = /^[^:\s]+::[^:\s]+::[^:\s]+$/.test(answer.trim());
+
+      return (
+        <main className="page">
+          <header className="hero">
+            <div>
+              <div className="eyebrow">LinkRPC evaluation report</div>
+              <h1>{humanize(scenarioId)}</h1>
+              <div className="subtitle">{formatDate(string(recording.createdAt))}</div>
+            </div>
+            <div className="chips">
+              <span className="chip">{model}</span>
+              <span className="chip">sample {sample ?? "n/a"}</span>
+              <span className={`chip ${contractValid ? "success" : "error"}`}>
+                {contractValid ? "valid answer shape" : "invalid answer shape"}
+              </span>
+            </div>
+          </header>
+
+          <section className="metrics" aria-label="Evaluation metrics">
+            <Metric label="MCP tool calls" value={toolCalls.length} />
+            <Metric label="Explore calls" value={exploreCalls.length} />
+            <Metric label="Successful explores" value={successfulExplores} />
+            <Metric label="Failed explores" value={failedExplores} />
+            <Metric label="Output tokens" value={formatNumber(outputTokens)} />
+            <Metric label={costUnit} value={formatNumber(cost, 3)} />
+          </section>
+
+          <section className="panel">
+            <div className="section-heading">
+              <h2>Answer</h2>
+              <span className="muted">{string(recording.functionVersion) && `recording v${string(recording.functionVersion)}`}</span>
+            </div>
+            <code className="answer">{answer}</code>
+          </section>
+
+          <section className="section">
+            <div className="section-heading">
+              <h2>Exploration queries</h2>
+              <span className="muted">{successfulExplores}/{exploreCalls.length} successful</span>
+            </div>
+            <div className="query-list">
+              {exploreCalls.length > 0
+                ? exploreCalls.map((call, index) => <QueryCard call={call} index={index} key={index} />)
+                : <div className="empty">No nested <code>con.explore</code> calls were recorded.</div>}
+            </div>
+          </section>
+
+          <section className="section">
+            <div className="section-heading">
+              <h2>MCP scripts</h2>
+              <span className="muted">{docsCalls} documentation bootstrap call{docsCalls === 1 ? "" : "s"}</span>
+            </div>
+            <div className="call-list">
+              {toolCalls.map((call, index) => <ToolCall call={call} index={index} key={index} />)}
+            </div>
+          </section>
+
+          <section className="section">
+            <details className="raw">
+              <summary>Raw recording</summary>
+              <pre>{JSON.stringify(recording, undefined, 2)}</pre>
+            </details>
+          </section>
+        </main>
+      );
+    }
+
+    function Editor({ client }: { readonly client: EditorClientLike }) {
+      const [content, setContent] = useState<unknown>(() => client.getContent());
+      useEffect(() => {
+        const disposable = client.onDidChangeContent(
+          (event: { readonly content: unknown }) => setContent(event.content),
+        );
+        return () => disposable.dispose();
+      }, [client]);
+      return <Report value={content} />;
+    }
+
+    function Setup({ host }: SetupProps) {
+      const [status, setStatus] = useState("Open this app as a custom editor for evaluation JSON recordings.");
+      const [busy, setBusy] = useState(false);
+      const configure = async () => {
+        setBusy(true);
+        try {
+          const result = await host.configureEditorAssociation(".json", { dismissable: false });
+          const scope = result.workspace.registered ? "workspace" : result.global.registered ? "user" : "no";
+          setStatus(`${humanize(scope)} association selected. Open an evaluation recording JSON file to view its report.`);
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error));
+        } finally {
+          setBusy(false);
+        }
+      };
+      return (
+        <main className="setup">
+          <div className="eyebrow">LinkRPC evaluation report</div>
+          <h1>Evaluation recording viewer</h1>
+          <p>{status}</p>
+          <button disabled={busy} onClick={configure}>
+            {busy ? "Configuring…" : "Configure for .json files"}
+          </button>
+        </main>
+      );
+    }
+
+    async function main() {
+      const host = new VsCodeAppHostClient({ connection: "windowParent" });
+      const context = await host.getContext();
+      if (context.dataDocument === null) {
+        createRoot(document.getElementById("root")!).render(<Setup host={host} />);
+        return;
+      }
+      const client = await WebEditorClient.connect({
+        connection: host.connection,
+        contentType: "json",
+        getContentSchema: () => ({
+          type: "object",
+          required: ["functionId", "input", "output"],
+          properties: {
+            functionId: { const: "linkrpc-explore/copilot-cli" },
+            input: {
+              type: "object",
+              required: ["scenarioId", "sampleId", "model"],
+            },
+            output: {
+              type: "object",
+              required: ["answer", "toolCalls", "exploreCalls"],
+            },
+          },
+        }),
+      });
+      createRoot(document.getElementById("root")!).render(<Editor client={client} />);
+    }
+
+    main().catch(error => {
+      createRoot(document.getElementById("root")!).render(
+        <main className="page">
+          <div className="error-well">
+            <h1>Unable to open report</h1>
+            <pre>{error instanceof Error ? error.stack ?? error.message : String(error)}</pre>
+          </div>
+        </main>
+      );
+    });
+  </script>
+</body>
+</html>

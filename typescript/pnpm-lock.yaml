@@ -71,6 +71,25 @@ importers:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(tsx@4.22.4)
 
+  packages-private/web-editors:
+    dependencies:
+      '@hediet/linkrpc':
+        specifier: workspace:*
+        version: link:../../packages/linkrpc
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.14(tsx@4.22.4)(typescript@6.0.3)
+      tslib:
+        specifier: ^2.8.1
+        version: 2.8.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   packages/linkrpc:
     dependencies:
       '@hpke/core':

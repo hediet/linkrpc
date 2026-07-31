@@ -20,3 +20,11 @@ Every output records the raw Copilot CLI usage summary and normalized metrics.
 `metrics.costUnit` identifies whether `metrics.cost` is measured in AI credits
 or legacy premium requests. Recordings default to
 `.eval-recordings/linkrpc-explore` and are never overwritten.
+
+## Recording report
+
+Open `linkrpc-eval-report.vscode-app.html` in VS Code and configure it as an
+editor for `.json` files. Opening an evaluation recording with that editor shows
+the scenario, model, answer, usage metrics, MCP scripts, and every nested
+`con.explore` query. Other JSON documents display an unsupported-document
+message and are not modified.
