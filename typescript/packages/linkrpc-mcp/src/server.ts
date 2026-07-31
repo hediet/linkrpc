@@ -17,6 +17,12 @@ import {
     type ResultPresentationMode,
 } from "./resultPresentation";
 
+export interface McpToolCall {
+    readonly name: string;
+    readonly arguments: unknown;
+    readonly result: unknown;
+}
+
 export interface LinkRpcMcpServerOptions {
     /**
      * Endpoint used when the tool call does not supply a `connection`. When
@@ -45,6 +51,8 @@ export interface LinkRpcMcpServerOptions {
      * exclusive with `pool` / `provider`.
      */
     readonly defaultConnection?: () => DefaultTransport;
+    /** Observes completed MCP tool calls exactly as their result is returned to the client. */
+    readonly onToolCall?: (call: McpToolCall) => void;
 }
 
 const CONNECTION_SCHEMA = z.string().optional().describe(
@@ -87,9 +95,11 @@ export class LinkRpcMcpServer {
     private readonly _mcp: SdkMcpServer;
     private readonly _pool: IConnectionPool;
     private readonly _tasks = new TaskRegistry();
+    private readonly _onToolCall: ((call: McpToolCall) => void) | undefined;
 
     public constructor(options: LinkRpcMcpServerOptions = {}) {
         this._mcp = new SdkMcpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+        this._onToolCall = options.onToolCall;
         this._pool = options.pool
             ?? (options.provider
                 ? new ProviderPool(options.provider)
@@ -192,7 +202,7 @@ export class LinkRpcMcpServer {
                     readOnlyHint: true,
                 },
             },
-            async (args) => {
+            async (args) => this._observeToolCall("runLinkRpcScript", args, async () => {
                 let pooled: PooledConnection;
                 try {
                     pooled = await this._pool.resolve(args.connection);
@@ -352,7 +362,7 @@ export class LinkRpcMcpServer {
                 } finally {
                     disposeTrace();
                 }
-            },
+            }),
         );
 
         this._mcp.registerTool(
@@ -373,13 +383,13 @@ export class LinkRpcMcpServer {
                 },
                 annotations: { readOnlyHint: true },
             },
-            async (args) => {
+            async (args) => this._observeToolCall("awaitLinkRpcTask", args, async () => {
                 const res = await this._tasks.awaitTask(args.taskId, args.timeoutMs ?? 30_000);
                 if (res.status === "unknown") {
                     return _errorResult(`No task with id ${args.taskId}`);
                 }
                 return _presentTaskResult(res, args.presentation);
-            },
+            }),
         );
 
         this._mcp.registerTool(
@@ -396,15 +406,29 @@ export class LinkRpcMcpServer {
                 // Cancelling only affects a task created through this MCP session.
                 annotations: { readOnlyHint: true },
             },
-            async (args) => {
+            async (args) => this._observeToolCall("cancelLinkRpcTask", args, async () => {
                 const res = await this._tasks.cancel(args.taskId);
                 if (res.status === "unknown") {
                     return _errorResult(`No task with id ${args.taskId}`);
                 }
                 return _presentTaskResult(res, args.presentation);
-            },
+            }),
         );
 
+    }
+
+    private async _observeToolCall<Args, Result>(
+        name: string,
+        args: Args,
+        invoke: () => Promise<Result>,
+    ): Promise<Result> {
+        const result = await invoke();
+        try {
+            this._onToolCall?.({ name, arguments: args, result });
+        } catch {
+            // Observability must not change the tool result.
+        }
+        return result;
     }
 }
 

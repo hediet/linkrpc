@@ -37,6 +37,40 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
+  packages-private/linkrpc-eval-runner:
+    dependencies:
+      '@hediet/linkrpc':
+        specifier: workspace:*
+        version: link:../../packages/linkrpc
+      '@hediet/linkrpc-hub':
+        specifier: workspace:*
+        version: link:../../packages/linkrpc-hub
+      '@hediet/linkrpc-mcp':
+        specifier: workspace:*
+        version: link:../../packages/linkrpc-mcp
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.30.0(zod@4.4.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.14(tsx@4.22.4)(typescript@6.0.3)
+      tsx:
+        specifier: 4.22.4
+        version: 4.22.4
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@22.20.1)(tsx@4.22.4)
+
   packages/linkrpc:
     dependencies:
       '@hpke/core':
@@ -2210,7 +2244,7 @@ snapshots:
 
   '@types/ws@8.18.1':
     dependencies:
-      '@types/node': 20.19.43
+      '@types/node': 22.20.1
 
   '@vitest/expect@3.2.7':
     dependencies:
