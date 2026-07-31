@@ -51,21 +51,21 @@ describe("RecordingCache", () => {
     it("includes the complete input in recording lookup", async () => {
         const cache = new RecordingCache(new MemoryRecordingStore());
         let runCount = 0;
-        const fn: RecordableFunction<{ llmSeed: number }, number, undefined> = {
+        const fn: RecordableFunction<{ sampleId: number }, number, undefined> = {
             id: "seeded",
             version: "1",
             async run(input) {
                 runCount++;
-                return { output: input.llmSeed, evidence: undefined };
+                return { output: input.sampleId, evidence: undefined };
             },
             async validate() {
                 return { valid: true };
             },
         };
 
-        await cache.resolve(fn, { llmSeed: 0 });
-        await cache.resolve(fn, { llmSeed: 1 });
-        await cache.resolve(fn, { llmSeed: 0 });
+        await cache.resolve(fn, { sampleId: 0 });
+        await cache.resolve(fn, { sampleId: 1 });
+        await cache.resolve(fn, { sampleId: 0 });
         expect(runCount).toBe(2);
     });
 });

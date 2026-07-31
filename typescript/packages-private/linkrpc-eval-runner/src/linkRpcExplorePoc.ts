@@ -7,23 +7,26 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
     createSeededMemoryPrincipal,
-    defineInterface,
-    requestType,
     TransportPair,
 } from "@hediet/linkrpc";
 import { HubSigningSender } from "@hediet/linkrpc/hub/client";
 import {
     createHubServiceInterfaces,
     Hub,
-    hubRegisterServiceId,
     registerHubServices,
     RootOverlay,
     withVerifiedSignature,
 } from "@hediet/linkrpc-hub/hub/server";
+import type { McpExploreCall, McpToolCall } from "@hediet/linkrpc-mcp";
 import { McpSocketHost } from "@hediet/linkrpc-mcp/node";
-import { z } from "zod";
 import { evaluate, type Score, type Scorer } from "./evaluation";
 import { FileRecordingStore } from "./fileRecordingStore";
+import {
+    getLinkRpcExploreScenario,
+    linkRpcExploreScenarios,
+    registerLinkRpcExploreCatalog,
+    type ExploreScenario,
+} from "./linkRpcExploreScenarios";
 import {
     hashValue,
     RecordingCache,
@@ -31,128 +34,9 @@ import {
     type ValidationResult,
 } from "./recordingCache";
 
-interface McpToolCall {
-    readonly name: string;
-    readonly arguments: unknown;
-    readonly result: unknown;
-}
-
-const workspaceIndexInterface = defineInterface(
-    {
-        id: "vscode.workspaceIndex",
-        description: "Searches workspace file paths using include and exclude glob patterns.",
-    },
-    {
-        findFiles: requestType(
-            z.object({
-                include: z.string(),
-                exclude: z.string().optional(),
-                maxResults: z.number().int().positive().optional(),
-            }),
-            z.object({ uris: z.array(z.string()) }),
-            { description: "Find matching workspace files without reading their contents." },
-        ),
-    },
-);
-
-const symbolIndexInterface = defineInterface(
-    {
-        id: "vscode.symbolIndex",
-        description: "Searches programming-language symbols and their definitions.",
-    },
-    {
-        findSymbols: requestType(
-            z.object({ query: z.string() }),
-            z.object({ locations: z.array(z.string()) }),
-            { description: "Find symbol definitions by a textual symbol query." },
-        ),
-    },
-);
-
-const pullRequestInterface = defineInterface(
-    {
-        id: "vscode.pullRequests",
-        description: "Reads and updates pull-request review state.",
-    },
-    {
-        createReviewThread: requestType(
-            z.object({
-                pullRequest: z.number().int().positive(),
-                file: z.string(),
-                line: z.number().int().positive(),
-                body: z.string(),
-            }),
-            z.object({ threadId: z.string() }),
-            { description: "Create an inline review thread at a file and line in a pull request." },
-        ),
-    },
-);
-
-const issueInterface = defineInterface(
-    {
-        id: "vscode.issues",
-        description: "Creates and updates repository issues.",
-    },
-    {
-        createIssue: requestType(
-            z.object({ title: z.string(), body: z.string() }),
-            z.object({ issueNumber: z.number().int().positive() }),
-            { description: "Create a repository issue that is not attached to a code line." },
-        ),
-    },
-);
-
-interface ExploreScenario {
-    readonly id: string;
-    readonly task: string;
-    readonly expectedOperation: string;
-    register(hub: Hub): () => void;
-}
-
-export const linkRpcExploreScenarios: readonly ExploreScenario[] = [
-    {
-        id: "workspace-file-search",
-        task: "find files by an include glob while excluding generated paths",
-        expectedOperation: "workbench::vscode.workspaceIndex::findFiles",
-        register: (hub) => {
-            const service = hubRegisterServiceId(hub, "workbench");
-            service.connection.register(
-                workspaceIndexInterface,
-                { findFiles: () => ({ uris: [] }) },
-                { serviceId: "workbench" },
-            );
-            service.connection.register(
-                symbolIndexInterface,
-                { findSymbols: () => ({ locations: [] }) },
-                { serviceId: "workbench" },
-            );
-            return () => service.dispose();
-        },
-    },
-    {
-        id: "pull-request-review-thread",
-        task: "add an inline review comment to a specific file and line of a pull request",
-        expectedOperation: "source-control::vscode.pullRequests::createReviewThread",
-        register: (hub) => {
-            const service = hubRegisterServiceId(hub, "source-control");
-            service.connection.register(
-                pullRequestInterface,
-                { createReviewThread: () => ({ threadId: "thread-1" }) },
-                { serviceId: "source-control" },
-            );
-            service.connection.register(
-                issueInterface,
-                { createIssue: () => ({ issueNumber: 1 }) },
-                { serviceId: "source-control" },
-            );
-            return () => service.dispose();
-        },
-    },
-];
-
 export interface LinkRpcExploreInput {
     readonly scenarioId: string;
-    readonly llmSeed: number;
+    readonly sampleId: number;
     readonly model: string;
 }
 
@@ -160,6 +44,7 @@ export interface LinkRpcExploreOutput {
     readonly answer: string;
     readonly model: string | undefined;
     readonly toolCalls: readonly McpToolCall[];
+    readonly exploreCalls: readonly McpExploreCall[];
     readonly usage: CopilotUsage;
     readonly metrics: LinkRpcExploreMetrics;
 }
@@ -190,7 +75,7 @@ export interface LinkRpcExplorePocOptions {
     readonly copilotCommand?: string;
     readonly models?: readonly string[];
     readonly scenarios?: readonly string[];
-    readonly seeds?: readonly number[];
+    readonly samples?: readonly number[];
 }
 
 export const defaultLinkRpcExploreModels = [
@@ -201,11 +86,11 @@ export const defaultLinkRpcExploreModels = [
 
 export async function runLinkRpcExplorePoc(options: LinkRpcExplorePocOptions): Promise<void> {
     const scenarios = selectScenarios(options.scenarios);
-    const seeds = options.seeds ?? [0, 1, 2];
+    const samples = options.samples ?? [0, 1, 2];
     const models = options.models ?? defaultLinkRpcExploreModels;
     const inputs = scenarios.flatMap((scenario) =>
         models.flatMap((model) =>
-            seeds.map((llmSeed) => ({ scenarioId: scenario.id, llmSeed, model })),
+            samples.map((sampleId) => ({ scenarioId: scenario.id, sampleId, model })),
         ),
     );
     const recordable = new LinkRpcExploreRecordable(options.copilotCommand ?? "copilot");
@@ -228,9 +113,10 @@ export async function runLinkRpcExplorePoc(options: LinkRpcExplorePocOptions): P
         const scores = Object.fromEntries(result.scores.map((score) => [score.name, score.value]));
         console.log(
             `${result.input.scenarioId} model=${result.output.model ?? result.input.model}`
-            + ` seed=${result.input.llmSeed} ${result.output.cacheKind}`
+            + ` sample=${result.input.sampleId} ${result.output.cacheKind}`
             + ` answer=${scores.answer} explore=${scores.explore} efficiency=${scores.efficiency}`
-            + ` calls=${result.output.toolCalls.length}`
+            + ` toolCalls=${result.output.toolCalls.length}`
+            + ` exploreCalls=${result.output.exploreCalls.length}`
             + ` cost=${formatMetric(result.output.metrics.cost)}`
             + ` costUnit=${result.output.metrics.costUnit ?? "n/a"}`
             + ` outputTokens=${formatMetric(result.output.metrics.outputTokens, 0)}`,
@@ -238,13 +124,12 @@ export async function runLinkRpcExplorePoc(options: LinkRpcExplorePocOptions): P
         console.log(`  ${result.output.answer.replace(/\s+/g, " ").trim()}`);
     }
 
-    const allScores = results.flatMap((result) => result.scores);
-    const average = allScores.length === 0
-        ? 0
-        : allScores.reduce((sum, score) => sum + score.value, 0) / allScores.length;
     const metrics = summarizeMetrics(results.map((result) => result.output.metrics));
     console.log(
-        `overall=${average.toFixed(3)} runs=${results.length}`
+        `runs=${results.length}`
+        + ` answer=${averageScore(results, "answer").toFixed(3)}`
+        + ` explore=${averageScore(results, "explore").toFixed(3)}`
+        + ` efficiency=${averageScore(results, "efficiency").toFixed(3)}`
         + ` cost=${formatMetric(metrics.cost)}`
         + ` costUnit=${metrics.costUnit ?? "n/a"}`
         + ` outputTokens=${formatMetric(metrics.outputTokens, 0)}`,
@@ -257,7 +142,7 @@ class LinkRpcExploreRecordable implements RecordableFunction<
     readonly McpToolCall[]
 > {
     public readonly id = "linkrpc-explore/copilot-cli";
-    public readonly version = "5";
+    public readonly version = "6";
 
     public constructor(private readonly _copilotCommand: string) { }
 
@@ -267,14 +152,19 @@ class LinkRpcExploreRecordable implements RecordableFunction<
     }> {
         const scenario = getScenario(input.scenarioId);
         const toolCalls: McpToolCall[] = [];
-        const environment = await startScenarioEnvironment(scenario, (call) => toolCalls.push(call));
+        const exploreCalls: McpExploreCall[] = [];
+        const environment = await startScenarioEnvironment(
+            scenario,
+            (call) => toolCalls.push(call),
+            (call) => exploreCalls.push(call),
+        );
         const temporaryDirectory = await mkdtemp(path.join(tmpdir(), "linkrpc-explore-eval-"));
         try {
             const configPath = path.join(temporaryDirectory, "mcp.json");
             await writeFile(configPath, JSON.stringify(createMcpConfig(environment), undefined, 2));
             const response = await invokeCopilot(
                 this._copilotCommand,
-                createPrompt(scenario, input.llmSeed),
+                createLinkRpcExplorePrompt(scenario.id),
                 input.model,
                 configPath,
                 temporaryDirectory,
@@ -286,6 +176,7 @@ class LinkRpcExploreRecordable implements RecordableFunction<
                 answer: response.content,
                 model: response.model,
                 toolCalls: [...toolCalls],
+                exploreCalls: [...exploreCalls],
                 usage: response.usage,
                 metrics: createMetrics(response.usage, response.outputTokens),
             };
@@ -337,28 +228,52 @@ class LinkRpcExploreRecordable implements RecordableFunction<
     }
 }
 
-const exploreScorers: readonly Scorer<LinkRpcExploreInput, LinkRpcExploreEvaluationOutput>[] = [
-    (input, output): Score => {
-        const expected = getScenario(input.scenarioId).expectedOperation;
-        return {
+export interface LinkRpcExploreScores {
+    readonly answer: Score;
+    readonly explore: Score;
+    readonly efficiency: Score;
+}
+
+export function scoreLinkRpcExploreOutput(
+    input: LinkRpcExploreInput,
+    output: LinkRpcExploreOutput,
+): LinkRpcExploreScores {
+    const expected = getScenario(input.scenarioId).expectedOperation;
+    const actual = output.answer.trim();
+    const successfulExploreCalls = output.exploreCalls.filter((call) => "result" in call).length;
+    const exploreCallCount = output.exploreCalls.length;
+    return {
+        answer: {
             name: "answer",
-            value: output.answer.includes(expected) ? 1 : 0,
-            details: { expected },
-        };
-    },
-    (_input, output): Score => ({
-        name: "explore",
-        value: output.toolCalls.some((call) =>
-            call.name === "runLinkRpcScript"
-            && typeof (call.arguments as { code?: unknown }).code === "string"
-            && (call.arguments as { code: string }).code.includes("con.explore")
-        ) ? 1 : 0,
-    }),
-    (_input, output): Score => ({
-        name: "efficiency",
-        value: output.toolCalls.length <= 3 ? 1 : output.toolCalls.length <= 5 ? 0.5 : 0,
-        details: { toolCalls: output.toolCalls.length },
-    }),
+            value: actual === expected ? 1 : 0,
+            details: { expected, actual },
+        },
+        explore: {
+            name: "explore",
+            value: successfulExploreCalls > 0 ? 1 : 0,
+            details: {
+                successfulExploreCalls,
+                failedExploreCalls: exploreCallCount - successfulExploreCalls,
+            },
+        },
+        efficiency: {
+            name: "efficiency",
+            value: exploreCallCount === 0
+                ? 0
+                : exploreCallCount <= 2
+                    ? 1
+                    : exploreCallCount <= 4
+                        ? 0.5
+                        : 0,
+            details: { exploreCalls: exploreCallCount },
+        },
+    };
+}
+
+const exploreScorers: readonly Scorer<LinkRpcExploreInput, LinkRpcExploreEvaluationOutput>[] = [
+    (input, output) => scoreLinkRpcExploreOutput(input, output).answer,
+    (input, output) => scoreLinkRpcExploreOutput(input, output).explore,
+    (input, output) => scoreLinkRpcExploreOutput(input, output).efficiency,
 ];
 
 interface ScenarioEnvironment {
@@ -370,10 +285,11 @@ interface ScenarioEnvironment {
 async function startScenarioEnvironment(
     scenario: ExploreScenario,
     onToolCall?: (call: McpToolCall) => void,
+    onExploreCall?: (call: McpExploreCall) => void,
 ): Promise<ScenarioEnvironment> {
     const hub = new Hub({ debugName: `eval-${scenario.id}` });
     const hubServices = createHubServiceInterfaces(hub);
-    const disposeScenario = scenario.register(hub);
+    const disposeScenario = registerLinkRpcExploreCatalog(hub);
     const principal = await createSeededMemoryPrincipal({ seed: 0 });
     const host = await McpSocketHost.start({
         label: `eval-${scenario.id}`,
@@ -392,6 +308,7 @@ async function startScenarioEnvironment(
                 serverOptions: {
                     provider: async () => HubSigningSender.create(participantPair.b, principal),
                     onToolCall,
+                    onExploreCall,
                 },
                 dispose: () => {
                     overlay.dispose();
@@ -437,13 +354,13 @@ function createMcpConfig(environment: ScenarioEnvironment): unknown {
     };
 }
 
-function createPrompt(scenario: ExploreScenario, llmSeed: number): string {
+export function createLinkRpcExplorePrompt(scenarioId: string): string {
+    const scenario = getScenario(scenarioId);
     return [
         "Use only the linkrpc-eval MCP server and its runLinkRpcScript tool.",
         "Discover the available LinkRPC interfaces with con.explore. Do not execute a domain operation.",
         `Identify the exact fully qualified LinkRPC operation for this task: ${scenario.task}.`,
         "Reply with only serviceId::interfaceId::member and no explanation.",
-        `Sample identity (llmSeed): ${llmSeed}.`,
     ].join("\n");
 }
 
@@ -611,6 +528,18 @@ function summarizeMetrics(metrics: readonly LinkRpcExploreMetrics[]): LinkRpcExp
     };
 }
 
+function averageScore(
+    results: readonly { readonly scores: readonly Score[] }[],
+    name: string,
+): number {
+    const values = results.flatMap((result) =>
+        result.scores.filter((score) => score.name === name).map((score) => score.value)
+    );
+    return values.length === 0
+        ? 0
+        : values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
 function sumDefined(values: readonly (number | undefined)[]): number | undefined {
     const defined = values.filter((value): value is number => value !== undefined);
     return defined.length > 0 ? defined.reduce((sum, value) => sum + value, 0) : undefined;
@@ -628,11 +557,7 @@ function selectScenarios(ids: readonly string[] | undefined): readonly ExploreSc
 }
 
 function getScenario(id: string): ExploreScenario {
-    const scenario = linkRpcExploreScenarios.find((candidate) => candidate.id === id);
-    if (!scenario) {
-        throw new Error(`Unknown scenario ${JSON.stringify(id)}`);
-    }
-    return scenario;
+    return getLinkRpcExploreScenario(id);
 }
 
 function describeError(error: unknown): string {

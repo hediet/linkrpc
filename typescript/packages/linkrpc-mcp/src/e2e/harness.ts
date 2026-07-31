@@ -22,7 +22,10 @@ import {
     withForwardedCallGate,
     withVerifiedSignature,
 } from "@hediet/linkrpc-hub/hub/server";
-import { LinkRpcMcpServer } from "../server";
+import {
+    LinkRpcMcpServer,
+    type LinkRpcMcpServerOptions,
+} from "../server";
 
 /** Registers a cleanup callback to run when the current test finishes. */
 export type OnTestFinished = (fn: () => void | Promise<void>) => void;
@@ -215,10 +218,15 @@ export async function makeGatedHub(d: TestDisposableStore): Promise<GatedHub> {
  * registered on the running test, so there is no shared mutable state between
  * cases.
  */
-export async function makeGatedHarness(gated: GatedHub, d: TestDisposableStore): Promise<Client> {
+export async function makeGatedHarness(
+    gated: GatedHub,
+    d: TestDisposableStore,
+    observers: Pick<LinkRpcMcpServerOptions, "onExploreCall" | "onToolCall"> = {},
+): Promise<Client> {
     const principal = await createSeededMemoryPrincipal({ seed: 0 });
     const server = new LinkRpcMcpServer({
         provider: async () => HubSigningSender.create(gated.attachClient(), principal),
+        ...observers,
     });
     return connectClient(server, "e2e-gated-client", d);
 }

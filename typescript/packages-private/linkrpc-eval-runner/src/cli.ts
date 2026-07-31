@@ -13,7 +13,7 @@ async function main(): Promise<void> {
     }
 
     const scenarios: string[] = [];
-    const seeds: number[] = [];
+    const samples: number[] = [];
     const models: string[] = [];
     let recordingsDirectory = path.resolve(".eval-recordings", "linkrpc-explore");
     let copilotCommand: string | undefined;
@@ -32,12 +32,12 @@ async function main(): Promise<void> {
         } else if (arg === "--scenario" && value) {
             scenarios.push(value);
             index++;
-        } else if (arg === "--seed" && value) {
-            const seed = Number(value);
-            if (!Number.isInteger(seed)) {
-                throw new Error(`Invalid seed ${JSON.stringify(value)}`);
+        } else if (arg === "--sample" && value) {
+            const sample = Number(value);
+            if (!Number.isInteger(sample)) {
+                throw new Error(`Invalid sample ${JSON.stringify(value)}`);
             }
-            seeds.push(seed);
+            samples.push(sample);
             index++;
         } else {
             throw new Error(`Unknown or incomplete option ${JSON.stringify(arg)}`);
@@ -49,22 +49,22 @@ async function main(): Promise<void> {
         copilotCommand,
         models: models.length > 0 ? models : undefined,
         scenarios: scenarios.length > 0 ? scenarios : undefined,
-        seeds: seeds.length > 0 ? seeds : undefined,
+        samples: samples.length > 0 ? samples : undefined,
     });
 }
 
 function printHelp(): void {
     console.log(`Usage: eval-runner linkrpc-explore [options]
 
-Runs two LinkRPC interface-discovery scenarios with llmSeed 0, 1, and 2.
+Runs the LinkRPC interface-discovery scenarios with three independent samples.
 Default models: ${defaultLinkRpcExploreModels.join(", ")}.
 
 Options:
   --recordings <path>  Append-only recording directory
-    --copilot <command>  Copilot CLI command (default: copilot)
-    --model <id>         Run only this model (repeatable)
+  --copilot <command>  Copilot CLI command (default: copilot)
+  --model <id>         Run only this model (repeatable)
   --scenario <id>      Run only this scenario (repeatable)
-  --seed <number>      Run only this llmSeed (repeatable)`);
+  --sample <number>    Run only this sample id (repeatable)`);
 }
 
 main().catch((error) => {

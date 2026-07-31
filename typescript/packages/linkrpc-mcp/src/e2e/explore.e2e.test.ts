@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { McpExploreCall } from "../server";
 import {
   createTestDisposableStore,
   llmResult,
@@ -9,7 +10,12 @@ import {
 describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
   it("browses visible interfaces and reports gated directories", async ({ onTestFinished }) => {
     const d = createTestDisposableStore(onTestFinished);
-    const client = await makeGatedHarness(await makeGatedHub(d), d);
+    const exploreCalls: McpExploreCall[] = [];
+    const client = await makeGatedHarness(
+      await makeGatedHub(d),
+      d,
+      { onExploreCall: (call) => exploreCalls.push(call) },
+    );
 
     const response = await client.callTool({
       name: "runLinkRpcScript",
@@ -55,6 +61,12 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         ],
       }
     `);
+    expect(exploreCalls).toMatchObject([
+      {
+    arguments: { kind: "browse" },
+    result: { kind: "browse", total: 2 },
+      },
+    ]);
   });
 
   it("unlocks gated directories and pages a stable sorted listing", async ({ onTestFinished }) => {
@@ -466,7 +478,12 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
 
   it("rejects missing kinds and invalid regular expressions", async ({ onTestFinished }) => {
     const d = createTestDisposableStore(onTestFinished);
-    const client = await makeGatedHarness(await makeGatedHub(d), d);
+    const exploreCalls: McpExploreCall[] = [];
+    const client = await makeGatedHarness(
+      await makeGatedHub(d),
+      d,
+      { onExploreCall: (call) => exploreCalls.push(call) },
+    );
 
     const missingKind = await client.callTool({
       name: "runLinkRpcScript",
@@ -505,5 +522,15 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
             "isError": true,
           }
         `);
+    expect(exploreCalls).toEqual([
+      {
+        arguments: {},
+        error: "explore requires `kind: \"browse\" | \"grep\" | \"inspect\"`.",
+      },
+      {
+        arguments: { kind: "grep", pattern: "[" },
+        error: expect.stringContaining("Invalid grep regular expression"),
+      },
+    ]);
   });
 });

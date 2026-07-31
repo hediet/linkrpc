@@ -23,6 +23,10 @@ export interface McpToolCall {
     readonly result: unknown;
 }
 
+export type McpExploreCall =
+    | { readonly arguments: unknown; readonly result: unknown }
+    | { readonly arguments: unknown; readonly error: string };
+
 export interface LinkRpcMcpServerOptions {
     /**
      * Endpoint used when the tool call does not supply a `connection`. When
@@ -53,6 +57,8 @@ export interface LinkRpcMcpServerOptions {
     readonly defaultConnection?: () => DefaultTransport;
     /** Observes completed MCP tool calls exactly as their result is returned to the client. */
     readonly onToolCall?: (call: McpToolCall) => void;
+    /** Observes every sandbox `con.explore` call, including calls that fail. */
+    readonly onExploreCall?: (call: McpExploreCall) => void;
 }
 
 const CONNECTION_SCHEMA = z.string().optional().describe(
@@ -96,10 +102,12 @@ export class LinkRpcMcpServer {
     private readonly _pool: IConnectionPool;
     private readonly _tasks = new TaskRegistry();
     private readonly _onToolCall: ((call: McpToolCall) => void) | undefined;
+    private readonly _onExploreCall: ((call: McpExploreCall) => void) | undefined;
 
     public constructor(options: LinkRpcMcpServerOptions = {}) {
         this._mcp = new SdkMcpServer({ name: SERVER_NAME, version: SERVER_VERSION });
         this._onToolCall = options.onToolCall;
+        this._onExploreCall = options.onExploreCall;
         this._pool = options.pool
             ?? (options.provider
                 ? new ProviderPool(options.provider)
@@ -291,11 +299,20 @@ export class LinkRpcMcpServer {
                         // through the same `hubAccess` door `con.call` uses; it's
                         // memoized so the whole walk costs at most one consent.
                         let reflectionGrant: Promise<boolean> | undefined;
-                        const result = await explore(pooled.channel, exploreArgs, {
-                            requestReflectionAccess: () =>
-                                (reflectionGrant ??= _requestReflectionAccess(pooled.session)),
-                        });
-                        return JSON.stringify(result);
+                        try {
+                            const result = await explore(pooled.channel, exploreArgs, {
+                                requestReflectionAccess: () =>
+                                    (reflectionGrant ??= _requestReflectionAccess(pooled.session)),
+                            });
+                            this._observeExploreCall({ arguments: exploreArgs, result });
+                            return JSON.stringify(result);
+                        } catch (error) {
+                            this._observeExploreCall({
+                                arguments: exploreArgs,
+                                error: error instanceof Error ? error.message : String(error),
+                            });
+                            throw error;
+                        }
                     },
                     requestAccess: async (argsJson) => {
                         const req = argsJson === "" ? {} : JSON.parse(argsJson);
@@ -429,6 +446,14 @@ export class LinkRpcMcpServer {
             // Observability must not change the tool result.
         }
         return result;
+    }
+
+    private _observeExploreCall(call: McpExploreCall): void {
+        try {
+            this._onExploreCall?.(call);
+        } catch {
+            // Observability must not change exploration behavior.
+        }
     }
 }
 
