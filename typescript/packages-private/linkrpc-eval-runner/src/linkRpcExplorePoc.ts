@@ -448,6 +448,10 @@ async function resolveCopilotInvocation(
     command: string,
     cwd: string,
 ): Promise<{ readonly command: string; readonly args: readonly string[]; readonly shell: boolean }> {
+    if (command.endsWith(".js")) {
+        await access(command);
+        return { command: process.execPath, args: [command], shell: false };
+    }
     if (process.platform !== "win32" || command !== "copilot") {
         return { command, args: [], shell: process.platform === "win32" };
     }
