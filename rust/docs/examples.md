@@ -1,10 +1,10 @@
-# hubrpc examples — Pizza order service
+# linkrpc examples — Pizza order service
 
 > **Status: design sketch.** This document shows the *target* developer experience for the
-> Rust `hubrpc` port using API that does **not exist yet**. It is the north star the
+> Rust `linkrpc` port using API that does **not exist yet**. It is the north star the
 > implementation aims for, not working code. See `plan.md` for the build phases.
 >
-> **Implemented subset (today).** The `#[hub_rpc_interface]` macro already works for the
+> **Implemented subset (today).** The `#[link_rpc_interface]` macro already works for the
 > non-streaming core. The shipped shape differs from the tarpc sketch below in a few ways:
 > the generated trait methods take **`&self`** and a **`&CallCtx`** first arg (not `self`
 > by value + tarpc `Context`); the interface builder is **`pizza_service::interface()`** (a
@@ -13,17 +13,17 @@
 > **`PizzaServiceClient::new(conn)`** with plain `async fn` methods returning
 > `Result<T, JsonRpcError>`. Streaming attributes (`#[incoming_stream]` / `#[outgoing_stream]`)
 > are rejected for now. The runnable reference is
-> `crates/hubrpc-tokio/tests/macro_pizza.rs`.
+> `crates/linkrpc-tokio/tests/macro_pizza.rs`.
 
 The model is **tarpc-based**: you write a clean, bare trait spec (no `self`, no `ctx`, no
-stream args). The `#[hub_rpc_interface]` macro **rewrites** it into the real service trait
+stream args). The `#[link_rpc_interface]` macro **rewrites** it into the real service trait
 (injecting `self` + a `Context` first arg, plus stream handles) and additionally emits:
 
 - the **rewritten `PizzaService` trait** the provider implements,
 - a **`PizzaServiceClient`** struct (the caller proxy; `ctx`-first methods),
 - a **`serve()`** adapter (turns an impl into a request handler),
 - internal **`PizzaServiceRequest` / `PizzaServiceResponse`** wire enums,
-- hubrpc bits: **`PizzaService::interface()`** with its `id@hash`, `::` method-name routing,
+- linkrpc bits: **`PizzaService::interface()`** with its `id@hash`, `::` method-name routing,
   and reflection registration.
 
 Stream directions are named **from the caller's perspective**:
@@ -41,7 +41,7 @@ This crate is shared by both the provider and the consumer — it is the single 
 truth for the contract (and its `id@hash`).
 
 ```rust
-use hubrpc::prelude::*;
+use linkrpc::prelude::*;
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -104,7 +104,7 @@ pub enum KitchenError {
 /// NOTE: this is a **bare tarpc-style spec**. No `self`, no `ctx`, and no stream
 /// arguments appear here; the macro injects them into the generated trait + client.
 /// Doc comments, `#[annotations(...)]`, and the `id` are normative (hashed).
-#[hub_rpc_interface(id = "com.acme.pizza")]
+#[link_rpc_interface(id = "com.acme.pizza")]
 pub trait PizzaService {
     /// Place a new pizza order. Charges money.
     #[annotations(dangerous)]
@@ -143,7 +143,7 @@ The provider implements the trait the macro generated. Every method gains `self`
 `OutgoingStream<T>` handle(s).
 
 ```rust
-use hubrpc::prelude::*;
+use linkrpc::prelude::*;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -219,7 +219,7 @@ captured by `Arc`.
 async fn main() -> anyhow::Result<()> {
     let shop = Arc::new(PizzaShop::new());
 
-    serve_unix("/tmp/pizza.sock", move |conn: &HubRpcConnection, prov: &ConnectionProvenance| {
+    serve_unix("/tmp/pizza.sock", move |conn: &LinkRpcConnection, prov: &ConnectionProvenance| {
         let _who = prov;                                     // verified uid/pid/container (pre-RPC)
 
         conn.serve(shop.clone().serve());                    // interface inferred from handler
@@ -234,7 +234,7 @@ For a single peer link (stdio, or a hub connection) there is no acceptor — bui
 connection directly:
 
 ```rust
-let conn = HubRpcConnection::new(StdioTransport::new());
+let conn = LinkRpcConnection::new(StdioTransport::new());
 conn.serve(Arc::new(PizzaShop::new()).serve());          // interface inferred; use serve_as("id", …) to mount
 conn.run().await?;
 ```
@@ -248,11 +248,11 @@ The consumer depends on the **same shared crate** and drives the generated
 `context::current()`.
 
 ```rust
-use hubrpc::prelude::*;
+use linkrpc::prelude::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let conn = HubRpcConnection::connect(UnixSocketTransport::dial("/tmp/pizza.sock").await?);
+    let conn = LinkRpcConnection::connect(UnixSocketTransport::dial("/tmp/pizza.sock").await?);
     let pizza = PizzaServiceClient::new(stub_config(), conn.clone()).spawn();
 
     // 1) plain request/response — inline params:
@@ -285,7 +285,7 @@ async fn main() -> anyhow::Result<()> {
     pizza.cancel_order(context::current(), c.order_id).await;
 
     // 6) reflection — the directory interface is just another generated client.
-    let entries = HubRpcDirectoryClient::new(stub_config(), conn).spawn()
+    let entries = LinkRpcDirectoryClient::new(stub_config(), conn).spawn()
         .list(context::current(), Default::default()).await?;
     println!("peer exposes {} interfaces", entries.len());
 
@@ -326,9 +326,9 @@ impl PizzaService for PizzaShop {
 Registering `PizzaService` on a connection also exposes the three reflection interfaces, so
 any peer can discover and introspect the service without prior knowledge:
 
-- **`hubrpc.directory`** — list the interfaces this connection serves (`id@hash`).
-- **`hubrpc.schemas`** — fetch the full `HubRpcInterfaceSchema` for an `id@hash`.
-- **`hubrpc.defaults`** — connection defaults (preset interface, etc.).
+- **`linkrpc.directory`** — list the interfaces this connection serves (`id@hash`).
+- **`linkrpc.schemas`** — fetch the full `LinkRpcInterfaceSchema` for an `id@hash`.
+- **`linkrpc.defaults`** — connection defaults (preset interface, etc.).
 
 Because the interface identity is a content hash of the (normalized) schema, a Rust server
 and a TS client agree on `com.acme.pizza@<hash>` only when their contracts are structurally

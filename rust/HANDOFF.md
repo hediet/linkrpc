@@ -1,19 +1,16 @@
-# Handoff — hubrpc Rust port (continue in Codespace)
+# Handoff — linkrpc Rust port (continue in Codespace)
 
-This file is the working context for continuing the Rust port of `hubrpc` (the
-TypeScript RPC framework at
-`vscode-team-tools/packages/hubrpc/hubrpc`). It exists so an agent (Copilot CLI)
-running **inside the Codespace** can pick up exactly where the Windows host
-session left off. Delete it once M6 lands if you like — it is a scratch handoff,
-not permanent docs.
+This file is the working context for continuing the Rust port of `linkrpc` in
+this monorepo. It exists so an agent (Copilot CLI) running **inside the
+Codespace** can pick up exactly where the Windows host session left off. Delete
+it once M6 lands if you like — it is a scratch handoff, not permanent docs.
 
 > **Resume (2026-06-22):** Codespace `bookish-spork-7rxjp5jv9v3xqwx` on
-> `hediet/hubrpc-rust@main` (rustc 1.96, Node 24). Baseline verified green on
+> `hediet/linkrpc@main` in the `rust/` workspace (rustc 1.96, Node 24). Baseline verified green on
 > Linux: `cargo fmt --check`, `cargo clippy --workspace --all-targets -D warnings`,
-> `cargo test --workspace` → **50 tests**. The TS reference repo is **not** present
-> in the Codespace, so the authoritative endpoint logic to port is captured inline
-> below (see "NEXT TASK — M6") and in `executionPlan.md` Appendix A. Start the
-> Copilot CLI here and continue with **M6 endpoint connector**.
+> `cargo test --workspace` → **50 tests**. The TypeScript reference is available
+> in `../typescript`; the endpoint-porting notes below and in `executionPlan.md`
+> Appendix A are retained as implementation history.
 
 ## Environment facts
 - Codespace toolchain: **rustc 1.96**, Node 24 (host was pinned to 1.85, which is
@@ -26,9 +23,10 @@ not permanent docs.
   cargo clippy --workspace --all-targets -- -D warnings
   cargo test --workspace        # 50 tests green as of this handoff
   ```
-- Conformance vectors: `cd conformance/generate && node gen.mjs` regenerates
-  `conformance/vectors/*.json`; CI fails if they drift. `gen-pizza-ref.mjs`
-  imports the real TS dist by absolute file URL.
+- Conformance vectors: build the TypeScript workspace, then run
+  `cd ../conformance/generate && npm run gen` to regenerate
+  `../conformance/vectors/*.json`; CI fails if they drift. `gen-pizza-ref.mjs`
+  imports the repository-local TypeScript dist by default.
 
 ## Milestone status
 | id | milestone | status |
@@ -36,8 +34,8 @@ not permanent docs.
 | M0 | workspace + interop harness | ✅ done |
 | M1 | wire core | ✅ done |
 | M2 | schema & hashing (interop canary) | ✅ done |
-| M3 | connection + reflection + `#[hub_rpc_interface]` macro | ✅ done |
-| M3 | NDJSON socket transport (`hubrpc-tokio`) | ✅ done |
+| M3 | connection + reflection + `#[link_rpc_interface]` macro | ✅ done |
+| M3 | NDJSON socket transport (`linkrpc-tokio`) | ✅ done |
 | **M6** | **WebSocket transport + env-var connector (endpoint layer)** | ✅ done |
 | M4 | identity core (Ed25519, optional but native) | pending |
 | M5 | capability gate + consent (hubAccess) | pending |
@@ -48,30 +46,30 @@ Streaming (incoming/outgoing/bidirectional) in the macro + runtime is deferred;
 `incoming_stream`/`outgoing_stream` attrs currently emit a compile error.
 
 ## Current crate layout
-- `crates/hubrpc/src/connection/` — `channel.rs`, `dispatch.rs`,
-  `hub_connection.rs` (the `HubRpcConnection` runtime), `interface_def.rs`,
+- `crates/linkrpc/src/connection/` — `channel.rs`, `dispatch.rs`,
+  `hub_connection.rs` (the `LinkRpcConnection` runtime), `interface_def.rs`,
   `reflection.rs`, `mod.rs`.
-- `crates/hubrpc-tokio/src/` — `ndjson.rs` (`NdjsonTransport` + `Preamble`),
+- `crates/linkrpc-tokio/src/` — `ndjson.rs` (`NdjsonTransport` + `Preamble`),
   `unix.rs` (`#[cfg(unix)]` `connect_unix` / `UnixHubListener` — **now compiles
   on Linux**), `lib.rs`.
-- `crates/hubrpc-macros/src/lib.rs` — `#[hub_rpc_interface]`.
-- `conformance/generate/{gen.mjs,gen-pizza-ref.mjs}` → `conformance/vectors/`.
+- `crates/linkrpc-macros/src/lib.rs` — `#[link_rpc_interface]`.
+- `../conformance/generate/{gen.mjs,gen-pizza-ref.mjs}` → `../conformance/vectors/`.
 
 ## NEXT TASK — M6 endpoint connector
 
-Goal: a Rust connector that reads `HUBRPC_ENDPOINT` / `HUBRPC_TOKEN`, parses the
+Goal: a Rust connector that reads `LINKRPC_ENDPOINT` / `LINKRPC_TOKEN`, parses the
 endpoint URI **identically to TS**, opens the right transport (UDS/pipe NDJSON
 with preamble, or WebSocket with `Authorization: Bearer`), and wraps it in a
-`HubRpcConnection`. Authoritative TS sources:
-- `hubrpc/src/connection/endpointUri.ts` — `parseEndpointUri`/`formatEndpointUri`.
-- `hubrpc/src/node/hubClient.ts` — `HUBRPC_ENDPOINT_VAR`/`HUBRPC_TOKEN_VAR`,
+`LinkRpcConnection`. Authoritative TS sources:
+- `linkrpc/src/connection/endpointUri.ts` — `parseEndpointUri`/`formatEndpointUri`.
+- `linkrpc/src/node/hubClient.ts` — `LINKRPC_ENDPOINT_VAR`/`LINKRPC_TOKEN_VAR`,
   `openHubChannel`, transport selection + preamble.
 See also `executionPlan.md` Appendix A.
 
 ### Subtask 1 — `parse_endpoint_uri` + `ResolvedEndpoint`
-New module (suggest `crates/hubrpc/src/connection/endpoint.rs`, re-export from
+New module (suggest `crates/linkrpc/src/connection/endpoint.rs`, re-export from
 `connection/mod.rs` + prelude). On the Codespace, `url = "2"` is available and
-gives WHATWG parity with Node's `URL`. Add it to `crates/hubrpc/Cargo.toml` and
+gives WHATWG parity with Node's `URL`. Add it to `crates/linkrpc/Cargo.toml` and
 the workspace `Cargo.toml` `[workspace.dependencies]`.
 
 ```rust
@@ -117,28 +115,28 @@ Algorithm (port verbatim — keep error strings byte-identical for conformance):
   `is_hub_endpoint` (true for Socket/Ws) for round-trip vectors.
 
 ### Subtask 2 — conformance vectors
-Write `conformance/generate/gen-endpoint.mjs` that **faithfully ports** the TS
+Write `../conformance/generate/gen-endpoint.mjs` that **faithfully ports** the TS
 `parseEndpointUri`/`formatEndpointUri` using Node's `URL` (the real TS endpoint
 fns are tree-shaken out of the dist — do NOT try to import them; reimplement the
 ~70 lines using `URL`, exactly like `endpointUri.ts`). Emit
-`conformance/vectors/endpoint.json` with cases covering: ws token-strip, npipe
+`../conformance/vectors/endpoint.json` with cases covering: ws token-strip, npipe
 backslashing, unix path decode, bare-string ws/socket auto-detect, unsupported
 scheme error, cmd/cmd-stdio command+argv+env, and format round-trip. Wire it
 into `gen.mjs` (or have `gen.mjs` call it) so CI regenerates it. Add a Rust test
-`crates/hubrpc/tests/endpoint_conformance.rs` that loads the vectors and asserts
+`crates/linkrpc/tests/endpoint_conformance.rs` that loads the vectors and asserts
 parse + format + error-message parity.
 
 ### Subtask 3 — env-var resolution + token precedence
-`HUBRPC_ENDPOINT` required (unset → `Err("HUBRPC_ENDPOINT is not set; cannot
-connect to hubrpc hub.")`). `HUBRPC_TOKEN` optional, defaults to `""`.
+`LINKRPC_ENDPOINT` required (unset → `Err("LINKRPC_ENDPOINT is not set; cannot
+connect to linkrpc hub.")`). `LINKRPC_TOKEN` optional, defaults to `""`.
 Token precedence for the env-var connector path:
-`--endpoint-token ?? token-from-URI ?? HUBRPC_TOKEN ?? ""`.
+`--endpoint-token ?? token-from-URI ?? LINKRPC_TOKEN ?? ""`.
 
-### Subtask 4 — connector entrypoint (`hubrpc-tokio`)
-`connect_to_hub(options) -> HubClientHandle`-ish in `hubrpc-tokio`:
+### Subtask 4 — connector entrypoint (`linkrpc-tokio`)
+`connect_to_hub(options) -> HubClientHandle`-ish in `linkrpc-tokio`:
 - `Socket { path, token }` → `connect_unix(path)` (or TCP for tests), write one
   `{"hello":1,"token":"<token>"}\n` preamble line, then `NdjsonTransport`, then
-  `HubRpcConnection`. Immediate socket close = auth failure.
+  `LinkRpcConnection`. Immediate socket close = auth failure.
 - `Ws { url, token }` → WebSocket; token in `Authorization: Bearer <token>`
   header; **no preamble**; one JSON-RPC frame per WS message. (Needs a WS dep —
   `tokio-tungstenite`. This is the M6 "WebSocket transport" half; if scoping
@@ -155,7 +153,7 @@ Token precedence for the env-var connector path:
 - Do **not** commit unless the user asks — they direct commits. Use plain `git`.
 
 ## Conventions / gotchas
-- Generated macro code references everything by absolute path (`::hubrpc`,
+- Generated macro code references everything by absolute path (`::linkrpc`,
   `::serde`, `::serde_json`, `::schemars`, `::async_trait`).
 - `schemars = "0.8"` (draft-07, `definitions`); `serde_json` has `preserve_order`.
 - Registry key = `format!("{}::{}", service_id.unwrap_or(""), interface_id)`.

@@ -1,5 +1,5 @@
 {
-	"name": "hubrpc-rust",
+	"name": "linkrpc-rust",
 	"image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
 	"features": {
 		"ghcr.io/devcontainers/features/node:1": {

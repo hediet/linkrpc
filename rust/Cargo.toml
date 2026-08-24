@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/hubrpc",
-    "crates/hubrpc-macros",
-    "crates/hubrpc-tokio",
-    "crates/hubrpc-examples",
+    "crates/linkrpc",
+    "crates/linkrpc-macros",
+    "crates/linkrpc-tokio",
+    "crates/linkrpc-examples",
 ]
 
 [workspace.package]

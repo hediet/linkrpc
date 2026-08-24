@@ -1,11 +1,11 @@
-# hubrpc-rust — The Hub
+# linkrpc-rust — The Hub
 
 > **Status: design sketch.** This explores how a **hub** looks for the Rust port, mirroring the
-> TypeScript `@vscode/hubrpc-hub` package. The hub is an *optional, separate crate* layered on top
+> TypeScript `@hediet/linkrpc-hub` package. The hub is an *optional, separate crate* layered on top
 > of the core (`docs/architecture.md`) — the core RPC/connection model does not depend on it.
 > Signatures are illustrative.
 
-A single `HubRpcConnection` links exactly **two** peers. A **hub** is what you reach for when you
+A single `LinkRpcConnection` links exactly **two** peers. A **hub** is what you reach for when you
 want *many* participants to discover and call each other over one endpoint (a WebSocket server, a
 Unix socket, an iframe bus). It is a **message router**, not an RPC server: it forwards
 JSON-RPC messages between links based on the `serviceId` prefix in the method name, and serves a
@@ -139,7 +139,7 @@ exactly like a response (never dropped by `H·root → drop`).
 
 ## 4. `RootOverlay` — the per-participant front door
 
-A `RootOverlay` is an `OverlaySplitter` wiring plus a `HubRpcConnection` for the participant's
+A `RootOverlay` is an `OverlaySplitter` wiring plus a `LinkRpcConnection` for the participant's
 **root services**. It deliberately has **no routing table and no knowledge of which services it
 serves** — it represents exactly one participant.
 
@@ -147,7 +147,7 @@ serves** — it represents exactly one participant.
 struct RootOverlay {
     /// The per-participant root connection. Register root services here; reachable only by
     /// this overlay's participant (root-addressed calls land here, never forwarded).
-    root: HubRpcConnection,
+    root: LinkRpcConnection,
 }
 
 impl RootOverlay {
@@ -163,15 +163,15 @@ participant's uplink), not in any local table.
 
 ## 5. The root services (served at the overlay root)
 
-These are ordinary hubrpc interfaces served on `overlay.root`. They are addressed in **root form**
+These are ordinary linkrpc interfaces served on `overlay.root`. They are addressed in **root form**
 (`interfaceId::member`), so by the splitter rule `P·root → C` they are reached **directly and are
 never forwarded → never capability-gated**. That's what makes them safe bootstrap surfaces.
 
 | interface | members | purpose |
 |---|---|---|
-| `hubrpc.directory` | `list` | **referral-only** at a hub: one `<prefix>::hubrpc.directory` row per claimed prefix |
-| `hubrpc.schemas` | `get` | schema for an `id@hash` |
-| `hubrpc.defaults` | `get` | connection preset, if any |
+| `linkrpc.directory` | `list` | **referral-only** at a hub: one `<prefix>::linkrpc.directory` row per claimed prefix |
+| `linkrpc.schemas` | `get` | schema for an `id@hash` |
+| `linkrpc.defaults` | `get` | connection preset, if any |
 | `hubGrantedServiceId` | `get`, `register` | connection facts + **capability-free** serviceId claims *within* the granted namespace |
 | `hubParticipant` | `registerServiceId` | claims **outside** the granted namespace (admin-capability gated, addressed via the hub's own serviceId) |
 | `hubAccess` | `request`, `extend`, `requestAccess` | the **consent front door** — a consumer asks for scoped access; returns `SignedCapability`s |
@@ -184,8 +184,8 @@ The split between the two claim doors is deliberate:
 - `<hubServiceId>::hubParticipant::registerServiceId` — claim a prefix **outside** that namespace.
   Fully-qualified (so it forwards to the hub) and **admin-capability gated**.
 
-`hubrpc.directory::list` is **referral-only** on a hub: it lists a row *per claimed prefix*
-(`<prefix>::hubrpc.directory`) rather than the prefix's leaf interfaces. Flattening the tree into a
+`linkrpc.directory::list` is **referral-only** on a hub: it lists a row *per claimed prefix*
+(`<prefix>::linkrpc.directory`) rather than the prefix's leaf interfaces. Flattening the tree into a
 full inventory is the consumer's job — a `walk_hub_detailed` breadth-first walk over the referral
 tree (shared by the CLI and the hub's own access-candidate resolution).
 
@@ -256,7 +256,7 @@ authenticity-only (signature-without-capability) middle ground:
 enum ForwardCheckingPolicy {
     /// Forwarded calls reach the hub unverified.
     Off,
-    /// Forwarded (fully-qualified) calls must carry a valid `$hubrpc` signature AND a capability
+    /// Forwarded (fully-qualified) calls must carry a valid `$linkrpc` signature AND a capability
     /// rooted at one of `admin_ids`. `admin_ids` is REQUIRED (an empty anchor set fails closed →
     /// rejects everything, including validly granted capabilities).
     Capability { admin_ids: Vec<NodeId> },
@@ -307,16 +307,16 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-A participant then connects with an ordinary `HubRpcConnection`, claims a prefix
+A participant then connects with an ordinary `LinkRpcConnection`, claims a prefix
 (`hub.register_service_id_namespace("acme")`), serves its interfaces under it, and other
-participants discover it via `hubrpc.directory::list` and call it through the hub by
+participants discover it via `linkrpc.directory::list` and call it through the hub by
 `acme::com.acme.pizza::order`.
 
 ---
 
 ## 10. Rust placement & phasing
 
-- **Separate crate** (`crates/hubrpc-hub`), depending on `hubrpc` core. The core (P1–P5) never
+- **Separate crate** (`crates/linkrpc-hub`), depending on `linkrpc` core. The core (P1–P5) never
   imports it.
 - Building blocks already modeled in the core: `MessageTransport`, `TransportPair`,
   `MultiplexedTransport`, the `::` grammar, `$stream::send` correlation, and the receive-side

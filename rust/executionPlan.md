@@ -1,9 +1,9 @@
-# hubrpc-rust — Execution Plan
+# linkrpc-rust — Execution Plan
 
 > **Companion to** `docs/architecture.md` (theory), `docs/examples.md` (target DX),
 > `docs/hub.md` (hub layer). Those describe *what* we are building; this file describes the
 > *order* we build it in, the *acceptance test* for each step, and how we keep the Rust impl
-> **wire-compatible with the existing TypeScript `@vscode/hubrpc`**.
+> **wire-compatible with the existing TypeScript `@hediet/linkrpc`**.
 
 ---
 
@@ -15,7 +15,7 @@
 
 Concretely:
 
-1. **Rust connector.** A Rust binary reads `HUBRPC_ENDPOINT` + `HUBRPC_TOKEN` and connects over a
+1. **Rust connector.** A Rust binary reads `LINKRPC_ENDPOINT` + `LINKRPC_TOKEN` and connects over a
    **Unix-domain socket with NDJSON framing** (newline-delimited JSON-RPC, `hello` preamble). It
    claims a serviceId namespace and serves `com.acme.pizza` (the running example).
 2. **TS consumer (VS Code).** A TypeScript app connects to the *same* hub, walks the directory,
@@ -28,7 +28,7 @@ Concretely:
 This scenario forces three hard requirements that shape the whole plan:
 
 - **R1 — Interop is a first-class, continuously-verified property.** Every wire-visible layer
-  (JCS bytes, interface hash, JSON-RPC framing, `$hubrpc` signed envelope, capability chain,
+  (JCS bytes, interface hash, JSON-RPC framing, `$linkrpc` signed envelope, capability chain,
   `hubAccess`/directory interfaces) must match TS **byte-for-byte / decision-for-decision**.
 - **R2 — Identity ships in v1 but is optional.** The signing/capability machinery must *exist*
   from the first release (anonymous connections work; signed connections + capability gating
@@ -44,19 +44,19 @@ Interop is the single biggest risk. We treat it as a **conformance corpus**, not
 hope.
 
 ```
-conformance/
-  generate/                 # tiny Node script importing @vscode/hubrpc to emit vectors
+../conformance/
+  generate/                 # tiny Node script importing @hediet/linkrpc to emit vectors
   vectors/                  # committed JSON fixtures (the source of truth = TS)
     method_name.json        # parse/format round-trips
     jcs.json                # value → canonical UTF-8 bytes (hex)
     interface_hash.json     # interface schema → "id@hash"  (incl. pizza)
     framing.json            # sample request/response/notification/stream/error frames
-    endpoint.json           # HUBRPC_ENDPOINT URI → ResolvedEndpoint (parse + token rules)
-    signed_envelope.json    # key + payload → $hubrpc envelope; + verify pass/fail cases
+    endpoint.json           # LINKRPC_ENDPOINT URI → ResolvedEndpoint (parse + token rules)
+    signed_envelope.json    # key + payload → $linkrpc envelope; + verify pass/fail cases
     capability.json         # minted capabilities + chain-validation expected verdicts
 ```
 
-- A small **TS generator** (committed under `conformance/generate/`) imports the real TS impl and
+- A small **TS generator** (committed under `../conformance/generate/`) imports the real TS impl and
   writes `vectors/*.json`. Regenerated whenever the TS impl changes; the diff is reviewable.
 - Every Rust module that touches the wire has a test that **loads the vectors and must match**.
 - **CI runs the Rust conformance tests on every commit.** A red conformance test blocks merge.
@@ -75,10 +75,10 @@ Each milestone lists **deliverable**, **acceptance** (how we know it's done), an
 (the conformance bar it must clear). Phases `P1–P6` reference `plan.md`.
 
 ### M0 — Workspace + interop harness
-- **Deliverable.** Cargo workspace (`crates/hubrpc`, `crates/hubrpc-macros`, `crates/hubrpc-tokio`,
-  `examples/`), CI (build + clippy + test), and the `conformance/` harness from §1 with the TS
-  generator wired up and producing vectors.
-- **Acceptance.** `cargo test` green on an empty corpus loader; `npm run gen` (in `conformance/`)
+- **Deliverable.** Cargo workspace (`crates/linkrpc`, `crates/linkrpc-macros`,
+  `crates/linkrpc-tokio`, `crates/linkrpc-examples`), CI (build + clippy + test), and the
+  `../conformance/` harness from §1 with the TS generator wired up and producing vectors.
+- **Acceptance.** `cargo test` green on an empty corpus loader; `npm run gen` (in `../conformance/`)
   produces `vectors/*.json`; CI runs both.
 - **Interop gate.** Harness exists and is enforced by CI (even if no vectors assert yet).
 
@@ -100,19 +100,19 @@ Each milestone lists **deliverable**, **acceptance** (how we know it's done), an
   server and TS client to agree on `id@hash`.
 
 ### M3 — Connection + reflection + macro (P3)
-- **Deliverable.** `InterfaceDefinition`, `HubRpcConnection` (register / get / dispatch / validate /
-  preset), the three reflection interfaces (`hubrpc.directory`, `hubrpc.schemas`,
-  `hubrpc.defaults`), and the `#[hub_rpc_interface]` proc-macro (emits the rewritten trait, the
+- **Deliverable.** `InterfaceDefinition`, `LinkRpcConnection` (register / get / dispatch / validate /
+  preset), the three reflection interfaces (`linkrpc.directory`, `linkrpc.schemas`,
+  `linkrpc.defaults`), and the `#[link_rpc_interface]` proc-macro (emits the rewritten trait, the
   `…Client` struct, `serve()`, and `interface()`), per `docs/examples.md`.
 - **Acceptance.** The pizza example from `docs/examples.md` runs: Rust provider ↔ Rust caller over
-  the in-memory pair **and** over a Unix socket (`hubrpc-tokio`).
+  the in-memory pair **and** over a Unix socket (`linkrpc-tokio`).
 - **Interop gate.** **Cross-impl, unsigned:** a Rust caller invokes a TS-served service and a TS
-  caller invokes a Rust-served service over a socket; reflection (`hubrpc.directory::list`,
-  `hubrpc.schemas::get`) returns identical shapes both directions.
+  caller invokes a Rust-served service over a socket; reflection (`linkrpc.directory::list`,
+  `linkrpc.schemas::get`) returns identical shapes both directions.
 
 ### M4 — Identity core (R2: present in v1, optional)
 - **Deliverable.** `SigningIdentity` abstraction (Ed25519 in-memory now; pluggable HSM later),
-  branded `NodeId` derived from the public key, the `$hubrpc` **signed envelope**
+  branded `NodeId` derived from the public key, the `$linkrpc` **signed envelope**
   (canonical signing input, sign/verify, clock-skew window), and the `Principal` / capability data
   model. All **optional at the connection level** — anonymous connections work unchanged; the
   verify path is only engaged when a signature is present or required.
@@ -134,14 +134,14 @@ Each milestone lists **deliverable**, **acceptance** (how we know it's done), an
   audience / root-issuer verdicts match the corpus exactly.
 
 ### M6 — Socket transport + hub client (the connector)
-- **Deliverable.** The **endpoint layer** (`parse_endpoint_uri` + `HUBRPC_ENDPOINT`/`HUBRPC_TOKEN`
+- **Deliverable.** The **endpoint layer** (`parse_endpoint_uri` + `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`
   resolution — see Appendix A for the exact contract), a **Unix-domain-socket transport with NDJSON
   framing + `hello` preamble** (the north-star transport), `connect_to_hub`, and a thin **hub client
   facade** (`get_connection_info` → `hubGrantedServiceId::get`, `register_service_id_namespace` →
   `hubGrantedServiceId::register`, `walk_hub_detailed` directory flattening). The **env-var
-  connector**: a `hubrpc-connect` entrypoint reading `HUBRPC_ENDPOINT` + `HUBRPC_TOKEN`.
+  connector**: a `linkrpc-connect` entrypoint reading `LINKRPC_ENDPOINT` + `LINKRPC_TOKEN`.
   WebSocket / named-pipe transports are deferred (not on the north-star path).
-- **Acceptance.** `HUBRPC_ENDPOINT=… HUBRPC_TOKEN=… hubrpc-connect` connects to the **existing TS
+- **Acceptance.** `LINKRPC_ENDPOINT=… LINKRPC_TOKEN=… linkrpc-connect` connects to the **existing TS
   standalone hub**, claims a namespace, serves pizza, and the Rust process appears in the hub's
   directory.
 - **Interop gate.** `endpoint.json` parse parity passes; **live**: Rust connector against the
@@ -157,7 +157,7 @@ Each milestone lists **deliverable**, **acceptance** (how we know it's done), an
 - **Interop gate.** This *is* the integration gate — the whole stack interoperating with TS.
 
 ### M8 — Rust hub server (P6, optional / parallelizable)
-- **Deliverable.** `crates/hubrpc-hub`: `Hub` longest-prefix router, `OverlaySplitter`,
+- **Deliverable.** `crates/linkrpc-hub`: `Hub` longest-prefix router, `OverlaySplitter`,
   `RootOverlay`, `HubConnectionAcceptor`, prefix policy, forwarded-call gate, root services
   (`hubGrantedServiceId` / `hubParticipant` / `hubAccess` / `identity`), directory referral-walk,
   and a standalone WS hub CLI (signed-by-default, token auth). See `docs/hub.md`.
@@ -189,15 +189,15 @@ M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M6 ─▶ M7
 
 ## 4. Key design commitments carried in (from the docs)
 
-- **Macro model = tarpc conventions, hubrpc codegen.** Bare trait spec → macro rewrites to
-  `self`+`Context`, emits `…Client` / `serve()` / `interface()` (hubrpc wire, not tarpc's).
+- **Macro model = tarpc conventions, linkrpc codegen.** Bare trait spec → macro rewrites to
+  `self`+`Context`, emits `…Client` / `serve()` / `interface()` (linkrpc wire, not tarpc's).
 - **Identity optional but native** (R2): `MessageTransport` (bytes) ⟂ `Attested` (provenance) ⟂
   `SigningIdentity` (keys); `CapGate` is a receive-side `RequestHandler` decorator, installed only
   when gating is on.
 - **`ForwardCheckingPolicy` fails closed by type** — capability mode can't compile without trust
   anchors.
-- **Reflection is the discovery API** (R3): `hubrpc.directory` (referral-walkable),
-  `hubrpc.schemas`, `hubrpc.defaults` — the AI exploration surface.
+- **Reflection is the discovery API** (R3): `linkrpc.directory` (referral-walkable),
+  `linkrpc.schemas`, `linkrpc.defaults` — the AI exploration surface.
 - **Streaming** (P4) is *not* on the north-star critical path (pizza `order` is unary). Slot it
   after M3 if/when a streaming method is demoed; otherwise defer.
 
@@ -212,7 +212,7 @@ M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M6 ─▶ M7
 | 3 | **Capability semantics** (attenuation, audience, root-issuer fail-closed) drift from TS. | M5 two-way `capability.json` vectors. |
 | 4 | **TS hub handshake/token** details (WS subprotocol, auth framing). | M6 live test against the real TS hub; read `connectToHubWs`. |
 | 5 | **Streaming interop** if a streamed method enters the demo. | Add a streaming milestone before that demo; vector its frames. |
-| 6 | Async runtime lock-in. | Core stays runtime-agnostic; `tokio` confined to `hubrpc-tokio`. |
+| 6 | Async runtime lock-in. | Core stays runtime-agnostic; `tokio` confined to `linkrpc-tokio`. |
 
 **Open questions for you:**
 1. **Hub ownership** — is a *Rust* hub (M8) a goal, or is interop with the existing TS hub enough
@@ -221,28 +221,28 @@ M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M6 ─▶ M7
 3. **Capability minting** — does the Rust side ever need to *mint/admin* capabilities, or only
    *present/verify* them (consumer + provider roles, admin stays TS)?
 4. **AI surface shape** — is programmatic directory/schema enumeration enough, or do you want a CLI
-   (`hubrpc ls` / `hubrpc describe`) and/or an MCP server fronting the hub?
+   (`linkrpc ls` / `linkrpc describe`) and/or an MCP server fronting the hub?
 
 ---
 
 ## Appendix A — The endpoint contract (what the Rust connector must reproduce)
 
 Distilled from the TS source so the Rust connector reads/parses identically:
-- `hubrpc/src/connection/endpointUri.ts` — `parseEndpointUri` / `formatEndpointUri`.
-- `hubrpc/src/node/hubClient.ts` — `HUBRPC_ENDPOINT_VAR` / `HUBRPC_TOKEN_VAR`, `openHubChannel`,
+- `linkrpc/src/connection/endpointUri.ts` — `parseEndpointUri` / `formatEndpointUri`.
+- `linkrpc/src/node/hubClient.ts` — `LINKRPC_ENDPOINT_VAR` / `LINKRPC_TOKEN_VAR`, `openHubChannel`,
   transport selection + preamble.
-- `hubrpc-cli/src/endpoint.ts` — token-precedence rules.
+- `linkrpc-cli/src/endpoint.ts` — token-precedence rules.
 
 ### Environment variables
-- **`HUBRPC_ENDPOINT`** — required. If unset, fail with
-  *"HUBRPC_ENDPOINT is not set; cannot connect to hubrpc hub."*
-- **`HUBRPC_TOKEN`** — optional; **defaults to `""`** (empty string) when connecting. Empty token
+- **`LINKRPC_ENDPOINT`** — required. If unset, fail with
+  *"LINKRPC_ENDPOINT is not set; cannot connect to linkrpc hub."*
+- **`LINKRPC_TOKEN`** — optional; **defaults to `""`** (empty string) when connecting. Empty token
   is valid against provenance-authenticated (hubv2) hubs, which ignore it.
 
 ### Endpoint URI grammar (`parse_endpoint_uri`)
 Trim first; empty → error. Try `URL` parse. **If it does NOT parse as a URL (bare string):**
 - matches `^wss?://` (case-insensitive) → `Ws { url }`
-- otherwise → `Socket { path }` (legacy bare `HUBRPC_ENDPOINT`).
+- otherwise → `Socket { path }` (legacy bare `LINKRPC_ENDPOINT`).
 
 **If it parses as a URL, switch on scheme:**
 
@@ -252,7 +252,7 @@ Trim first; empty → error. Try `URL` parse. **If it does NOT parse as a URL (b
 | `unix:` | `Socket { path, token? }` | `path = decodeURIComponent(pathname)`; `?token=` |
 | `npipe:` | `Socket { path, token? }` | `npipe://host/tail` → `\\<host>\<tail>` (host defaults `.`; `decodeURIComponent`, `/`→`\`); `?token=` |
 | `cmd-stdio:` | `CmdStdio { command, env? }` | spawn child, talk over its stdio |
-| `cmd:` | `CmdEnv { command, provisionSlot?, env? }` | start a local hub, inject `HUBRPC_ENDPOINT`/`HUBRPC_TOKEN` into the child |
+| `cmd:` | `CmdEnv { command, provisionSlot?, env? }` | start a local hub, inject `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` into the child |
 | anything else | **error** | *"unsupported endpoint scheme …"* |
 
 Command payload: repeated `?argv=` params → `{ argv }` (structure-preserving), else `?command=` →
@@ -261,9 +261,9 @@ splits). For the **connector** (a participant that dials a hub), only `ws`/`wss`
 matter — `isHubEndpoint()` is true only for `socket` and `ws`. The `cmd*` schemes are *spawn*
 modes, out of scope for v1's "connect to an existing hub."
 
-### Token precedence (env-var path — what `hubrpc-connect` uses)
-`--endpoint-token (if any)` ?? `token from the URI` ?? `HUBRPC_TOKEN` ?? `""`.
-(Explicit `--endpoint <uri>` path differs: it never falls back to `HUBRPC_TOKEN`.)
+### Token precedence (env-var path — what `linkrpc-connect` uses)
+`--endpoint-token (if any)` ?? `token from the URI` ?? `LINKRPC_TOKEN` ?? `""`.
+(Explicit `--endpoint <uri>` path differs: it never falls back to `LINKRPC_TOKEN`.)
 
 ### Transport selection + handshake (`open_hub_channel`)
 - **`ws://` / `wss://`** → WebSocket; token rides in the **`Authorization: Bearer <token>`**
@@ -273,10 +273,10 @@ modes, out of scope for v1's "connect to an existing hub."
   (one JSON-RPC message per `\n`-delimited line). An immediate socket close = auth failure.
 
 ### After connecting (the connector's job)
-1. Wrap the transport in a `HubRpcConnection`.
+1. Wrap the transport in a `LinkRpcConnection`.
 2. Claim a prefix: `hubGrantedServiceId::register` (capability-free, within the granted namespace)
    or `hub::hubParticipant::registerServiceId` (signed/admin-gated, outside it).
-3. Serve the interface(s) under the claimed prefix; become discoverable via `hubrpc.directory`.
+3. Serve the interface(s) under the claimed prefix; become discoverable via `linkrpc.directory`.
 
 > **Conformance:** `endpoint.json` vectors cover every row above (incl. token-strip-from-ws-url,
 > npipe backslashing, decode of `unix:` path, bare-string auto-detect, and the precedence chain).

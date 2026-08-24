@@ -14,4 +14,6 @@ This repository keeps the protocol and its implementations independent:
 | [`interop/`](./interop) | Cross-language interoperability tests |
 
 The TypeScript workspace contains the core runtime, client helpers, Hub, CLI,
-and MCP bridge under [`typescript/packages/`](./typescript/packages).
+and MCP bridge under [`typescript/packages/`](./typescript/packages). The Rust
+workspace contains the core, procedural macros, Tokio transports, and examples
+under [`rust/crates/`](./rust/crates).

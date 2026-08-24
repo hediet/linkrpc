@@ -1,18 +1,18 @@
-# hubrpc-rust — Architecture & Theory
+# linkrpc-rust — Architecture & Theory
 
 > **Status: design.** This describes the *model* we are building — the concepts, how they
 > relate, and why. It is intentionally a "theory" document: signatures are illustrative and
 > need not be 100% accurate or implemented yet. For the concrete target DX, see
 > [`examples.md`](./examples.md); for the build plan, see `plan.md`.
 
-hubrpc is a **dialect of JSON-RPC 2.0** that lets many typed services share one bidirectional
+linkrpc is a **dialect of JSON-RPC 2.0** that lets many typed services share one bidirectional
 connection. It does not invent a transport, an auth scheme, or a streaming framing beyond
 JSON-RPC — it layers *routing*, *content-hashed interface identity*, *reflection*, and optional
 *streaming* and *signing* on top.
 
 The Rust port has two cooperating halves:
 
-- a **macro layer** (`#[hub_rpc_interface]`, tarpc-style) that gives ergonomic, typed traits/clients;
+- a **macro layer** (`#[link_rpc_interface]`, tarpc-style) that gives ergonomic, typed traits/clients;
 - a **protocol/runtime layer** that multiplexes, routes, validates, and moves bytes.
 
 They meet at the **connection**.
@@ -26,7 +26,7 @@ They meet at the **connection**.
 │  Your trait + impl + generated Client          (application)  │
 ├──────────────────────────────────────────────────────────────┤
 │  Macro output: rewritten trait, Client, serve() handler,      │
-│  interface() descriptor (id@hash)              (hubrpc-macros) │
+│  interface() descriptor (id@hash)              (linkrpc-macros) │
 ├──────────────────────────────────────────────────────────────┤
 │  Connection: routing (::), dispatch, validation, reflection,  │
 │  preset, streaming correlation                 (connection/)  │
@@ -52,7 +52,7 @@ it produces (handlers, clients, schemas) could be written by hand against the ru
 ### Message
 A single, complete JSON-RPC value: a **request** (has `id`, expects a response), a
 **notification** (no `id`, no response), or a **response** (`result` or `error`, carries the
-matching `id`). hubrpc never sees partial messages — framing is the transport's job.
+matching `id`). linkrpc never sees partial messages — framing is the transport's job.
 
 ### Transport
 The lowest abstraction: a **bidirectional stream of whole messages** between this process and
@@ -85,14 +85,14 @@ Two rules of thumb fall out of this:
   describe *payload*; per-call knobs are *options*. Keeping them apart stops the wire type from
   absorbing transport-specific configuration.
 
-Concrete transports (Unix socket, TCP, stdio, WebSocket) live in `hubrpc-tokio`; the core ships
+Concrete transports (Unix socket, TCP, stdio, WebSocket) live in `linkrpc-tokio`; the core ships
 only the trait and an in-memory pair for tests:
 
 ```rust
 // Test/in-process: a connected pair with no identity (In = Out = Message).
 let (a, b) = InMemoryTransport::pair();
-let server = HubRpcConnection::new(a);
-let client = HubRpcConnection::new(b);
+let server = LinkRpcConnection::new(a);
+let client = LinkRpcConnection::new(b);
 ```
 
 ### Provenance — a *separate* capability trait
@@ -129,7 +129,7 @@ The application reads it where it matters — at **registration** (per-peer wiri
 
 ### Identity (signing / wrapping) — the cryptographic vocabulary
 *Provenance* is what the **transport** vouches for; *identity* is what a peer **cryptographically
-proves** via the optional `$hubrpc` envelope (P5). The layered vocabulary, ported from TS:
+proves** via the optional `$linkrpc` envelope (P5). The layered vocabulary, ported from TS:
 
 ```rust
 /// Branded ids — newtypes, NOT bare aliases, so you can't pass a random String where an
@@ -159,7 +159,7 @@ struct Principal { identity: Arc<dyn Identity>, caps: CapBag }
 
 `NodeId` is a **branded newtype** derived from the public signing key (a peer's stable
 cryptographic name). The chain is: **`SigningIdentity`** (how you sign) → **`Principal`** (who you
-are + what you may do) → `$hubrpc` envelope on the wire → **`Participant`** (who the callee
+are + what you may do) → `$linkrpc` envelope on the wire → **`Participant`** (who the callee
 believes called).
 
 ### Participant (deferred — not a core concept)
@@ -169,7 +169,7 @@ through `Context`'s typed extension map, so it is *pluggable and deferrable*.
 - **P1–P3 (core RPC):** no `Participant` type exists; handlers never need it. `Context` only
   carries `request_id` + cancellation.
 - **P3 (provenance) / P5 (signing):** we *introduce* `Participant`, derived from a verified
-  `$hubrpc` signer when present, else from transport provenance (the unsigned fallback). Nothing
+  `$linkrpc` signer when present, else from transport provenance (the unsigned fallback). Nothing
   in the core changes — it just becomes available via `ctx.get::<Participant>()`.
 
 ```rust
@@ -256,7 +256,7 @@ struct IncomingCall<InCtx> {
 enum CallResult { Ok(JsonValue), Err(RpcError) }
 ```
 
-**`HubRpcConnection` is the `RequestHandler`.** Its `handle_request` does the hubrpc-specific
+**`LinkRpcConnection` is the `RequestHandler`.** Its `handle_request` does the linkrpc-specific
 work: parse the `::` method name, find the registered handler, validate params against the
 interface schema, assemble a `Context` from `call.context` + `call.signal`, invoke the service
 method, and encode the typed `Result<R, E>` back into a `CallResult`. The channel never knows
@@ -270,8 +270,8 @@ Routing is encoded in the JSON-RPC `method` string using `::`:
 | `member` | dispatch to the connection's **preset** interface (vanilla JSON-RPC backcompat) |
 | `interfaceId::member` | interface-qualified, mounted at the root |
 | `serviceId::interfaceId::member` | fully qualified, mounted under a serviceId |
-| `rpc.*` | reserved by JSON-RPC; never used by hubrpc |
-| `$stream::*`, `$hubrpc` | reserved hubrpc control/envelope namespaces |
+| `rpc.*` | reserved by JSON-RPC; never used by linkrpc |
+| `$stream::*`, `$linkrpc` | reserved linkrpc control/envelope namespaces |
 
 This is how one connection multiplexes many interfaces **without a session handshake**: every
 call self-describes its target.
@@ -304,24 +304,24 @@ unit of versioning and discovery.
 
 - **interfaceId** — a stable, human-chosen name (e.g. `com.acme.pizza`). *Intrinsic* to the
   contract; part of the hash.
-- **InterfaceSchema** — the full machine-readable description (`HubRpcInterfaceSchema`) using a
-  decidable JSON-Schema subset (`HubRpcJsonSchema`). Doc comments and `#[annotations]` are
+- **InterfaceSchema** — the full machine-readable description (`LinkRpcInterfaceSchema`) using a
+  decidable JSON-Schema subset (`LinkRpcJsonSchema`). Doc comments and `#[annotations]` are
   **normative** (they affect identity); the `comment` field is stripped before hashing.
 
 ```rust
-struct HubRpcInterfaceSchema {
+struct LinkRpcInterfaceSchema {
     id:         String,                          // "com.acme.pizza"
     hash:       Option<String>,                  // filled in after hashing; omitted while hashing
     members:    Vec<MemberSchema>,
-    components: BTreeMap<String, HubRpcJsonSchema>, // reusable named types ($ref targets)
+    components: BTreeMap<String, LinkRpcJsonSchema>, // reusable named types ($ref targets)
 }
 
 struct MemberSchema {
     name:        String,
     kind:        MemberKind,                     // Method | Notification
     params:      Vec<ParamSchema>,               // inline, by-name (no wrapper object)
-    result:      Option<HubRpcJsonSchema>,       // None for notifications
-    error:       Option<HubRpcJsonSchema>,
+    result:      Option<LinkRpcJsonSchema>,       // None for notifications
+    error:       Option<LinkRpcJsonSchema>,
     streams:     Vec<StreamSchema>,              // incoming/outgoing, with element type
     description: Option<String>,                 // normative (hashed)
     annotations: Vec<String>,                    // e.g. ["dangerous"] — normative (hashed)
@@ -334,7 +334,7 @@ SHA-256 (first 8 bytes → 16 hex) of the **JCS-canonicalized** (RFC 8785) schem
 top-level `hash` omitted and `comment` stripped.
 
 ```rust
-fn compute_interface_hash(schema: &HubRpcInterfaceSchema) -> String {
+fn compute_interface_hash(schema: &LinkRpcInterfaceSchema) -> String {
     let mut s = schema.clone();
     s.hash = None;                               // top-level hash omitted
     let normalized = normalize(s);               // strip `comment`, sort, canonical defaults
@@ -344,7 +344,7 @@ fn compute_interface_hash(schema: &HubRpcInterfaceSchema) -> String {
 }
 
 // Identity = "com.acme.pizza@1f3c9a02b7d45e60"
-fn interface_id(schema: &HubRpcInterfaceSchema) -> String {
+fn interface_id(schema: &LinkRpcInterfaceSchema) -> String {
     format!("{}@{}", schema.id, compute_interface_hash(schema))
 }
 ```
@@ -377,10 +377,10 @@ and carries the interface's `id@hash` so the connection can register it without 
 
 ```rust
 // What the macro's serve() roughly produces — a self-describing handler:
-struct ServeHandler<T> { inner: Arc<T>, interface: &'static HubRpcInterfaceSchema }
+struct ServeHandler<T> { inner: Arc<T>, interface: &'static LinkRpcInterfaceSchema }
 
 impl<T: PizzaService> Handler for ServeHandler<T> {
-    fn interface(&self) -> &HubRpcInterfaceSchema { self.interface }  // ← inferred id@hash
+    fn interface(&self) -> &LinkRpcInterfaceSchema { self.interface }  // ← inferred id@hash
 
     async fn dispatch(&self, member: &str, ctx: Context, params: JsonValue, streams: Streams)
         -> Outbound
@@ -418,7 +418,7 @@ impl PizzaServiceClient {
 }
 ```
 
-### Connection (`HubRpcConnection`)
+### Connection (`LinkRpcConnection`)
 The runtime hub, **one per connected peer** (one transport = one symmetric, bidirectional link).
 It owns:
 
@@ -429,14 +429,14 @@ It owns:
 - an optional **preset** interface for bare-`member` calls.
 
 ```rust
-impl HubRpcConnection {
+impl LinkRpcConnection {
     fn new(transport: impl MessageTransport + 'static) -> Self;
 
     fn serve(&self, handler: impl Handler + 'static);                 // root mount, id@hash inferred
     fn serve_as(&self, service_id: &str, handler: impl Handler + 'static);
 
-    fn client<C: HubRpcClient>(&self) -> C;                           // outbound proxy for an interface
-    fn set_preset(&self, interface: &HubRpcInterfaceSchema);          // bare-method dispatch target
+    fn client<C: LinkRpcClient>(&self) -> C;                           // outbound proxy for an interface
+    fn set_preset(&self, interface: &LinkRpcInterfaceSchema);          // bare-method dispatch target
     fn enable_reflection(&self, opts: ReflectionOptions);
 
     async fn run(self) -> Result<(), ConnError>;                      // pump until the peer closes
@@ -447,32 +447,32 @@ Because it is symmetric, both peers can serve *and* call over the same link.
 
 ### Preset
 An interface nominated as the default target for bare `member` calls (no `::`). This is the
-backwards-compatibility bridge to vanilla JSON-RPC clients that don't know about hubrpc routing.
+backwards-compatibility bridge to vanilla JSON-RPC clients that don't know about linkrpc routing.
 
 ### Reflection
 Discovery is *not* a special protocol — it is **three ordinary interfaces** auto-registered
 alongside your service, callable like anything else:
 
-- `hubrpc.directory` — which interfaces this connection serves (their `id@hash`).
-- `hubrpc.schemas` — fetch the full `InterfaceSchema` for an `id@hash`.
-- `hubrpc.defaults` — connection defaults (e.g. the preset).
+- `linkrpc.directory` — which interfaces this connection serves (their `id@hash`).
+- `linkrpc.schemas` — fetch the full `InterfaceSchema` for an `id@hash`.
+- `linkrpc.defaults` — connection defaults (e.g. the preset).
 
 ```rust
-// They are literally hub_rpc_interfaces too:
-#[hub_rpc_interface(id = "hubrpc.directory")]
-trait HubRpcDirectory {
+// They are literally link_rpc_interfaces too:
+#[link_rpc_interface(id = "linkrpc.directory")]
+trait LinkRpcDirectory {
     async fn list() -> Result<Vec<DirectoryEntry>, RpcError>;  // [{ service_id?, interface_id_hash }]
 }
 
-#[hub_rpc_interface(id = "hubrpc.schemas")]
-trait HubRpcSchemas {
-    async fn get(id_hash: String) -> Result<HubRpcInterfaceSchema, RpcError>;
+#[link_rpc_interface(id = "linkrpc.schemas")]
+trait LinkRpcSchemas {
+    async fn get(id_hash: String) -> Result<LinkRpcInterfaceSchema, RpcError>;
 }
 
 // A peer that knows nothing can bootstrap:
-let dir = conn.client::<HubRpcDirectoryClient>();
+let dir = conn.client::<LinkRpcDirectoryClient>();
 for e in dir.list(Context::current()).await? {
-    let schema = conn.client::<HubRpcSchemasClient>().get(Context::current(), e.id_hash).await?;
+    let schema = conn.client::<LinkRpcSchemasClient>().get(Context::current(), e.id_hash).await?;
     println!("{} has {} members", schema.id, schema.members.len());
 }
 ```
@@ -499,7 +499,7 @@ impl Context {
   There is **no generic `Cx` type parameter**; identity is read dynamically here.
 
 ### Streaming (extension)
-JSON-RPC is request/response only; hubrpc adds a streaming sub-protocol — one in-flight call may
+JSON-RPC is request/response only; linkrpc adds a streaming sub-protocol — one in-flight call may
 carry a bidirectional, request-id-correlated channel of `$stream::send` notifications, plus
 reserved cancel/ping/pong controls. **Direction is named from the caller's perspective**:
 
@@ -529,13 +529,13 @@ The caller drives one handle `RpcCall<R, Out, In, E>` (`.send`, `.next`, `.finis
 A member with no stream attributes is a plain awaitable `Result<R, E>`.
 
 ### Signing / capabilities (optional, advanced)
-An optional `$hubrpc` envelope wraps calls with an Ed25519 signature over a canonical
+An optional `$linkrpc` envelope wraps calls with an Ed25519 signature over a canonical
 (JCS) signing input, plus capability tokens/attenuation. Calls without it are plain JSON-RPC
 with raw params. This is the layer that upgrades *provenance* (transport-level) to
 *cryptographically attested* identity and authority.
 
 ```rust
-// Carried under params.$hubrpc — out of band from the user's params, never colliding.
+// Carried under params.$linkrpc — out of band from the user's params, never colliding.
 struct CallMeta {
     method: String,             // fully-qualified wire method; verifier asserts equality
     nonce: String,              // replay-protection (base64url); gate dedups on it
@@ -543,7 +543,7 @@ struct CallMeta {
     signer: Option<NodeId>,     // present iff signed; == audience of every presented cap
     interface_hash: Option<String>, // optional schema-hash assertion
 }
-// + params.$hubrpcSignature (the signature) and params.$hubrpcUnsigned.capabilities (the cap bag).
+// + params.$linkrpcSignature (the signature) and params.$linkrpcUnsigned.capabilities (the cap bag).
 ```
 
 A `SigningSender` decorator (wrapping the channel's `RequestSender`, using a `Principal`'s
@@ -559,7 +559,7 @@ service method is touched:
 
 ```rust
 struct CapGate<H> {
-    inner: H,                                              // the HubRpcConnection handler
+    inner: H,                                              // the LinkRpcConnection handler
     accepted_root_issuers: Box<dyn Fn(&ServiceId) -> Vec<AcceptedRootIssuer>>, // trust anchors
     replay: ReplayLedger,                                  // dedups nonces (single-use grants)
     max_skew: Duration,
@@ -567,7 +567,7 @@ struct CapGate<H> {
 
 impl<H: RequestHandler<()>> RequestHandler<()> for CapGate<H> {
     async fn handle_request(&self, call: IncomingCall<()>) -> CallResult {
-        // 1. envelope: signature + skew, strip `$hubrpc*` from params.
+        // 1. envelope: signature + skew, strip `$linkrpc*` from params.
         let v = match verify_call(&call.method, &call.params, now(), self.max_skew) {
             Ok(v) => v,
             Err(VerifyErr::Envelope(r)) => return CallResult::Err(RpcError::invalid_request(r)),
@@ -624,7 +624,7 @@ serve_unix(path, |conn, prov| { … })         ── (1) REGISTRATION (per peer
         │   (ConnectionProvenance) and hands it in. Decide what to expose to
         │   THIS peer; capture shared state via Arc.
         ▼
-   HubRpcConnection                          ── (2) LINK (per peer, symmetric)
+   LinkRpcConnection                          ── (2) LINK (per peer, symmetric)
         │   registry of served interfaces + reflection; mints Client proxies;
         │   lives as long as the transport is open.
         ▼
@@ -635,7 +635,7 @@ serve_unix(path, |conn, prov| { … })         ── (1) REGISTRATION (per peer
 ```rust
 // The acceptor owns attestation: it resolves provenance from the raw socket
 // (peer-cred / TLS / container) and passes it to your per-connection closure.
-serve_unix("/tmp/pizza.sock", move |conn: &HubRpcConnection, prov: &ConnectionProvenance| {
+serve_unix("/tmp/pizza.sock", move |conn: &LinkRpcConnection, prov: &ConnectionProvenance| {
     // (1) per-peer wiring — provenance is known *before* any RPC:
     let shop = if prov.attributes.get("uid") == Some(&json!(0)) {
         admin_shop.clone()          // root gets the admin surface
@@ -655,7 +655,7 @@ serve_unix("/tmp/pizza.sock", move |conn: &HubRpcConnection, prov: &ConnectionPr
   accepts sockets and invokes your closure once per connection (mirroring the TS
   `setConnectionHandler` + `withProvenance`). Shared services are `Arc`-captured; per-peer
   services can be built from the resolved `ConnectionProvenance`.
-- **(2)** One `HubRpcConnection` == one peer link. There is **no multi-accept "server" object** in
+- **(2)** One `LinkRpcConnection` == one peer link. There is **no multi-accept "server" object** in
   the core — accepting is the listener's job; the core only models the per-peer connection.
 - **(3)** `Context` is the only thing a handler needs to reason about *this* call.
 
