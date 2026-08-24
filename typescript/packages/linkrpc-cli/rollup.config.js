@@ -39,7 +39,7 @@ const plugins = () => [
         include: [
             'src/**/*.ts',
             'src/**/*.tsx',
-            '../linkrpc-client/src/**/*.ts',
+            '../../packages-private/linkrpc-client/src/**/*.ts',
         ],
     }),
 ];
