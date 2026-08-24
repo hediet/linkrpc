@@ -1,6 +1,6 @@
 # 07 — Capabilities
 
-**Optional. Requires chapter 06.** Identity says *who* makes a call; a capability is a signed predicate describing *which calls that identity may make*. Here, a **call** means either a JSON-RPC request or notification. This chapter defines that predicate as `capabilityPermits`, how callers present capabilities under `params.$hubrpcUnsigned.capabilities`, and the **gate** a provider runs to authorize a call. The model is fail-closed: absent a valid permitting capability chain, a gated call is refused.
+**Optional. Requires chapter 06.** Identity says *who* makes a call; a capability is a signed predicate describing *which calls that identity may make*. Here, a **call** means either a JSON-RPC request or notification. This chapter defines that predicate as `capabilityPermits`, how callers present capabilities under `params.$linkrpcUnsigned.capabilities`, and the **gate** a provider runs to authorize a call. The model is fail-closed: absent a valid permitting capability chain, a gated call is refused.
 
 ## 1. Capability
 
@@ -178,7 +178,7 @@ A `callBind` admits only the call whose `callHash` equals its `payloadHash`. Thi
 
 ## 2. Presenting capabilities
 
-A caller attaches capabilities to a request or notification under `params.$hubrpcUnsigned.capabilities` (chapter 01 §3). The partial message interface repeats the relevant envelope fields to show their location:
+A caller attaches capabilities to a request or notification under `params.$linkrpcUnsigned.capabilities` (chapter 01 §3). The partial message interface repeats the relevant envelope fields to show their location:
 
 ```ts
 interface CallUnsignedData {
@@ -190,22 +190,22 @@ interface JsonRpcMessage {
   method: string;
   params: {
     [propertyName: string]: unknown;
-    $hubrpc: {
+    $linkrpc: {
       method: string;
       nonce: string;
       signedAtMs: number;
       principal?: PrincipalId;
       interfaceHash?: string;
     };
-    $hubrpcSignature?: {
+    $linkrpcSignature?: {
       [domain: string]?: SignatureEntry;
     };
-    $hubrpcUnsigned?: CallUnsignedData;
+    $linkrpcUnsigned?: CallUnsignedData;
   };
 }
 ```
 
-`$hubrpcUnsigned` is **not** covered by the call signature (chapter 06 §4): each capability has its own issuer signature and can be attached without changing the signed call. `capabilities` is an unordered set of presented capabilities, not a chain. It MAY contain leaves for multiple candidate chains and MUST contain every ancestor needed to resolve any chain the caller expects the provider to accept.
+`$linkrpcUnsigned` is **not** covered by the call signature (chapter 06 §4): each capability has its own issuer signature and can be attached without changing the signed call. `capabilities` is an unordered set of presented capabilities, not a chain. It MAY contain leaves for multiple candidate chains and MUST contain every ancestor needed to resolve any chain the caller expects the provider to accept.
 
 ## 3. Delegation chains
 

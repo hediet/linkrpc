@@ -1,8 +1,8 @@
-# hubrpc — Protocol Specification
+# linkrpc — Protocol Specification
 
 **Status:** Draft. **Version:** v1.
 
-hubrpc is a wire protocol for typed, multiplexed remote procedure calls over a single bidirectional message stream. It is a specialization of [JSON-RPC 2.0](https://www.jsonrpc.org/specification): every hubrpc message is a JSON-RPC 2.0 message, and hubrpc adds an addressing grammar, a schema-and-hash interface model, and optional identity and capability layers — all carried inside the JSON-RPC envelope.
+linkrpc is a wire protocol for typed, multiplexed remote procedure calls over a single bidirectional message stream. It is a specialization of [JSON-RPC 2.0](https://www.jsonrpc.org/specification): every linkrpc message is a JSON-RPC 2.0 message, and linkrpc adds an addressing grammar, a schema-and-hash interface model, and optional identity and capability layers — all carried inside the JSON-RPC envelope.
 
 > **Note.** This document specifies *the protocol* — the bytes exchanged at a connection boundary and the behavior a node must exhibit in response. It does not specify any implementation, library, or product. A *hub* (a routing intermediary) is a product built from this protocol; its routing engine is out of scope, though the interfaces it exposes are specified by chapter 08 and its per-connection directory responses remain subject to chapter 09.
 
@@ -31,19 +31,19 @@ Each term and each wire field is defined **exactly once**, in the chapter that g
 
 ## 2. Layers and chapters
 
-hubrpc is layered. Each chapter builds on the chapters before it. The **optional** chapters may be omitted by a conformant node, and a connection between nodes that disagree on them still works for the calls that need none of them.
+linkrpc is layered. Each chapter builds on the chapters before it. The **optional** chapters may be omitted by a conformant node, and a connection between nodes that disagree on them still works for the calls that need none of them.
 
 | # | Chapter | Status | Defines |
 |---|---|---|---|
-| 01 | [Messages](01-messages.md) | required | JSON-RPC specialization, `::` method grammar, reserved `$hubrpc` namespace, ids, error codes |
+| 01 | [Messages](01-messages.md) | required | JSON-RPC specialization, `::` method grammar, reserved `$linkrpc` namespace, ids, error codes |
 | 02 | [Transport](02-transport.md) | required | abstract transport + NDJSON / WebSocket / stdio bindings + endpoint URIs |
 | 03 | [Streaming](03-streaming.md) | optional | the `$stream` interface, in-flight correlated messages, control verbs |
-| 04 | [Interfaces](04-interfaces.md) | required | interface schema format, JSON Schema subset, interface hash, `$hubrpc.interfaceHash`, validation |
-| 05 | [Reflection](05-reflection.md) | required | `hubrpc.schemas`, `hubrpc.defaults` |
-| 06 | [Identity](06-identity.md) | optional | principals & keys, the signed-object standard, `$hubrpc` signing members, `$hubrpcSignature` |
-| 07 | [Capabilities](07-capabilities.md) | optional | `SignedCapability`, `$hubrpcUnsigned.capabilities`, the authorization gate |
+| 04 | [Interfaces](04-interfaces.md) | required | interface schema format, JSON Schema subset, interface hash, `$linkrpc.interfaceHash`, validation |
+| 05 | [Reflection](05-reflection.md) | required | `linkrpc.schemas`, `linkrpc.defaults` |
+| 06 | [Identity](06-identity.md) | optional | principals & keys, the signed-object standard, `$linkrpc` signing members, `$linkrpcSignature` |
+| 07 | [Capabilities](07-capabilities.md) | optional | `SignedCapability`, `$linkrpcUnsigned.capabilities`, the authorization gate |
 | 08 | [Hub interfaces](08-hub-interfaces.md) | optional | `hubAccess`, `hubGrantedServiceId`, `hubServiceIdRegistry` wire contracts |
-| 09 | [Directory](09-hub-directory.md) | required | `hubrpc.directory`, root/addressed views, referrals, walking and graph watches |
+| 09 | [Directory](09-hub-directory.md) | required | `linkrpc.directory`, root/addressed views, referrals, walking and graph watches |
 
 > **Note.** Streaming (03) is optional to *implement* but is placed before interfaces (04) because an interface schema declares its members' stream payload types — the `$stream` mechanism must be defined before the schema fields that type it.
 
@@ -53,10 +53,10 @@ hubrpc is layered. Each chapter builds on the chapters before it. The **optional
 
 Every optional layer is carried in **reserved members** that a node which does not implement the layer treats as opaque. Specifically:
 
-- Optional metadata rides under reserved `$hubrpc`-prefixed keys on a call's `params` object (chapter 01 §3).
+- Optional metadata rides under reserved `$linkrpc`-prefixed keys on a call's `params` object (chapter 01 §3).
 - A node that does not implement a layer MUST ignore that layer's reserved members when they are not required for the call it is processing, and MUST NOT let their presence change the outcome of an otherwise-ungated call.
 
-> **Rationale.** This is what makes the layers composable. A Core node and a Capability node interoperate on any call the Capability node does not gate, because the extra `$hubrpcUnsigned`/`$hubrpc` members are invisible to the Core node and inert on an ungated path.
+> **Rationale.** This is what makes the layers composable. A Core node and a Capability node interoperate on any call the Capability node does not gate, because the extra `$linkrpcUnsigned`/`$linkrpc` members are invisible to the Core node and inert on an ungated path.
 
 ## 4. Conformance model
 
@@ -72,7 +72,7 @@ Obligations attach to **roles relative to a single call** — *caller* and *prov
 
 A node's served contract — which interfaces it provides and their schemas — is itself observable through reflection (chapter 05). A conformance checker therefore discovers a node's contract from the boundary, then verifies each obligation against it.
 
-> **Note.** Two classes of obligation appear. *Protocol obligations* are fully specified here (a malformed request MUST yield `parseError`; an unknown method MUST yield `methodNotFound`). *Contract obligations* are specified in shape but delegated in content: a valid call to a member MUST yield either a result valid against that member's result schema or an enumerated error — hubrpc fixes the envelope of the reaction; the application interface supplies the schemas; hubrpc never specifies the application's value-level mapping. This is the precise sense in which the spec is complete without knowing any application.
+> **Note.** Two classes of obligation appear. *Protocol obligations* are fully specified here (a malformed request MUST yield `parseError`; an unknown method MUST yield `methodNotFound`). *Contract obligations* are specified in shape but delegated in content: a valid call to a member MUST yield either a result valid against that member's result schema or an enumerated error — linkrpc fixes the envelope of the reaction; the application interface supplies the schemas; linkrpc never specifies the application's value-level mapping. This is the precise sense in which the spec is complete without knowing any application.
 
 ## 5. Profiles
 

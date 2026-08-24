@@ -41,7 +41,7 @@ hubServiceIdRegistry::registerServiceId
 
 ## 3. `hubAccess`
 
-A consumer (e.g. a sandboxed editor) asks the hub for scoped access to services. Served at the connection root, so it needs no bootstrap capability. On grant, the hub returns `SignedCapability`s (chapter 07) the consumer attaches to subsequent calls via `$hubrpcUnsigned.capabilities`.
+A consumer (e.g. a sandboxed editor) asks the hub for scoped access to services. Served at the connection root, so it needs no bootstrap capability. On grant, the hub returns `SignedCapability`s (chapter 07) the consumer attaches to subsequent calls via `$linkrpcUnsigned.capabilities`.
 
 ```
 hubAccess::request

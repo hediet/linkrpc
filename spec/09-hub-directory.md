@@ -1,19 +1,19 @@
 # 09 — Directory
 
 **Required. Requires chapter 04.** This chapter defines the
-`hubrpc.directory` reflection interface and its observable behavior between two
+`linkrpc.directory` reflection interface and its observable behavior between two
 nodes on one connection. It does not specify how a provider constructs its
 listing, how an intermediary routes calls, or how several connections are
 combined internally.
 
 ## 1. Interface definition
 
-`hubrpc.directory` lists the services a provider exposes to its peer through the
-current connection. A listing MAY identify another `hubrpc.directory` service,
+`linkrpc.directory` lists the services a provider exposes to its peer through the
+current connection. A listing MAY identify another `linkrpc.directory` service,
 allowing a consumer to explore the exposed contract transitively.
 
 ```
-hubrpc.directory::list
+linkrpc.directory::list
   params: {
     interfaceId?:       string, // exact interface-id filter
     interfaceIdPrefix?: string, // interface-id prefix filter
@@ -73,16 +73,16 @@ when it identifies another directory. An omitted or empty
 NOT grant invocation or routing authority.
 
 `reachableServiceIds` is meaningful only when `interfaceId` is
-`hubrpc.directory`; section 3 defines it. A consumer MUST ignore it on every
+`linkrpc.directory`; section 3 defines it. A consumer MUST ignore it on every
 other listing.
 
-### 1.1 `hubrpc.directory::watch`
+### 1.1 `linkrpc.directory::watch`
 
 `watch` is a long-lived streaming request (chapter 03) that emits an empty tick
 whenever the optionally filtered directory might have changed.
 
 ```
-hubrpc.directory::watch
+linkrpc.directory::watch
   params: {
     interfaceId?:       string,
     interfaceIdPrefix?: string,
@@ -107,12 +107,12 @@ the stream, emit no ticks, and wait for cancellation.
 
 ## 2. Root and addressed views
 
-A **connection-root directory** is the `hubrpc.directory` provider selected by
-the interface-form method `hubrpc.directory::list`.
+A **connection-root directory** is the `linkrpc.directory` provider selected by
+the interface-form method `linkrpc.directory::list`.
 
-An **addressed directory** is a `hubrpc.directory` provider selected by the
+An **addressed directory** is a `linkrpc.directory` provider selected by the
 fully-qualified method
-`<serviceId>::hubrpc.directory::list`.
+`<serviceId>::linkrpc.directory::list`.
 
 The connection-root directory MUST describe the root service and every addressed
 directory the provider exposes to this peer as a discovery entry point.
@@ -142,7 +142,7 @@ The same node MAY return different directory views on different connections.
 ## 3. Directory referrals
 
 A **directory referral** is a `ServiceListing` whose `interfaceId` is
-`hubrpc.directory`. Its `serviceId` is the target of a possible subsequent
+`linkrpc.directory`. Its `serviceId` is the target of a possible subsequent
 addressed directory call.
 
 Returning a directory referral asserts that the provider exposes that target to
@@ -185,7 +185,7 @@ current accumulated scope.
 For every remaining directory referral, the walker MUST intersect its current
 accumulated scope with the referral's effective `reachableServiceIds`. If the
 intersection is non-empty, the walker SHOULD invoke
-`<serviceId>::hubrpc.directory::list` with that intersection as
+`<serviceId>::linkrpc.directory::list` with that intersection as
 `serviceIdScopes` and recursively process its result. If the intersection is
 empty, it MUST NOT follow the referral.
 
@@ -223,9 +223,9 @@ entries discovered below that referral.
 >
 > ```text
 > connection root
->   -> de.hediet::hubrpc.directory
->        -> de.hediet/cloud::hubrpc.directory
->             -> de.hediet/cloud/ext/auth::hubrpc.directory
+>   -> de.hediet::linkrpc.directory
+>        -> de.hediet/cloud::linkrpc.directory
+>             -> de.hediet/cloud/ext/auth::linkrpc.directory
 >                  -> auth interface leaves
 > ```
 >
@@ -315,10 +315,10 @@ and connection.
 
 ## 8. Conformance scenarios
 
-A Core provider of `hubrpc.directory` MUST satisfy all of the following
+A Core provider of `linkrpc.directory` MUST satisfy all of the following
 observable scenarios:
 
-1. **Root listing.** A peer can invoke root-form `hubrpc.directory::list` and
+1. **Root listing.** A peer can invoke root-form `linkrpc.directory::list` and
    receive valid interface hashes for the contract exposed on that connection.
 2. **Filters.** Exact interface, interface-prefix, and exact service filters
    exclude every non-matching item. A service-scope union excludes every item

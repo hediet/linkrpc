@@ -1,0 +1,83 @@
+{
+    "name": "@hediet/linkrpc",
+    "version": "0.0.1",
+    "type": "module",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/hediet/linkrpc.git",
+        "directory": "typescript/packages/linkrpc"
+    },
+    "homepage": "https://github.com/hediet/linkrpc/tree/main/typescript/packages/linkrpc",
+    "bugs": {
+        "url": "https://github.com/hediet/linkrpc/issues"
+    },
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "@vscode/source": "./src/index.ts",
+            "default": "./dist/index.js"
+        },
+        "./hub/client": {
+            "@vscode/source": "./src/hub/client/index.ts",
+            "default": "./dist/hub/client/index.js"
+        },
+        "./hub/common": {
+            "@vscode/source": "./src/hub/common/index.ts",
+            "default": "./dist/hub/common/index.js"
+        },
+        "./node": {
+            "@vscode/source": "./src/node.ts",
+            "default": "./dist/node.js"
+        },
+        "./web": {
+            "@vscode/source": "./src/web.ts",
+            "default": "./dist/web.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist/"
+    ],
+    "sideEffects": false,
+    "scripts": {
+        "build": "tsdown",
+        "dev": "tsdown --watch",
+        "pack": "pnpm build && pnpm pack",
+        "test": "vitest --run",
+        "test:watch": "vitest"
+    },
+    "peerDependencies": {
+        "zod": "^4.4.3"
+    },
+    "dependencies": {
+        "@hpke/core": "^1.9.0",
+        "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "@rollup/plugin-node-resolve": "^16.0.1",
+        "@rollup/plugin-typescript": "^12.1.2",
+        "@types/node": "^20.0.0",
+        "@types/ws": "^8.5.13",
+        "rollup": "^4.34.2",
+        "tslib": "^2.8.1",
+        "tsdown": "^0.22.3",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0",
+        "zod": "^4.4.3"
+    },
+    "inlinedDependencies": {
+        "@hpke/common": "1.10.1",
+        "@hpke/core": "1.9.0"
+    },
+    "publishConfig": {
+        "exports": {
+            ".": "./dist/index.js",
+            "./hub/client": "./dist/hub/client/index.js",
+            "./hub/common": "./dist/hub/common/index.js",
+            "./node": "./dist/node.js",
+            "./web": "./dist/web.js",
+            "./package.json": "./package.json"
+        }
+    }
+}

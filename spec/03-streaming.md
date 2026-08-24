@@ -45,7 +45,7 @@ A stream message SHOULD carry either a `control` or a `payload`, not both: a `co
 - **`ping`** — either direction. A liveness probe carrying a fresh `nonce`. It resets the idle timer (§5) and requests a `pong`.
 - **`pong`** — the reply to a `ping`, echoing the ping's `nonce`, traveling opposite the ping. It carries no application effect.
 
-`control.reason` is an open set of human/diagnostic strings; any string is valid. The reasons hubrpc itself emits include `clientDisconnected` and `idleTimeout`.
+`control.reason` is an open set of human/diagnostic strings; any string is valid. The reasons linkrpc itself emits include `clientDisconnected` and `idleTimeout`.
 
 A node that receives a `ping` SHOULD emit a `pong` echoing its `nonce` (a reaction obligation). A node MUST NOT treat an unrecognized `control.reason` as an error.
 
