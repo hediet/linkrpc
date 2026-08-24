@@ -66,9 +66,9 @@ export default defineConfig({
     // `exports` map in package.json keeps resolving.
     outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
     /**
-     * Let tsdown own the `exports` map. `devExports` adds a `@vscode/source`
+     * Let tsdown own the `exports` map. `devExports` adds a `@hediet/source`
      * condition pointing at the TypeScript sources so that other workspace
-     * packages whose tsconfig sets `customConditions: ["@vscode/source"]`
+     * packages whose tsconfig sets `customConditions: ["@hediet/source"]`
      * resolve `@hediet/linkrpc` straight to `src/` — giving cross-package
      * go-to-definition / find-all-references in the editor without any
      * `paths` mapping or project references. The published `dist` mapping is
@@ -76,7 +76,7 @@ export default defineConfig({
      * (and anything without the custom condition) still resolve to `dist/`.
      */
     exports: {
-        devExports: '@vscode/source',
+        devExports: '@hediet/source',
     },
     /**
      * `zod` (a declared `peerDependency`) and `ws` (a runtime `dependency`) are

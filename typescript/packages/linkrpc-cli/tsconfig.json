@@ -12,7 +12,7 @@
         "jsx": "react-jsx",
         "composite": true,
         "noEmit": true,
-        "customConditions": ["@vscode/source"]
+        "customConditions": ["@hediet/source"]
     },
     "references": [{ "path": "../linkrpc" }],
     "include": ["src/**/*", "generate-ahp-schema.ts"]

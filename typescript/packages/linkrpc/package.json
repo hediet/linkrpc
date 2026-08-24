@@ -15,23 +15,23 @@
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
-            "@vscode/source": "./src/index.ts",
+            "@hediet/source": "./src/index.ts",
             "default": "./dist/index.js"
         },
         "./hub/client": {
-            "@vscode/source": "./src/hub/client/index.ts",
+            "@hediet/source": "./src/hub/client/index.ts",
             "default": "./dist/hub/client/index.js"
         },
         "./hub/common": {
-            "@vscode/source": "./src/hub/common/index.ts",
+            "@hediet/source": "./src/hub/common/index.ts",
             "default": "./dist/hub/common/index.js"
         },
         "./node": {
-            "@vscode/source": "./src/node.ts",
+            "@hediet/source": "./src/node.ts",
             "default": "./dist/node.js"
         },
         "./web": {
-            "@vscode/source": "./src/web.ts",
+            "@hediet/source": "./src/web.ts",
             "default": "./dist/web.js"
         },
         "./package.json": "./package.json"
