@@ -1,0 +1,82 @@
+{
+    "name": "@vscode/hubrpc-hub",
+    "version": "0.0.1",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./hub/server": {
+            "import": "./dist/hub/server/index.js",
+            "types": "./dist/hub/server/index.d.ts"
+        },
+        "./hub/server/client": {
+            "import": "./dist/hub/server/client.js",
+            "types": "./dist/hub/server/client.d.ts"
+        },
+        "./hub/server/transit": {
+            "import": "./dist/hub/server/transit.js",
+            "types": "./dist/hub/server/transit.d.ts"
+        },
+        "./hub/server/connection-token-binder": {
+            "import": "./dist/hub/server/connectionTokenBinder.js",
+            "types": "./dist/hub/server/connectionTokenBinder.d.ts"
+        },
+        "./hub/server/node": {
+            "import": "./dist/hub/server/node/index.js",
+            "types": "./dist/hub/server/node/index.d.ts"
+        },
+        "./config": {
+            "import": "./dist/config.js",
+            "types": "./dist/config.d.ts"
+        },
+        "./config-file": {
+            "import": "./dist/configFile.js",
+            "types": "./dist/configFile.d.ts"
+        },
+        "./spawn": {
+            "import": "./dist/spawn.js",
+            "types": "./dist/spawn.d.ts"
+        },
+        "./serve": {
+            "import": "./dist/serve.js",
+            "types": "./dist/serve.d.ts"
+        },
+        "./engine/runHub": {
+            "import": "./dist/engine/runHub.js",
+            "types": "./dist/engine/runHub.d.ts"
+        }
+    },
+    "bin": {
+        "hubrpc-hub": "./dist/cli.js"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "start": "tsx src/cli.ts",
+        "build": "tsdown",
+        "pack": "pnpm build && pnpm pack",
+        "dev": "tsdown --watch",
+        "test": "vitest --run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@vscode/hubrpc": "workspace:*",
+        "@vscode/observables": "workspace:*",
+        "commander": "^12.1.0",
+        "ws": "^8.18.0",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "@types/ws": "^8.5.13",
+        "tsdown": "^0.22.3",
+        "tsx": "4.22.4",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0"
+    }
+}

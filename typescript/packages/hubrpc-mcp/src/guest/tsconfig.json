@@ -1,0 +1,18 @@
+{
+	// Standalone "guest world" program: the QuickJS sandbox, NOT the Node host.
+	// It deliberately has no DOM/Node libs — the only ambient surface is the
+	// public API (`connection.d.ts`) plus the host seam (`hostBridge.d.ts`).
+	// `guestMain.ts` is type-checked against both; drift breaks the build.
+	"compilerOptions": {
+		"target": "ES2022",
+		"lib": ["ES2022"],
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"strict": true,
+		"isolatedModules": false,
+		"noEmit": true,
+		"skipLibCheck": true,
+		"types": []
+	},
+	"include": ["./**/*"]
+}

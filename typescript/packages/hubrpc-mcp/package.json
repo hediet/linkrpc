@@ -1,0 +1,50 @@
+{
+    "name": "@vscode/hubrpc-mcp",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./node": {
+            "types": "./dist/node.d.ts",
+            "default": "./dist/node.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "bin": {
+        "hubrpc-mcp": "./dist/cli.js"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "start": "node dist/cli.js",
+        "build": "tsdown",
+        "dev": "tsdown --watch",
+        "typecheck:guest": "tsc -p src/guest/tsconfig.json",
+        "test": "vitest --run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@modelcontextprotocol/sdk": "^1.29.0",
+        "@vscode/hubrpc": "workspace:*",
+        "@vscode/hubrpc-hub": "workspace:*",
+        "quickjs-emscripten": "^0.31.0",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@vscode/hubrpc-client": "workspace:*",
+        "@types/node": "^20.0.0",
+        "@vscode/rollup-plugin-esm-url": "1.0.1-11",
+        "tsdown": "^0.22.3",
+        "tslib": "^2.8.1",
+        "tsx": "4.22.4",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0"
+    }
+}
