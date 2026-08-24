@@ -256,7 +256,7 @@ authenticity-only (signature-without-capability) middle ground:
 enum ForwardCheckingPolicy {
     /// Forwarded calls reach the hub unverified.
     Off,
-    /// Forwarded (fully-qualified) calls must carry a valid `$linkrpc` signature AND a capability
+    /// Forwarded (fully-qualified) calls must carry a valid `$hubrpc` signature AND a capability
     /// rooted at one of `admin_ids`. `admin_ids` is REQUIRED (an empty anchor set fails closed →
     /// rejects everything, including validly granted capabilities).
     Capability { admin_ids: Vec<NodeId> },

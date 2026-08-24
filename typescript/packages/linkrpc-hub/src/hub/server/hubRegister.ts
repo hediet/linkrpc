@@ -17,7 +17,7 @@ import type { Hub } from './routing/routingHub';
 
 /**
  * Out-of-band, per-call context produced by {@link withRequestIdContext}. A
- * typed handler only ever sees the zod-stripped params (the `$linkrpc` envelope
+ * typed handler only ever sees the zod-stripped params (the `$hubrpc` envelope
  * and the wire id are gone), so the originating request's wire id is smuggled
  * alongside the message via the channel's `context` slot — never over a wire.
  *

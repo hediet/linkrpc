@@ -35,7 +35,7 @@ async function setup() {
 // ---- authenticity (verifyCall) -----------------------------------------
 
 describe("signParams / verifyCall (authenticity)", () => {
-    it("injects $linkrpc envelope into params and verifies round-trip", async () => {
+    it("injects $hubrpc envelope into params and verifies round-trip", async () => {
         const s = await setup();
         const params = await signParams({
             method: "github::linkrpc.directory::list",
@@ -43,7 +43,7 @@ describe("signParams / verifyCall (authenticity)", () => {
             signingIdentity: s.caller,
             nowMs: NOW,
         });
-        const signed = (params as { $linkrpc?: { principal: string; nonce: string; signedAtMs: number } }).$linkrpc;
+        const signed = (params as { $hubrpc?: { principal: string; nonce: string; signedAtMs: number } }).$hubrpc;
         const signature = (params as { $linkrpcSignature?: { call?: { keyId: string; sig: string } } }).$linkrpcSignature;
         expect(signed).toBeDefined();
         expect(signature).toBeDefined();
@@ -67,7 +67,7 @@ describe("signParams / verifyCall (authenticity)", () => {
         }
     });
 
-    it("returns empty strippedParams when only $linkrpc envelope was present", async () => {
+    it("returns empty strippedParams when only $hubrpc envelope was present", async () => {
         const s = await setup();
         const params = await signParams({
             method: "x::y::z", params: undefined,
@@ -108,7 +108,7 @@ describe("signParams / verifyCall (authenticity)", () => {
             method: "x::y::other", params, parseMethod, nowMs: NOW,
         });
         expect(r.ok).toBe(false);
-        // The signed `$linkrpc.method` no longer matches the wire method.
+        // The signed `$hubrpc.method` no longer matches the wire method.
         if (!r.ok) expect(r.reason).toBe("method mismatch");
     });
 
@@ -126,7 +126,7 @@ describe("signParams / verifyCall (authenticity)", () => {
         if (!r.ok) expect(r.reason).toMatch(/timestamp skew/);
     });
 
-    it("rejects a call with no $linkrpc envelope (verifyCall always requires a signature)", async () => {
+    it("rejects a call with no $hubrpc envelope (verifyCall always requires a signature)", async () => {
         const r = await verifyCall({
             method: "x::y::z", params: { a: 1 },
             parseMethod, nowMs: NOW,

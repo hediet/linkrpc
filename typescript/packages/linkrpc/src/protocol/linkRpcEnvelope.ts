@@ -12,12 +12,12 @@ import {
 export { LINKRPC_META_KEY, LINKRPC_SIGNATURE_KEY, LINKRPC_UNSIGNED_KEY, type Signatures };
 
 /**
- * Signed call meta. Lives under `params.$linkrpc` so it can't collide with
+ * Signed call meta. Lives under `params.$hubrpc` so it can't collide with
  * the user's top-level param keys. Present on signed AND unsigned calls
  * (the latter omit {@link CallMeta.principal} and carry no `$linkrpcSignature`).
  *
  * Included verbatim in the bytes a call signature commits to — the
- * signature covers `signingInput("call", { ...userParams, $linkrpc })`.
+ * signature covers `signingInput("call", { ...userParams, $hubrpc })`.
  */
 export interface CallMeta {
     /** Fully-qualified wire method. The verifier asserts it equals the JSON-RPC `method`. */
@@ -79,7 +79,7 @@ export type LinkRpcJsonRpcMessage<
 
 /**
  * The linkrpc signing/cap system accepts only plain-object user params (or
- * none). Reject arrays/primitives at the boundary so "strip `$linkrpc*`, the
+ * none). Reject arrays/primitives at the boundary so "strip `$hubrpc*`, the
  * rest is the signed user params" stays unambiguous.
  */
 export function requireObjectParams(

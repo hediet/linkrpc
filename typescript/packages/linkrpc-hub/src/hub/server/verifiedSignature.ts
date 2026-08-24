@@ -7,7 +7,7 @@ import {
 } from '@hediet/linkrpc';
 
 /**
- * Wrap an inbound transport so every request's `$linkrpc` signature is verified
+ * Wrap an inbound transport so every request's `$hubrpc` signature is verified
  * **eagerly, at the door** — a pure authenticity gate with no capability check:
  *
  * - a **valid** signature → the request is delivered unchanged;

@@ -227,7 +227,7 @@ describe('withForwardedCallGate (hub signature front door)', () => {
         expect(resp).toMatchObject({ result: { ok: true } });
         expect(provider.received).toHaveLength(1);
         // The envelope is forwarded intact (not stripped) for re-verification.
-        expect(provider.received[0].params).toHaveProperty('$linkrpc');
+        expect(provider.received[0].params).toHaveProperty('$hubrpc');
     });
 
     it('keeps the envelope intact through chained gates and strips it only for a strict terminal handler', async () => {

@@ -14,7 +14,7 @@ A node advertises exactly one profile. Profiles are nested: each includes the ob
 
 A node implementing the hub interfaces (08) additionally serves those member contracts; a hub is a Capability node (08 depends on 05/06/07). Its observable directory behavior is covered by the same chapter 09 obligations as every other Core node.
 
-**Interop guarantee.** Two nodes interoperate at the greatest profile they share. A call that requires no gated authority (carries no `$linkrpc` signing members and is not gated by the provider) MUST work across any pair of profiles, because the additive-envelope invariant (chapter 00 §3) makes the higher layers' reserved members inert on that path.
+**Interop guarantee.** Two nodes interoperate at the greatest profile they share. A call that requires no gated authority (carries no `$hubrpc` signing members and is not gated by the provider) MUST work across any pair of profiles, because the additive-envelope invariant (chapter 00 §3) makes the higher layers' reserved members inert on that path.
 
 **Optional sub-features.** Streaming (03) is optional even within Core: a node that never sends `$stream::send` is Core-conformant. A node MUST NOT advertise a profile whose mandatory chapters (01, 02, 04, 05, 09 §1) it does not fully implement. The identity extension ([identity-extension.md](identity-extension.md)) is an optional add-on to the Signed profile: a Signed node that resolves only inline (`key:`) keys is conformant; one that also resolves `keydoc:` keys and rotation records additionally implements the extension. Either way the call envelope is identical.
 

@@ -301,7 +301,7 @@ export const hubAccessInterface = defineInterface(
                     /**
                      * One or more `SignedCapability`s issued by the hub
                      * (audience = consumer NodeId). Consumers attach them
-                     * via `$linkrpc.capabilities` on subsequent calls. Empty
+                     * via `$hubrpc.capabilities` on subsequent calls. Empty
                      * array is legal (hub with no signing identity / tests).
                      *
                      * Plural so a handler can return per-slot caps with
@@ -332,7 +332,7 @@ export const hubAccessInterface = defineInterface(
          * On grant the response carries a fresh `SignedCapability` whose
          * attenuations cover **only** the granted delta. Bag-compatible
          * with the prior cap; combine via `merge` (when it exists) or
-         * just keep both in `$linkrpc.capabilities`.
+         * just keep both in `$hubrpc.capabilities`.
          *
          * Distinguished from `request` so the consent UI can render a
          * different affordance ("X already has read access on `github`,

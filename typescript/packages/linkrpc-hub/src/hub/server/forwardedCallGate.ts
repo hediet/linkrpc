@@ -46,7 +46,7 @@ type AcceptedRootIssuerResolver = (serviceId: string) => readonly AcceptedRootIs
  * type system enforces the one combination that is actually safe:
  *
  * - **authenticity only** (`requireCapability` omitted / `false`): a valid
- *   `$linkrpc` signature is enough; *authorization* is left to the target
+ *   `$hubrpc` signature is enough; *authorization* is left to the target
  *   service / capability layer. `acceptedRootIssuers` is optional here.
  * - **capability mode** (`requireCapability: true`): a bare signature is not
  *   enough — the request must also present a capability that {@link permits}
@@ -81,7 +81,7 @@ export type ForwardedCallGateOptions =
  * A **signature front door** for fully-qualified calls. Wrap an incoming
  * transport with this before attaching it to a hub or constructing the serving
  * connection, so every `serviceId::interfaceId::member` call must carry a
- * valid `$linkrpc` signature.
+ * valid `$hubrpc` signature.
  * Unsigned or tampered calls are rejected with an error response and never
  * reach the downstream hub or connection.
  *
@@ -94,7 +94,7 @@ export type ForwardedCallGateOptions =
  *   prefix} (the hub's own services, which gate themselves).
  *
  * The gate **does not strip** the envelope: signed wire params keep the real
- * call params at the top level alongside `$linkrpc`/`$linkrpcUnsigned`, so the
+ * call params at the top level alongside `$hubrpc`/`$linkrpcUnsigned`, so the
  * target's typed handler recovers them via schema-stripping while a target that
  * cares may re-verify as defense-in-depth. Authorization is *not* this gate's
  * job (unless {@link ForwardedCallGateOptions.requireCapability} is set): it

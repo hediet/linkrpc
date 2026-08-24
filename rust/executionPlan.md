@@ -28,7 +28,7 @@ Concretely:
 This scenario forces three hard requirements that shape the whole plan:
 
 - **R1 — Interop is a first-class, continuously-verified property.** Every wire-visible layer
-  (JCS bytes, interface hash, JSON-RPC framing, `$linkrpc` signed envelope, capability chain,
+  (JCS bytes, interface hash, JSON-RPC framing, `$hubrpc` signed envelope, capability chain,
   `hubAccess`/directory interfaces) must match TS **byte-for-byte / decision-for-decision**.
 - **R2 — Identity ships in v1 but is optional.** The signing/capability machinery must *exist*
   from the first release (anonymous connections work; signed connections + capability gating
@@ -52,7 +52,7 @@ hope.
     interface_hash.json     # interface schema → "id@hash"  (incl. pizza)
     framing.json            # sample request/response/notification/stream/error frames
     endpoint.json           # LINKRPC_ENDPOINT URI → ResolvedEndpoint (parse + token rules)
-    signed_envelope.json    # key + payload → $linkrpc envelope; + verify pass/fail cases
+    signed_envelope.json    # key + payload → $hubrpc envelope; + verify pass/fail cases
     capability.json         # minted capabilities + chain-validation expected verdicts
 ```
 
@@ -112,7 +112,7 @@ Each milestone lists **deliverable**, **acceptance** (how we know it's done), an
 
 ### M4 — Identity core (R2: present in v1, optional)
 - **Deliverable.** `SigningIdentity` abstraction (Ed25519 in-memory now; pluggable HSM later),
-  branded `NodeId` derived from the public key, the `$linkrpc` **signed envelope**
+  branded `NodeId` derived from the public key, the `$hubrpc` **signed envelope**
   (canonical signing input, sign/verify, clock-skew window), and the `Principal` / capability data
   model. All **optional at the connection level** — anonymous connections work unchanged; the
   verify path is only engaged when a signature is present or required.

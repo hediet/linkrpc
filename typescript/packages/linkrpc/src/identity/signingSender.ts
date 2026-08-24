@@ -170,7 +170,7 @@ export class OneShotCapStaging {
 }
 
 /**
- * Outbound sender decorator that wraps every call in a `$linkrpc` signed
+ * Outbound sender decorator that wraps every call in a `$hubrpc` signed
  * envelope and (optionally) attaches capabilities. Stateless w.r.t. signing
  * config — the {@link Principal} and {@link OneShotCapStaging} are resolved
  * per-call from {@link SigningSenderConfig}, so the caller can install or

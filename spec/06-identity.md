@@ -1,6 +1,6 @@
 # 06 — Identity
 
-**Optional.** This chapter defines how a call is *signed*: the **principal** that names a signing identity (resolved to a public key via its **keyId**), the **signed-object standard** that fixes the bytes a signature commits to, the `$linkrpc` signing members and the `$linkrpcSignature` map that carry a call's signature, and the verification rules. Identity is self-contained: it authenticates *who* makes a call but grants no authority on its own (that is chapter 07). A node that does not implement identity omits these members; an unsigned call is well-formed (chapter 00 §3).
+**Optional.** This chapter defines how a call is *signed*: the **principal** that names a signing identity (resolved to a public key via its **keyId**), the **signed-object standard** that fixes the bytes a signature commits to, the `$hubrpc` signing members and the `$linkrpcSignature` map that carry a call's signature, and the verification rules. Identity is self-contained: it authenticates *who* makes a call but grants no authority on its own (that is chapter 07). A node that does not implement identity omits these members; an unsigned call is well-formed (chapter 00 §3).
 
 ## 1. Keys
 
@@ -31,7 +31,7 @@ An in-process key pair uses a uniformly random 32-byte Ed25519 seed as its priva
 
 Signing in linkrpc follows one rule, applied to any JSON object in a **domain**. This chapter uses `call`; chapter 07 uses `capability`. The identity extension adds domains such as `keyRotation`; the domain set is open.
 
-Signing is backwards-compatible with the existing wire envelope: it only adds members whose names begin with the reserved `$linkrpc` prefix. It does not change the shape or meaning of user params or any JSON-RPC field. A node that does not implement identity ignores these members (chapter 00 §3), while a node that does implement identity interprets them as defined below.
+Signing is backwards-compatible with the existing wire envelope: it only adds members whose names begin with the reserved `$hubrpc` prefix. It does not change the shape or meaning of user params or any JSON-RPC field. A node that does not implement identity ignores these members (chapter 00 §3), while a node that does implement identity interprets them as defined below.
 
 ### 2.1 Signing
 
@@ -73,7 +73,7 @@ async function sign<TDomain extends string>(
 
 The signing key owns the private key material; it need not expose or export it. Its `keyId` is copied into the signature entry. The returned value is the final wire object.
 
-The signature does not cover `$linkrpcSignature` (which contains the signature itself) or `$linkrpcUnsigned` (which contains attachments authored independently of the signer). It covers every other property, including `$linkrpc`.
+The signature does not cover `$linkrpcSignature` (which contains the signature itself) or `$linkrpcUnsigned` (which contains attachments authored independently of the signer). It covers every other property, including `$hubrpc`.
 
 The signed and unsigned parts are read independently:
 
@@ -246,11 +246,11 @@ function resolvePrincipalKey<TDomain extends string>(
 
 `signedObject` is unused by the inline resolver. The identity extension ([identity-extension.md](identity-extension.md)) uses its validated `$linkrpcUnsigned.bindings` evidence to resolve rotated keys while preserving the same function shape.
 
-The principal is a claim inside the signed data: calls use `$linkrpc.principal`, capabilities use `issuer`, and rotation records use the genesis document's `admin`. A mismatched `(principalId, keyId)` pair MUST resolve to `undefined` (fail-closed).
+The principal is a claim inside the signed data: calls use `$hubrpc.principal`, capabilities use `issuer`, and rotation records use the genesis document's `admin`. A mismatched `(principalId, keyId)` pair MUST resolve to `undefined` (fail-closed).
 
 ## 4. Signed calls
 
-A call's signing metadata lives in its `params.$linkrpc` object (chapter 01 §3.1). The partial interface below shows the fields relevant to identity; a message may contain additional JSON-RPC and linkrpc fields specified in earlier chapters.
+A call's signing metadata lives in its `params.$hubrpc` object (chapter 01 §3.1). The partial interface below shows the fields relevant to identity; a message may contain additional JSON-RPC and linkrpc fields specified in earlier chapters.
 
 ```ts
 interface JsonRpcMessage {
@@ -258,7 +258,7 @@ interface JsonRpcMessage {
   method: string;
   params: {
     [propertyName: string]: unknown;
-    $linkrpc: {
+    $hubrpc: {
       method: string;         // fully-qualified wire method; MUST equal method above
       nonce: string;          // replay-protection nonce, base64url
       signedAtMs: number;     // Unix milliseconds when the call was signed
@@ -273,14 +273,14 @@ interface JsonRpcMessage {
 }
 ```
 
-The method appears twice deliberately. The outer `message.method` is the JSON-RPC routing field and is not part of the signed `params` object. The inner `params.$linkrpc.method` is the signer's assertion of the intended route and is covered by the signature. A receiver MUST require the two values to be equal. Thus a forwarder may read the outer method to route the message, but cannot change it to redirect a signed call without verification failing.
+The method appears twice deliberately. The outer `message.method` is the JSON-RPC routing field and is not part of the signed `params` object. The inner `params.$hubrpc.method` is the signer's assertion of the intended route and is covered by the signature. A receiver MUST require the two values to be equal. Thus a forwarder may read the outer method to route the message, but cannot change it to redirect a signed call without verification failing.
 
-`$linkrpc` is present on both signed and unsigned calls (an unsigned call omits `principal` and carries no `$linkrpcSignature`).
+`$hubrpc` is present on both signed and unsigned calls (an unsigned call omits `principal` and carries no `$linkrpcSignature`).
 
 A **signed call** is one whose `params` object is call-signed (domain `call`, §2). On a signed call, `principal` MUST be present and `verifySignatureWithPrincipal(params, "call", principal, resolvePrincipalKey)` MUST succeed.
 
 ```ts
-const principalId = message.params.$linkrpc.principal;
+const principalId = message.params.$hubrpc.principal;
 if (principalId === undefined) reject();
 
 const verified = await verifySignatureWithPrincipal(
@@ -294,14 +294,14 @@ if (!verified.valid) reject();
 
 The resolver binds the signature entry's `keyId` to the principal claim carried by the signed bytes.
 
-> **Note.** The strip rule (§2) removes `$linkrpcSignature` and `$linkrpcUnsigned` but keeps `$linkrpc`, so the signature binds `$linkrpc.method`, `nonce`, `signedAtMs`, `principal`, and the user params. The equality check against the outer `method` binds that signed assertion to JSON-RPC routing, and the bound `nonce` makes the bytes unique per attempt.
+> **Note.** The strip rule (§2) removes `$linkrpcSignature` and `$linkrpcUnsigned` but keeps `$hubrpc`, so the signature binds `$hubrpc.method`, `nonce`, `signedAtMs`, `principal`, and the user params. The equality check against the outer `method` binds that signed assertion to JSON-RPC routing, and the bound `nonce` makes the bytes unique per attempt.
 
 ### 4.1 Verification
 
 A node that requires a signed call MUST, before acting on it:
 
-1. verify the `call` signature for `$linkrpc.principal` using `resolvePrincipalKey` (§§2–3);
-2. assert `$linkrpc.method` equals the JSON-RPC `method`;
+1. verify the `call` signature for `$hubrpc.principal` using `resolvePrincipalKey` (§§2–3);
+2. assert `$hubrpc.method` equals the JSON-RPC `method`;
 3. enforce a freshness window on `signedAtMs` (reject calls outside an acceptable clock-skew bound);
 4. enforce single-use of `nonce` per principal (reject a replay of a previously-seen `(principal, nonce)`).
 

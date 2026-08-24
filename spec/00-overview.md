@@ -35,12 +35,12 @@ linkrpc is layered. Each chapter builds on the chapters before it. The **optiona
 
 | # | Chapter | Status | Defines |
 |---|---|---|---|
-| 01 | [Messages](01-messages.md) | required | JSON-RPC specialization, `::` method grammar, reserved `$linkrpc` namespace, ids, error codes |
+| 01 | [Messages](01-messages.md) | required | JSON-RPC specialization, `::` method grammar, reserved `$hubrpc` namespace, ids, error codes |
 | 02 | [Transport](02-transport.md) | required | abstract transport + NDJSON / WebSocket / stdio bindings + endpoint URIs |
 | 03 | [Streaming](03-streaming.md) | optional | the `$stream` interface, in-flight correlated messages, control verbs |
-| 04 | [Interfaces](04-interfaces.md) | required | interface schema format, JSON Schema subset, interface hash, `$linkrpc.interfaceHash`, validation |
+| 04 | [Interfaces](04-interfaces.md) | required | interface schema format, JSON Schema subset, interface hash, `$hubrpc.interfaceHash`, validation |
 | 05 | [Reflection](05-reflection.md) | required | `linkrpc.schemas`, `linkrpc.defaults` |
-| 06 | [Identity](06-identity.md) | optional | principals & keys, the signed-object standard, `$linkrpc` signing members, `$linkrpcSignature` |
+| 06 | [Identity](06-identity.md) | optional | principals & keys, the signed-object standard, `$hubrpc` signing members, `$linkrpcSignature` |
 | 07 | [Capabilities](07-capabilities.md) | optional | `SignedCapability`, `$linkrpcUnsigned.capabilities`, the authorization gate |
 | 08 | [Hub interfaces](08-hub-interfaces.md) | optional | `hubAccess`, `hubGrantedServiceId`, `hubServiceIdRegistry` wire contracts |
 | 09 | [Directory](09-hub-directory.md) | required | `linkrpc.directory`, root/addressed views, referrals, walking and graph watches |
@@ -53,10 +53,10 @@ linkrpc is layered. Each chapter builds on the chapters before it. The **optiona
 
 Every optional layer is carried in **reserved members** that a node which does not implement the layer treats as opaque. Specifically:
 
-- Optional metadata rides under reserved `$linkrpc`-prefixed keys on a call's `params` object (chapter 01 §3).
+- Optional metadata rides under reserved `$hubrpc`-prefixed keys on a call's `params` object (chapter 01 §3).
 - A node that does not implement a layer MUST ignore that layer's reserved members when they are not required for the call it is processing, and MUST NOT let their presence change the outcome of an otherwise-ungated call.
 
-> **Rationale.** This is what makes the layers composable. A Core node and a Capability node interoperate on any call the Capability node does not gate, because the extra `$linkrpcUnsigned`/`$linkrpc` members are invisible to the Core node and inert on an ungated path.
+> **Rationale.** This is what makes the layers composable. A Core node and a Capability node interoperate on any call the Capability node does not gate, because the extra `$linkrpcUnsigned`/`$hubrpc` members are invisible to the Core node and inert on an ungated path.
 
 ## 4. Conformance model
 

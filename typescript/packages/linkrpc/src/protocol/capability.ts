@@ -54,7 +54,7 @@ export type ParamMatcher =
  * The exact, point-precision narrowing of a {@link Permission}: it admits
  * **one** signed RPC call — the one whose call content-hash
  * ({@link import("./signedObject").signedHash}`("call", signedCall)`, i.e.
- * `base64url(sha256(jcs({ "linkrpc-sig/v1/call": userParams + $linkrpc })))`)
+ * `base64url(sha256(jcs({ "linkrpc-sig/v1/call": userParams + $hubrpc })))`)
  * equals `payloadHash`. No field-by-field comparison; pure hash equality.
  * This is the *same bytes the call signature commits to*, so the host can
  * pre-compute it at consent time exactly as the consumer will sign.
@@ -88,7 +88,7 @@ export interface TargetPattern {
     interfaceId: Pattern;
     /**
      * Optional schema-version pin. When set, the call's asserted
-     * `interfaceHash` (carried in `$linkrpc.interfaceHash`) must equal this
+     * `interfaceHash` (carried in `$hubrpc.interfaceHash`) must equal this
      * string. Omit to accept any version.
      */
     interfaceHash?: string;

@@ -60,7 +60,7 @@ export interface LinkRpcConnectionOptions {
  *
  * Typed proxies built by this class merely forward each call's
  * `interfaceHash` hint to the channel so the signer stamps it into the
- * `$linkrpc` envelope.
+ * `$hubrpc` envelope.
  *
  * `TInCtx` is the per-call out-of-band context the connection's transport
  * carries. Default `undefined` covers cross-process and ordinary in-process

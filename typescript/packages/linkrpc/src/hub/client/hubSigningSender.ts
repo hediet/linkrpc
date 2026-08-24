@@ -22,7 +22,7 @@ import type { HubAccessRequest, HubAccessResult } from '../common/hubAccess';
 
 /**
  * The single connection handle a hub client consumes: a signing request
- * sender (every outbound call is wrapped in a `$linkrpc` signed envelope by the
+ * sender (every outbound call is wrapped in a `$hubrpc` signed envelope by the
  * principal) that also surfaces the principal's public identity and its grants.
  *
  * It IS the channel — `sendRequest("svc::iface::member", params)` routes a

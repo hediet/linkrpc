@@ -5,7 +5,7 @@
  *
  *     params: {
  *         ...userParams,
- *         $linkrpc:           CallMeta,        // signed
+ *         $hubrpc:           CallMeta,        // signed
  *         $linkrpcSignature:  { call: sig },   // the signature
  *         $linkrpcUnsigned:   { capabilities } // unsigned attachments
  *     }
@@ -60,13 +60,13 @@ export interface SignRpcCallOptions {
 export interface SignedRpcCall {
     /**
      * Wire params for the JSON-RPC request: the user's params merged with
-     * `$linkrpc` (signed meta) and `$linkrpcSignature` (the `call` signature).
+     * `$hubrpc` (signed meta) and `$linkrpcSignature` (the `call` signature).
      * Capabilities are attached separately via {@link attachCapabilities}
      * since they are unsigned authority hints, not part of what the
      * signature commits to.
      */
     readonly wireParams: LinkRpcWireParams;
-    /** The signed call meta embedded under `$linkrpc`. */
+    /** The signed call meta embedded under `$hubrpc`. */
     readonly callMeta: CallMeta;
     /** The call's content hash (`signedHash("call", signedParams)`) — what `callBind` binds to. */
     readonly callHash: Base64Sha256;
@@ -74,7 +74,7 @@ export interface SignedRpcCall {
 
 /**
  * Sign a single JSON-RPC call. Produces the wire-form params with the
- * `$linkrpc` (signed meta) and `$linkrpcSignature.call` envelopes attached,
+ * `$hubrpc` (signed meta) and `$linkrpcSignature.call` envelopes attached,
  * plus the call content hash.
  */
 export async function signRpcCall(opts: SignRpcCallOptions): Promise<SignedRpcCall> {
@@ -128,7 +128,7 @@ export interface VerifyRpcCallOptions {
 export type VerifyRpcCallResult =
     | {
         readonly ok: true;
-        /** `undefined` when the call had no signed (`$linkrpc` + `$linkrpcSignature.call`) envelope. */
+        /** `undefined` when the call had no signed (`$hubrpc` + `$linkrpcSignature.call`) envelope. */
         readonly identity:
         | undefined
         | {
@@ -148,7 +148,7 @@ export type VerifyRpcCallResult =
  * Verify the identity envelope on a JSON-RPC call. Does **not** evaluate
  * capability chains or caveats — that is the hub / authoriser's job.
  *
- * A signed call carries `$linkrpc` (with `principal`) and a `call` signature
+ * A signed call carries `$hubrpc` (with `principal`) and a `call` signature
  * under `$linkrpcSignature`. The signature is checked against
  * `signingInput("call", wireParams)` (the reserved keys are stripped by the
  * signed-object standard). Bare/unsigned calls return `identity: undefined`.
@@ -159,7 +159,7 @@ export async function verifyRpcCall(opts: VerifyRpcCallOptions): Promise<VerifyR
     const userParams = stripLinkRpcWireMeta(wireParams);
 
     if (meta === undefined) {
-        if (opts.requireSigned) return { ok: false, reason: 'missing $linkrpc envelope' };
+        if (opts.requireSigned) return { ok: false, reason: 'missing $hubrpc envelope' };
         return { ok: true, identity: undefined, params: userParams };
     }
 
@@ -188,7 +188,7 @@ export async function verifyRpcCall(opts: VerifyRpcCallOptions): Promise<VerifyR
 
     const signature = readSignature(wireParams as object, 'call');
     if (meta.principal === undefined || signature === undefined) {
-        // Has $linkrpc meta but no signature — an unsigned call.
+        // Has $hubrpc meta but no signature — an unsigned call.
         if (opts.requireSigned) return { ok: false, reason: 'unsigned call' };
         return { ok: true, identity: undefined, params: userParams };
     }

@@ -1,6 +1,6 @@
 # 04 — Interfaces
 
-This chapter defines what a linkrpc **interface** is: a named set of typed members described by an *interface schema*, and a content **hash** that gives the schema a stable identity. It defines the schema format, the restricted JSON Schema subset, the normalization and hashing that derive the interface hash, the `$linkrpc.interfaceHash` caller assertion, and the validation obligations on calls and responses. This layer is a pure addressing/typing mechanism; it requires no identity or capabilities.
+This chapter defines what a linkrpc **interface** is: a named set of typed members described by an *interface schema*, and a content **hash** that gives the schema a stable identity. It defines the schema format, the restricted JSON Schema subset, the normalization and hashing that derive the interface hash, the `$hubrpc.interfaceHash` caller assertion, and the validation obligations on calls and responses. This layer is a pure addressing/typing mechanism; it requires no identity or capabilities.
 
 ## 1. Interfaces and members
 
@@ -116,7 +116,7 @@ The **interface hash** is the content identity of an interface schema. It is com
 
 Two schemas have the same hash iff their canonical documents are byte-identical.
 
-> **Note.** `id@hash` is a human/diagnostic notation for "interface `id` at version `hash`". It is never sent as a single token on the wire: a method (chapter 01 §2) carries only the id, and a version assertion travels as the separate `$linkrpc.interfaceHash` field (§5).
+> **Note.** `id@hash` is a human/diagnostic notation for "interface `id` at version `hash`". It is never sent as a single token on the wire: a method (chapter 01 §2) carries only the id, and a version assertion travels as the separate `$hubrpc.interfaceHash` field (§5).
 
 > **Rationale.** 64 bits of hash is a deliberate collision budget per id, not a security boundary — identity is scoped by `id`, and the hash only distinguishes versions of that id.
 
@@ -136,12 +136,12 @@ This is a purely additive rule. No interface that avoids `x-…` keys is affecte
 
 > **Note (normative vs. non-normative).** The stripping rule and the reservation of the `x-` prefix are **normative** (an implementation MUST strip these keys to interoperate on the hash). The *meaning* of any particular extension (e.g. `x-codegen`, `x-validation`) is **non-normative** and outside this specification — extensions are for producers and their tooling, and a conformant peer that does not understand an extension simply ignores it.
 
-## 5. `$linkrpc.interfaceHash`
+## 5. `$hubrpc.interfaceHash`
 
-A caller MAY assert the interface hash it believes the target implements by setting `interfaceHash` (a hash string, §4) inside the call's `$linkrpc` object (chapter 01 §3.1):
+A caller MAY assert the interface hash it believes the target implements by setting `interfaceHash` (a hash string, §4) inside the call's `$hubrpc` object (chapter 01 §3.1):
 
 ```
-params.$linkrpc.interfaceHash = "<16 hex>"
+params.$hubrpc.interfaceHash = "<16 hex>"
 ```
 
 When present, this is a fail-fast contract check: a provider MAY reject a call whose asserted `interfaceHash` does not equal the hash of the interface it actually serves, responding with `invalidParams`. When absent, the caller has not pinned a version and the provider MUST NOT reject on this basis.

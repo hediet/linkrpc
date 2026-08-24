@@ -463,7 +463,7 @@ describe('formatFlowSummary', () => {
                 data: {
                     issues: [{
                         code: 'unrecognized_keys',
-                        keys: ['$linkrpc'],
+                        keys: ['$hubrpc'],
                         path: [],
                         message: 'Unrecognized key',
                     }],
@@ -479,7 +479,7 @@ describe('formatFlowSummary', () => {
         expect(line).toContain(
             'error {"code":-32602,"message":"Invalid params","data":{"issues":',
         );
-        expect(line).toContain('"keys":["$linkrpc"]');
+        expect(line).toContain('"keys":["$hubrpc"]');
     });
 
     it('appends indented stream lines when stream frames are present', () => {

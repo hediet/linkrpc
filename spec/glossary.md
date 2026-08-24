@@ -10,8 +10,8 @@ A term index. Each entry is one short gloss plus a pointer to its defining secti
 | **Profile** | A node's advertised conformance level: Core, Signed, or Capability. | conformance §1 |
 | **Message** | One JSON-RPC value carried by the transport: request, notification, or response. | 01 §1 |
 | **Method** | A printable-ASCII bare name or a structured `::` address identifying an interface member. | 01 §2 |
-| **User params** | A call's `params` with all `$linkrpc`-prefixed keys removed. | 01 §3 |
-| **Reserved key** | A `$linkrpc`-prefixed `params` key owned by linkrpc (`$linkrpc`, `$linkrpcSignature`, `$linkrpcUnsigned`). | 01 §3 |
+| **User params** | A call's `params` with all `$hubrpc`-prefixed keys removed. | 01 §3 |
+| **Reserved key** | A `$hubrpc`-prefixed `params` key owned by linkrpc (`$hubrpc`, `$linkrpcSignature`, `$linkrpcUnsigned`). | 01 §3 |
 | **Transport** | A reliable, ordered, bidirectional, message-preserving channel. | 02 §1 |
 | **Initialize handshake** | The first message `linkrpc::initialize` (request + reply) on a connection that authenticates or negotiates transport details. | 02 §2.1 |
 | **Endpoint URI** | An RFC 3986 URI naming where a node lives and how to reach/start it. | 02 §5 |
@@ -34,7 +34,7 @@ A term index. Each entry is one short gloss plus a pointer to its defining secti
 | **Signing domain value** | The wrapper key `linkrpc-sig/v1/<domain>`. | 06 §2 |
 | **Signing input** | `jcs({ [domainValue(domain)]: obj without the two reserved keys })`. | 06 §2 |
 | **SignatureEntry** | A `$linkrpcSignature` value: `{ keyId, sig }`. | 06 §2 |
-| **CallMeta** | The `$linkrpc` object: `method`, `nonce`, `signedAtMs`, `principal?`, `interfaceHash?`. | 06 §4 |
+| **CallMeta** | The `$hubrpc` object: `method`, `nonce`, `signedAtMs`, `principal?`, `interfaceHash?`. | 06 §4 |
 | **Capability** | A signed grant from an issuer to an audience listing permitted calls. | 07 §1 |
 | **Permission** | One grant clause: a target pattern plus invoke/delegate/param/callBind constraints. | 07 §1.1 |
 | **TargetPattern** | The addressable set a permission talks about (service/interface/hash/members). | 07 §1.1 |

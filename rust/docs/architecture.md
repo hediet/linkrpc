@@ -129,7 +129,7 @@ The application reads it where it matters — at **registration** (per-peer wiri
 
 ### Identity (signing / wrapping) — the cryptographic vocabulary
 *Provenance* is what the **transport** vouches for; *identity* is what a peer **cryptographically
-proves** via the optional `$linkrpc` envelope (P5). The layered vocabulary, ported from TS:
+proves** via the optional `$hubrpc` envelope (P5). The layered vocabulary, ported from TS:
 
 ```rust
 /// Branded ids — newtypes, NOT bare aliases, so you can't pass a random String where an
@@ -159,7 +159,7 @@ struct Principal { identity: Arc<dyn Identity>, caps: CapBag }
 
 `NodeId` is a **branded newtype** derived from the public signing key (a peer's stable
 cryptographic name). The chain is: **`SigningIdentity`** (how you sign) → **`Principal`** (who you
-are + what you may do) → `$linkrpc` envelope on the wire → **`Participant`** (who the callee
+are + what you may do) → `$hubrpc` envelope on the wire → **`Participant`** (who the callee
 believes called).
 
 ### Participant (deferred — not a core concept)
@@ -169,7 +169,7 @@ through `Context`'s typed extension map, so it is *pluggable and deferrable*.
 - **P1–P3 (core RPC):** no `Participant` type exists; handlers never need it. `Context` only
   carries `request_id` + cancellation.
 - **P3 (provenance) / P5 (signing):** we *introduce* `Participant`, derived from a verified
-  `$linkrpc` signer when present, else from transport provenance (the unsigned fallback). Nothing
+  `$hubrpc` signer when present, else from transport provenance (the unsigned fallback). Nothing
   in the core changes — it just becomes available via `ctx.get::<Participant>()`.
 
 ```rust
@@ -271,7 +271,7 @@ Routing is encoded in the JSON-RPC `method` string using `::`:
 | `interfaceId::member` | interface-qualified, mounted at the root |
 | `serviceId::interfaceId::member` | fully qualified, mounted under a serviceId |
 | `rpc.*` | reserved by JSON-RPC; never used by linkrpc |
-| `$stream::*`, `$linkrpc` | reserved linkrpc control/envelope namespaces |
+| `$stream::*`, `$hubrpc` | reserved linkrpc control/envelope namespaces |
 
 This is how one connection multiplexes many interfaces **without a session handshake**: every
 call self-describes its target.
@@ -529,13 +529,13 @@ The caller drives one handle `RpcCall<R, Out, In, E>` (`.send`, `.next`, `.finis
 A member with no stream attributes is a plain awaitable `Result<R, E>`.
 
 ### Signing / capabilities (optional, advanced)
-An optional `$linkrpc` envelope wraps calls with an Ed25519 signature over a canonical
+An optional `$hubrpc` envelope wraps calls with an Ed25519 signature over a canonical
 (JCS) signing input, plus capability tokens/attenuation. Calls without it are plain JSON-RPC
 with raw params. This is the layer that upgrades *provenance* (transport-level) to
 *cryptographically attested* identity and authority.
 
 ```rust
-// Carried under params.$linkrpc — out of band from the user's params, never colliding.
+// Carried under params.$hubrpc — out of band from the user's params, never colliding.
 struct CallMeta {
     method: String,             // fully-qualified wire method; verifier asserts equality
     nonce: String,              // replay-protection (base64url); gate dedups on it
@@ -567,7 +567,7 @@ struct CapGate<H> {
 
 impl<H: RequestHandler<()>> RequestHandler<()> for CapGate<H> {
     async fn handle_request(&self, call: IncomingCall<()>) -> CallResult {
-        // 1. envelope: signature + skew, strip `$linkrpc*` from params.
+        // 1. envelope: signature + skew, strip `$hubrpc*` from params.
         let v = match verify_call(&call.method, &call.params, now(), self.max_skew) {
             Ok(v) => v,
             Err(VerifyErr::Envelope(r)) => return CallResult::Err(RpcError::invalid_request(r)),

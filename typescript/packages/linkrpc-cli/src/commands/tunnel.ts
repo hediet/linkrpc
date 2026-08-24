@@ -42,7 +42,7 @@ export interface TunnelOptions {
  * Claims `serviceId` on {@link TunnelOptions.local} via the hub claim
  * interface, then forwards every inbound request/notification verbatim onto
  * {@link TunnelOptions.remote} and pipes the response back. Forwarding is
- * signature-preserving: the original caller's `$linkrpc` envelope rides inside
+ * signature-preserving: the original caller's `$hubrpc` envelope rides inside
  * `params`, so the remote send is issued unsigned (`signerOverride: null`) to
  * avoid re-wrapping it. The streaming sub-protocol is bridged both ways, so
  * long-running / streaming calls forward their in-flight stream messages and
@@ -151,7 +151,7 @@ async function _forwardRequest(
     //   - callee → caller progress: relayed via `onStreamMessage` → `call.stream.send`
     //   - caller → callee input: relayed via `call.stream.onMessage` → `rc.send`
     //   - caller cancellation (disconnect / idle / explicit): via `call.signal` → `rc.cancel`
-    // `signerOverride: null` forwards verbatim: the inbound `$linkrpc` envelope
+    // `signerOverride: null` forwards verbatim: the inbound `$hubrpc` envelope
     // (if any) is preserved instead of being re-signed.
     const rc = remote.channel.sendRequestWithStream(call.method, call.params, {
         ctx: { signerOverride: null },

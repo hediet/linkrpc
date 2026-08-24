@@ -212,7 +212,7 @@ export type ListenerConfig = z.infer<typeof ListenerConfigSchema>;
  * `hubServiceIdRegistry::registerServiceId` + `hubAccess` front doors, and gates
  * every forwarded (fully-qualified) call at each listener boundary:
  *
- * - `verifySignatures` — forwarded calls must carry a valid `$linkrpc`
+ * - `verifySignatures` — forwarded calls must carry a valid `$hubrpc`
  *   signature (authenticity).
  * - `requireCapability` — forwarded calls must additionally present a
  *   capability chain rooting at the hub admin (authorization). Granting

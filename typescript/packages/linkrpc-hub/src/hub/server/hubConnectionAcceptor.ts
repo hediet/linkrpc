@@ -73,7 +73,7 @@ export interface HubConnectionAcceptorBaseOptions<TTransport extends Transport> 
  *
  * - **off** (default): forwarded calls reach the hub unverified.
  * - **authenticity only** (`verifyForwardedCalls: true`): forwarded calls must
- *   carry a valid `$linkrpc` signature; `adminIds` is optional.
+ *   carry a valid `$hubrpc` signature; `adminIds` is optional.
  * - **capability** (`verifyForwardedCalls: true` + `requireForwardedCapability:
  *   true`): forwarded calls must additionally present a capability rooted at one
  *   of `adminIds`. Because an empty/absent anchor set fails closed (rejecting
@@ -90,7 +90,7 @@ export type ForwardCheckingPolicy =
         /**
          * Every accepted participant's hub-facing link is wrapped in a
          * {@link withForwardedCallGate signature front door}: forwarded
-         * (fully-qualified) requests must carry a valid `$linkrpc` signature to
+         * (fully-qualified) requests must carry a valid `$hubrpc` signature to
          * reach the hub. Requests to the hub's own `hubServiceId` prefix are
          * exempt (those services self-gate).
          */

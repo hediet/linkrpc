@@ -179,7 +179,7 @@ export interface RawStreamingCall {
  * the interface a typed proxy is calling. It is independent of
  * `TOutCtx` — the connection stamps it from the interface definition,
  * the base {@link JsonRpcChannel} ignores it, and signing decorators
- * bake it into the `$linkrpc` envelope.
+ * bake it into the `$hubrpc` envelope.
  *
  * `ctx` is the sender's `TOutCtx`-typed override / extension bag for
  * per-call decorator overrides (e.g. `signerOverride`, `capsOverride`).

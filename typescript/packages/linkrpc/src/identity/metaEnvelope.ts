@@ -43,7 +43,7 @@ export interface SignParamsOptions {
 }
 
 /**
- * Returns a wire-form params object carrying the `$linkrpc` envelope, the
+ * Returns a wire-form params object carrying the `$hubrpc` envelope, the
  * `call` signature under `$linkrpcSignature`, and (optionally) capabilities
  * under `$linkrpcUnsigned`.
  */
@@ -70,7 +70,7 @@ export async function signParams(opts: SignParamsOptions): Promise<JsonObject> {
 
 export interface VerifyCallOptions {
     method: string;
-    /** Raw params as received on the wire. Carries `$linkrpc` + `$linkrpcSignature` when signed. */
+    /** Raw params as received on the wire. Carries `$hubrpc` + `$linkrpcSignature` when signed. */
     params: unknown;
     /** Decode the method string into the call's target address. */
     parseMethod: (method: string) => CallTarget;
@@ -99,7 +99,7 @@ export type VerifyResult =
         nonce: string;
         /** The call's content hash — input to `callBind.payloadHash`. */
         callHash: Base64Sha256;
-        /** The `$linkrpc` envelope as received. */
+        /** The `$hubrpc` envelope as received. */
         callMeta: CallMeta;
         /** Schema-version assertion the caller stamped. */
         interfaceHash: string | undefined;

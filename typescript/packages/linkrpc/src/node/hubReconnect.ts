@@ -75,7 +75,7 @@ export interface ServeOverHubOptions {
     readonly signal?: AbortSignal;
     /**
      * When set, registration is performed against a secure-mode hub: the
-     * caller's `$linkrpc`-signed `hubServiceIdRegistry::registerServiceId` carries a
+     * caller's `$hubrpc`-signed `hubServiceIdRegistry::registerServiceId` carries a
      * presented capability. The first attempt loads any cached cap from
      * disk; on `permissionRequired` the helper calls the hub-admin issuer
      * service to obtain a fresh cap, persists it, and retries. Subsequent
@@ -182,7 +182,7 @@ export interface HubPrefixClaimerOptions {
 export interface HubPrefixClaimer {
     /**
      * Register the configured prefix on `handle`'s hub, performing the
-     * `$linkrpc`-signed register plus capability dance: presents the cached
+     * `$hubrpc`-signed register plus capability dance: presents the cached
      * cap, and on `permissionRequired` mints a fresh one via the hub-admin
      * issuer, persists it, and retries. Call once per (re)connect, before
      * serving handlers. The loaded identity and cap are cached across calls.

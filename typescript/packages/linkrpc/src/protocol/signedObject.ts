@@ -40,7 +40,7 @@ export const LINKRPC_SIGNATURE_KEY = "$linkrpcSignature";
 export const LINKRPC_UNSIGNED_KEY = "$linkrpcUnsigned";
 
 /** Reserved wire-key: signed call meta, present only on calls (dodges the JSON-RPC param namespace). */
-export const LINKRPC_META_KEY = "$linkrpc";
+export const LINKRPC_META_KEY = "$hubrpc";
 
 /**
  * One domain's signature on the wire: which key signed ({@link KeyId}, an

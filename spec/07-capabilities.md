@@ -190,7 +190,7 @@ interface JsonRpcMessage {
   method: string;
   params: {
     [propertyName: string]: unknown;
-    $linkrpc: {
+    $hubrpc: {
       method: string;
       nonce: string;
       signedAtMs: number;

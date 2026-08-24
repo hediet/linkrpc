@@ -1,6 +1,6 @@
 # 01 — Messages
 
-This chapter defines the linkrpc message envelope: a specialization of [JSON-RPC 2.0](https://www.jsonrpc.org/specification). It adds the `::` method-addressing grammar, the reserved `$linkrpc`-prefixed `params` namespace that carries every optional layer, the set of error codes, and the request/response correlation rule. It defines the *names* of the reserved members and the rule for stripping them before canonicalization; each member's *meaning* is defined in the chapter that owns its layer.
+This chapter defines the linkrpc message envelope: a specialization of [JSON-RPC 2.0](https://www.jsonrpc.org/specification). It adds the `::` method-addressing grammar, the reserved `$hubrpc`-prefixed `params` namespace that carries every optional layer, the set of error codes, and the request/response correlation rule. It defines the *names* of the reserved members and the rule for stripping them before canonicalization; each member's *meaning* is defined in the chapter that owns its layer.
 
 ## 1. Relationship to JSON-RPC 2.0
 
@@ -11,7 +11,7 @@ linkrpc differs from plain JSON-RPC 2.0 in exactly the following ways, and in no
 **Extensions** (linkrpc gives meaning to things JSON-RPC leaves open):
 
 1. A `method` may be a flexible bare name or a structured `::` address (§2).
-2. The `params` object gains a reserved `$linkrpc`-prefixed namespace carrying every optional layer's metadata (§3). User params are `params` minus those keys.
+2. The `params` object gains a reserved `$hubrpc`-prefixed namespace carrying every optional layer's metadata (§3). User params are `params` minus those keys.
 3. Additional error codes are defined in the JSON-RPC reserved range (§4).
 
 **Constraints** (linkrpc narrows what JSON-RPC permits):
@@ -60,25 +60,25 @@ A node that receives a syntactically malformed method MUST respond with `methodN
 
 > **Note.** The bare syntax preserves the freedom of ordinary JSON-RPC method names while keeping addressed names predictable for routing, matching, and display. A bare method has no interface context; an intermediary that routes on interface (a hub) does not accept it. See chapter 04 for the addressing model and chapter 08 for hub routing surfaces.
 
-## 3. The reserved `$linkrpc` namespace
+## 3. The reserved `$hubrpc` namespace
 
-On a call's `params` object, member keys beginning with `$linkrpc` are **reserved by linkrpc**; no other keys are reserved. Three are defined:
+On a call's `params` object, member keys beginning with `$hubrpc` are **reserved by linkrpc**; no other keys are reserved. Three are defined:
 
 | Key | Carries | Defined in |
 |---|---|---|
-| `$linkrpc` | signed call metadata (and the interface-hash assertion) | §3.1 below; members in 04 §4, 06 §4 |
+| `$hubrpc` | signed call metadata (and the interface-hash assertion) | §3.1 below; members in 04 §4, 06 §4 |
 | `$linkrpcSignature` | the per-domain signature map | 06 §2 |
 | `$linkrpcUnsigned` | extrinsic unsigned attachments (the capability bag) | 07 §2 |
 
-**User params.** The *user params* of a call are its `params` object with every `$linkrpc`-prefixed key removed. Application interface schemas (chapter 04) describe the user params only.
+**User params.** The *user params* of a call are its `params` object with every `$hubrpc`-prefixed key removed. Application interface schemas (chapter 04) describe the user params only.
 
-**Strip rule.** Wherever this specification canonicalizes a call for hashing or signing, it canonicalizes the call object with `$linkrpcSignature` and `$linkrpcUnsigned` removed and `$linkrpc` retained. `$linkrpcSignature` cannot cover itself; `$linkrpcUnsigned` is authored by a party other than the signer. (The exact signing input is defined in 06 §2.)
+**Strip rule.** Wherever this specification canonicalizes a call for hashing or signing, it canonicalizes the call object with `$linkrpcSignature` and `$linkrpcUnsigned` removed and `$hubrpc` retained. `$linkrpcSignature` cannot cover itself; `$linkrpcUnsigned` is authored by a party other than the signer. (The exact signing input is defined in 06 §2.)
 
-> **Note.** `$linkrpc` lives inside `params` rather than as a sibling of `params` on the JSON-RPC object because JSON-RPC 2.0 fixes the top-level member set (`jsonrpc`, `id`, `method`, `params`); carrying metadata inside `params` keeps the message a valid JSON-RPC message and lets it travel with the call's arguments through a forwarder that treats `params` as opaque. The `$linkrpc` prefix — not the placement — is what reserves these keys from colliding with user param keys.
+> **Note.** `$hubrpc` lives inside `params` rather than as a sibling of `params` on the JSON-RPC object because JSON-RPC 2.0 fixes the top-level member set (`jsonrpc`, `id`, `method`, `params`); carrying metadata inside `params` keeps the message a valid JSON-RPC message and lets it travel with the call's arguments through a forwarder that treats `params` as opaque. The `$hubrpc` prefix — not the placement — is what reserves these keys from colliding with user param keys.
 
-### 3.1 `$linkrpc` presence
+### 3.1 `$hubrpc` presence
 
-`$linkrpc` is present on a call whenever any layer attaches metadata to it (an interface-hash assertion, a signature, or both). When present it MUST be a JSON object. Its individual members are defined where they gain meaning — `interfaceHash` in chapter 04, the signing members (`method`, `nonce`, `signedAtMs`, `principal`) in chapter 06. A node that does not implement those layers MUST ignore the corresponding members.
+`$hubrpc` is present on a call whenever any layer attaches metadata to it (an interface-hash assertion, a signature, or both). When present it MUST be a JSON object. Its individual members are defined where they gain meaning — `interfaceHash` in chapter 04, the signing members (`method`, `nonce`, `signedAtMs`, `principal`) in chapter 06. A node that does not implement those layers MUST ignore the corresponding members.
 
 ## 4. Error codes
 

@@ -134,7 +134,7 @@ export async function toSignedPermissions(
 /**
  * Compute `callBind.payloadHash` for a grant bound to one consumer-declared
  * call. Builds the SAME signed params the consumer commits to at sign time
- * (`signedHash('call', { ...params, $linkrpc: meta })`); the forwarded-call gate
+ * (`signedHash('call', { ...params, $hubrpc: meta })`); the forwarded-call gate
  * re-derives this on the inbound call and checks the hash matches. The consumer
  * owns `nonce`/`signedAtMs`, supplied via `callIntent`.
  */

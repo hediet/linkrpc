@@ -52,7 +52,7 @@ The **hub** is optional; on a direct connection the consumer node talks to the p
 the routing and access-broker steps. A **service** is a concrete provider of one or more typed
 interfaces. Reflection exposes those interfaces at the connection boundary, while signatures identify
 the caller and capabilities authorize specific calls. Optional metadata stays inside reserved
-`$linkrpc`-prefixed `params` members, so peers that only implement the Core profile can still handle
+`$hubrpc`-prefixed `params` members, so peers that only implement the Core profile can still handle
 ungated calls.
 
 You describe an interface once with [zod](https://zod.dev) schemas. The same definition gives you a
@@ -311,7 +311,7 @@ hands each consumer a scoped capability and enforces it on every routed call.
 ## A layered protocol
 
 linkrpc is built in additive layers. Lower layers stand alone; higher ones ride in reserved
-`$linkrpc`-prefixed members that a peer who doesn't implement them treats as opaque. That's what lets
+`$hubrpc`-prefixed members that a peer who doesn't implement them treats as opaque. That's what lets
 a minimal node and a fully-secured node interoperate on any call that needs no gated authority.
 
 | Layer | What it adds |

@@ -98,7 +98,7 @@ discover what a node offers rather than being told.
 ## A layered protocol
 
 linkrpc is built in additive layers. Lower layers stand alone; higher ones ride in reserved
-`$linkrpc`-prefixed members that a peer who doesn't implement them treats as opaque. That's what lets
+`$hubrpc`-prefixed members that a peer who doesn't implement them treats as opaque. That's what lets
 a minimal "Core" node and a full "Capability" node interoperate on any call that needs no gated
 authority.
 
