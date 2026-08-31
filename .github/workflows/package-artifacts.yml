@@ -6,10 +6,6 @@ on:
     paths:
       - "typescript/**"
       - ".github/workflows/package-artifacts.yml"
-  pull_request:
-    paths:
-      - "typescript/**"
-      - ".github/workflows/package-artifacts.yml"
   workflow_dispatch:
 
 jobs:
@@ -33,15 +29,46 @@ jobs:
         working-directory: typescript
         run: pnpm build
       - name: Create npm tarballs
+        id: package
         working-directory: typescript
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/artifacts/npm"
-          pnpm --filter @hediet/linkrpc pack --pack-destination "$GITHUB_WORKSPACE/artifacts/npm"
-          pnpm --filter @hediet/linkrpc-hub pack --pack-destination "$GITHUB_WORKSPACE/artifacts/npm"
-          pnpm --filter @hediet/linkrpc-cli pack --pack-destination "$GITHUB_WORKSPACE/artifacts/npm"
-      - name: Upload npm tarballs
+          pack_package() {
+            local selector="$1"
+            local output_name="$2"
+            local output_dir="$GITHUB_WORKSPACE/artifacts/npm/$output_name"
+
+            mkdir -p "$output_dir"
+            pnpm --filter "$selector" pack --pack-destination "$output_dir"
+
+            mapfile -t tarballs < <(find "$output_dir" -maxdepth 1 -type f -name '*.tgz')
+            test "${#tarballs[@]}" -eq 1
+
+            local tarball="${tarballs[0]}"
+            echo "${output_name}_path=$tarball" >> "$GITHUB_OUTPUT"
+            echo "${output_name}_artifact=npm-package-$(basename "$tarball")" >> "$GITHUB_OUTPUT"
+          }
+
+          pack_package @hediet/linkrpc linkrpc
+          pack_package @hediet/linkrpc-hub linkrpc_hub
+          pack_package @hediet/linkrpc-cli linkrpc_cli
+
+      - name: Upload @hediet/linkrpc
         uses: actions/upload-artifact@v4
         with:
-          name: npm-packages
-          path: artifacts/npm/*.tgz
+          name: ${{ steps.package.outputs.linkrpc_artifact }}
+          path: ${{ steps.package.outputs.linkrpc_path }}
+          if-no-files-found: error
+
+      - name: Upload @hediet/linkrpc-hub
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.linkrpc_hub_artifact }}
+          path: ${{ steps.package.outputs.linkrpc_hub_path }}
+          if-no-files-found: error
+
+      - name: Upload @hediet/linkrpc-cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.linkrpc_cli_artifact }}
+          path: ${{ steps.package.outputs.linkrpc_cli_path }}
           if-no-files-found: error
