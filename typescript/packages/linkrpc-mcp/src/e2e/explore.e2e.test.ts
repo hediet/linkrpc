@@ -27,13 +27,13 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "entries": [
                   {
-                    "documentId": "linkrpc://$root/hubAccess@5560868beca678de.ts",
-                    "interfaceHash": "5560868beca678de",
+                    "documentId": "linkrpc://$root/hubAccess@81b90efa3d0ed791.ts",
+                    "interfaceHash": "81b90efa3d0ed791",
                     "interfaceId": "hubAccess",
                     "serviceId": "",
                   },
@@ -84,13 +84,13 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "entries": [
                   {
-                    "documentId": "linkrpc://$root/hubAccess@5560868beca678de.ts",
-                    "interfaceHash": "5560868beca678de",
+                    "documentId": "linkrpc://$root/hubAccess@81b90efa3d0ed791.ts",
+                    "interfaceHash": "81b90efa3d0ed791",
                     "interfaceId": "hubAccess",
                     "serviceId": "",
                   },
@@ -124,7 +124,7 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "entries": [
@@ -174,7 +174,7 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "entries": [
@@ -185,20 +185,20 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/linkrpc.defaults@f0bcf98c6733cef9.ts",
-                    "interfaceHash": "f0bcf98c6733cef9",
+                    "documentId": "linkrpc://hello/linkrpc.defaults@6338c42820453561.ts",
+                    "interfaceHash": "6338c42820453561",
                     "interfaceId": "linkrpc.defaults",
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/linkrpc.directory@29c73b0ebe5d0361.ts",
-                    "interfaceHash": "29c73b0ebe5d0361",
+                    "documentId": "linkrpc://hello/linkrpc.directory@9878186e61a6d6b6.ts",
+                    "interfaceHash": "9878186e61a6d6b6",
                     "interfaceId": "linkrpc.directory",
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/linkrpc.schemas@e12e0c013a3dbd24.ts",
-                    "interfaceHash": "e12e0c013a3dbd24",
+                    "documentId": "linkrpc://hello/linkrpc.schemas@f1e32214d017b570.ts",
+                    "interfaceHash": "f1e32214d017b570",
                     "interfaceId": "linkrpc.schemas",
                     "serviceId": "hello",
                   },
@@ -236,7 +236,7 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "entries": [
@@ -247,8 +247,8 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
                     "matches": [
                       {
                         "lineRange": [
-                          19,
-                          21,
+                          22,
+                          24,
                         ],
                         "member": "hello",
                         "searchResult": "            z.object({
@@ -295,7 +295,7 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "entries": [
@@ -306,15 +306,22 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
                     "matches": [
                       {
                         "lineRange": [
-                          12,
-                          12,
+                          10,
+                          10,
+                        ],
+                        "searchResult": " * Greets by name.",
+                      },
+                      {
+                        "lineRange": [
+                          15,
+                          15,
                         ],
                         "searchResult": "        description: "Greets by name.",",
                       },
                       {
                         "lineRange": [
-                          20,
-                          20,
+                          23,
+                          23,
                         ],
                         "member": "hello",
                         "searchResult": "                greeting: z.string(),",
@@ -358,7 +365,7 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
@@ -375,6 +382,9 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
       import { defineInterface, notificationType, requestType } from "@hediet/linkrpc";
       import { z } from "zod";
 
+      /**
+       * Greets by name.
+       */
       export const greeterInterface = defineInterface(
           {
               id: "greeter",
@@ -424,7 +434,7 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
         "content": [
           {
             "json": {
-              "endpoint": "id:key:9GZx2z1ySiGfh4Hw3ggwEtH1cyzqEKSpd01t-HbedsM",
+              "endpoint": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
               "logs": [],
               "result": {
                 "documentId": "linkrpc://hello/greeter@6a089c5e05cb0b9c.ts",
@@ -490,18 +500,19 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
       arguments: { code: `async ({ con }) => con.explore({})` },
     });
     expect(llmResult(missingKind)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "text": "runLinkRpcScript failed: explore requires \`kind: "browse" | "grep" | "inspect"\`.
-              at <anonymous> (eval.js:6)
-          ",
-                "type": "text",
-              },
-            ],
-            "isError": true,
-          }
-        `);
+            "text": "runLinkRpcScript failed: explore requires \`kind: "browse" | "grep" | "inspect"\`.
+          at <anonymous> (eval.js:2)
+          at <eval> (eval.js:13)
+      ",
+            "type": "text",
+          },
+        ],
+        "isError": true,
+      }
+    `);
 
     const invalidRegex = await client.callTool({
       name: "runLinkRpcScript",
@@ -510,18 +521,19 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
       },
     });
     expect(llmResult(invalidRegex)).toMatchInlineSnapshot(`
+      {
+        "content": [
           {
-            "content": [
-              {
-                "text": "runLinkRpcScript failed: Invalid grep regular expression: Invalid regular expression: /[/iu: Unterminated character class
-              at <anonymous> (eval.js:6)
-          ",
-                "type": "text",
-              },
-            ],
-            "isError": true,
-          }
-        `);
+            "text": "runLinkRpcScript failed: Invalid grep regular expression: Invalid regular expression: /[/iu: Unterminated character class
+          at <anonymous> (eval.js:2)
+          at <eval> (eval.js:13)
+      ",
+            "type": "text",
+          },
+        ],
+        "isError": true,
+      }
+    `);
     expect(exploreCalls).toEqual([
       {
         arguments: {},
