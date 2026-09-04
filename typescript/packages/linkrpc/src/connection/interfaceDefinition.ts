@@ -70,6 +70,17 @@ export interface InterfaceInfo {
 
 export type MemberMap = Record<string, MemberType>;
 
+/** Stable wire identity of one member in an interface definition. */
+export interface InterfaceMemberRef<TName extends string = string> {
+    readonly interfaceId: string;
+    readonly interfaceHash: string;
+    readonly member: TName;
+}
+
+export type InterfaceMemberRefMap<TMembers extends MemberMap> = {
+    readonly [K in keyof TMembers & string]: InterfaceMemberRef<K>;
+};
+
 /**
  * Per-call options accepted by a streaming-enabled client method. Currently
  * only `onMessage` for consuming server→client stream notifications; the
@@ -193,6 +204,9 @@ interface InterfaceDefinitionState {
 const interfaceDefinitionState = new WeakMap<object, InterfaceDefinitionState>();
 
 export class InterfaceDefinition<TMembers extends MemberMap> {
+    /** Typed wire references for capability and access-request construction. */
+    public readonly ref: InterfaceMemberRefMap<TMembers>;
+
     constructor(
         public readonly info: InterfaceInfo,
         public readonly members: TMembers,
@@ -203,6 +217,16 @@ export class InterfaceDefinition<TMembers extends MemberMap> {
             schemaCache: undefined,
             hashCache: undefined,
         });
+        this.ref = new Proxy(
+            {},
+            {
+                get: (_target, member: string): InterfaceMemberRef => ({
+                    interfaceId: this.info.id,
+                    interfaceHash: this.schemaHash,
+                    member,
+                }),
+            },
+        ) as InterfaceMemberRefMap<TMembers>;
         if (info.hash !== undefined && this.schemaHash !== info.hash) {
             throw new Error(
                 `Interface hash mismatch for "${info.id}": expected "${info.hash}", got "${this.schemaHash}". `

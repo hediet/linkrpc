@@ -9,6 +9,7 @@ export * from "./schema/codegen/generateTsInterface";
 export * from "./hub/common/reflection.interfaces";
 export * from "./hub/common/node.interfaces";
 export * from "./hub/common/inspection.interfaces";
+export * from "./interfaces/logging";
 export * from "./connection/streaming";
 export * from "./protocol";
 export * from "./connection";
