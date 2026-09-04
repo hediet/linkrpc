@@ -52,12 +52,6 @@ export interface HistoryEntry {
     readonly timestamp: number;
 }
 
-export type SchemaState =
-    | { kind: "none" }
-    | { kind: "loading" }
-    | { kind: "error"; error: unknown }
-    | { kind: "loaded"; schema: SvcInterfaceSchema; method: MethodSchema | undefined };
-
 export interface FieldDesc {
     readonly name: string;
     readonly required: boolean;
@@ -65,6 +59,12 @@ export interface FieldDesc {
 }
 
 export type MethodListItem = MethodSchema & { readonly name: string };
+
+export type SchemaState =
+    | { kind: "none" }
+    | { kind: "loading" }
+    | { kind: "error"; error: unknown }
+    | { kind: "loaded"; schema: SvcInterfaceSchema; method: MethodListItem | undefined };
 
 /**
  * View model for the TUI. Owns the live channel and an in-memory schema cache
@@ -212,8 +212,11 @@ export class UiModel extends Disposable {
         if (!result) return { kind: "loading" };
         if (result.error) return { kind: "error", error: result.error };
         const schema = result.data!;
-        const method = sel.methodName !== undefined
+        const methodSchema = sel.methodName !== undefined
             ? schema.methods[sel.methodName]
+            : undefined;
+        const method = methodSchema && sel.methodName !== undefined
+            ? { ...methodSchema, name: sel.methodName }
             : undefined;
         return { kind: "loaded", schema, method };
     });

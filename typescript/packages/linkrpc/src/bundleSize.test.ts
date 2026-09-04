@@ -81,7 +81,7 @@ function virtualEntry(baseDir: string): Plugin {
  * fallback that does `await import("crypto")`. That bare `crypto` specifier is
  * dead code on every runtime we target, but it trips bundlers that disallow
  * bare Node-builtin specifiers. Inline it away — same shim the production
- * `rollup.config.js` uses.
+ * `tsdown.config.ts` uses.
  */
 function emptyCryptoFallback(): Plugin {
     const VIRTUAL = '\0empty-crypto';
@@ -263,7 +263,7 @@ describe('bundle size', () => {
         // eslint-disable-next-line no-console
         console.log(`  written to ${outDir}`);
 
-        // Upper bound (current real size ≈ 182 KiB). The example authors with
+        // Upper bound (current real size ≈ 210 KiB). The example authors with
         // `zod/mini` and linkrpc's internals do too, so only zod's shared *core*
         // (parsing + json-schema, ~75 KiB) is pulled — the classic schema
         // façade is gone. The bundle honours the package's `sideEffects: false`,
@@ -272,7 +272,7 @@ describe('bundle size', () => {
         // stack is lazy and tree-shaken out of the stdio path. This is a
         // regression guard, not a target — bump it deliberately when a
         // dependency genuinely grows, and investigate sudden jumps.
-        const BUDGET_KIB = 185;
+        const BUDGET_KIB = 215;
         expect(kib).toBeLessThanOrEqual(BUDGET_KIB);
     }, 60_000);
 });

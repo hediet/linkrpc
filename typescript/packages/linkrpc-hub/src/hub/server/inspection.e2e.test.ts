@@ -528,7 +528,9 @@ function summarizeGraph(
                 sources: service.sources,
             }))
             .sort((a, b) =>
-                `${a.serviceId}:${a.node}`.localeCompare(`${b.serviceId}:${b.node}`)),
+                a.serviceId.localeCompare(b.serviceId)
+                || a.node.localeCompare(b.node)
+                || a.sources.join('\0').localeCompare(b.sources.join('\0'))),
     };
 }
 

@@ -37,7 +37,9 @@ function fakeIdentity(principal: PrincipalId): Identity {
 function makeTokenPeer(token: string | undefined): { transport: TokenTransport; peer: LinkRpcConnection } {
     const pair = new TransportPair();
     const transport = Object.assign(new FakeTransport(pair.a), { initializeToken: token });
-    return { transport, peer: LinkRpcConnection.fromTransport(pair.b) };
+    const peer = LinkRpcConnection.fromTransport(pair.b);
+    peer.enableInspection();
+    return { transport, peer };
 }
 
 /** A minter-side acceptor: any connection gets the connectionTokenBinder front door. */

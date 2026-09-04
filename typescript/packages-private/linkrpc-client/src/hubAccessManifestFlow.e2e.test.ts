@@ -229,7 +229,7 @@ describe('hubAccessManifest consent flow (P1 → P2, approved by P3 over the man
 
         // P1 asks (discover) for SOME service implementing `greeter`.
         const res = await p1.sendRequest('hubAccess::request', {
-            consumer: { name: 'P1', principal: p1.id },
+            consumer: { name: 'P1', principal: p1.identity.principal },
             dependencies: { dep1: { interfaces: [{ id: 'greeter' }] } },
             duration: 'persistent',
         }) as { status: string; slots: Record<string, { serviceId: string; satisfiedInterfaces: string[] }>; capabilities: unknown[] };
