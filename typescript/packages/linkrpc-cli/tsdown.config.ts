@@ -1,6 +1,6 @@
 import { defineConfig } from 'tsdown';
 
-// Two entries: the library index and the `linkrpc` / `hub` CLI (bin).
+// Library entry and one explicit entry per executable profile.
 //
 // Runtime `dependencies` (react, ink, commander, zod, `@hediet/linkrpc`,
 // `@hediet/linkrpc-hub`) stay external and resolve from node_modules. The
@@ -9,7 +9,9 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
     entry: {
         index: 'src/index.ts',
-        cli: 'src/cli.ts',
+        linkrpc: 'src/linkrpc.ts',
+        rpc: 'src/rpc.ts',
+        hub: 'src/hub.ts',
     },
     format: 'esm',
     platform: 'node',
@@ -26,8 +28,7 @@ export default defineConfig({
     },
     outputOptions: {
         chunkFileNames: 'chunks/[name]-[hash].js',
-        // Shebang only on the CLI entry — `src/cli.ts` has no shebang of its
-        // own, and a shebang in an imported module is a syntax error.
-        banner: (chunk) => (chunk.name === 'cli' ? '#!/usr/bin/env node' : ''),
+        banner: (chunk) =>
+            (['linkrpc', 'rpc', 'hub'].includes(chunk.name) ? '#!/usr/bin/env node' : ''),
     },
 });

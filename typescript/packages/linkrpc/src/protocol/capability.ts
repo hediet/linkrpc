@@ -10,7 +10,7 @@ import { type PrincipalId } from "../crypto/cryptoProvider";
 import { jcsCanonicalize } from "./jcs";
 import {
     type Base64Sha256,
-    LINKRPC_SIGNATURE_KEY,
+    HUBRPC_SIGNATURE_KEY,
     readSignature,
     type Signatures,
 } from "./signedObject";
@@ -54,7 +54,7 @@ export type ParamMatcher =
  * The exact, point-precision narrowing of a {@link Permission}: it admits
  * **one** signed RPC call — the one whose call content-hash
  * ({@link import("./signedObject").signedHash}`("call", signedCall)`, i.e.
- * `base64url(sha256(jcs({ "linkrpc-sig/v1/call": userParams + $hubrpc })))`)
+ * `base64url(sha256(jcs({ "hubrpc-sig/v1/call": userParams + $hubrpc })))`)
  * equals `payloadHash`. No field-by-field comparison; pure hash equality.
  * This is the *same bytes the call signature commits to*, so the host can
  * pre-compute it at consent time exactly as the consumer will sign.
@@ -84,7 +84,7 @@ export interface CallBind {
 export interface TargetPattern {
     /** Delimiter `/`. `"github"` matches `"github/repos"` but not `"githubclone"`. */
     serviceId: Pattern;
-    /** Delimiter `.`. `"linkrpc"` matches `"linkrpc.directory"` but not `"linkrpcx.foo"`. */
+    /** Delimiter `.`. `"linkrpc"` matches `"hubrpc.directory"` but not `"linkrpcx.foo"`. */
     interfaceId: Pattern;
     /**
      * Optional schema-version pin. When set, the call's asserted
@@ -142,7 +142,7 @@ export interface Capability {
      * The single parent this cap delegates from, referenced by its content
      * hash (`signedHash("capability", parent)`). Linearized — at most one
      * parent. The parent itself travels out-of-band in the call's
-     * `$linkrpcUnsigned.capabilities` bag and is resolved by this hash.
+     * `$hubrpcUnsigned.capabilities` bag and is resolved by this hash.
      * Effective authority is the intersection over the chain: a call must be
      * permitted by every link. Absent = this cap is a root.
      */
@@ -153,13 +153,13 @@ export interface Capability {
 
 /**
  * A capability with its issuer's signature attached under
- * `$linkrpcSignature.capability`. It IS a {@link Capability} (the fields are
+ * `$hubrpcSignature.capability`. It IS a {@link Capability} (the fields are
  * top-level) plus the signature map — no separate wrapper object. The
  * signature commits to `signingInput("capability", cap)`, i.e. the cap with
- * `$linkrpcSignature`/`$linkrpcUnsigned` stripped.
+ * `$hubrpcSignature`/`$hubrpcUnsigned` stripped.
  */
 export type SignedCapability = Capability & {
-    readonly [LINKRPC_SIGNATURE_KEY]: Signatures;
+    readonly [HUBRPC_SIGNATURE_KEY]: Signatures;
 };
 
 /**

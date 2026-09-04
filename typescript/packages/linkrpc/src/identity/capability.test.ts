@@ -47,11 +47,11 @@ function makeCall(target: CallTarget, signer: PrincipalId): Call {
 // ---- permissionMatchesTarget (pure addressing) --------------------------
 
 describe("permissionMatchesTarget", () => {
-    const target: CallTarget = { serviceId: "github/repos", interfaceId: "linkrpc.directory", member: "list" };
+    const target: CallTarget = { serviceId: "github/repos", interfaceId: "hubrpc.directory", member: "list" };
 
     it("matches when a permission addresses every axis", () => {
         expect(permissionMatchesTarget(target, {
-            target: { serviceId: { prefix: "github" }, interfaceId: { exact: "linkrpc.directory" }, members: [{ exact: "list" }] },
+            target: { serviceId: { prefix: "github" }, interfaceId: { exact: "hubrpc.directory" }, members: [{ exact: "list" }] },
             canInvoke: true,
         })).toBe(true);
     });
@@ -68,12 +68,12 @@ describe("permissionMatchesTarget", () => {
 
     it("delimited-prefix on interfaceId uses `.`", () => {
         const perm: Permission = {
-            target: { serviceId: { prefix: "" }, interfaceId: { prefix: "linkrpc" }, members: [{ prefix: "" }] },
+            target: { serviceId: { prefix: "" }, interfaceId: { prefix: "hubrpc" }, members: [{ prefix: "" }] },
             canInvoke: true,
         };
-        expect(permissionMatchesTarget({ ...target, interfaceId: "linkrpc" }, perm)).toBe(true);
-        expect(permissionMatchesTarget({ ...target, interfaceId: "linkrpc.directory" }, perm)).toBe(true);
-        expect(permissionMatchesTarget({ ...target, interfaceId: "linkrpcx.foo" }, perm)).toBe(false);
+        expect(permissionMatchesTarget({ ...target, interfaceId: "hubrpc" }, perm)).toBe(true);
+        expect(permissionMatchesTarget({ ...target, interfaceId: "hubrpc.directory" }, perm)).toBe(true);
+        expect(permissionMatchesTarget({ ...target, interfaceId: "hubrpcx.foo" }, perm)).toBe(false);
     });
 
     it("member uses raw startsWith (no delimiter)", () => {
@@ -176,7 +176,7 @@ describe("permissionPermits target diagnostics", () => {
 // ---- chain verification (exercised through the public `permits`) --------
 
 describe("chain verification (via permits)", () => {
-    const target: CallTarget = { serviceId: "github/repos", interfaceId: "linkrpc.directory", member: "readItems" };
+    const target: CallTarget = { serviceId: "github/repos", interfaceId: "hubrpc.directory", member: "readItems" };
 
     /**
      * Accept exactly `issuer` as the chain root for any service, so a failing
@@ -239,11 +239,11 @@ describe("chain verification (via permits)", () => {
         }, s.admin);
         const tampered = {
             ...leaf,
-            $linkrpcSignature: {
+            $hubrpcSignature: {
                 capability: {
-                    ...leaf.$linkrpcSignature.capability!,
-                    sig: (leaf.$linkrpcSignature.capability!.sig.startsWith("A") ? "B" : "A")
-                        + leaf.$linkrpcSignature.capability!.sig.slice(1),
+                    ...leaf.$hubrpcSignature.capability!,
+                    sig: (leaf.$hubrpcSignature.capability!.sig.startsWith("A") ? "B" : "A")
+                        + leaf.$hubrpcSignature.capability!.sig.slice(1),
                 },
             },
         };
@@ -393,7 +393,7 @@ describe("chain verification (via permits)", () => {
 // ---- permits (the single authorization entry point) ---------------------
 
 describe("permits", () => {
-    const target: CallTarget = { serviceId: "github/repos", interfaceId: "linkrpc.directory", member: "readItems" };
+    const target: CallTarget = { serviceId: "github/repos", interfaceId: "hubrpc.directory", member: "readItems" };
 
     async function setup() {
         const admin = await KeypairSigningIdentity.generateNew();

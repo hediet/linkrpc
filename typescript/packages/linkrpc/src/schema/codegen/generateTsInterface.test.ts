@@ -124,9 +124,9 @@ describe("generateInterface", () => {
           /**
            * Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.
            */
-          export const linkrpcDirectoryInterface = defineInterface(
+          export const hubrpcDirectoryInterface = defineInterface(
               {
-                  id: "linkrpc.directory",
+                  id: "hubrpc.directory",
                   description: "Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.",
               },
               {

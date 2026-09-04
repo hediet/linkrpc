@@ -80,7 +80,7 @@ function parseMethodName(method) {
 
 const methodInputs = [
   "list",
-  "linkrpc.directory::list",
+  "hubrpc.directory::list",
   "acme::com.acme.pizza@ab12::order",
   "",
   "a::",

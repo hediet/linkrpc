@@ -7,10 +7,10 @@
     }
   },
   {
-    "input": "linkrpc.directory::list",
+    "input": "hubrpc.directory::list",
     "expected": {
       "kind": "interface",
-      "interfaceId": "linkrpc.directory",
+      "interfaceId": "hubrpc.directory",
       "member": "list"
     }
   },

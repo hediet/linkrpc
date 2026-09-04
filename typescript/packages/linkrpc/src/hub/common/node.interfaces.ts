@@ -26,7 +26,7 @@ export type { ParticipantDescriptorSource };
  */
 export const nodeInterface = defineInterface(
     {
-        id: "linkrpc.node",
+        id: "hubrpc.node",
         description:
             "Topology bootstrap: identify the node and port at this end of the direct connection.",
     },

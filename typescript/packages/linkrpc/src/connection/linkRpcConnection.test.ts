@@ -295,7 +295,7 @@ describe('LinkRpcConnection', () => {
         expect(getLocalMessageContext({
             jsonrpc: '2.0',
             id: 1,
-            method: 'hub::linkrpc.topology::getGraph',
+            method: 'hub::hubrpc.topology::getGraph',
             context: { inspection: true },
         } as JsonRpcMessage)).toBeUndefined();
         connection.close();
@@ -437,9 +437,9 @@ describe('LinkRpcConnection', () => {
             out: expect.objectContaining({ requestId: transits[0].in?.requestId }),
         });
         expect(transits.every((transit) =>
-            !transit.method?.includes('linkrpc.topology')
-            && !transit.method?.includes('linkrpc.node')
-            && !transit.method?.includes('linkrpc.traffic'))).toBe(true);
+            !transit.method?.includes('hubrpc.topology')
+            && !transit.method?.includes('hubrpc.node')
+            && !transit.method?.includes('hubrpc.traffic'))).toBe(true);
 
         await watch.cancel('test-complete');
         await expect(watch).resolves.toMatchObject({ delivered: 2, dropped: 0 });
@@ -608,7 +608,7 @@ describe('LinkRpcConnection — preset (form 1)', () => {
 });
 
 describe('LinkRpcConnection — reflection', () => {
-    it('linkrpc.defaults reports the preset', async () => {
+    it('hubrpc.defaults reports the preset', async () => {
         const { client, server, dispose } = makePair();
         server.register(greeter, {
             hello: async ({ name }) => ({ greeting: name }),
@@ -625,7 +625,7 @@ describe('LinkRpcConnection — reflection', () => {
         dispose();
     });
 
-    it('linkrpc.directory lists registered services', async () => {
+    it('hubrpc.directory lists registered services', async () => {
         const { client, server, dispose } = makePair();
         server.register(greeter, {
             hello: async ({ name }) => ({ greeting: name }),
@@ -641,24 +641,24 @@ describe('LinkRpcConnection — reflection', () => {
         const ids = all.items.map((i) => `${i.serviceId}::${i.interfaceId}`).sort();
         expect(ids).toContain(`::${greeter.info.id}`);
         expect(ids).toContain(`acme::${greeter.info.id}`);
-        expect(ids).toContain('::linkrpc.directory');
-        expect(ids).toContain('::linkrpc.schemas');
-        expect(ids).toContain('::linkrpc.defaults');
+        expect(ids).toContain('::hubrpc.directory');
+        expect(ids).toContain('::hubrpc.schemas');
+        expect(ids).toContain('::hubrpc.defaults');
 
         const filtered = await client.get(directoryInterface).list({ interfaceId: greeter.info.id });
         expect(filtered.items.every((i) => i.interfaceId === greeter.info.id)).toBe(true);
 
-        const prefixed = await client.get(directoryInterface).list({ interfaceIdPrefix: 'linkrpc.' });
+        const prefixed = await client.get(directoryInterface).list({ interfaceIdPrefix: 'hubrpc.' });
         expect(prefixed.items.map((i) => i.interfaceId).sort()).toEqual([
-            'linkrpc.defaults',
-            'linkrpc.directory',
-            'linkrpc.schemas',
+            'hubrpc.defaults',
+            'hubrpc.directory',
+            'hubrpc.schemas',
         ]);
 
         dispose();
     });
 
-    it('linkrpc.directory applies exact and segment-aware prefix service scopes', async () => {
+    it('hubrpc.directory applies exact and segment-aware prefix service scopes', async () => {
         const { client, server, dispose } = makePair();
         for (const serviceId of ['acme', 'acme/child', 'acme-other']) {
             server.service(serviceId).register(greeter, {
@@ -705,7 +705,7 @@ describe('LinkRpcConnection — reflection', () => {
         dispose();
     });
 
-    it('linkrpc.directory includes per-service rootPrincipalSets on all interfaces of that service', async () => {
+    it('hubrpc.directory includes per-service rootPrincipalSets on all interfaces of that service', async () => {
         const { client, server, dispose } = makePair();
         const other = defineInterface(
             { id: 'test.other' },
@@ -760,7 +760,7 @@ describe('LinkRpcConnection — reflection', () => {
         dispose();
     });
 
-    it('linkrpc.directory pages with limit + cursor', async () => {
+    it('hubrpc.directory pages with limit + cursor', async () => {
         const { client, server, dispose } = makePair();
         server.register(greeter, { hello: async () => ({ greeting: '' }), shout: () => { } });
         server.enableReflection();
@@ -772,7 +772,7 @@ describe('LinkRpcConnection — reflection', () => {
         dispose();
     });
 
-    it("linkrpc.schemas returns the registered interface's schema", async () => {
+    it("hubrpc.schemas returns the registered interface's schema", async () => {
         const { client, server, dispose } = makePair();
         server.register(greeter, {
             hello: async ({ name }) => ({ greeting: name }),
@@ -786,7 +786,7 @@ describe('LinkRpcConnection — reflection', () => {
         dispose();
     });
 
-    it('linkrpc.schemas rejects unknown interface', async () => {
+    it('hubrpc.schemas rejects unknown interface', async () => {
         const { client, server, dispose } = makePair();
         server.enableReflection();
         const err = await client.get(schemasInterface).get({ interfaceId: 'nope.x' }).then(() => null, (e) => e);

@@ -175,7 +175,7 @@ impl LinkRpcConnection {
     }
 
     /// Declare the preset interface for form-1 (bare-method) dispatch. Must already be registered
-    /// under the root service (no service id). Surfaced via `linkrpc.defaults::get`.
+    /// under the root service (no service id). Surfaced via `hubrpc.defaults::get`.
     pub fn set_preset(&self, interface_id: &str) -> Result<(), ConnError> {
         let entry = self
             .inner

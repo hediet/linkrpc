@@ -334,7 +334,7 @@ export function defineInterface<TMembers extends MemberMap>(
 /**
  * Build a runtime {@link InterfaceDefinition} from a previously-published
  * {@link LinkRpcInterfaceSchema} — typically one received over the wire (e.g.
- * from `linkrpc.schemas::get`) or generated at runtime by tooling that does
+ * from `hubrpc.schemas::get`) or generated at runtime by tooling that does
  * not have the original zod sources at hand (codegen, faker / mock
  * services, dynamic gateways).
  *

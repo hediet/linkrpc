@@ -23,7 +23,7 @@ export class NodeWebSocketTransport implements Transport {
     private _closed = false;
 
     /**
-     * Token presented by the peer in the `linkrpc::initialize` handshake, when
+     * Token presented by the peer in the `hubrpc::initialize` handshake, when
      * the server ran one. A {@link ConnectionProvenanceProvider} can read it to
      * attest the peer. `undefined` when the handshake carried no token.
      */
@@ -121,7 +121,7 @@ export interface WebSocketServerOptions {
     /** Host/interface to bind. Defaults to all interfaces. */
     readonly host?: string;
     /**
-     * Validate the token presented in the client's `linkrpc::initialize`
+     * Validate the token presented in the client's `hubrpc::initialize`
      * handshake. Resolve `true` to admit the connection, `false` to reject it.
      * Required unless {@link allowAnonymous} is set. Browsers cannot set the
      * `Authorization` header on the `WebSocket` constructor, so auth happens
@@ -129,7 +129,7 @@ export interface WebSocketServerOptions {
      */
     readonly isTokenAccepted?: (token: string | undefined) => Promise<boolean>;
     /**
-     * Allow connections without validating a token: the `linkrpc::initialize`
+     * Allow connections without validating a token: the `hubrpc::initialize`
      * handshake still runs (and its token is captured), but any token is
      * accepted. Use ONLY behind a trusted reverse proxy that performs auth
      * itself, or on a private interface.
@@ -161,7 +161,7 @@ export interface WebSocketServerOptions {
 
 /**
  * A hub-agnostic {@link ITransportServer} over WebSocket. It owns an
- * `http.Server`, gates each upgrade by origin, runs the `linkrpc::initialize`
+ * `http.Server`, gates each upgrade by origin, runs the `hubrpc::initialize`
  * handshake (authentication + protocol negotiation) over each accepted socket,
  * and frames it as a {@link NodeWebSocketTransport}. Compose identity/claim
  * policy on top via {@link HubConnectionAcceptor} — this server never couples
@@ -270,7 +270,7 @@ export class WebSocketServer implements ITransportServer<NodeWebSocketTransport>
     }
 
     /**
-     * Frame the upgraded socket, run the `linkrpc::initialize` handshake
+     * Frame the upgraded socket, run the `hubrpc::initialize` handshake
      * (authentication + protocol negotiation), then hand the transport to the
      * connection handler. A failed handshake (bad/missing token, wrong first
      * message, or timeout) drops the socket without reaching the handler.

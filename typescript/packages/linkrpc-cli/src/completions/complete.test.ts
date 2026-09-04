@@ -33,9 +33,59 @@ describe('complete (static-only)', () => {
         expect(texts).not.toContain('_complete');
     });
 
+    it('keeps hub-only commands out of the RPC profile', async () => {
+        const r = await complete({ line: 'rpc ', point: 4 });
+        const texts = r.map((c) => c.text);
+        expect(texts).toContain('call');
+        expect(texts).toContain('hub');
+        expect(texts).not.toContain('topology');
+        expect(texts).not.toContain('tunnel');
+
+        const flags = await complete({ line: 'rpc call --c', point: 'rpc call --c'.length });
+        expect(flags.map((candidate) => candidate.text)).not.toContain('--config');
+    });
+
+    it('offers hub-only commands below the linkrpc hub profile', async () => {
+        const r = await complete({ line: 'linkrpc hub ', point: 'linkrpc hub '.length });
+        const texts = r.map((c) => c.text);
+        expect(texts).toContain('call');
+        expect(texts).toContain('topology');
+        expect(texts).toContain('tunnel');
+
+        const flags = await complete({
+            line: 'linkrpc hub call --c',
+            point: 'linkrpc hub call --c'.length,
+        });
+        expect(flags.map((candidate) => candidate.text)).toContain('--config');
+    });
+
+    it('normalizes path-qualified hub executable variants', async () => {
+        const line = 'C:\\tools\\hub.cmd ';
+        const r = await complete({ line, point: line.length });
+        expect(r.map((candidate) => candidate.text)).toContain('topology');
+    });
+
     it('filters subcommands by prefix', async () => {
         const r = await complete({ line: 'hub cal', point: 7 });
         expect(r.map((c) => c.text)).toEqual(['call']);
+    });
+
+    it('returns nested connection subcommands', async () => {
+        const r = await complete({ line: 'hub connection ', point: 'hub connection '.length });
+        expect(r.map((c) => c.text)).toEqual([
+            'create',
+            'destroy',
+            'notifications',
+            'status',
+        ]);
+    });
+
+    it('includes parent options on nested commands', async () => {
+        const r = await complete({
+            line: 'hub topology participants --s',
+            point: 'hub topology participants --s'.length,
+        });
+        expect(r.map((c) => c.text)).toContain('--source');
     });
 
     it('lists flag names after `call --`', async () => {
@@ -62,10 +112,10 @@ describe('complete (static-only)', () => {
 
 describe('complete (with directory)', () => {
     const entries: readonly DirectoryEntry[] = [
-        { serviceId: '', interfaceId: 'linkrpc.directory', hash: 'h1' },
-        { serviceId: '', interfaceId: 'linkrpc.schemas', hash: 'h2' },
+        { serviceId: '', interfaceId: 'hubrpc.directory', hash: 'h1' },
+        { serviceId: '', interfaceId: 'hubrpc.schemas', hash: 'h2' },
         { serviceId: 'azure-cli', interfaceId: 'Runner', hash: 'ha' },
-        { serviceId: 'azure-cli', interfaceId: 'linkrpc.directory', hash: 'h1' },
+        { serviceId: 'azure-cli', interfaceId: 'hubrpc.directory', hash: 'h1' },
         { serviceId: 'github', interfaceId: 'github.workspace', hash: 'hg' },
         { serviceId: 'github', interfaceId: 'github.repos', hash: 'hr' },
     ];
@@ -95,19 +145,19 @@ describe('complete (with directory)', () => {
         // they wouldn't route as form-2.
         expect(texts).toContain('azure-cli');
         expect(texts).toContain('github');
-        expect(texts).toContain('linkrpc.directory'); // root-hosted
-        expect(texts).toContain('linkrpc.schemas');   // root-hosted
+        expect(texts).toContain('hubrpc.directory'); // root-hosted
+        expect(texts).toContain('hubrpc.schemas');   // root-hosted
         expect(texts).not.toContain('Runner');        // service-bound only
         expect(texts).not.toContain('github.workspace');
         expect(texts).not.toContain('azure-cli::');
-        expect(texts).not.toContain('linkrpc.directory::');
+        expect(texts).not.toContain('hubrpc.directory::');
     });
 
     it('lists interfaces on a serviceId (no trailing ::) for `call <sid>::`', async () => {
         const r = await complete({ line: 'hub call azure-cli::', point: 20, directory: dir });
         const texts = r.map((c) => c.text);
         expect(texts).toContain('azure-cli::Runner');
-        expect(texts).toContain('azure-cli::linkrpc.directory');
+        expect(texts).toContain('azure-cli::hubrpc.directory');
         expect(texts).not.toContain('azure-cli::Runner::');
     });
 
@@ -136,22 +186,22 @@ describe('complete (with directory)', () => {
     });
 
     it('attempts form-2 method completion when first IS a root interface', async () => {
-        // `linkrpc.directory` is registered at root → form-2 valid.
+        // `hubrpc.directory` is registered at root → form-2 valid.
         const dirWithRootMethods = makeDir({
             entries,
             methods: new Map([
-                ['::linkrpc.directory', ['list', 'get']],
+                ['::hubrpc.directory', ['list', 'get']],
                 ...methods,
             ]),
         });
         const r = await complete({
-            line: 'hub call linkrpc.directory::',
-            point: 'hub call linkrpc.directory::'.length,
+            line: 'hub call hubrpc.directory::',
+            point: 'hub call hubrpc.directory::'.length,
             directory: dirWithRootMethods,
         });
         const texts = r.map((c) => c.text);
-        expect(texts).toContain('linkrpc.directory::list');
-        expect(texts).toContain('linkrpc.directory::get');
+        expect(texts).toContain('hubrpc.directory::list');
+        expect(texts).toContain('hubrpc.directory::get');
     });
 
     it('lists methods for `call <sid>::<iface>::`', async () => {
@@ -180,9 +230,26 @@ describe('complete (with directory)', () => {
         ]);
     });
 
-    it('uses interfaceIds for the `schema <interfaceRef>` positional', async () => {
-        const r = await complete({ line: 'hub schema gith', point: 'hub schema gith'.length, directory: dir });
+    it('uses interfaceIds for the `schema show <interfaceRef>` positional', async () => {
+        const r = await complete({
+            line: 'hub schema show gith',
+            point: 'hub schema show gith'.length,
+            directory: dir,
+        });
         expect(r.map((c) => c.text)).toEqual(['github.repos', 'github.workspace']);
+    });
+
+    it('completes legacy command forms', async () => {
+        const commands = await complete({ line: 'hub che', point: 'hub che'.length });
+        expect(commands.map((candidate) => candidate.text)).toEqual(['check-compat']);
+
+        const schemas = await complete({
+            line: 'hub schema gith',
+            point: 'hub schema gith'.length,
+            directory: dir,
+        });
+        expect(schemas.map((candidate) => candidate.text))
+            .toEqual(['github.repos', 'github.workspace']);
     });
 
     it('uses serviceIds for `ls --service `', async () => {

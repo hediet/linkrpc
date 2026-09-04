@@ -18,7 +18,7 @@ sequenceDiagram
     participant Service as Service handlers
 
     Note over Caller,Provider: Reliable, ordered, bidirectional transport<br/>NDJSON, WebSocket, or stdio
-    Caller->>Hub: linkrpc.directory::list / linkrpc.schemas::get
+    Caller->>Hub: hubrpc.directory::list / hubrpc.schemas::get
     Hub-->>Caller: Services, interface schemas, and hashes
 
     opt The target call is capability-gated
@@ -139,9 +139,9 @@ backed by its live registry, so a peer (or the [`linkrpc` CLI](../linkrpc-cli)) 
 it with **no prior knowledge** — list the services, fetch their schemas, generate a typed client at
 runtime:
 
-- **`linkrpc.directory`** — which services and interfaces this connection serves (each with its `id@hash`).
-- **`linkrpc.schemas`** — the full schema for any advertised interface.
-- **`linkrpc.defaults`** — the connection's preset service/interface, if any (`setPreset(iface)`).
+- **`hubrpc.directory`** — which services and interfaces this connection serves (each with its `id@hash`).
+- **`hubrpc.schemas`** — the full schema for any advertised interface.
+- **`hubrpc.defaults`** — the connection's preset service/interface, if any (`setPreset(iface)`).
 
 ```ts
 connection.register(greeter, handlers);
@@ -319,7 +319,7 @@ a minimal node and a fully-secured node interoperate on any call that needs no g
 | Messages | JSON-RPC envelope, `::` method grammar, error codes |
 | Transport | framed whole-message channel + endpoint URIs |
 | Interfaces | schema format, JSON Schema subset, the interface hash |
-| Reflection | `linkrpc.directory` / `.schemas` / `.defaults` |
+| Reflection | `hubrpc.directory` / `.schemas` / `.defaults` |
 | Streaming *(optional)* | in-flight correlated stream messages |
 | Identity *(optional)* | Ed25519-signed calls (principals, freshness + replay protection) |
 | Capabilities *(optional)* | signed grants + the authorization gate (`permits`) |

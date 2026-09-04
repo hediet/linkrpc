@@ -19,7 +19,7 @@ import { Hub } from './routing/routingHub';
 import { TokenIdentityStore } from './tokenIdentityStore';
 import { FakeTransport, FakeTransportServer, flush } from './testUtil';
 
-/** A transport carrying an `linkrpc::initialize` token, like NodeSocketTransport. */
+/** A transport carrying an `hubrpc::initialize` token, like NodeSocketTransport. */
 type TokenTransport = Transport & { initializeToken: string | undefined };
 
 function fakeIdentity(principal: PrincipalId): Identity {

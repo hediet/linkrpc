@@ -59,7 +59,7 @@ function makeFixture(): Fixture {
     server.enableReflection();
     // Mirror the hub-mode convention: services that live behind a prefix
     // expose reflection both at root and at their prefix, so form-3
-    // `<prefix>::linkrpc.schemas::get` resolves.
+    // `<prefix>::hubrpc.schemas::get` resolves.
     server.enableReflection({ serviceId: "acme.mailer" });
 
     const conn = connectViaTransport(pair.a);
@@ -107,7 +107,7 @@ describe("CLI commands against an in-process linkrpc server", () => {
             expect(Object.keys(dump.directories)).toContain("acme.mailer");
             expect(dump.root.nativeListings).toContainEqual(expect.objectContaining({
                     serviceId: "acme.mailer",
-                    interfaceId: "linkrpc.directory",
+                    interfaceId: "hubrpc.directory",
             }));
             expect(dump.schemas[mailerInterface.schemaHash]).toEqual(expect.objectContaining({
                 id: mailerInterface.info.id,

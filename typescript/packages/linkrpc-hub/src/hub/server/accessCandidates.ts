@@ -77,7 +77,7 @@ export interface ResolvedCandidates {
 /**
  * Fetch the full interface directory by recursively walking the hub's
  * **referral** directory graph. {@link walkHubDetailed} follows explicit
- * `linkrpc.directory` listings to collect leaf interfaces (folding transitive
+ * `hubrpc.directory` listings to collect leaf interfaces (folding transitive
  * root-node-id requirements onto descendants along the way). Routing claims do
  * not create referrals. This is the v2 replacement for the hub-internal
  * `_fullDirectory()`.

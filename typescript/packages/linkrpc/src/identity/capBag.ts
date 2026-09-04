@@ -11,13 +11,13 @@ export interface CapBagOptions {
      * that forgets its caps when the process exits.
      */
     readonly storage?: ManagedIdentityStorage;
-    /** Storage key. Defaults to `linkrpc.caps.v1`. */
+    /** Storage key. Defaults to `hubrpc.caps.v1`. */
     readonly storageKey?: string;
     /** Optional sink for non-fatal storage warnings. */
     readonly onWarn?: (message: string) => void;
 }
 
-const DEFAULT_STORAGE_KEY = 'linkrpc.caps.v1';
+const DEFAULT_STORAGE_KEY = 'hubrpc.caps.v1';
 
 /**
  * A process-lifetime bag of hub-issued capabilities. Plug
@@ -87,7 +87,7 @@ export class CapBag {
                 return;
             }
             for (const cap of persisted) {
-                if (cap && typeof cap === 'object' && '$linkrpcSignature' in cap) {
+                if (cap && typeof cap === 'object' && '$hubrpcSignature' in cap) {
                     this._caps.push(cap);
                 } else {
                     this._onWarn(`skipping malformed persisted cap`);

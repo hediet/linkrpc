@@ -1,5 +1,5 @@
-//! The three linkrpc reflection interfaces — `linkrpc.defaults`, `linkrpc.directory`,
-//! `linkrpc.schemas` — defined with the `#[link_rpc_interface]` macro. Registering any interface on
+//! The three linkrpc reflection interfaces — `hubrpc.defaults`, `hubrpc.directory`,
+//! `hubrpc.schemas` — defined with the `#[link_rpc_interface]` macro. Registering any interface on
 //! a connection also exposes these so peers can discover and introspect it.
 //!
 //! Param/result schemas are derived from Rust types via `schemars` + the schemars→subset bridge,
@@ -12,9 +12,9 @@
 
 use crate::connection::interface_def::InterfaceDefinition;
 
-pub const DEFAULTS_ID: &str = "linkrpc.defaults";
-pub const DIRECTORY_ID: &str = "linkrpc.directory";
-pub const SCHEMAS_ID: &str = "linkrpc.schemas";
+pub const DEFAULTS_ID: &str = "hubrpc.defaults";
+pub const DIRECTORY_ID: &str = "hubrpc.directory";
+pub const SCHEMAS_ID: &str = "hubrpc.schemas";
 
 // Generated trait/client/server items for the three reflection interfaces. The typed `*Client`
 // proxies are re-exported (see `prelude`) so consumers can introspect an endpoint without hand-
@@ -28,7 +28,7 @@ pub mod iface {
     use crate::protocol::jsonrpc::JsonRpcError;
     use linkrpc_macros::link_rpc_interface;
 
-    // ── linkrpc.defaults ───────────────────────────────────────────────────────
+    // ── hubrpc.defaults ───────────────────────────────────────────────────────
     #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "camelCase")]
     pub struct DefaultsGetResult {
@@ -41,12 +41,12 @@ pub mod iface {
     }
 
     /// Reflection: preset default service / interface on this connection.
-    #[link_rpc_interface(id = "linkrpc.defaults")]
+    #[link_rpc_interface(id = "hubrpc.defaults")]
     pub trait DefaultsService {
         async fn get() -> Result<DefaultsGetResult, JsonRpcError>;
     }
 
-    // ── linkrpc.directory ──────────────────────────────────────────────────────
+    // ── hubrpc.directory ──────────────────────────────────────────────────────
     #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct ServiceListing {
@@ -68,7 +68,7 @@ pub mod iface {
     }
 
     /// Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.
-    #[link_rpc_interface(id = "linkrpc.directory")]
+    #[link_rpc_interface(id = "hubrpc.directory")]
     pub trait DirectoryService {
         async fn list(
             interface_id: Option<String>,
@@ -79,7 +79,7 @@ pub mod iface {
         ) -> Result<DirectoryListResult, JsonRpcError>;
     }
 
-    // ── linkrpc.schemas ────────────────────────────────────────────────────────
+    // ── hubrpc.schemas ────────────────────────────────────────────────────────
     #[derive(Serialize, Deserialize, JsonSchema)]
     pub struct SchemasGetResult {
         /// A full `LinkRpcInterfaceSchema`.
@@ -87,7 +87,7 @@ pub mod iface {
     }
 
     /// Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.
-    #[link_rpc_interface(id = "linkrpc.schemas")]
+    #[link_rpc_interface(id = "hubrpc.schemas")]
     pub trait SchemasService {
         async fn get(
             interface_id: String,
@@ -96,17 +96,17 @@ pub mod iface {
     }
 }
 
-/// `linkrpc.defaults` — the preset default service/interface on this connection.
+/// `hubrpc.defaults` — the preset default service/interface on this connection.
 pub fn defaults_interface() -> InterfaceDefinition {
     iface::defaults_service::interface()
 }
 
-/// `linkrpc.directory` — list the services/interfaces exposed by this endpoint.
+/// `hubrpc.directory` — list the services/interfaces exposed by this endpoint.
 pub fn directory_interface() -> InterfaceDefinition {
     iface::directory_service::interface()
 }
 
-/// `linkrpc.schemas` — fetch interface schemas by id (+ optional hash).
+/// `hubrpc.schemas` — fetch interface schemas by id (+ optional hash).
 pub fn schemas_interface() -> InterfaceDefinition {
     iface::schemas_service::interface()
 }

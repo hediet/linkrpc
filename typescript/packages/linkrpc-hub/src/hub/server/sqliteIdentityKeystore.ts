@@ -1,5 +1,5 @@
-import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import {
     InMemoryManagedIdentity,
@@ -20,6 +20,19 @@ import type {
     SlotByIdAndTimeResult,
     SlotId,
 } from "./identityKeystore";
+
+type DatabaseSync = import("node:sqlite").DatabaseSync;
+type DatabaseSyncConstructor = typeof import("node:sqlite").DatabaseSync;
+
+let _DatabaseSync: DatabaseSyncConstructor | undefined;
+
+function _getDatabaseSync(): DatabaseSyncConstructor {
+    if (_DatabaseSync === undefined) {
+        const sqlite = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+        _DatabaseSync = sqlite.DatabaseSync;
+    }
+    return _DatabaseSync;
+}
 
 /**
  * SQLite-backed {@link IdentityKeystore} — a drop-in alternative to the
@@ -45,7 +58,9 @@ import type {
  * one-time re-encode — not a schema migration.
  *
  * Uses the built-in `node:sqlite` `DatabaseSync`, matching the monorepo's
- * other SQLite stores.
+ * other SQLite stores. The module is loaded only when a keystore opens a
+ * database, so consumers that only import the Hub package do not receive
+ * Node's SQLite experimental warning.
  */
 export interface SqliteIdentitySlot extends IdentitySlot {
     /**
@@ -116,7 +131,7 @@ CREATE TABLE IF NOT EXISTS identity_keys (
 export function createSqliteIdentityKeystore(
     opts: SqliteIdentityKeystoreOptions,
 ): SqliteIdentityKeystore {
-    const db = opts.db ?? new DatabaseSync(_requireDbPath(opts));
+    const db = opts.db ?? new (_getDatabaseSync())(_requireDbPath(opts));
     db.exec(_SCHEMA);
     return new _SqliteKeystore(db);
 }

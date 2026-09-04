@@ -453,18 +453,18 @@ backwards-compatibility bridge to vanilla JSON-RPC clients that don't know about
 Discovery is *not* a special protocol — it is **three ordinary interfaces** auto-registered
 alongside your service, callable like anything else:
 
-- `linkrpc.directory` — which interfaces this connection serves (their `id@hash`).
-- `linkrpc.schemas` — fetch the full `InterfaceSchema` for an `id@hash`.
-- `linkrpc.defaults` — connection defaults (e.g. the preset).
+- `hubrpc.directory` — which interfaces this connection serves (their `id@hash`).
+- `hubrpc.schemas` — fetch the full `InterfaceSchema` for an `id@hash`.
+- `hubrpc.defaults` — connection defaults (e.g. the preset).
 
 ```rust
 // They are literally link_rpc_interfaces too:
-#[link_rpc_interface(id = "linkrpc.directory")]
+#[link_rpc_interface(id = "hubrpc.directory")]
 trait LinkRpcDirectory {
     async fn list() -> Result<Vec<DirectoryEntry>, RpcError>;  // [{ service_id?, interface_id_hash }]
 }
 
-#[link_rpc_interface(id = "linkrpc.schemas")]
+#[link_rpc_interface(id = "hubrpc.schemas")]
 trait LinkRpcSchemas {
     async fn get(id_hash: String) -> Result<LinkRpcInterfaceSchema, RpcError>;
 }
@@ -543,7 +543,7 @@ struct CallMeta {
     signer: Option<NodeId>,     // present iff signed; == audience of every presented cap
     interface_hash: Option<String>, // optional schema-hash assertion
 }
-// + params.$linkrpcSignature (the signature) and params.$linkrpcUnsigned.capabilities (the cap bag).
+// + params.$hubrpcSignature (the signature) and params.$hubrpcUnsigned.capabilities (the cap bag).
 ```
 
 A `SigningSender` decorator (wrapping the channel's `RequestSender`, using a `Principal`'s

@@ -48,7 +48,7 @@ export interface LsOptions {
     /** Resolves when a watched stream should stop. */
     readonly stop?: Promise<void>;
     /**
-     * When listing the whole bus, how many `linkrpc.directory` follow-ups
+     * When listing the whole bus, how many `hubrpc.directory` follow-ups
      * to perform. Defaults to 5. Ignored when `serviceId` is set (then we
      * just list that one service).
      */
@@ -67,7 +67,7 @@ export interface LsState {
 
 /**
  * Recursive bus walk: list the connection's directory, then for each
- * `linkrpc.directory` entry it surfaces on a service we haven't queried
+ * `hubrpc.directory` entry it surfaces on a service we haven't queried
  * yet, recurse. Bounded by `maxDepth`. Duplicates (same
  * `serviceId+interfaceId+hash`) are dropped.
  */
@@ -363,7 +363,7 @@ function renderDirectoryNode(
     );
     for (const listing of item.node.nativeListings) {
         const service = listing.serviceId === "" ? "(root)" : listing.serviceId;
-        lines.push(`${prefix}  ${service} → ${listing.interfaceId} @ ${listing.interfaceHash}`);
+        lines.push(`${prefix}  ${service} → ${listing.interfaceId} @ ${listing.hash}`);
     }
     if (item.node.inaccessibleReason !== undefined) {
         lines.push(`${prefix}  ! ${item.node.inaccessibleReason}`);

@@ -5,7 +5,7 @@ import { requestType } from "../../schema/memberTypes";
 
 export const defaultsInterface = defineInterface(
     {
-        id: "linkrpc.defaults",
+        id: "hubrpc.defaults",
         description: "Reflection: preset default service / interface on this connection.",
     },
     {
@@ -24,7 +24,7 @@ export const defaultsInterface = defineInterface(
 /**
  * A single root-principal requirement. `transitive: true` means the requirement
  * also applies to every service reachable *through* this one — i.e. when this
- * listing is a `linkrpc.directory` reference, everything it lists inherits the
+ * listing is a `hubrpc.directory` reference, everything it lists inherits the
  * requirement (also as transitive).
  */
 const zRootPrincipalReq = object({
@@ -60,7 +60,7 @@ const zServiceListing = object({
     rootPrincipalSets: optional(array(zRootPrincipalSet)),
     /**
      * Service-id regions reachable through this referral. Meaningful only for
-     * `linkrpc.directory` entries; omission defaults to the referral service-id
+     * `hubrpc.directory` entries; omission defaults to the referral service-id
      * subtree.
      */
     reachableServiceIds: optional(array(zServiceIdPattern)),
@@ -68,7 +68,7 @@ const zServiceListing = object({
 
 export const directoryInterface = defineInterface(
     {
-        id: "linkrpc.directory",
+        id: "hubrpc.directory",
         description:
             "Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.",
     },
@@ -163,7 +163,7 @@ export function directoryWatchNever(
 
 export const schemasInterface = defineInterface(
     {
-        id: "linkrpc.schemas",
+        id: "hubrpc.schemas",
         description:
             "Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.",
     },

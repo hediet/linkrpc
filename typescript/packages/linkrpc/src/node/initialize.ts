@@ -13,7 +13,9 @@ import { NdjsonTransport } from './ndjsonTransport';
  * handled entirely by the transport layer (via {@link connectNdjson}) and is
  * never forwarded to the hub or any service — it is not a routed call.
  */
-export const INITIALIZE_METHOD = 'linkrpc::initialize';
+export const INITIALIZE_METHOD = 'hubrpc::initialize';
+/** Transitional alias accepted by servers created during the LinkRPC wire-name migration. */
+export const LINKRPC_INITIALIZE_METHOD_ALIAS = 'linkrpc::initialize';
 
 /** Current transport protocol version. */
 export const INITIALIZE_PROTOCOL_VERSION = 1;
@@ -21,7 +23,7 @@ export const INITIALIZE_PROTOCOL_VERSION = 1;
 /** Default time (ms) to wait for the handshake message before giving up. */
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10_000;
 
-/** Fixed request id for the initiator's `linkrpc::initialize` request. */
+/** Fixed request id for the initiator's `hubrpc::initialize` request. */
 const INITIALIZE_REQUEST_ID = 0;
 
 export interface InitializeParams {
@@ -36,8 +38,8 @@ export interface InitializeResult {
 
 /**
  * The handshake role for a connection:
- *  - `client`: send `linkrpc::initialize` and await the reply (the dialing side).
- *  - `server`: require `linkrpc::initialize` as the first message, validate the
+ *  - `client`: send `hubrpc::initialize` and await the reply (the dialing side).
+ *  - `server`: require `hubrpc::initialize` as the first message, validate the
  *    token, and reply (the accepting side).
  */
 export type InitializeRole =
@@ -52,7 +54,7 @@ export interface ConnectNdjsonOptions {
     readonly output: NodeJS.WritableStream;
     readonly onClose?: () => void;
     /**
-     * Run a `linkrpc::initialize` handshake before the transport goes live. Omit
+     * Run a `hubrpc::initialize` handshake before the transport goes live. Omit
      * for trusted links that need neither auth nor negotiation (e.g. stdio).
      */
     readonly initialize?: InitializeRole;
@@ -76,7 +78,7 @@ export interface ConnectedNdjson {
 /**
  * The single supported way to build an ndjson transport. Constructs the
  * transport over `input`/`output` and, when {@link ConnectNdjsonOptions.initialize}
- * is set, runs the `linkrpc::initialize` handshake internally before resolving.
+ * is set, runs the `hubrpc::initialize` handshake internally before resolving.
  *
  * Rejects (after disposing the transport) when the handshake fails — a bad or
  * missing token, a wrong/absent first message, or a timeout. The accepting side
@@ -94,7 +96,7 @@ export async function connectNdjson(opts: ConnectNdjsonOptions): Promise<Connect
         try {
             opts.onClose?.();
         } finally {
-            rejectClosedHandshake?.(new Error('linkrpc::initialize: transport closed during handshake'));
+            rejectClosedHandshake?.(new Error('hubrpc::initialize: transport closed during handshake'));
         }
     });
     const transport = opts.trace === undefined
@@ -127,7 +129,7 @@ export interface RunInitializeHandshakeOptions {
 }
 
 /**
- * Run the `linkrpc::initialize` handshake on an already-constructed transport.
+ * Run the `hubrpc::initialize` handshake on an already-constructed transport.
  * Used for transports that the caller builds itself (e.g. WebSocket), where
  * {@link connectNdjson} does not apply. On failure it throws but does NOT
  * dispose the transport — the caller owns it and decides how to tear down.
@@ -167,10 +169,10 @@ async function _runClientHandshake(
     });
     const message = await reply;
     if (isRequest(message) || !('id' in message) || message.id !== INITIALIZE_REQUEST_ID) {
-        throw new Error('linkrpc::initialize: unexpected reply to handshake');
+        throw new Error('hubrpc::initialize: unexpected reply to handshake');
     }
     if ('error' in message) {
-        throw new Error(`linkrpc::initialize rejected: ${message.error.message}`);
+        throw new Error(`hubrpc::initialize rejected: ${message.error.message}`);
     }
 }
 
@@ -180,8 +182,14 @@ async function _runServerHandshake(
     timeoutMs: number,
 ): Promise<string | undefined> {
     const first = await _nextMessage(transport, timeoutMs);
-    if (!isRequest(first) || first.method !== INITIALIZE_METHOD) {
-        throw new Error('linkrpc::initialize: expected initialize as the first message');
+    if (
+        !isRequest(first)
+        || (
+            first.method !== INITIALIZE_METHOD
+            && first.method !== LINKRPC_INITIALIZE_METHOD_ALIAS
+        )
+    ) {
+        throw new Error('hubrpc::initialize: expected initialize as the first message');
     }
     const params = (first.params ?? {}) as Partial<InitializeParams>;
     if (!(await isTokenAccepted(params.token))) {
@@ -190,7 +198,7 @@ async function _runServerHandshake(
             id: first.id,
             error: { code: ErrorCode.invalidRequest, message: 'unauthenticated' },
         });
-        throw new Error('linkrpc::initialize: unauthenticated');
+        throw new Error('hubrpc::initialize: unauthenticated');
     }
     const result: InitializeResult = { protocolVersion: INITIALIZE_PROTOCOL_VERSION };
     void transport.send({
@@ -211,7 +219,7 @@ function _nextMessage(transport: IMessageTransport, timeoutMs: number): Promise<
     return new Promise<JsonRpcMessage>((resolve, reject) => {
         const timer = setTimeout(() => {
             transport.setListener(undefined);
-            reject(new Error('linkrpc::initialize: handshake timed out'));
+            reject(new Error('hubrpc::initialize: handshake timed out'));
         }, timeoutMs);
         transport.setListener((message) => {
             clearTimeout(timer);

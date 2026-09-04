@@ -88,9 +88,9 @@ runnable example.
 Calling `enable_reflection()` exposes three standard interfaces backed by the connection's live
 registry:
 
-- **`linkrpc.directory`** — which services and interfaces this connection serves (each with its `id@hash`).
-- **`linkrpc.schemas`** — the full schema for any advertised interface.
-- **`linkrpc.defaults`** — the connection's preset service/interface, if any.
+- **`hubrpc.directory`** — which services and interfaces this connection serves (each with its `id@hash`).
+- **`hubrpc.schemas`** — the full schema for any advertised interface.
+- **`hubrpc.defaults`** — the connection's preset service/interface, if any.
 
 Because a node's contract is observable from the boundary, tools and conformance checkers can
 discover what a node offers rather than being told.
@@ -107,7 +107,7 @@ authority.
 | Messages | JSON-RPC envelope, `::` method grammar, error codes |
 | Transport | framed whole-message byte stream + endpoint URIs |
 | Interfaces | schema format, JSON Schema subset, the interface hash |
-| Reflection | `linkrpc.directory` / `.schemas` / `.defaults` |
+| Reflection | `hubrpc.directory` / `.schemas` / `.defaults` |
 | Streaming *(optional)* | in-flight correlated stream messages |
 | Identity *(optional)* | Ed25519-signed calls |
 | Capabilities *(optional)* | signed grants + an authorization gate |

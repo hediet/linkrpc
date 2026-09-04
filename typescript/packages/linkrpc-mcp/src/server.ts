@@ -548,7 +548,7 @@ function _parseMethod(method: string): { serviceId: string; interfaceId: string;
 
 /**
  * Negotiate durable capabilities for the reflection methods the bus walk uses
- * — `linkrpc.directory::list` (enumeration) and `linkrpc.schemas::get` (schema
+ * — `hubrpc.directory::list` (enumeration) and `hubrpc.schemas::get` (schema
  * fetch) — across *all* service ids, through the hub's `hubAccess` consent
  * door. One grant unlocks enumeration of every gated directory the walk
  * reaches, so `explore({ requestPermission: true })` only needs a single
@@ -561,7 +561,7 @@ async function _requestReflectionAccess(session: HubAccess): Promise<boolean> {
             {
                 target: {
                     serviceId: { prefix: "" },
-                    interfaceId: { exact: "linkrpc.directory" },
+                    interfaceId: { exact: "hubrpc.directory" },
                     members: [{ exact: "list" }],
                 },
                 canInvoke: true,
@@ -569,7 +569,7 @@ async function _requestReflectionAccess(session: HubAccess): Promise<boolean> {
             {
                 target: {
                     serviceId: { prefix: "" },
-                    interfaceId: { exact: "linkrpc.schemas" },
+                    interfaceId: { exact: "hubrpc.schemas" },
                     members: [{ exact: "get" }],
                 },
                 canInvoke: true,

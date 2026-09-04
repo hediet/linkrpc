@@ -314,7 +314,7 @@ describe("LinkRpcMcpServer task names (integration)", () => {
         const started = parse(await h.client.callTool({
             name: "runLinkRpcScript",
             arguments: {
-                code: `({ con }) => con.call("hub", "linkrpc.traffic", "watch", {})`,
+                code: `({ con }) => con.call("hub", "hubrpc.traffic", "watch", {})`,
                 foregroundMs: 40,
             },
         }));
@@ -329,7 +329,7 @@ describe("LinkRpcMcpServer task names (integration)", () => {
             status: "running",
             logs: [{
                 level: "log",
-                text: `stream hub::linkrpc.traffic::watch {"type":"transit","nodeId":"hub-a"}`,
+                text: `stream hub::hubrpc.traffic::watch {"type":"transit","nodeId":"hub-a"}`,
             }],
         });
 

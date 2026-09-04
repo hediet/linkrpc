@@ -90,9 +90,9 @@ mod tests {
             })
         );
         assert_eq!(
-            parse_method_name("linkrpc.directory::list"),
+            parse_method_name("hubrpc.directory::list"),
             Some(ParsedMethodName::Interface {
-                interface_id: "linkrpc.directory".into(),
+                interface_id: "hubrpc.directory".into(),
                 member: "list".into()
             })
         );

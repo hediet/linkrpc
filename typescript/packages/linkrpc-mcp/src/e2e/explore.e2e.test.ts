@@ -32,8 +32,8 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
               "result": {
                 "entries": [
                   {
-                    "documentId": "linkrpc://$root/hubAccess@81b90efa3d0ed791.ts",
-                    "interfaceHash": "81b90efa3d0ed791",
+                    "documentId": "linkrpc://$root/hubAccess@5560868beca678de.ts",
+                    "interfaceHash": "5560868beca678de",
                     "interfaceId": "hubAccess",
                     "serviceId": "",
                   },
@@ -89,8 +89,8 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
               "result": {
                 "entries": [
                   {
-                    "documentId": "linkrpc://$root/hubAccess@81b90efa3d0ed791.ts",
-                    "interfaceHash": "81b90efa3d0ed791",
+                    "documentId": "linkrpc://$root/hubAccess@5560868beca678de.ts",
+                    "interfaceHash": "5560868beca678de",
                     "interfaceId": "hubAccess",
                     "serviceId": "",
                   },
@@ -185,21 +185,21 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/linkrpc.defaults@6338c42820453561.ts",
-                    "interfaceHash": "6338c42820453561",
-                    "interfaceId": "linkrpc.defaults",
+                    "documentId": "linkrpc://hello/hubrpc.defaults@f0bcf98c6733cef9.ts",
+                    "interfaceHash": "f0bcf98c6733cef9",
+                    "interfaceId": "hubrpc.defaults",
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/linkrpc.directory@9878186e61a6d6b6.ts",
-                    "interfaceHash": "9878186e61a6d6b6",
-                    "interfaceId": "linkrpc.directory",
+                    "documentId": "linkrpc://hello/hubrpc.directory@28f85a6b67ce7754.ts",
+                    "interfaceHash": "28f85a6b67ce7754",
+                    "interfaceId": "hubrpc.directory",
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/linkrpc.schemas@f1e32214d017b570.ts",
-                    "interfaceHash": "f1e32214d017b570",
-                    "interfaceId": "linkrpc.schemas",
+                    "documentId": "linkrpc://hello/hubrpc.schemas@e12e0c013a3dbd24.ts",
+                    "interfaceHash": "e12e0c013a3dbd24",
+                    "interfaceId": "hubrpc.schemas",
                     "serviceId": "hello",
                   },
                 ],

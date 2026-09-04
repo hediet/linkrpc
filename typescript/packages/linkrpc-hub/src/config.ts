@@ -262,8 +262,8 @@ export const HubConfigSchema = z.object({
     $schema: z.string().optional(),
     /**
      * The hub's own service id: the prefix under which it mounts its global
-     * services (`hubAccess`, `linkrpc.directory`, reflection) and the target of
-     * each overlay's `linkrpc.directory` referral. Defaults to `'hub'`.
+     * services (`hubAccess`, `hubrpc.directory`, reflection) and the target of
+     * each overlay's `hubrpc.directory` referral. Defaults to `'hub'`.
      */
     hubServiceId: z.string().min(1).default('hub'),
     /** Inbound transports: accept many peers. */

@@ -18,7 +18,7 @@ export type DialEndpoint = Extract<ResolvedEndpoint, { kind: 'ws' | 'socket'; }>
 
 /**
  * Dial a ws / socket endpoint as a client, presenting `token` in the
- * `linkrpc::initialize` handshake. Used for the hub-facing side (with the minted
+ * `hubrpc::initialize` handshake. Used for the hub-facing side (with the minted
  * bound token) and for ws / socket / uri targets (with the target's own token).
  */
 export async function openDialTransport(spec: DialEndpoint, token: string): Promise<TransportHandle> {

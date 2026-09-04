@@ -101,10 +101,10 @@ describe('approval commands', () => {
         expect(permits('hubAccessManifest', 'getDesired')).toBe(true);
         expect(permits('hubAccessManifest', 'watchDesired')).toBe(true);
         expect(permits('hubAccessManifest', 'setCurrent')).toBe(true);
-        expect(permits('linkrpc.directory', 'list')).toBe(true);
-        expect(permits('linkrpc.directory', 'watch')).toBe(true);
+        expect(permits('hubrpc.directory', 'list')).toBe(true);
+        expect(permits('hubrpc.directory', 'watch')).toBe(true);
         expect(permits('hubAccess', 'requestAccess')).toBe(false);
-        expect(permits('linkrpc.defaults', 'getDesired')).toBe(false);
+        expect(permits('hubrpc.defaults', 'getDesired')).toBe(false);
         expect(permits('identity', 'getPrincipal')).toBe(false);
     });
 

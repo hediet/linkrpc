@@ -1,14 +1,13 @@
 import * as fs from "node:fs/promises";
 import { loadOrCreateIdentity } from "@hediet/linkrpc/node";
+import { MANAGED_FALLBACK_USER_ID } from "./principal";
 
 /**
  * Stable slot id for the on-disk keypair used by the managed-with-fallback
- * default (and `--principal user:linkrpc-cli`). The same slot always loads the
+ * default (and `--principal user:hubrpc-cli`). The same slot always loads the
  * same keypair so persistent caps issued by the hub keep working across CLI
  * invocations.
  */
-const CLI_IDENTITY_SLOT = "linkrpc-cli";
-
 /**
  * Delete the CLI's persistent identity keypair and its cached caps. The
  * next CLI command will mint a fresh keypair and trigger a new consent
@@ -21,7 +20,7 @@ export async function logoutCliIdentity(): Promise<string[]> {
     // briefly create a fresh keypair if one didn't exist, which we then
     // delete on the line below. Net effect: end state is empty either
     // way, and the cost is one wasted keygen on the no-op path.
-    const identity = await loadOrCreateIdentity({ id: CLI_IDENTITY_SLOT });
+    const identity = await loadOrCreateIdentity({ id: MANAGED_FALLBACK_USER_ID });
     const capsFile = _capsFile(identity.file);
     const removed: string[] = [];
     for (const f of [identity.file, capsFile]) {

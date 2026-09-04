@@ -17,7 +17,7 @@ import {
     type ServiceListing,
 } from './directoryWalk';
 
-const DIRECTORY = 'linkrpc.directory';
+const DIRECTORY = 'hubrpc.directory';
 
 describe('directory service-id scopes', () => {
     it('matches and intersects exact and segment-aware prefix patterns', () => {
@@ -550,7 +550,7 @@ async function until(condition: () => boolean, timeoutMs = 2_000): Promise<void>
 }
 
 function parseTarget(method: string, member: 'list' | 'watch'): string | undefined {
-    const rootMethod = `linkrpc.directory::${member}`;
+    const rootMethod = `hubrpc.directory::${member}`;
     if (method === rootMethod) return undefined;
     const suffix = `::${rootMethod}`;
     if (!method.endsWith(suffix)) throw new Error(`Unexpected method: ${method}`);

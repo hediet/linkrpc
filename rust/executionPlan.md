@@ -101,14 +101,14 @@ Each milestone lists **deliverable**, **acceptance** (how we know it's done), an
 
 ### M3 — Connection + reflection + macro (P3)
 - **Deliverable.** `InterfaceDefinition`, `LinkRpcConnection` (register / get / dispatch / validate /
-  preset), the three reflection interfaces (`linkrpc.directory`, `linkrpc.schemas`,
-  `linkrpc.defaults`), and the `#[link_rpc_interface]` proc-macro (emits the rewritten trait, the
+  preset), the three reflection interfaces (`hubrpc.directory`, `hubrpc.schemas`,
+  `hubrpc.defaults`), and the `#[link_rpc_interface]` proc-macro (emits the rewritten trait, the
   `…Client` struct, `serve()`, and `interface()`), per `docs/examples.md`.
 - **Acceptance.** The pizza example from `docs/examples.md` runs: Rust provider ↔ Rust caller over
   the in-memory pair **and** over a Unix socket (`linkrpc-tokio`).
 - **Interop gate.** **Cross-impl, unsigned:** a Rust caller invokes a TS-served service and a TS
-  caller invokes a Rust-served service over a socket; reflection (`linkrpc.directory::list`,
-  `linkrpc.schemas::get`) returns identical shapes both directions.
+  caller invokes a Rust-served service over a socket; reflection (`hubrpc.directory::list`,
+  `hubrpc.schemas::get`) returns identical shapes both directions.
 
 ### M4 — Identity core (R2: present in v1, optional)
 - **Deliverable.** `SigningIdentity` abstraction (Ed25519 in-memory now; pluggable HSM later),
@@ -196,8 +196,8 @@ M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M6 ─▶ M7
   when gating is on.
 - **`ForwardCheckingPolicy` fails closed by type** — capability mode can't compile without trust
   anchors.
-- **Reflection is the discovery API** (R3): `linkrpc.directory` (referral-walkable),
-  `linkrpc.schemas`, `linkrpc.defaults` — the AI exploration surface.
+- **Reflection is the discovery API** (R3): `hubrpc.directory` (referral-walkable),
+  `hubrpc.schemas`, `hubrpc.defaults` — the AI exploration surface.
 - **Streaming** (P4) is *not* on the north-star critical path (pizza `order` is unary). Slot it
   after M3 if/when a streaming method is demoed; otherwise defer.
 
@@ -276,7 +276,7 @@ modes, out of scope for v1's "connect to an existing hub."
 1. Wrap the transport in a `LinkRpcConnection`.
 2. Claim a prefix: `hubGrantedServiceId::register` (capability-free, within the granted namespace)
    or `hub::hubParticipant::registerServiceId` (signed/admin-gated, outside it).
-3. Serve the interface(s) under the claimed prefix; become discoverable via `linkrpc.directory`.
+3. Serve the interface(s) under the claimed prefix; become discoverable via `hubrpc.directory`.
 
 > **Conformance:** `endpoint.json` vectors cover every row above (incl. token-strip-from-ws-url,
 > npipe backslashing, decode of `unix:` path, bare-string auto-detect, and the precedence chain).

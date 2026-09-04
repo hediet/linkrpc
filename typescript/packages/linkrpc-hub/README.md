@@ -44,7 +44,7 @@ const hub = await connectToHubWs({
     url: 'wss://hub.example.com/',
     token: process.env.HUB_TOKEN!,
 });
-const result = await hub.channel.sendRequest('linkrpc.directory::list', {});
+const result = await hub.channel.sendRequest('hubrpc.directory::list', {});
 ```
 
 ## Traefik recipe

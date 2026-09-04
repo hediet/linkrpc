@@ -9,7 +9,7 @@ import type { StaticHubSchema } from "../staticHubSchema";
 import { StaticHubReflection } from "./staticHubReflection";
 import { createForwardingHandler } from "./tunnel";
 
-export const BROKER_INTERFACE_ID = "linkrpc.connectionBroker";
+export const BROKER_INTERFACE_ID = "hubrpc.connectionBroker";
 export const BROKER_STATUS_METHOD = `${BROKER_INTERFACE_ID}::status`;
 export const BROKER_READ_NOTIFICATIONS_METHOD = `${BROKER_INTERFACE_ID}::readNotifications`;
 export const BROKER_DISCONNECT_METHOD = `${BROKER_INTERFACE_ID}::disconnect`;

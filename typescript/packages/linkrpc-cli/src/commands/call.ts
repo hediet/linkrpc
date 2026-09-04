@@ -21,6 +21,8 @@ export interface CallCommandOptions {
     readonly paramOverrides?: readonly string[];
     /** Skip schema-based validation. Default: validate. */
     readonly noValidate?: boolean;
+    /** Schema lookup policy. `noValidate` takes precedence when set. */
+    readonly validation?: 'auto' | 'required' | 'off';
     readonly json?: boolean;
     /**
      * Invoked for every server→client stream message (`$stream::send`) that
@@ -36,7 +38,8 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
     const baseParams = readParamsArg(opts.paramsArg);
     const params = mergeParams({ base: baseParams, overrides: opts.paramOverrides });
 
-    if (!opts.noValidate) await validateParams(channel, ref, params, 'call');
+    const validation = opts.noValidate ? 'off' : (opts.validation ?? 'required');
+    if (validation !== 'off') await validateParams(channel, ref, params, 'call', validation);
     const onStreamChunk = opts.onStreamChunk ?? writeChunkToStderr;
     try {
         // Always use the streaming send path: it behaves identically to a plain
@@ -73,7 +76,8 @@ export async function notifyCommand(channel: CliChannel, opts: NotifyCommandOpti
     const ref = MethodRefWithOptHash.parseMethodRef(opts.methodRef);
     const baseParams = readParamsArg(opts.paramsArg);
     const params = mergeParams({ base: baseParams, overrides: opts.paramOverrides });
-    if (!opts.noValidate) await validateParams(channel, ref, params, 'notify');
+    const validation = opts.noValidate ? 'off' : (opts.validation ?? 'required');
+    if (validation !== 'off') await validateParams(channel, ref, params, 'notify', validation);
     await channel.sendNotification(ref.getMethodOnWire(), params as never);
     return '(notification sent)';
 }
@@ -83,6 +87,7 @@ async function validateParams(
     ref: MethodRefWithOptHash,
     params: unknown,
     verb: 'call' | 'notify',
+    validation: 'auto' | 'required',
 ): Promise<void> {
     let schema: SvcInterfaceSchema | undefined;
     try {
@@ -93,16 +98,28 @@ async function validateParams(
         // such route" — in either case the bus-wide suggestion is what the
         // user wants. Any other RpcError (e.g. permission) is propagated.
         if (e instanceof RpcError && e.code === ErrorCode.methodNotFound) {
+            if (validation === 'auto') return;
             await _failWithSuggestion(channel, ref, verb);
         }
         throw e;
     }
     if (schema === undefined) {
+        if (validation === 'auto') return;
         await _failWithSuggestion(channel, ref, verb);
     }
     const method = findMethodInSchema(schema, ref.methodName);
     if (!method) {
         await _failWithSuggestion(channel, ref, verb);
+    }
+    if (verb === 'call' && method!.result === undefined) {
+        throw new Error(
+            `${ref.getMethodOnWire()} is a notification member; use \`notify\` instead of \`call\`.`,
+        );
+    }
+    if (verb === 'notify' && method!.result !== undefined) {
+        throw new Error(
+            `${ref.getMethodOnWire()} is a request member; use \`call\` instead of \`notify\`.`,
+        );
     }
     const paramsSchema = method!.params;
     const reason = validateValueAgainstSchema(params, paramsSchema, schema.components?.schemas ?? {});

@@ -234,7 +234,7 @@ export class Hub {
      * Listeners notified whenever the forwarding table changes (a prefix is
      * claimed or released, or a link detaches dropping its claims). Coarse, by
      * design: it carries no payload — consumers re-query the directory. This is
-     * the "poll now" nudge that backs `linkrpc.directory::watch`.
+     * the "poll now" nudge that backs `hubrpc.directory::watch`.
      */
     private readonly _routingListeners = new Set<() => void>();
 

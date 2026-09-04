@@ -28,7 +28,7 @@ export interface SnapshotEntry {
     readonly methods: readonly string[];
 }
 
-const _SYSTEM_PREFIX = 'linkrpc.';
+const _SYSTEM_PREFIX = 'hubrpc.';
 
 function _isSystemInterface(id: string): boolean {
     return id.startsWith(_SYSTEM_PREFIX);

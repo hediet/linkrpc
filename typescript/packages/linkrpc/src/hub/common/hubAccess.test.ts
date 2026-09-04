@@ -86,6 +86,6 @@ function cap(
             canInvoke: true,
             ...(options.callBind !== undefined ? { callBind: options.callBind } : {}),
         }],
-        $linkrpcSignature: {},
+        $hubrpcSignature: {},
     };
 }

@@ -480,11 +480,11 @@ async function loadUiServices(channel: CliChannel): Promise<UiServicesResult> {
     ]);
 
     const warnings = walkResult.inaccessible.map(({ serviceId, reason }) =>
-        `Service "${serviceId}" does not offer a usable linkrpc.directory::list: ${reason}`
+        `Service "${serviceId}" does not offer a usable hubrpc.directory::list: ${reason}`
     );
     if (!defaultsResult.ok) {
         warnings.push(
-            `The root service does not offer linkrpc.defaults::get: ${getErrorMessage(defaultsResult.error)}`,
+            `The root service does not offer hubrpc.defaults::get: ${getErrorMessage(defaultsResult.error)}`,
         );
         return { services: walkResult.listings, warnings };
     }

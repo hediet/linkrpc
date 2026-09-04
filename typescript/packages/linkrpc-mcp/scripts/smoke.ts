@@ -27,7 +27,7 @@ async function main(): Promise<void> {
     });
     const endpoint = socketServer.endpoint;
     // hubv2 authenticates by provenance; the client still sends an
-    // `linkrpc::initialize` token, which this server accepts and ignores.
+    // `hubrpc::initialize` token, which this server accepts and ignores.
     const token = "smoke";
     console.log(`[smoke] hub listening on ${endpoint}`);
 
@@ -86,9 +86,9 @@ async function main(): Promise<void> {
         console.log("   ->", r3.resultJson);
 
         // 4. con.explore with includeSchema for a known root interface.
-        console.log("[smoke] 4 — con.explore({ interfaceId: 'linkrpc.directory', includeSchema: true, maxResults: 3 })");
+        console.log("[smoke] 4 — con.explore({ interfaceId: 'hubrpc.directory', includeSchema: true, maxResults: 3 })");
         const r4 = await runSandboxed(
-            `({ con }) => con.explore({ interfaceId: 'linkrpc.directory', includeSchema: true, maxResults: 3 })`,
+            `({ con }) => con.explore({ interfaceId: 'hubrpc.directory', includeSchema: true, maxResults: 3 })`,
             host,
             undefined,
         );

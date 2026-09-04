@@ -6,7 +6,7 @@ interface ExploreCommonArgs {
     /** Exact directory-level filters, applied before browsing or searching. */
     readonly serviceId?: string;
     readonly interfaceId?: string;
-    /** Include reflection plumbing such as `linkrpc.directory` and `linkrpc.schemas`. */
+    /** Include reflection plumbing such as `hubrpc.directory` and `hubrpc.schemas`. */
     readonly includeInternal?: boolean;
     /** Request one broad reflection grant when a gated directory is encountered. */
     readonly requestPermission?: boolean;
@@ -429,5 +429,5 @@ function _inaccessible(
 }
 
 function _isHubrpcInternalInterface(interfaceId: string): boolean {
-    return interfaceId.startsWith('linkrpc.');
+    return interfaceId.startsWith('hubrpc.');
 }

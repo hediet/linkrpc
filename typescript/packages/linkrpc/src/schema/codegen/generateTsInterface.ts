@@ -16,7 +16,7 @@ export interface GenerateInterfaceOptions {
     /**
      * Identifier for the exported `InterfaceDefinition` const. Defaults to
      * a sanitized form of the interface id with an `Interface` suffix
-     * (e.g. `linkrpc.directory` → `linkRpcDirectoryInterface`).
+     * (e.g. `hubrpc.directory` → `linkRpcDirectoryInterface`).
      */
     exportName?: string;
     /**

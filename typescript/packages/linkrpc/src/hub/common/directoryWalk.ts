@@ -5,9 +5,9 @@ import type { LinkRpcInterfaceSchema, MethodSchema } from '../../schema/linkRpcI
 import { type RootPrincipalSet, type ServiceIdPattern } from './reflection.interfaces';
 
 /**
- * Portable reflection walk over the `linkrpc.directory` referral tree.
+ * Portable reflection walk over the `hubrpc.directory` referral tree.
  *
- * A directory may explicitly list other `linkrpc.directory` services as
+ * A directory may explicitly list other `hubrpc.directory` services as
  * referrals. Flattening that graph into an interface inventory is the
  * consumer's job. Routing state is deliberately not part of this contract.
  */
@@ -54,7 +54,7 @@ export interface ListOptions {
     readonly timeoutMs?: number;
     /**
      * When set, send the reflection call to that service via form-3
-     * (`<target>::linkrpc.directory::list`) instead of the implicit root
+     * (`<target>::hubrpc.directory::list`) instead of the implicit root
      * directory. Used when talking to a hub: the root directory is the hub
      * itself, but per-service reflection lives on each participant.
      */
@@ -66,8 +66,8 @@ export async function fetchDirectory(
     opts: ListOptions = {},
 ): Promise<ServiceListing[]> {
     const method = opts.target
-        ? `${opts.target}::linkrpc.directory::list`
-        : 'linkrpc.directory::list';
+        ? `${opts.target}::hubrpc.directory::list`
+        : 'hubrpc.directory::list';
     const all: ServiceListing[] = [];
     let cursor: string | undefined;
     while (true) {
@@ -122,15 +122,15 @@ export async function fetchSchema(
     hash: string | undefined,
     /**
      * Optional routing target. When set, the schema request is addressed to
-     * `<target>::linkrpc.schemas::get` (form-3) so it reaches the service that
+     * `<target>::hubrpc.schemas::get` (form-3) so it reaches the service that
      * actually hosts this interface — needed when talking to a hub and the
      * interface lives behind a participant.
      */
     target?: string,
 ): Promise<LinkRpcInterfaceSchema> {
     const method = target
-        ? `${target}::linkrpc.schemas::get`
-        : 'linkrpc.schemas::get';
+        ? `${target}::hubrpc.schemas::get`
+        : 'hubrpc.schemas::get';
     const params: Record<string, JsonValue | undefined> = { interfaceId };
     if (hash !== undefined) params.hash = hash;
     const raw = await channel.sendRequest(method, params);
@@ -147,7 +147,7 @@ export function findMethodInSchema(
 
 /** Default recursion depth when walking the bus. */
 export const DEFAULT_WALK_DEPTH = 5;
-const DIRECTORY_INTERFACE_ID = 'linkrpc.directory';
+const DIRECTORY_INTERFACE_ID = 'hubrpc.directory';
 const ROOT_NODE_KEY = '\u0000root';
 
 /** Segment-aware service-id pattern matching (`foo` includes `foo/bar`, not `foobar`). */
@@ -254,7 +254,7 @@ export interface WalkHubResult {
 
 /**
  * Recursive graph walk: list a directory, intersect the accumulated service-id
- * scope with every explicit `linkrpc.directory` referral, and recurse. Bounded
+ * scope with every explicit `hubrpc.directory` referral, and recurse. Bounded
  * by `maxDepth`.
  *
  * Every listing is tagged with `discoveredFrom` — the serviceId of the
@@ -294,14 +294,14 @@ export interface WalkHubOptions {
     readonly serviceIdScopes?: readonly ServiceIdPattern[];
     /**
      * The directory the walk starts from. Defaults to the implicit root
-     * directory (form-2 `linkrpc.directory::list`). Pass a serviceId to start at
-     * `<rootTarget>::linkrpc.directory::list` — e.g. the hub's own global
+     * directory (form-2 `hubrpc.directory::list`). Pass a serviceId to start at
+     * `<rootTarget>::hubrpc.directory::list` — e.g. the hub's own global
      * directory (`'hub'`) when walking from the hub's in-process connection.
      */
     readonly rootTarget?: string;
     /**
      * Invoked once per gated sub-directory the walk encounters. Return `true`
-     * if a capability for its `linkrpc.directory::list` was granted and the
+     * if a capability for its `hubrpc.directory::list` was granted and the
      * directory should be re-listed; `false` (or omitted hook) leaves it in
      * {@link WalkHubResult.inaccessible}. Called at most once per `serviceId`.
      */
@@ -994,8 +994,8 @@ export class HubDirectoryExplorer {
     private _replaceWatch(node: DirectoryNode): boolean {
         if (!this._watching || this._disposed) return false;
         const method = node.target === undefined
-            ? 'linkrpc.directory::watch'
-            : `${node.target}::linkrpc.directory::watch`;
+            ? 'hubrpc.directory::watch'
+            : `${node.target}::hubrpc.directory::watch`;
         const params: Record<string, JsonValue | undefined> = {
             serviceIdScopes: [...node.scopes],
         };

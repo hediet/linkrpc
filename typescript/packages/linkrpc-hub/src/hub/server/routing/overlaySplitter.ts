@@ -38,7 +38,7 @@ export interface OverlaySplitterInspection {
  * Ports:
  * - **P** — the participant (downstream connection),
  * - **C** — the local root-services connection (`hubServiceIdRegistry::registerServiceId`,
- *   `linkrpc.directory`, `identity::*`, …),
+ *   `hubrpc.directory`, `identity::*`, …),
  * - **H** — the uplink to the parent hub.
  *
  * Routing rules (verbatim to the design):

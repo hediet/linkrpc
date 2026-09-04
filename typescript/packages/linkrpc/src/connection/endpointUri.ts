@@ -38,7 +38,7 @@ export interface SocketEndpoint {
     readonly brokerMode?: 'linkrpc' | 'raw';
 }
 
-/** A running WebSocket hub; `token` rides in the `linkrpc::initialize` handshake. */
+/** A running WebSocket hub; `token` rides in the `hubrpc::initialize` handshake. */
 export interface WsEndpoint {
     readonly kind: 'ws';
     readonly url: string;
@@ -47,7 +47,7 @@ export interface WsEndpoint {
 
 /**
  * A running plain-JSON-RPC WebSocket endpoint. Unlike {@link WsEndpoint}, CLI
- * consumers use it without the `linkrpc::initialize` handshake or LinkRPC signing.
+ * consumers use it without the `hubrpc::initialize` handshake or LinkRPC signing.
  * Query parameters are preserved verbatim for protocols that authenticate
  * during the WebSocket upgrade (for example AHP's `tkn` parameter).
  */

@@ -12,7 +12,7 @@
  *                                                         └─(aggregator)→ one approver
  *
  * What this proves:
- *  1. **Scan + aggregate.** The aggregator walks `linkrpc.directory`, finds every
+ *  1. **Scan + aggregate.** The aggregator walks `hubrpc.directory`, finds every
  *     `hubAccessManifest` interface, and merges their desired entries.
  *  2. **Capability required.** The aggregator reaches a remote manifest via a
  *     forwarded (gated) call, so its connection must carry an admin-rooted cap
@@ -79,7 +79,7 @@ function permissionFor(serviceId: string): Permission {
 function aggregatorPermissions(): Permission[] {
     return [
         { target: { serviceId: { prefix: '' }, interfaceId: { exact: MANIFEST_ID }, members: [{ prefix: '' }] }, canInvoke: true },
-        { target: { serviceId: { prefix: '' }, interfaceId: { exact: 'linkrpc.directory' }, members: [{ prefix: '' }] }, canInvoke: true },
+        { target: { serviceId: { prefix: '' }, interfaceId: { exact: 'hubrpc.directory' }, members: [{ prefix: '' }] }, canInvoke: true },
     ];
 }
 

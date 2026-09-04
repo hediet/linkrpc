@@ -201,7 +201,7 @@ describe('withForwardedCallGate (hub signature front door)', () => {
             transits.push(transit.method ?? '');
         });
 
-        const inspectionMethod = 'svc::linkrpc.topology::getGraph';
+        const inspectionMethod = 'svc::hubrpc.topology::getGraph';
         await caller.sendRequest(
             inspectionMethod,
             await signedCall(identity, inspectionMethod, {}),
@@ -209,7 +209,7 @@ describe('withForwardedCallGate (hub signature front door)', () => {
         expect(provider.received.at(-1)?.method).toBe(inspectionMethod);
         expect(transits).toEqual([]);
 
-        const visibleMethod = 'svc::linkrpc.topology.extra::getGraph';
+        const visibleMethod = 'svc::hubrpc.topology.extra::getGraph';
         await caller.sendRequest(
             visibleMethod,
             await signedCall(identity, visibleMethod, {}),
@@ -313,7 +313,7 @@ describe('withForwardedCallGate (hub signature front door)', () => {
         const id = await makeIdentity();
         const params = await signedCall(id, 'svc::math::add', { a: 2, b: 3 }) as Record<string, unknown>;
         // Corrupt the call signature.
-        const sigs = params['$linkrpcSignature'] as { call: { keyId: string; sig: string }; };
+        const sigs = params['$hubrpcSignature'] as { call: { keyId: string; sig: string }; };
         sigs.call.sig = (sigs.call.sig.startsWith('A') ? 'B' : 'A') + sigs.call.sig.slice(1);
 
         const resp = await caller.sendRequest('svc::math::add', params);
@@ -325,7 +325,7 @@ describe('withForwardedCallGate (hub signature front door)', () => {
     it('lets an unsigned request to an exempt prefix pass verbatim', async () => {
         const { hubServices, caller } = makeHarness();
 
-        const resp = await caller.sendRequest('hub::linkrpc.directory::list', {});
+        const resp = await caller.sendRequest('hub::hubrpc.directory::list', {});
 
         expect(resp).toMatchObject({ result: { ok: true } });
         expect(hubServices.received).toHaveLength(1);

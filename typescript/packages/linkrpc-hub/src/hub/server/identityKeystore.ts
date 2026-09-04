@@ -270,11 +270,11 @@ interface FilesDirPayload {
 }
 
 const _FILE_SCHEMA_VERSION = 1;
-const _DOMAIN = "linkrpc.identity.keystore.v1";
-const _STORAGE_DOMAIN = "linkrpc.identity.storage.v1";
-const _KEYS_DOMAIN = "linkrpc.identity.keys.v1";
-const _SNOOZE_DOMAIN = "linkrpc.identity.snooze.v1";
-const _FILESDIR_DOMAIN = "linkrpc.identity.filesdir.v1";
+const _DOMAIN = "hubrpc.identity.keystore.v1";
+const _STORAGE_DOMAIN = "hubrpc.identity.storage.v1";
+const _KEYS_DOMAIN = "hubrpc.identity.keys.v1";
+const _SNOOZE_DOMAIN = "hubrpc.identity.snooze.v1";
+const _FILESDIR_DOMAIN = "hubrpc.identity.filesdir.v1";
 
 export function createIdentityKeystore(opts: IdentityKeystoreOptions): IdentityKeystore {
     if (opts.keystoreSecret.length < 32) {

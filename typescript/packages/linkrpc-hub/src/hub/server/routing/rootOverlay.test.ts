@@ -75,11 +75,11 @@ describe('RootOverlay + hub services (end-to-end)', () => {
         const ids = dir.items.map((i) => `${i.serviceId}::${i.interfaceId}`);
 
         // Referral-only: the hub lists each prefix's directory, not its leaves.
-        expect(ids).toContain('calc::linkrpc.directory');
-        expect(ids).toContain('sci::linkrpc.directory');
+        expect(ids).toContain('calc::hubrpc.directory');
+        expect(ids).toContain('sci::hubrpc.directory');
         expect(ids).not.toContain('calc::math');
         // The hub's own services show up under the hub prefix.
-        expect(ids).toContain('hub::linkrpc.directory');
+        expect(ids).toContain('hub::hubrpc.directory');
 
         const scoped = await consumer.service('hub').get(directoryInterface).list({
             serviceIdScopes: [{ exact: 'calc' }],
@@ -101,9 +101,9 @@ describe('RootOverlay + hub services (end-to-end)', () => {
 
         const consumer = attachConsumer(hub);
         const dir = await consumer.service('hub').get(directoryInterface)
-            .list({ interfaceId: 'linkrpc.directory' });
+            .list({ interfaceId: 'hubrpc.directory' });
         expect(dir.items.length).toBeGreaterThan(0);
-        expect(dir.items.every((i) => i.interfaceId === 'linkrpc.directory')).toBe(true);
+        expect(dir.items.every((i) => i.interfaceId === 'hubrpc.directory')).toBe(true);
     });
 
     it('discovers public root -> cloud -> Auth through explicit directory listings', async () => {
@@ -280,7 +280,7 @@ describe('RootOverlay + hub services (end-to-end)', () => {
         });
 
         // 'child' lists a leaf interface that carries no requirements of its
-        // own, reached by the walk via its form-3 `child::linkrpc.directory`.
+        // own, reached by the walk via its form-3 `child::hubrpc.directory`.
         const childPair = new TransportPair();
         hub.claimPrefix(childPair.a, 'child');
         const child = LinkRpcConnection.fromTransport(childPair.b);
@@ -319,7 +319,7 @@ describe('RootOverlay + hub services (end-to-end)', () => {
         // Form-2 (root-addressed) directory hits the overlay root services.
         const own = await participant.get(directoryInterface).list({});
         const referrals = own.items.filter(
-            (i) => i.serviceId === 'hub' && i.interfaceId === 'linkrpc.directory',
+            (i) => i.serviceId === 'hub' && i.interfaceId === 'hubrpc.directory',
         );
         // Exactly one referral row pointing at the hub's global directory.
         expect(referrals).toHaveLength(1);

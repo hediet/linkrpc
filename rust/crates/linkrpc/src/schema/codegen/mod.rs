@@ -3,7 +3,7 @@
 //! This is the *schema-document → Rust* direction, the mirror image of the
 //! [`link_rpc_interface`](linkrpc_macros::link_rpc_interface) trait macro (which
 //! goes *Rust trait → interface*). Given a wire [`LinkRpcInterfaceSchema`] — for
-//! example one fetched over `linkrpc.schemas::get`, or produced by the canonical
+//! example one fetched over `hubrpc.schemas::get`, or produced by the canonical
 //! TypeScript toolchain — it emits:
 //!
 //! - a Rust `struct` / `enum` for each entry in `components.schemas`, with

@@ -267,10 +267,10 @@ function _isWebSocketEndpoint(endpoint: string): boolean {
 
 // ws/wss  → WebSocket; token rides in `Authorization: Bearer <token>` header; NO handshake message.
 // anything else (UDS / named pipe) → open socket, then send ONE newline-terminated
-//   `linkrpc::initialize` request `{"jsonrpc":"2.0","id":0,"method":"linkrpc::initialize",
+//   `hubrpc::initialize` request `{"jsonrpc":"2.0","id":0,"method":"hubrpc::initialize",
 //   "params":{"protocolVersion":1,"token":"<token>"}}\n` BEFORE any RPC, await its reply,
 //   then NDJSON framing. An immediate socket close == auth failure.
-socket.write(JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'linkrpc::initialize', params: { protocolVersion: 1, token } }) + '\n');
+socket.write(JSON.stringify({ jsonrpc: '2.0', id: 0, method: 'hubrpc::initialize', params: { protocolVersion: 1, token } }) + '\n');
 ```
 
 Token precedence for the env-var connector path (`linkrpc-cli/src/endpoint.ts`):

@@ -256,7 +256,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     /**
      * Declare the preset interface for form-1 (bare-method) dispatch. The
      * interface must already be registered under the root (no serviceId).
-     * Surfaced via `linkrpc.defaults::get`.
+     * Surfaced via `hubrpc.defaults::get`.
      */
     public setPreset(iface: InterfaceDefinition<any>): void {
         const key = `::${iface.info.id}`;
@@ -326,10 +326,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
      * `directory`, `schemas`), backed by this connection's live registry.
      *
      * By default they live under the root service (form-2 reachable as
-     * `linkrpc.directory::list`). Pass `serviceId` to additionally mount
+     * `hubrpc.directory::list`). Pass `serviceId` to additionally mount
      * them under a specific service — useful for participants that live
      * behind a hub, so callers can reach reflection via form-3
-     * `<serviceId>::linkrpc.directory::list`.
+     * `<serviceId>::hubrpc.directory::list`.
      *
      * Idempotent: re-registering the same `(serviceId, interfaceId)` pair
      * is a no-op.
@@ -420,7 +420,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
 
         // A service-scoped reflection set is *also* surfaced at the connection
         // root, so a hub that reads this connection's root directory
-        // (`H·root → P`) discovers its `<serviceId>::linkrpc.directory` referral
+        // (`H·root → P`) discovers its `<serviceId>::hubrpc.directory` referral
         // without reaching the (capability-gated) service directory. Keyed
         // separately and guarded above, so the recursive root call is a no-op
         // once root reflection exists.
@@ -476,7 +476,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     }
 
     /**
-     * Enable the root `linkrpc.node::getNodeId` topology-bootstrap service.
+     * Enable the root `hubrpc.node::getNodeId` topology-bootstrap service.
      *
      * The generated ids are stable while this registration is active. They are
      * unauthenticated correlation labels only; callers must not use them for
@@ -961,7 +961,7 @@ export interface RegisterOptions {
     serviceId?: string;
     /**
      * Optional human description recorded for `serviceId` and surfaced
-     * through `linkrpc.directory::list`. Requires `serviceId`. The first
+     * through `hubrpc.directory::list`. Requires `serviceId`. The first
      * registration's description wins; any later registration that
      * supplies a *different* non-undefined description throws.
      */
@@ -969,7 +969,7 @@ export interface RegisterOptions {
     /**
      * Root node ids required to access `serviceId`, in CNF (AND of OR-sets):
      * the caller must satisfy **every** set, and a set is satisfied by **any
-     * one** of its node ids. Surfaced through `linkrpc.directory::list`.
+     * one** of its node ids. Surfaced through `hubrpc.directory::list`.
      * Requires `serviceId`. Recorded per service; a later registration that
      * supplies a *different* value for the same `serviceId` throws.
      */

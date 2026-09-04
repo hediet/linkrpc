@@ -8,10 +8,12 @@
  *   1. `--endpoint-cmd <command>`        → spawn a server, connect via injected env
  *   2. `--endpoint-cmd-stdio <command>`  → spawn a child, talk over its stdio
  *   3. `--endpoint <uri>`                → a literal strict endpoint URI
- *   4. `LINKRPC_ENDPOINT` env var        → legacy bare path / ws url
+ *   4. `LINKRPC_ENDPOINT` / `HUBRPC_ENDPOINT` env vars → bare path / ws url
  *
- * `--endpoint-token` overrides the token from a URI / `LINKRPC_TOKEN` for
- * socket / ws endpoints. At most one of `--endpoint*` may be given.
+ * `--endpoint-token` only applies to socket / ws endpoint URIs that contain an
+ * exact `token=%` placeholder. Env vars support both `LINKRPC_*` and legacy
+ * `HUBRPC_*`, with `LINKRPC_*` taking precedence. At most one of `--endpoint*`
+ * may be given.
  * `ws-no-init:` preserves its query string verbatim and therefore does not use
  * `--endpoint-token`.
  */
@@ -38,7 +40,7 @@ export interface ResolveEndpointInput {
     readonly endpointCmdEnv?: Readonly<Record<string, string>>;
     /** `--endpoint-cmd-cwd <dir>`: working directory for the spawned child. */
     readonly endpointCmdCwd?: string;
-    /** `--endpoint-token <token>`: overrides the URI / `LINKRPC_TOKEN` token. */
+    /** `--endpoint-token <token>`: fills an explicit `?token=%` placeholder. */
     readonly endpointToken?: string;
     /** `--provision-identity`: provision a persistent identity for `--endpoint-cmd`. */
     readonly provisionIdentity?: boolean;
@@ -58,12 +60,78 @@ export interface ResolveEndpointResult {
     readonly error: string | undefined;
 }
 
+const LEGACY_ENDPOINT_VAR = "HUBRPC_ENDPOINT";
+const LEGACY_TOKEN_VAR = "HUBRPC_TOKEN";
+const TOKEN_PLACEHOLDER = "%";
+const TOKEN_PLACEHOLDER_PATTERN = /(?:[?&])token=(?<value>[^&#]*)/g;
+
 /** Apply a token override to socket / ws specs; commands carry no token. */
 function _withToken(spec: ResolvedEndpoint, token: string | undefined): ResolvedEndpoint {
     if (token === undefined) return spec;
     if (spec.kind === "socket") return { ...spec, token };
     if (spec.kind === "ws") return { ...spec, token };
     return spec;
+}
+
+function _getEnvValue(
+    env: NodeJS.ProcessEnv,
+    currentName: string,
+    legacyName: string,
+): string | undefined {
+    return env[currentName] ?? env[legacyName];
+}
+
+function _resolveUriEndpoint(
+    uri: string,
+    tokenOverride: string | undefined,
+    fallbackToken: string | undefined,
+    tokenFlagName: string,
+    endpointName: string,
+): ResolvedEndpoint {
+    const spec = parseEndpointUri(uri);
+    if (tokenOverride !== undefined) {
+        return _applyTokenOverride(spec, uri, tokenOverride, tokenFlagName, endpointName);
+    }
+    const rawTokenParams = [...uri.matchAll(TOKEN_PLACEHOLDER_PATTERN)]
+        .map((match) => match.groups?.value ?? "");
+    if (rawTokenParams.includes(TOKEN_PLACEHOLDER)) {
+        if (rawTokenParams.length !== 1) {
+            throw new Error(`${endpointName} must contain at most one token parameter`);
+        }
+        if (fallbackToken === undefined) {
+            throw new Error(
+                `${endpointName} contains token=% but no token value was provided`,
+            );
+        }
+        return _withToken(spec, fallbackToken);
+    }
+    const embeddedToken = "token" in spec ? spec.token : undefined;
+    const token = embeddedToken ?? fallbackToken;
+    return _withToken(spec, token);
+}
+
+function _applyTokenOverride(
+    spec: ResolvedEndpoint,
+    uri: string,
+    token: string,
+    tokenFlagName: string,
+    endpointName: string,
+): ResolvedEndpoint {
+    if (spec.kind !== "socket" && spec.kind !== "ws") {
+        throw new Error(
+            `${tokenFlagName} is only supported for socket/unix/npipe and ws/wss ${endpointName} values`,
+        );
+    }
+    if (token === TOKEN_PLACEHOLDER) {
+        throw new Error(`${tokenFlagName} must not be '${TOKEN_PLACEHOLDER}'`);
+    }
+    const tokenParams = [...uri.matchAll(TOKEN_PLACEHOLDER_PATTERN)].map((m) => m.groups?.value ?? "");
+    if (tokenParams.length !== 1 || tokenParams[0] !== TOKEN_PLACEHOLDER) {
+        throw new Error(
+            `${tokenFlagName} requires ${endpointName} to contain exactly '?token=%' or '&token=%'`,
+        );
+    }
+    return _withToken(spec, token);
 }
 
 /**
@@ -73,6 +141,7 @@ function _withToken(spec: ResolvedEndpoint, token: string | undefined): Resolved
  */
 export function resolveEndpoint(input: ResolveEndpointInput): ResolveEndpointResult {
     const env = input.env ?? process.env;
+    const envEndpoint = _getEnvValue(env, LINKRPC_ENDPOINT_VAR, LEGACY_ENDPOINT_VAR);
     const explicit = [input.endpoint, input.endpointCmd, input.endpointCmdStdio].filter(
         (v) => v !== undefined,
     );
@@ -90,6 +159,16 @@ export function resolveEndpoint(input: ResolveEndpointInput): ResolveEndpointRes
         return {
             endpoint: undefined,
             error: "--provision-identity / --provision-identity-slot require --endpoint-cmd",
+        };
+    }
+    if (
+        input.endpointToken !== undefined
+        && input.endpoint === undefined
+        && envEndpoint === undefined
+    ) {
+        return {
+            endpoint: undefined,
+            error: "--endpoint-token requires --endpoint or an endpoint environment variable containing token=%",
         };
     }
     const cmdEnv = input.endpointCmdEnv;
@@ -143,21 +222,29 @@ export function resolveEndpoint(input: ResolveEndpointInput): ResolveEndpointRes
             };
         }
         if (input.endpoint !== undefined) {
-            const spec = parseEndpointUri(input.endpoint);
-            // Explicit endpoint: token comes from the URI or --endpoint-token,
-            // never from LINKRPC_TOKEN.
-            return { endpoint: _withToken(spec, input.endpointToken), error: undefined };
+            return {
+                endpoint: _resolveUriEndpoint(
+                    input.endpoint,
+                    input.endpointToken,
+                    undefined,
+                    "--endpoint-token",
+                    "--endpoint",
+                ),
+                error: undefined,
+            };
         }
 
-        const envEndpoint = env[LINKRPC_ENDPOINT_VAR];
         if (envEndpoint) {
-            const spec = parseEndpointUri(envEndpoint);
-            // Env endpoint: --endpoint-token wins, then the URI token, then
-            // LINKRPC_TOKEN.
-            const token = input.endpointToken
-                ?? ("token" in spec ? spec.token : undefined)
-                ?? env[LINKRPC_TOKEN_VAR];
-            return { endpoint: _withToken(spec, token), error: undefined };
+            return {
+                endpoint: _resolveUriEndpoint(
+                    envEndpoint,
+                    input.endpointToken,
+                    _getEnvValue(env, LINKRPC_TOKEN_VAR, LEGACY_TOKEN_VAR),
+                    "--endpoint-token",
+                    `${LINKRPC_ENDPOINT_VAR}/${LEGACY_ENDPOINT_VAR}`,
+                ),
+                error: undefined,
+            };
         }
     } catch (e) {
         return { endpoint: undefined, error: (e as Error).message };
@@ -182,7 +269,7 @@ export interface ResolveTargetEndpointInput {
     readonly targetEndpointCmdEnv?: Readonly<Record<string, string>>;
     /** `--target-endpoint-cmd-cwd <dir>`: working directory for the spawned target child. */
     readonly targetEndpointCmdCwd?: string;
-    /** `--target-endpoint-token <token>`. */
+    /** `--target-endpoint-token <token>`: fills an explicit `?token=%` placeholder. */
     readonly targetEndpointToken?: string;
     /**
      * Provisioning options to bind to the *target* cmd. Same semantics as
@@ -227,6 +314,12 @@ export function resolveTargetEndpoint(input: ResolveTargetEndpointInput): Resolv
         return {
             endpoint: undefined,
             error: "--provision-identity / --provision-identity-slot require --target-endpoint-cmd",
+        };
+    }
+    if (input.targetEndpointToken !== undefined && input.targetEndpoint === undefined) {
+        return {
+            endpoint: undefined,
+            error: "--target-endpoint-token requires --target-endpoint containing token=%",
         };
     }
     const cmdEnv = input.targetEndpointCmdEnv;
@@ -280,8 +373,16 @@ export function resolveTargetEndpoint(input: ResolveTargetEndpointInput): Resolv
             };
         }
         if (input.targetEndpoint !== undefined) {
-            const spec = parseEndpointUri(input.targetEndpoint);
-            return { endpoint: _withToken(spec, input.targetEndpointToken), error: undefined };
+            return {
+                endpoint: _resolveUriEndpoint(
+                    input.targetEndpoint,
+                    input.targetEndpointToken,
+                    undefined,
+                    "--target-endpoint-token",
+                    "--target-endpoint",
+                ),
+                error: undefined,
+            };
         }
     } catch (e) {
         return { endpoint: undefined, error: (e as Error).message };

@@ -24,7 +24,7 @@ describe("createAutoNegotiatingCapProvider", () => {
                 },
                 canInvoke: true,
             }],
-            $linkrpcSignature: {},
+            $hubrpcSignature: {},
         };
         await principal.capBag.add(capability);
 

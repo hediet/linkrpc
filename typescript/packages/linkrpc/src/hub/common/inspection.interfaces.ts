@@ -102,7 +102,7 @@ export type TopologyGraph = zInfer<typeof zTopologyGraph>;
 
 export const topologyInterface = defineInterface(
     {
-        id: "linkrpc.topology",
+        id: "hubrpc.topology",
         description:
             "Inspect the transport graph visible from a service. A watch emits invalidation "
             + "ticks; consumers re-fetch getGraph after each tick.",
@@ -173,7 +173,7 @@ const zTrafficWatchWithPayloadsParams = object({
  */
 export const trafficInterface = defineInterface(
     {
-        id: "linkrpc.traffic",
+        id: "hubrpc.traffic",
         description:
             "Stream raw message transits for the entire node hosting the addressed service. "
             + "Payload-free and explicitly payload-bearing variants keep disclosure opt-in.",

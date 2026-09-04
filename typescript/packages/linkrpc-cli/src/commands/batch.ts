@@ -36,6 +36,7 @@ export type BatchResult =
     };
 
 export interface ExecuteBatchOptions {
+    readonly validation?: 'auto' | 'required' | 'off';
     readonly onStreamChunk?: (event: {
         readonly index: number;
         readonly method: string;
@@ -112,6 +113,7 @@ export async function executeBatch(
             paramsArg: operation.paramsArg,
             paramOverrides: operation.paramOverrides,
             noValidate: operation.noValidate,
+            validation: options.validation,
             json: true,
             onStreamChunk: (payload) => options.onStreamChunk?.({
                 index,

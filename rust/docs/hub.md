@@ -169,9 +169,9 @@ never forwarded → never capability-gated**. That's what makes them safe bootst
 
 | interface | members | purpose |
 |---|---|---|
-| `linkrpc.directory` | `list` | **referral-only** at a hub: one `<prefix>::linkrpc.directory` row per claimed prefix |
-| `linkrpc.schemas` | `get` | schema for an `id@hash` |
-| `linkrpc.defaults` | `get` | connection preset, if any |
+| `hubrpc.directory` | `list` | **referral-only** at a hub: one `<prefix>::hubrpc.directory` row per claimed prefix |
+| `hubrpc.schemas` | `get` | schema for an `id@hash` |
+| `hubrpc.defaults` | `get` | connection preset, if any |
 | `hubGrantedServiceId` | `get`, `register` | connection facts + **capability-free** serviceId claims *within* the granted namespace |
 | `hubParticipant` | `registerServiceId` | claims **outside** the granted namespace (admin-capability gated, addressed via the hub's own serviceId) |
 | `hubAccess` | `request`, `extend`, `requestAccess` | the **consent front door** — a consumer asks for scoped access; returns `SignedCapability`s |
@@ -184,8 +184,8 @@ The split between the two claim doors is deliberate:
 - `<hubServiceId>::hubParticipant::registerServiceId` — claim a prefix **outside** that namespace.
   Fully-qualified (so it forwards to the hub) and **admin-capability gated**.
 
-`linkrpc.directory::list` is **referral-only** on a hub: it lists a row *per claimed prefix*
-(`<prefix>::linkrpc.directory`) rather than the prefix's leaf interfaces. Flattening the tree into a
+`hubrpc.directory::list` is **referral-only** on a hub: it lists a row *per claimed prefix*
+(`<prefix>::hubrpc.directory`) rather than the prefix's leaf interfaces. Flattening the tree into a
 full inventory is the consumer's job — a `walk_hub_detailed` breadth-first walk over the referral
 tree (shared by the CLI and the hub's own access-candidate resolution).
 
@@ -309,7 +309,7 @@ async fn main() -> anyhow::Result<()> {
 
 A participant then connects with an ordinary `LinkRpcConnection`, claims a prefix
 (`hub.register_service_id_namespace("acme")`), serves its interfaces under it, and other
-participants discover it via `linkrpc.directory::list` and call it through the hub by
+participants discover it via `hubrpc.directory::list` and call it through the hub by
 `acme::com.acme.pizza::order`.
 
 ---

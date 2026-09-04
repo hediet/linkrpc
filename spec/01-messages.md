@@ -67,12 +67,12 @@ On a call's `params` object, member keys beginning with `$hubrpc` are **reserved
 | Key | Carries | Defined in |
 |---|---|---|
 | `$hubrpc` | signed call metadata (and the interface-hash assertion) | §3.1 below; members in 04 §4, 06 §4 |
-| `$linkrpcSignature` | the per-domain signature map | 06 §2 |
-| `$linkrpcUnsigned` | extrinsic unsigned attachments (the capability bag) | 07 §2 |
+| `$hubrpcSignature` | the per-domain signature map | 06 §2 |
+| `$hubrpcUnsigned` | extrinsic unsigned attachments (the capability bag) | 07 §2 |
 
 **User params.** The *user params* of a call are its `params` object with every `$hubrpc`-prefixed key removed. Application interface schemas (chapter 04) describe the user params only.
 
-**Strip rule.** Wherever this specification canonicalizes a call for hashing or signing, it canonicalizes the call object with `$linkrpcSignature` and `$linkrpcUnsigned` removed and `$hubrpc` retained. `$linkrpcSignature` cannot cover itself; `$linkrpcUnsigned` is authored by a party other than the signer. (The exact signing input is defined in 06 §2.)
+**Strip rule.** Wherever this specification canonicalizes a call for hashing or signing, it canonicalizes the call object with `$hubrpcSignature` and `$hubrpcUnsigned` removed and `$hubrpc` retained. `$hubrpcSignature` cannot cover itself; `$hubrpcUnsigned` is authored by a party other than the signer. (The exact signing input is defined in 06 §2.)
 
 > **Note.** `$hubrpc` lives inside `params` rather than as a sibling of `params` on the JSON-RPC object because JSON-RPC 2.0 fixes the top-level member set (`jsonrpc`, `id`, `method`, `params`); carrying metadata inside `params` keeps the message a valid JSON-RPC message and lets it travel with the call's arguments through a forwarder that treats `params` as opaque. The `$hubrpc` prefix — not the placement — is what reserves these keys from colliding with user param keys.
 

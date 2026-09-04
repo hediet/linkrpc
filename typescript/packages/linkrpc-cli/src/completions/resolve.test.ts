@@ -73,7 +73,7 @@ describe('resolveSlot', () => {
     });
 
     it('advances positional index across positionals', () => {
-        const r = slotFor('hub check-compat foo ');
+        const r = slotFor('hub schema check-compat foo ');
         expect(r.slot.kind).toBe('positional');
         if (r.slot.kind === 'positional') {
             expect(r.slot.index).toBe(1);
@@ -93,7 +93,28 @@ describe('resolveSlot', () => {
     });
 
     it('records all positionals for multi-positional commands', () => {
-        const r = slotFor('hub check-compat acme.email ./local.json ');
+        const r = slotFor('hub schema check-compat acme.email ./local.json ');
         expect(r.seenPositionals).toEqual(['acme.email', './local.json']);
+    });
+
+    it('detects nested subcommand slots', () => {
+        const r = slotFor('hub connection ');
+        expect(r.slot).toMatchObject({ kind: 'subcommand' });
+        expect(r.subcommand?.name).toBe('connection');
+    });
+
+    it('resolves a nested command positional', () => {
+        const r = slotFor('hub schema show ');
+        expect(r.slot).toMatchObject({ kind: 'positional', type: 'interfaceRef', index: 0 });
+        expect(r.subcommand?.name).toBe('show');
+    });
+
+    it('resolves parent options after a nested command', () => {
+        const r = slotFor('hub topology participants --source ');
+        expect(r.slot.kind).toBe('flag-value');
+        if (r.slot.kind === 'flag-value') {
+            expect(r.slot.flag.name).toBe('--source');
+            expect(r.slot.flag.valueType).toBe('serviceId');
+        }
     });
 });

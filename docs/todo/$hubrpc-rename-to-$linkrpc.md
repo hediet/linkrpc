@@ -1,7 +1,6 @@
-# Rename `$hubrpc` to `$linkrpc`
+# Keep HubRPC wire names
 
-The signed-call metadata key is currently `$hubrpc` for compatibility with
-existing HubRPC peers.
-
-In a future breaking protocol version, rename this key to `$linkrpc`. The
-`$linkrpcSignature` and `$linkrpcUnsigned` keys are not part of this rename.
+The signed-call metadata and signature keys remain `$hubrpc`,
+`$hubrpcSignature`, and `$hubrpcUnsigned` for compatibility with existing
+HubRPC peers. LinkRPC is the product and package name; HubRPC remains the wire
+protocol namespace.

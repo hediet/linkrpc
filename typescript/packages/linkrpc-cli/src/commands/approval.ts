@@ -54,7 +54,7 @@ export const approvalCommandPermissions: readonly Permission[] = [
     {
         target: {
             serviceId: { prefix: '' },
-            interfaceId: { exact: 'linkrpc.directory' },
+            interfaceId: { exact: 'hubrpc.directory' },
             members: [{ prefix: '' }],
         },
         canInvoke: true,

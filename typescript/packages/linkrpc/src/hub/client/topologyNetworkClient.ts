@@ -32,7 +32,7 @@ export interface TopologyNetworkSnapshot {
 export interface TopologyNetworkOptions {
     /**
      * Fixed topology providers. When omitted, providers are discovered through
-     * the directory graph by their `linkrpc.topology` interface.
+     * the directory graph by their `hubrpc.topology` interface.
      */
     readonly sourceServiceIds?: readonly string[];
     readonly maxDepth?: number;

@@ -38,13 +38,13 @@ describe("signParams / verifyCall (authenticity)", () => {
     it("injects $hubrpc envelope into params and verifies round-trip", async () => {
         const s = await setup();
         const params = await signParams({
-            method: "github::linkrpc.directory::list",
+            method: "github::hubrpc.directory::list",
             params: { foo: 1 },
             signingIdentity: s.caller,
             nowMs: NOW,
         });
         const signed = (params as { $hubrpc?: { principal: string; nonce: string; signedAtMs: number } }).$hubrpc;
-        const signature = (params as { $linkrpcSignature?: { call?: { keyId: string; sig: string } } }).$linkrpcSignature;
+        const signature = (params as { $hubrpcSignature?: { call?: { keyId: string; sig: string } } }).$hubrpcSignature;
         expect(signed).toBeDefined();
         expect(signature).toBeDefined();
         expect(typeof signature?.call?.sig).toBe("string");
@@ -54,14 +54,14 @@ describe("signParams / verifyCall (authenticity)", () => {
         expect(signed?.principal).toBe(s.callerId);
 
         const r = await verifyCall({
-            method: "github::linkrpc.directory::list",
+            method: "github::hubrpc.directory::list",
             params, parseMethod, nowMs: NOW,
         });
         expect(r.ok).toBe(true);
         if (r.ok) {
             expect(r.signer).toBe(s.callerId);
             expect(r.call.signer).toBe(s.callerId);
-            expect(r.call.target).toEqual({ serviceId: "github", interfaceId: "linkrpc.directory", member: "list" });
+            expect(r.call.target).toEqual({ serviceId: "github", interfaceId: "hubrpc.directory", member: "list" });
             expect(r.strippedParams).toEqual({ foo: 1 });
             expect(r.capabilities).toEqual([]);
         }
@@ -86,10 +86,10 @@ describe("signParams / verifyCall (authenticity)", () => {
             method: "x::y::z", params: { a: 1 },
             signingIdentity: s.caller, nowMs: NOW,
         });
-        const u = (params as { $linkrpcSignature: { call: { keyId: string; sig: string } } }).$linkrpcSignature;
+        const u = (params as { $hubrpcSignature: { call: { keyId: string; sig: string } } }).$hubrpcSignature;
         const tampered = {
             ...params,
-            $linkrpcSignature: { ...u, call: { ...u.call, sig: u.call.sig.slice(0, -4) + "AAAA" } },
+            $hubrpcSignature: { ...u, call: { ...u.call, sig: u.call.sig.slice(0, -4) + "AAAA" } },
         };
         const r = await verifyCall({
             method: "x::y::z", params: tampered, parseMethod, nowMs: NOW,
@@ -168,12 +168,12 @@ describe("verifyCall + permits (authorization)", () => {
         }, s.admin);
 
         const params = await signParams({
-            method: "github::linkrpc.directory::list", params: {},
+            method: "github::hubrpc.directory::list", params: {},
             signingIdentity: s.caller, nowMs: NOW, capabilities: [cap],
         });
 
         const r = await verifyCall({
-            method: "github::linkrpc.directory::list",
+            method: "github::hubrpc.directory::list",
             params, parseMethod, nowMs: NOW, requireCapability: true,
         });
         expect(r.ok).toBe(true);

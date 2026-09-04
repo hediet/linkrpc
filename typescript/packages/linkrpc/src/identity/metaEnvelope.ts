@@ -8,9 +8,9 @@ import {
 import type { Base64Sha256 } from "../protocol/signedObject";
 import type { JsonValue } from "../protocol/jsonValue";
 import {
-    LINKRPC_META_KEY,
-    LINKRPC_SIGNATURE_KEY,
-    LINKRPC_UNSIGNED_KEY,
+    HUBRPC_META_KEY,
+    HUBRPC_SIGNATURE_KEY,
+    HUBRPC_UNSIGNED_KEY,
     attachCapabilities,
     signRpcCall,
     verifyRpcCall,
@@ -31,7 +31,7 @@ export interface SignParamsOptions {
     /** Identity that produces the signature. */
     signingIdentity: SigningIdentity;
     /**
-     * Caps to attach. They are NOT signed — they ride in `$linkrpcUnsigned`.
+     * Caps to attach. They are NOT signed — they ride in `$hubrpcUnsigned`.
      */
     capabilities?: readonly SignedCapability[];
     /** Unix milliseconds; defaults to `Date.now()`. */
@@ -44,8 +44,8 @@ export interface SignParamsOptions {
 
 /**
  * Returns a wire-form params object carrying the `$hubrpc` envelope, the
- * `call` signature under `$linkrpcSignature`, and (optionally) capabilities
- * under `$linkrpcUnsigned`.
+ * `call` signature under `$hubrpcSignature`, and (optionally) capabilities
+ * under `$hubrpcUnsigned`.
  */
 export async function signParams(opts: SignParamsOptions): Promise<JsonObject> {
     if (opts.params !== undefined
@@ -70,7 +70,7 @@ export async function signParams(opts: SignParamsOptions): Promise<JsonObject> {
 
 export interface VerifyCallOptions {
     method: string;
-    /** Raw params as received on the wire. Carries `$hubrpc` + `$linkrpcSignature` when signed. */
+    /** Raw params as received on the wire. Carries `$hubrpc` + `$hubrpcSignature` when signed. */
     params: unknown;
     /** Decode the method string into the call's target address. */
     parseMethod: (method: string) => CallTarget;
@@ -176,5 +176,4 @@ export async function verifyCall(opts: VerifyCallOptions): Promise<VerifyResult>
 }
 
 // Re-exported so callers can spot signed calls without going through `verifyCall`.
-export { LINKRPC_META_KEY, LINKRPC_SIGNATURE_KEY, LINKRPC_UNSIGNED_KEY };
-
+export { HUBRPC_META_KEY, HUBRPC_SIGNATURE_KEY, HUBRPC_UNSIGNED_KEY };

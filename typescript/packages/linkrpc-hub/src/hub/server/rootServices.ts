@@ -54,10 +54,10 @@ export interface RegisterHubServicesOptions {
  *   overlay represents a single participant, *one* upstream claim suffices: all
  *   prefixed traffic the parent routes to this overlay is for this participant,
  *   so the {@link OverlaySplitter} delivers it without any local table.
- * - `linkrpc.directory::list` — by default a **referral** (own root interfaces
- *   plus one row pointing at `<hubServiceId>::linkrpc.directory`); an
+ * - `hubrpc.directory::list` — by default a **referral** (own root interfaces
+ *   plus one row pointing at `<hubServiceId>::hubrpc.directory`); an
  *   implementation is free to aggregate the parent's listing instead.
- * - `linkrpc.schemas::get` — schemas for this overlay's own root interfaces.
+ * - `hubrpc.schemas::get` — schemas for this overlay's own root interfaces.
  *
  * The hub's consent front door (`hubAccess::*`) is installed separately at the
  * overlay root by {@link registerHubAccessService}; it needs no capability of

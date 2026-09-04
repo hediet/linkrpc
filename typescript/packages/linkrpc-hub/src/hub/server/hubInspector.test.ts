@@ -440,7 +440,7 @@ describe('hub traffic services', () => {
             && events.some((event) => event.kind === 'response'),
         );
         expect(events.every((event) =>
-            event.method === `${services.hubServiceId}::linkrpc.directory::list`
+            event.method === `${services.hubServiceId}::hubrpc.directory::list`
         )).toBe(true);
 
         await watch.cancel();
@@ -461,8 +461,8 @@ describe('hub traffic services', () => {
             .list({});
         const ids = listing.items.map((item) => item.interfaceId);
 
-        expect(ids).toContain('linkrpc.topology');
-        expect(ids).toContain('linkrpc.traffic');
+        expect(ids).toContain('hubrpc.topology');
+        expect(ids).toContain('hubrpc.traffic');
         services.dispose();
     });
 

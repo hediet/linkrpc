@@ -30,7 +30,7 @@ export interface ConnectionContext {
     readonly hub: Hub;
     /** The accepted transport (custom handlers may read attestation off it). */
     readonly transport: IMessageTransport;
-    /** The `linkrpc::initialize` token the connection presented (if any). */
+    /** The `hubrpc::initialize` token the connection presented (if any). */
     readonly token: string | undefined;
     /** ServiceId the global reflection services are mounted under. */
     readonly hubServiceId: string;
@@ -63,7 +63,7 @@ export interface RootProvision {
 export type ConnectionHandler = (ctx: ConnectionContext) => void;
 
 /**
- * Selects and (on claim) provisions a connection by its `linkrpc::initialize`
+ * Selects and (on claim) provisions a connection by its `hubrpc::initialize`
  * token. `handle` is **non-consuming** — it may be called at the pre-handshake
  * gate to answer "would you accept this token?" — and returns a
  * {@link ConnectionHandler} that does the (possibly consuming) installation, or

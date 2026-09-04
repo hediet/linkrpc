@@ -102,7 +102,7 @@ const zConsumer = object({
  * structural type without pulling zod into the identity package. Keep in
  * sync with `Capability` / `SignedCapability` there.
  *
- * A capability is now a flat object (its fields) plus a `$linkrpcSignature`
+ * A capability is now a flat object (its fields) plus a `$hubrpcSignature`
  * map carrying the issuer's `capability` signature. Delegation links to a
  * single `parentHash` (the parent's `signedHash("capability", ...)`).
  */
@@ -113,7 +113,7 @@ const zSignedCapability = object({
     expiresAtMs: optional(number()),
     parentHash: optional(string()),
     nonce: string(),
-    $linkrpcSignature: object({
+    $hubrpcSignature: object({
         capability: optional(object({ keyId: string(), sig: string() })),
         call: optional(object({ keyId: string(), sig: string() })),
     }),
@@ -406,7 +406,7 @@ export const hubAccessInterface = defineInterface(
          *     when the consumer says "give me SOME service that does X".
          *   - `requestAccess` is verbatim. Use when the consumer says
          *     "give me exactly these attenuations". Especially useful for
-         *     reflection (`linkrpc.directory::list` on any service) and
+         *     reflection (`hubrpc.directory::list` on any service) and
          *     for on-demand per-method grants from an explorer-style UI.
          *
          * The user prompt shows the exact `Capability` the hub will sign
@@ -531,7 +531,7 @@ const zCurrentEntry = discriminatedUnion('status', [
  *
  * Where `hubAccess` is the imperative, just-in-time door a consumer *calls* (and
  * the hub serves at the connection root), `hubAccessManifest` is **served by the
- * participant** under its own serviceId, so it appears in `linkrpc.directory::list`
+ * participant** under its own serviceId, so it appears in `hubrpc.directory::list`
  * — its very presence is the request. A participant publishes its DESIRED access
  * entries (keyed by id, like `request`'s `dependencies`); an admin discovers
  * them via the directory, mints capabilities **with its own identity** (a
@@ -543,7 +543,7 @@ const zCurrentEntry = discriminatedUnion('status', [
  *  - `getDesired` / `watchDesired` — the participant's declared needs.
  *  - `getCurrent` / `setCurrent` / `watchCurrent` — the admin-written grants.
  *
- * `watch*` follows the coarse empty-tick convention of `linkrpc.directory::watch`:
+ * `watch*` follows the coarse empty-tick convention of `hubrpc.directory::watch`:
  * a tick means "re-`get` now", keeping the server stateless (no per-item deltas).
  */
 export const hubAccessManifestInterface = defineInterface(
@@ -573,7 +573,7 @@ export const hubAccessManifestInterface = defineInterface(
         /**
          * Coarse change tap on the desired document. Emits an empty tick when
          * `requested` may have changed; the caller re-`getDesired`. Resolves when
-         * the caller cancels. Mirrors `linkrpc.directory::watch`.
+         * the caller cancels. Mirrors `hubrpc.directory::watch`.
          */
         watchDesired: requestType(
             object({}),

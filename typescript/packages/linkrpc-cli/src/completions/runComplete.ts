@@ -18,13 +18,26 @@ import { setupSigning } from '@hediet/linkrpc-client';
 import { parsePrincipalSpec } from '@hediet/linkrpc-client';
 import { connect } from '@hediet/linkrpc-client';
 import { isHubEndpoint } from '@hediet/linkrpc/node';
-import { resolveEndpoint, type ResolvedEndpoint } from '@hediet/linkrpc-client';
+import { type ResolvedEndpoint } from '@hediet/linkrpc-client';
 import { complete, type CompleteOptions, type Completion } from './complete';
 import { withFileCache } from './cache';
 import { ChannelDirectorySource, type DirectorySource } from './directorySource';
 import { parseLine } from './parse';
 import { resolveSlot, type Slot } from './resolve';
-import { COMMAND_TREE, type SlotType } from './tree';
+import {
+    HUB_COMMAND_TREE,
+    RPC_COMMAND_TREE,
+    type SlotType,
+} from './tree';
+import { ContextStore, type ContextValues } from '../contexts';
+import {
+    type CliProfile,
+    resolveInvocationContext,
+    resolveInvocationEndpoint,
+} from '../invocationContext';
+import { loadStaticHubSchema, type StaticHubSchema } from '../staticHubSchema';
+import { withStaticHubReflection } from '../commands/staticHubReflection';
+import { normalizeCliExecutable } from '../cliInvocation';
 
 /** Slot types that require talking to a hub. Anything else is static-only. */
 const DYNAMIC_SLOT_TYPES: ReadonlySet<SlotType> = new Set([
@@ -78,7 +91,12 @@ export async function completeForLine(
     opts: CompleteForLineOptions,
 ): Promise<CompleteForLineResult> {
     const parsed = parseLine(opts.line, opts.point);
-    const ctx = resolveSlot(parsed, COMMAND_TREE);
+    const executable = normalizeCliExecutable(parsed.tokensBefore[0]?.text);
+    const tree = executable === 'hub' ? HUB_COMMAND_TREE : RPC_COMMAND_TREE;
+    const ctx = resolveSlot(parsed, tree);
+    const profile: CliProfile = executable === 'hub' || ctx.commandPath[0]?.name === 'hub'
+        ? 'hub'
+        : 'rpc';
     const prefix = parsed.currentWordPrefix;
 
     let directory: DirectorySource | undefined = opts.directoryOverride;
@@ -87,6 +105,7 @@ export async function completeForLine(
         const opened = await _openDirectoryFromLine(ctx.seenFlagValues, {
             endpointOverride: opts.endpointOverride,
             env: opts.env,
+            profile,
         });
         directory = opened?.source;
         closeConnection = opened?.close;
@@ -96,6 +115,7 @@ export async function completeForLine(
         const completeOpts: CompleteOptions = {
             line: opts.line,
             point: opts.point,
+            tree,
             ...(directory !== undefined ? { directory } : {}),
         };
         const candidates = await complete(completeOpts);
@@ -126,6 +146,7 @@ interface OpenedDirectory {
 interface OpenDirectoryOptions {
     readonly endpointOverride?: string;
     readonly env?: NodeJS.ProcessEnv;
+    readonly profile: CliProfile;
 }
 
 /**
@@ -140,38 +161,96 @@ async function _openDirectoryFromLine(
     seenFlagValues: ReadonlyMap<string, string | undefined>,
     opts: OpenDirectoryOptions,
 ): Promise<OpenedDirectory | undefined> {
-    const epResult = resolveEndpoint({
-        endpoint: opts.endpointOverride ?? seenFlagValues.get('--endpoint'),
-        endpointCmd: seenFlagValues.get('--endpoint-cmd'),
-        endpointCmdStdio: seenFlagValues.get('--endpoint-cmd-stdio'),
-        endpointToken: seenFlagValues.get('--endpoint-token'),
-        provisionIdentity: seenFlagValues.has('--provision-identity'),
-        provisionIdentitySlot: seenFlagValues.get('--provision-identity-slot'),
-        ...(opts.env !== undefined ? { env: opts.env } : {}),
+    try {
+        return await _openDirectoryFromLineCore(seenFlagValues, opts);
+    } catch {
+        return undefined;
+    }
+}
+
+async function _openDirectoryFromLineCore(
+    seenFlagValues: ReadonlyMap<string, string | undefined>,
+    opts: OpenDirectoryOptions,
+): Promise<OpenedDirectory | undefined> {
+    const invocation = await resolveInvocationContext({
+        profile: opts.profile,
+        store: new ContextStore(),
+        selector: seenFlagValues.get('--context'),
+        cliOverrides: completionContextOverrides(seenFlagValues, opts.endpointOverride),
+        env: opts.env,
+        useEnvironment: seenFlagValues.has('--use-env')
+            ? true
+            : seenFlagValues.has('--no-use-env')
+                ? false
+                : undefined,
     });
-    if (epResult.error || !epResult.endpoint) return undefined;
-    const endpoint = epResult.endpoint;
+    let endpoint: ResolvedEndpoint | undefined;
+    try {
+        endpoint = resolveInvocationEndpoint(invocation);
+    } catch {
+        return undefined;
+    }
+    if (endpoint === undefined) return undefined;
 
     // Never spawn a child process during completion (cmd / cmd-stdio / cmd-env).
-    if (endpoint.kind !== 'socket' && endpoint.kind !== 'ws') return undefined;
+    if (
+        endpoint.kind !== 'socket'
+        && endpoint.kind !== 'ws'
+        && endpoint.kind !== 'ws-no-init'
+    ) return undefined;
 
     const opened = await _connectWithDeadline(endpoint, 800);
     if (!opened) return undefined;
-    try {
-        const principalSpec = parsePrincipalSpec(seenFlagValues.get('--principal'));
-        await _withDeadline(
-            setupSigning(opened.channel, opened.signing, principalSpec, {
-                negotiateHubCaps: isHubEndpoint(endpoint),
-            }),
-            800,
-        );
-    } catch {
-        opened.close();
-        return undefined;
+    const isRaw = endpoint.kind === 'ws-no-init'
+        || (endpoint.kind === 'socket' && endpoint.brokerMode === 'raw');
+    if (opts.profile === 'hub' && !isRaw) {
+        try {
+            const principalSpec = parsePrincipalSpec(invocation.values.principal);
+            await _withDeadline(
+                setupSigning(opened.channel, opened.signing, principalSpec, {
+                    negotiateHubCaps: isHubEndpoint(endpoint),
+                }),
+                800,
+            );
+        } catch {
+            opened.close();
+            return undefined;
+        }
     }
-    const live = new ChannelDirectorySource(opened.channel);
-    const cached = withFileCache(live, _endpointCacheKey(endpoint));
+    const staticSchema = invocation.values.schema === undefined
+        ? undefined
+        : await loadStaticHubSchema(invocation.values.schema);
+    const channel = staticSchema === undefined
+        ? opened.channel
+        : withStaticHubReflection(opened.channel, staticSchema);
+    const live = new ChannelDirectorySource(channel);
+    const cached = withFileCache(live, _endpointCacheKey(endpoint, staticSchema));
     return { source: cached, close: () => opened.close() };
+}
+
+function completionContextOverrides(
+    seen: ReadonlyMap<string, string | undefined>,
+    endpointOverride: string | undefined,
+): ContextValues {
+    const endpoint = endpointOverride ?? seen.get('--endpoint');
+    return {
+        ...(endpoint !== undefined ? { endpoint } : {}),
+        ...(seen.get('--endpoint-cmd') !== undefined
+            ? { endpointCmd: seen.get('--endpoint-cmd') }
+            : {}),
+        ...(seen.get('--endpoint-cmd-stdio') !== undefined
+            ? { endpointCmdStdio: seen.get('--endpoint-cmd-stdio') }
+            : {}),
+        ...(endpointOverride === undefined && seen.get('--endpoint-token') !== undefined
+            ? { endpointToken: seen.get('--endpoint-token') }
+            : {}),
+        ...(seen.has('--provision-identity') ? { provisionIdentity: true } : {}),
+        ...(seen.get('--provision-identity-slot') !== undefined
+            ? { provisionIdentitySlot: seen.get('--provision-identity-slot') }
+            : {}),
+        ...(seen.get('--principal') !== undefined ? { principal: seen.get('--principal') } : {}),
+        ...(seen.get('--schema') !== undefined ? { schema: seen.get('--schema') } : {}),
+    };
 }
 
 /**
@@ -218,8 +297,18 @@ async function _withDeadline<T>(p: Promise<T>, deadlineMs: number): Promise<T> {
     }
 }
 
-function _endpointCacheKey(endpoint: ResolvedEndpoint): string {
-    if (endpoint.kind === 'socket') return `socket:${endpoint.path}`;
-    if (endpoint.kind === 'ws') return `ws:${endpoint.url}`;
-    return `${endpoint.kind}:?`;
+function _endpointCacheKey(
+    endpoint: ResolvedEndpoint,
+    staticSchema: StaticHubSchema | undefined,
+): string {
+    const endpointKey = endpoint.kind === 'socket'
+        ? `socket:${endpoint.path}`
+        : endpoint.kind === 'ws'
+            ? `ws:${endpoint.url}`
+            : endpoint.kind === 'ws-no-init'
+                ? `ws-no-init:${endpoint.url}`
+                : `${endpoint.kind}:?`;
+    return staticSchema === undefined
+        ? endpointKey
+        : `${endpointKey}|schema:${JSON.stringify(staticSchema)}`;
 }

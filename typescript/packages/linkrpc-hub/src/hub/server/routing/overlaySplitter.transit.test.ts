@@ -192,7 +192,7 @@ describe('OverlaySplitter transit chaining', () => {
         const inspectionRequest: JsonRpcRequest = {
             jsonrpc: '2.0',
             id: 42,
-            method: 'hub::linkrpc.topology::getGraph',
+            method: 'hub::hubrpc.topology::getGraph',
             params: {},
         };
         setLocalMessageContext(inspectionRequest, { inspection: true });
@@ -203,7 +203,7 @@ describe('OverlaySplitter transit chaining', () => {
 
         expect(transits).toEqual([]);
 
-        const fake = participant.request('hub::linkrpc.topology::getGraph', {});
+        const fake = participant.request('hub::hubrpc.topology::getGraph', {});
         await waitFor(() => uplink.inbox.length === 2);
         uplink.respond(uplink.lastRequest(), { nodes: [], links: [], services: [] });
         await fake;

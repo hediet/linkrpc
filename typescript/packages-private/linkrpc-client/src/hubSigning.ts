@@ -28,11 +28,11 @@ const CAP_FRESHNESS_MARGIN_MS = 2000;
  * service id. See {@link requestReflectionAccess}.
  */
 const REFLECTION_INTERFACE_IDS = [
-    'linkrpc.directory',
-    'linkrpc.schemas',
-    'linkrpc.defaults',
+    'hubrpc.directory',
+    'hubrpc.schemas',
+    'hubrpc.defaults',
 ] as const;
-const TOPOLOGY_INTERFACE_ID = 'linkrpc.topology';
+const TOPOLOGY_INTERFACE_ID = 'hubrpc.topology';
 
 type HubCapProviderResult = Pick<CapProviderResult, 'capabilities' | 'interfaceHash' | 'signedAtMs'>;
 
@@ -178,7 +178,7 @@ export async function setupSigning(
 
 /**
  * Up-front, explicit batched request for reflection access across *every*
- * service: `linkrpc.directory` / `linkrpc.schemas` / `linkrpc.defaults` with a
+ * service: `hubrpc.directory` / `hubrpc.schemas` / `hubrpc.defaults` with a
  * wildcard `serviceId` (`{ prefix: '' }`). One consent prompt covers the whole
  * bus, so `ls` / `schema` / `defaults` / the TUI walk stop re-prompting per
  * service id.
@@ -241,7 +241,7 @@ export async function requestTopologyAccess(
         : sourceServiceIds.map((serviceId) => ({ exact: serviceId } as const));
     const needsDirectory = sourceServiceIds === undefined;
     const alreadyGranted = (!needsDirectory
-        || _hasInterfaceAccess(session, 'linkrpc.directory', { prefix: '' }))
+        || _hasInterfaceAccess(session, 'hubrpc.directory', { prefix: '' }))
         && targets.every((target) =>
             _hasInterfaceAccess(session, TOPOLOGY_INTERFACE_ID, target));
     if (alreadyGranted) return 'granted';
@@ -251,7 +251,7 @@ export async function requestTopologyAccess(
         permissions.push({
             target: {
                 serviceId: { prefix: '' },
-                interfaceId: { exact: 'linkrpc.directory' },
+                interfaceId: { exact: 'hubrpc.directory' },
                 members: [{ prefix: '' }],
             },
             canInvoke: true,

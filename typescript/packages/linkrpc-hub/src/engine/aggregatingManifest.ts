@@ -73,7 +73,7 @@ export interface AggregatingManifestOptions {
     readonly resolveSources: () => Promise<readonly AggregatorSource[]> | readonly AggregatorSource[];
     /**
      * Optional: subscribe to "the *set* of sources may have changed" — e.g. the
-     * hub's `linkrpc.directory::watch`, which ticks when a service appears or
+     * hub's `hubrpc.directory::watch`, which ticks when a service appears or
      * disappears. Each tick re-emits a change (so a watching approver re-`getDesired`,
      * which re-runs {@link resolveSources} and discovers the new/removed source).
      * Without it, a brand-new manifest is only noticed when some *already-known*

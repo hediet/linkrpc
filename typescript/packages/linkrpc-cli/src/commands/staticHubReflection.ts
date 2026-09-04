@@ -2,17 +2,19 @@ import {
     ErrorCode,
     type LinkRpcInterfaceSchema,
     type IncomingCall,
+    type IRequestSender,
     type JsonValue,
     type Result,
+    RpcError,
 } from '@hediet/linkrpc';
 import type {
     StaticHubSchema,
     StaticInterfaceReference,
 } from '../staticHubSchema';
 
-const DIRECTORY_INTERFACE_ID = 'linkrpc.directory';
-const SCHEMAS_INTERFACE_ID = 'linkrpc.schemas';
-const DEFAULTS_INTERFACE_ID = 'linkrpc.defaults';
+const DIRECTORY_INTERFACE_ID = 'hubrpc.directory';
+const SCHEMAS_INTERFACE_ID = 'hubrpc.schemas';
+const DEFAULTS_INTERFACE_ID = 'hubrpc.defaults';
 
 const DIRECTORY_LIST_METHOD = `${DIRECTORY_INTERFACE_ID}::list`;
 const DIRECTORY_WATCH_METHOD = `${DIRECTORY_INTERFACE_ID}::watch`;
@@ -29,6 +31,7 @@ export class StaticHubReflection {
     private readonly _directory: readonly DirectoryItem[];
     private readonly _schemasByKey = new Map<string, LinkRpcInterfaceSchema>();
     private readonly _activeHashesById = new Map<string, Set<string>>();
+    private readonly _hashesByServiceInterface = new Map<string, Set<string>>();
 
     constructor(private readonly _schema: StaticHubSchema) {
         this._directory = _schema.services.flatMap((service) =>
@@ -44,6 +47,10 @@ export class StaticHubReflection {
             const hashes = this._activeHashesById.get(item.interfaceId) ?? new Set<string>();
             hashes.add(item.interfaceHash);
             this._activeHashesById.set(item.interfaceId, hashes);
+            const serviceKey = interfaceKey(item.serviceId, item.interfaceId);
+            const serviceHashes = this._hashesByServiceInterface.get(serviceKey) ?? new Set<string>();
+            serviceHashes.add(item.interfaceHash);
+            this._hashesByServiceInterface.set(serviceKey, serviceHashes);
         }
         if (_schema.defaultInterface !== undefined) {
             const ref = _schema.defaultInterface;
@@ -54,16 +61,25 @@ export class StaticHubReflection {
     }
 
     public tryHandleRequest(call: IncomingCall): Promise<Result> | undefined {
-        if (!isReflectionMethod(call.method)) {
+        return this.tryHandle(call.method, call.params, call.signal);
+    }
+
+    public tryHandle(
+        method: string,
+        params: JsonValue | undefined,
+        signal: AbortSignal,
+    ): Promise<Result> | undefined {
+        const reflectionCall = parseReflectionMethod(method);
+        if (reflectionCall === undefined) {
             return undefined;
         }
-        switch (call.method) {
+        switch (reflectionCall.method) {
             case DIRECTORY_LIST_METHOD:
-                return Promise.resolve(this._listDirectory(call.params));
+                return Promise.resolve(this._listDirectory(params));
             case DIRECTORY_WATCH_METHOD:
-                return this._watchDirectory(call);
+                return this._watchDirectory(params, signal);
             case SCHEMAS_GET_METHOD:
-                return Promise.resolve(this._getSchema(call.params));
+                return Promise.resolve(this._getSchema(params, reflectionCall.serviceId));
             case DEFAULTS_GET_METHOD:
                 return Promise.resolve({
                     result: this._schema.defaultInterface === undefined
@@ -74,7 +90,7 @@ export class StaticHubReflection {
                         },
                 });
             default:
-                return Promise.resolve(methodNotFound(call.method));
+                return Promise.resolve(methodNotFound(method));
         }
     }
 
@@ -102,20 +118,20 @@ export class StaticHubReflection {
         };
     }
 
-    private _watchDirectory(call: IncomingCall): Promise<Result> {
-        const parsed = parseDirectoryParams(call.params, false);
+    private _watchDirectory(params: JsonValue | undefined, signal: AbortSignal): Promise<Result> {
+        const parsed = parseDirectoryParams(params, false);
         if ('error' in parsed) return Promise.resolve(parsed);
         return new Promise<Result>((resolve) => {
             const done = (): void => resolve({ result: {} });
-            if (call.signal.aborted) {
+            if (signal.aborted) {
                 done();
                 return;
             }
-            call.signal.addEventListener('abort', done, { once: true });
+            signal.addEventListener('abort', done, { once: true });
         });
     }
 
-    private _getSchema(params: JsonValue | undefined): Result {
+    private _getSchema(params: JsonValue | undefined, serviceId: string | undefined): Result {
         if (!isRecord(params)) {
             return invalidParams('schemas.get params must be an object');
         }
@@ -130,7 +146,12 @@ export class StaticHubReflection {
 
         let resolvedHash = hash;
         if (resolvedHash === undefined) {
-            const active = [...(this._activeHashesById.get(interfaceId) ?? [])];
+            const active = serviceId === undefined
+                ? [...(this._activeHashesById.get(interfaceId) ?? [])]
+                : [
+                    ...(this._hashesByServiceInterface.get(interfaceKey(serviceId, interfaceId))
+                        ?? []),
+                ];
             if (active.length !== 1) {
                 return {
                     error: {
@@ -158,6 +179,50 @@ export class StaticHubReflection {
         }
         return { result: { schema } as unknown as JsonValue };
     }
+}
+
+export function withStaticHubReflection<TContext>(
+    sender: IRequestSender<TContext>,
+    schema: StaticHubSchema,
+): IRequestSender<TContext> {
+    const reflection = new StaticHubReflection(schema);
+    const handle = (
+        method: string,
+        params: JsonValue | undefined,
+        signal: AbortSignal,
+    ): Promise<JsonValue> | undefined => {
+        const result = reflection.tryHandle(method, params, signal);
+        return result?.then(unwrapResult);
+    };
+    return {
+        sendRequest: (method, params, opts) =>
+            handle(method, params, new AbortController().signal)
+            ?? sender.sendRequest(method, params, opts),
+        sendNotification: (method, params, opts) =>
+            sender.sendNotification(method, params, opts),
+        sendRequestWithStream: (method, params, opts) => {
+            const controller = new AbortController();
+            const result = handle(method, params, controller.signal);
+            if (result === undefined) {
+                return sender.sendRequestWithStream(method, params, opts);
+            }
+            return {
+                result,
+                send: () => { },
+                cancel: () => controller.abort(),
+                dispose: () => controller.abort(),
+                ping: () => Promise.resolve(),
+            };
+        },
+        close: () => sender.close(),
+    };
+}
+
+function unwrapResult(result: Result): JsonValue {
+    if ('error' in result) {
+        throw new RpcError(result.error.message, result.error.code, result.error.data);
+    }
+    return result.result;
 }
 
 function parseDirectoryParams(
@@ -208,10 +273,26 @@ function parseDirectoryParams(
     return result;
 }
 
-function isReflectionMethod(method: string): boolean {
-    return method.startsWith(`${DIRECTORY_INTERFACE_ID}::`)
-        || method.startsWith(`${SCHEMAS_INTERFACE_ID}::`)
-        || method.startsWith(`${DEFAULTS_INTERFACE_ID}::`);
+function parseReflectionMethod(
+    method: string,
+): { readonly method: string; readonly serviceId: string | undefined; } | undefined {
+    const parts = method.split('::');
+    const candidate = parts.length === 2
+        ? method
+        : parts.length === 3
+            ? `${parts[1]}::${parts[2]}`
+            : undefined;
+    if (
+        candidate?.startsWith(`${DIRECTORY_INTERFACE_ID}::`)
+        || candidate?.startsWith(`${SCHEMAS_INTERFACE_ID}::`)
+        || candidate?.startsWith(`${DEFAULTS_INTERFACE_ID}::`)
+    ) {
+        return {
+            method: candidate,
+            serviceId: parts.length === 3 ? parts[0] : undefined,
+        };
+    }
+    return undefined;
 }
 
 function methodNotFound(method: string): Result {

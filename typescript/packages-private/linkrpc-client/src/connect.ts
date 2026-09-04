@@ -195,7 +195,7 @@ export async function connectViaLocalHub(opts: {
 /**
  * Connect to a spawned `cmd-env` child through a {@link startLocalOverlay}
  * RootOverlay instead of a full local hub. Root-form calls (`identity::*`,
- * `hubGrantedServiceId::*`, `linkrpc.directory`, `hubAccess`) are served locally;
+ * `hubGrantedServiceId::*`, `hubrpc.directory`, `hubAccess`) are served locally;
  * every prefixed request/response is relayed over the returned connection's
  * channel. Used by `tunnel --target-endpoint-cmd`: the tunnel forwards each
  * claimed request onto this channel and the overlay delivers it to the child —

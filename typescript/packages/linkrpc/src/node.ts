@@ -40,6 +40,7 @@ export {
     type ConnectNdjsonOptions,
     connectNdjson,
     INITIALIZE_METHOD,
+    LINKRPC_INITIALIZE_METHOD_ALIAS,
     INITIALIZE_PROTOCOL_VERSION,
     type InitializeParams,
     type InitializeResult,

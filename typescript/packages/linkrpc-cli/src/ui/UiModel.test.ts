@@ -86,23 +86,23 @@ describe("UiModel", () => {
     it("keeps reachable services and warns about a broken service directory", async () => {
         const channel: CliChannel = {
             sendRequest: async (method) => {
-                if (method === "linkrpc.directory::list") {
+                if (method === "hubrpc.directory::list") {
                     return {
                         items: [
                             {
                                 serviceId: "healthy",
-                                interfaceId: "linkrpc.directory",
+                                interfaceId: "hubrpc.directory",
                                 interfaceHash: "healthy-directory",
                             },
                             {
                                 serviceId: "broken",
-                                interfaceId: "linkrpc.directory",
+                                interfaceId: "hubrpc.directory",
                                 interfaceHash: "broken-directory",
                             },
                         ],
                     };
                 }
-                if (method === "healthy::linkrpc.directory::list") {
+                if (method === "healthy::hubrpc.directory::list") {
                     return {
                         items: [{
                             serviceId: "healthy",
@@ -111,10 +111,10 @@ describe("UiModel", () => {
                         }],
                     };
                 }
-                if (method === "broken::linkrpc.directory::list") {
-                    throw new Error("Method not found: broken::linkrpc.directory::list");
+                if (method === "broken::hubrpc.directory::list") {
+                    throw new Error("Method not found: broken::hubrpc.directory::list");
                 }
-                if (method === "linkrpc.defaults::get") {
+                if (method === "hubrpc.defaults::get") {
                     return {};
                 }
                 throw new Error(`Unexpected request: ${method}`);
@@ -135,8 +135,8 @@ describe("UiModel", () => {
                 interfaceId: "test.healthy",
             }));
             expect(model.discoveryWarnings.get()).toEqual([
-                'Service "broken" does not offer a usable linkrpc.directory::list: '
-                    + "Method not found: broken::linkrpc.directory::list",
+                'Service "broken" does not offer a usable hubrpc.directory::list: '
+                    + "Method not found: broken::hubrpc.directory::list",
             ]);
         } finally {
             model.dispose();
@@ -146,7 +146,7 @@ describe("UiModel", () => {
     it("keeps directory services when the root does not offer defaults", async () => {
         const channel: CliChannel = {
             sendRequest: async (method) => {
-                if (method === "linkrpc.directory::list") {
+                if (method === "hubrpc.directory::list") {
                     return {
                         items: [{
                             serviceId: "healthy",
@@ -155,8 +155,8 @@ describe("UiModel", () => {
                         }],
                     };
                 }
-                if (method === "linkrpc.defaults::get") {
-                    throw new Error("Method not found: linkrpc.defaults::get");
+                if (method === "hubrpc.defaults::get") {
+                    throw new Error("Method not found: hubrpc.defaults::get");
                 }
                 throw new Error(`Unexpected request: ${method}`);
             },
@@ -176,8 +176,8 @@ describe("UiModel", () => {
                 interfaceId: "test.healthy",
             }));
             expect(model.discoveryWarnings.get()).toEqual([
-                "The root service does not offer linkrpc.defaults::get: "
-                    + "Method not found: linkrpc.defaults::get",
+                "The root service does not offer hubrpc.defaults::get: "
+                    + "Method not found: hubrpc.defaults::get",
             ]);
         } finally {
             model.dispose();
@@ -207,11 +207,11 @@ describe("UiModel", () => {
         const sentMethods: string[] = [];
         const channel: CliChannel = {
             sendRequest: async (method) => {
-                if (method === "linkrpc.directory::list") return { items: [] };
-                if (method === "linkrpc.defaults::get") {
+                if (method === "hubrpc.directory::list") return { items: [] };
+                if (method === "hubrpc.defaults::get") {
                     return { interfaceId: schema.id, interfaceHash: schema.hash };
                 }
-                if (method === "linkrpc.schemas::get") return { schema };
+                if (method === "hubrpc.schemas::get") return { schema };
                 throw new Error(`Unexpected request: ${method}`);
             },
             sendNotification: async () => { },
@@ -449,7 +449,7 @@ describe("UiModel", () => {
         try {
             const data = await waitFor(() => model.servicesPromise.promiseResult.get());
             // Sanity — the fixture exposes more than one (interface) row, since
-            // reflection auto-registers linkrpc.defaults / .directory / .schemas.
+            // reflection auto-registers hubrpc.defaults / .directory / .schemas.
             expect((data.data ?? []).length).toBeGreaterThan(1);
 
             model.moveServiceCursor(1); // -1 + 1 = 0 → first row

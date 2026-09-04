@@ -382,7 +382,7 @@ describe('Hub routing', () => {
 
 describe('Hub.queryParticipantRoots', () => {
     /**
-     * Attach a participant link that answers a root-form `linkrpc.directory::list`
+     * Attach a participant link that answers a root-form `hubrpc.directory::list`
      * with `items` (or replies with an error when `items === 'throw'`). Claims
      * every prefix in `prefixes` on the *same* link.
      */
@@ -395,7 +395,7 @@ describe('Hub.queryParticipantRoots', () => {
         for (const p of prefixes) hub.claimPrefix(pair.a, p);
         pair.b.setListener((m) => {
             const req = m as JsonRpcRequest;
-            if (req.method !== 'linkrpc.directory::list' || !('id' in req)) return;
+            if (req.method !== 'hubrpc.directory::list' || !('id' in req)) return;
             if (items === 'throw') {
                 void pair.b.send({
                     jsonrpc: '2.0', id: req.id,
@@ -410,11 +410,11 @@ describe('Hub.queryParticipantRoots', () => {
     it('fans a root-form request to each participant, excluding a prefix and the uplink', async () => {
         const hub = new Hub();
         // The hub's own services prefix — excluded from the fan-out.
-        attachRootDir(hub, ['hub'], [{ serviceId: 'hub', interfaceId: 'linkrpc.directory' }]);
-        attachRootDir(hub, ['calc'], [{ serviceId: 'calc', interfaceId: 'linkrpc.directory' }]);
-        attachRootDir(hub, ['fs'], [{ serviceId: 'fs', interfaceId: 'linkrpc.directory' }]);
+        attachRootDir(hub, ['hub'], [{ serviceId: 'hub', interfaceId: 'hubrpc.directory' }]);
+        attachRootDir(hub, ['calc'], [{ serviceId: 'calc', interfaceId: 'hubrpc.directory' }]);
+        attachRootDir(hub, ['fs'], [{ serviceId: 'fs', interfaceId: 'hubrpc.directory' }]);
 
-        const results = await hub.queryParticipantRoots('linkrpc.directory::list', {}, 'hub');
+        const results = await hub.queryParticipantRoots('hubrpc.directory::list', {}, 'hub');
         const sids = results
             .flatMap((r) => (r as { items: { serviceId: string; }[]; }).items)
             .map((i) => i.serviceId)
@@ -425,10 +425,10 @@ describe('Hub.queryParticipantRoots', () => {
 
     it('queries a multi-prefix participant once and tolerates a failing participant', async () => {
         const hub = new Hub();
-        attachRootDir(hub, ['a', 'a/b'], [{ serviceId: 'a', interfaceId: 'linkrpc.directory' }]);
+        attachRootDir(hub, ['a', 'a/b'], [{ serviceId: 'a', interfaceId: 'hubrpc.directory' }]);
         attachRootDir(hub, ['boom'], 'throw');
 
-        const results = await hub.queryParticipantRoots('linkrpc.directory::list', {});
+        const results = await hub.queryParticipantRoots('hubrpc.directory::list', {});
         // The failing participant is dropped; the multi-prefix one answers once.
         expect(results).toHaveLength(1);
         expect((results[0] as { items: { serviceId: string; }[]; }).items[0].serviceId).toBe('a');
@@ -442,7 +442,7 @@ describe('Hub.queryParticipantRoots', () => {
         let liveWatchId: RequestId | undefined;
         pair.b.setListener((message) => {
             const request = message as JsonRpcRequest;
-            if (request.method !== 'linkrpc.directory::watch' || !('id' in request)) return;
+            if (request.method !== 'hubrpc.directory::watch' || !('id' in request)) return;
             watchAttempts++;
             if (watchAttempts === 1) {
                 void pair.b.send({
@@ -456,7 +456,7 @@ describe('Hub.queryParticipantRoots', () => {
         });
         let ticks = 0;
         const watch = hub.watchParticipantRoots(
-            'linkrpc.directory::watch',
+            'hubrpc.directory::watch',
             {},
             () => ticks++,
         );
@@ -486,7 +486,7 @@ describe('Hub.queryParticipantRoots', () => {
         let callerPongs = 0;
         const controls: StreamSendParams[] = [];
         pair.b.setListener((message) => {
-            if (isRequest(message) && message.method === 'linkrpc.directory::watch') {
+            if (isRequest(message) && message.method === 'hubrpc.directory::watch') {
                 watchId = message.id;
                 return;
             }
@@ -518,7 +518,7 @@ describe('Hub.queryParticipantRoots', () => {
         });
         let ticks = 0;
         const watch = hub.watchParticipantRoots(
-            'linkrpc.directory::watch',
+            'hubrpc.directory::watch',
             {},
             () => ticks++,
         );
@@ -556,7 +556,7 @@ describe('Hub.queryParticipantRoots', () => {
         let watchAttempts = 0;
         const transport: IMessageTransport = {
             send: async (message) => {
-                if (isRequest(message) && message.method === 'linkrpc.directory::watch') {
+                if (isRequest(message) && message.method === 'hubrpc.directory::watch') {
                     watchAttempts++;
                     return;
                 }
@@ -569,7 +569,7 @@ describe('Hub.queryParticipantRoots', () => {
         };
         hub.claimPrefix(transport, 'unstable');
         const watch = hub.watchParticipantRoots(
-            'linkrpc.directory::watch',
+            'hubrpc.directory::watch',
             {},
             () => {},
         );

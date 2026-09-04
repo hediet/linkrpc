@@ -223,9 +223,9 @@ function _isWebSocketEndpoint(endpoint: string): boolean {
  * Open the underlying transport for {@link openHubChannel}, picking the
  * scheme from the endpoint:
  *  - `ws://` / `wss://` → WebSocket; the token is presented via the
- *    `linkrpc::initialize` handshake (browsers cannot set request headers).
+ *    `hubrpc::initialize` handshake (browsers cannot set request headers).
  *  - anything else → named pipe / UDS; the token is presented via the
- *    `linkrpc::initialize` handshake the socket server requires.
+ *    `hubrpc::initialize` handshake the socket server requires.
  *
  * `onClose` fires once when the peer ends the transport.
  */
@@ -428,15 +428,15 @@ function _defaultStoreDir(): string {
     const home = os.homedir();
     if (process.platform === 'win32') {
         const appdata = process.env.APPDATA;
-        if (appdata) return path.join(appdata, 'linkrpc', 'identities');
-        return path.join(home, 'AppData', 'Roaming', 'linkrpc', 'identities');
+        if (appdata) return path.join(appdata, 'hubrpc', 'identities');
+        return path.join(home, 'AppData', 'Roaming', 'hubrpc', 'identities');
     }
     if (process.platform === 'darwin') {
-        return path.join(home, 'Library', 'Application Support', 'linkrpc', 'identities');
+        return path.join(home, 'Library', 'Application Support', 'hubrpc', 'identities');
     }
     const xdg = process.env.XDG_CONFIG_HOME;
-    if (xdg) return path.join(xdg, 'linkrpc', 'identities');
-    return path.join(home, '.config', 'linkrpc', 'identities');
+    if (xdg) return path.join(xdg, 'hubrpc', 'identities');
+    return path.join(home, '.config', 'hubrpc', 'identities');
 }
 
 function _slotName(id: string): string {

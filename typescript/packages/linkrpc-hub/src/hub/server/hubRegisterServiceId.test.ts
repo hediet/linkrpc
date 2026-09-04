@@ -46,7 +46,7 @@ describe('hubRegisterServiceId (in-process service)', () => {
             .service(hubServiceId)
             .get(directoryInterface)
             .list({});
-        expect(items.some((it) => it.serviceId === 'vscode' && it.interfaceId === 'linkrpc.directory')).toBe(true);
+        expect(items.some((it) => it.serviceId === 'vscode' && it.interfaceId === 'hubrpc.directory')).toBe(true);
         expect(items.some((it) => it.serviceId === 'vscode' && it.interfaceId === 'math')).toBe(false);
 
         // The breadth-first walk recurses into the referral and finds the leaf.

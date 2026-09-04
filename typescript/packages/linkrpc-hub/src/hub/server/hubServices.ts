@@ -155,8 +155,8 @@ async function runTrafficWatch(
 }
 
 /**
- * Register the hub's **reflection** surface — `linkrpc.directory::list` /
- * `linkrpc.schemas::get` — on `connection`, mounted under `hubServiceId`.
+ * Register the hub's **reflection** surface — `hubrpc.directory::list` /
+ * `hubrpc.schemas::get` — on `connection`, mounted under `hubServiceId`.
  *
  * This is the always-on half of {@link createHubServiceInterfaces}: the
  * destination every {@link RootOverlay} directory *refers* world-view queries
@@ -220,9 +220,9 @@ function registerHubReflection(
             }
 
             // Gather each connected participant's self-listing from its ROOT
-            // directory (`H·root → P`): one root-form `linkrpc.directory::list`
-            // per participant link, filtered to `linkrpc.directory` rows so we
-            // surface only its `<serviceId>::linkrpc.directory` referrals, never
+            // directory (`H·root → P`): one root-form `hubrpc.directory::list`
+            // per participant link, filtered to `hubrpc.directory` rows so we
+            // surface only its `<serviceId>::hubrpc.directory` referrals, never
             // its leaves. Root services are never forwarded and never gated, so
             // this needs no signing or capabilities. Consumers recurse into the
             // referrals via `walkHubDetailed`; transitive root-node-id

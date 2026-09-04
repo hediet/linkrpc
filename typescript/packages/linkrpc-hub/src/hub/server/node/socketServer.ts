@@ -15,14 +15,14 @@ import type {
  * A {@link Transport} over a Node socket that still exposes the underlying
  * {@link net.Socket}. Provenance providers (peercred, etc.) read `socket`;
  * the hub core never does. Framing is newline-delimited JSON, and the
- * connection has already completed the `linkrpc::initialize` handshake.
+ * connection has already completed the `hubrpc::initialize` handshake.
  */
 export class NodeSocketTransport implements Transport {
     private readonly _closeHandlers: (() => void)[] = [];
     private _closed = false;
 
     /**
-     * Token presented by the peer in the `linkrpc::initialize` handshake. When
+     * Token presented by the peer in the `hubrpc::initialize` handshake. When
      * the server was started with {@link SocketServerOptions.isTokenAccepted}
      * the token has already been validated (the connection would otherwise have
      * been dropped); a {@link ConnectionProvenanceProvider} can read it to
@@ -80,7 +80,7 @@ export interface SocketServerOptions {
      */
     readonly endpoint?: string;
     /**
-     * Validate the token presented in the client's `linkrpc::initialize`
+     * Validate the token presented in the client's `hubrpc::initialize`
      * handshake. Resolve `true` to admit the connection, `false` to reject it
      * (the socket is dropped before it reaches the connection handler). Called
      * live on every connection, so a dynamic allow-list (e.g. one-shot run
@@ -95,7 +95,7 @@ export interface SocketServerOptions {
 
 /**
  * A hub-agnostic {@link ITransportServer} over a named pipe / UDS. It listens,
- * accepts, runs the `linkrpc::initialize` handshake (authentication + protocol
+ * accepts, runs the `hubrpc::initialize` handshake (authentication + protocol
  * negotiation), frames each socket as a {@link NodeSocketTransport}, and hands
  * it to the connection handler — no hub coupling. Compose
  * attestation/identity on top via `withProvenance` and
@@ -169,7 +169,7 @@ export class SocketServer implements ITransportServer<NodeSocketTransport> {
     }
 
     /**
-     * Run the `linkrpc::initialize` handshake on the freshly accepted socket,
+     * Run the `hubrpc::initialize` handshake on the freshly accepted socket,
      * then frame it as a {@link NodeSocketTransport} and hand it to the
      * connection handler. A failed handshake (bad/missing token, wrong first
      * message, or timeout) drops the socket without reaching the handler.

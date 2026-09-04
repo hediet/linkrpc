@@ -6,12 +6,12 @@
  *     params: {
  *         ...userParams,
  *         $hubrpc:           CallMeta,        // signed
- *         $linkrpcSignature:  { call: sig },   // the signature
- *         $linkrpcUnsigned:   { capabilities } // unsigned attachments
+ *         $hubrpcSignature:  { call: sig },   // the signature
+ *         $hubrpcUnsigned:   { capabilities } // unsigned attachments
  *     }
  *
  * The call signature commits to `signingInput("call", paramsObject)` — the
- * params with the two reserved keys (`$linkrpcSignature`, `$linkrpcUnsigned`)
+ * params with the two reserved keys (`$hubrpcSignature`, `$hubrpcUnsigned`)
  * stripped and the `"call"` pad prefixed. This is the same
  * {@link signedHash} the cap-minter uses for `callBind.payloadHash`, so the
  * two can never drift.
@@ -20,7 +20,7 @@
 import type { SignedCapability } from '../protocol/capability';
 import type { JsonValue } from '../protocol/jsonValue';
 import {
-    LINKRPC_UNSIGNED_KEY,
+    HUBRPC_UNSIGNED_KEY,
     type CallMeta,
     type LinkRpcUnsigned,
     type LinkRpcWireParams,
@@ -29,8 +29,8 @@ import {
 } from '../protocol/linkRpcEnvelope';
 import { bytesToBase64Url, type PrincipalId, resolveSigningKey } from '../crypto/cryptoProvider';
 import {
-    LINKRPC_META_KEY,
-    LINKRPC_SIGNATURE_KEY,
+    HUBRPC_META_KEY,
+    HUBRPC_SIGNATURE_KEY,
     type Base64Sha256,
     readSignature,
     signObject,
@@ -39,7 +39,7 @@ import {
 } from './signedObject';
 import type { SigningIdentity } from './identity';
 
-export { LINKRPC_META_KEY, LINKRPC_SIGNATURE_KEY, LINKRPC_UNSIGNED_KEY, type CallMeta };
+export { HUBRPC_META_KEY, HUBRPC_SIGNATURE_KEY, HUBRPC_UNSIGNED_KEY, type CallMeta };
 
 // ---- signing -------------------------------------------------------
 
@@ -60,7 +60,7 @@ export interface SignRpcCallOptions {
 export interface SignedRpcCall {
     /**
      * Wire params for the JSON-RPC request: the user's params merged with
-     * `$hubrpc` (signed meta) and `$linkrpcSignature` (the `call` signature).
+     * `$hubrpc` (signed meta) and `$hubrpcSignature` (the `call` signature).
      * Capabilities are attached separately via {@link attachCapabilities}
      * since they are unsigned authority hints, not part of what the
      * signature commits to.
@@ -74,7 +74,7 @@ export interface SignedRpcCall {
 
 /**
  * Sign a single JSON-RPC call. Produces the wire-form params with the
- * `$hubrpc` (signed meta) and `$linkrpcSignature.call` envelopes attached,
+ * `$hubrpc` (signed meta) and `$hubrpcSignature.call` envelopes attached,
  * plus the call content hash.
  */
 export async function signRpcCall(opts: SignRpcCallOptions): Promise<SignedRpcCall> {
@@ -88,7 +88,7 @@ export async function signRpcCall(opts: SignRpcCallOptions): Promise<SignedRpcCa
         principal: opts.signingIdentity.publicSigningIdentity.principal,
         ...(opts.interfaceHash !== undefined ? { interfaceHash: opts.interfaceHash } : {}),
     };
-    const signedParams = { ...userParams, [LINKRPC_META_KEY]: callMeta };
+    const signedParams = { ...userParams, [HUBRPC_META_KEY]: callMeta };
     const callHash = signedHash("call", signedParams);
     const wireParams = await signObject("call", signedParams, opts.signingIdentity) as LinkRpcWireParams;
     return { wireParams, callMeta, callHash };
@@ -96,7 +96,7 @@ export async function signRpcCall(opts: SignRpcCallOptions): Promise<SignedRpcCa
 
 /**
  * Attach capabilities to a {@link SignedRpcCall.wireParams}. Capabilities
- * ride in `$linkrpcUnsigned.capabilities` — they are NOT part of what the
+ * ride in `$hubrpcUnsigned.capabilities` — they are NOT part of what the
  * signature commits to (which is why this is a separate step). Returns a
  * new wireParams object; the input is not mutated.
  */
@@ -106,9 +106,9 @@ export function attachCapabilities(
 ): LinkRpcWireParams {
     if (capabilities.length === 0) return wireParams;
     const obj = wireParams as unknown as Record<string, unknown>;
-    const existing = obj[LINKRPC_UNSIGNED_KEY] as LinkRpcUnsigned | undefined;
+    const existing = obj[HUBRPC_UNSIGNED_KEY] as LinkRpcUnsigned | undefined;
     const merged: LinkRpcUnsigned = { ...existing, capabilities };
-    return { ...obj, [LINKRPC_UNSIGNED_KEY]: merged } as LinkRpcWireParams;
+    return { ...obj, [HUBRPC_UNSIGNED_KEY]: merged } as LinkRpcWireParams;
 }
 
 // ---- verification --------------------------------------------------
@@ -128,7 +128,7 @@ export interface VerifyRpcCallOptions {
 export type VerifyRpcCallResult =
     | {
         readonly ok: true;
-        /** `undefined` when the call had no signed (`$hubrpc` + `$linkrpcSignature.call`) envelope. */
+        /** `undefined` when the call had no signed (`$hubrpc` + `$hubrpcSignature.call`) envelope. */
         readonly identity:
         | undefined
         | {
@@ -149,13 +149,13 @@ export type VerifyRpcCallResult =
  * capability chains or caveats — that is the hub / authoriser's job.
  *
  * A signed call carries `$hubrpc` (with `principal`) and a `call` signature
- * under `$linkrpcSignature`. The signature is checked against
+ * under `$hubrpcSignature`. The signature is checked against
  * `signingInput("call", wireParams)` (the reserved keys are stripped by the
  * signed-object standard). Bare/unsigned calls return `identity: undefined`.
  */
 export async function verifyRpcCall(opts: VerifyRpcCallOptions): Promise<VerifyRpcCallResult> {
     const { wireParams } = opts;
-    const meta = _extractObject<CallMeta>(wireParams, LINKRPC_META_KEY);
+    const meta = _extractObject<CallMeta>(wireParams, HUBRPC_META_KEY);
     const userParams = stripLinkRpcWireMeta(wireParams);
 
     if (meta === undefined) {
@@ -203,12 +203,12 @@ export async function verifyRpcCall(opts: VerifyRpcCallOptions): Promise<VerifyR
     }
 
     // The signature covers `signingInput("call", wireParams)` — the
-    // standard strips `$linkrpcSignature`/`$linkrpcUnsigned` for us.
+    // standard strips `$hubrpcSignature`/`$hubrpcUnsigned` for us.
     const sigOk = await verifyObject('call', wireParams as object, resolved.publicKey);
     if (!sigOk) return { ok: false, reason: 'bad signature' };
 
     const callHash = signedHash('call', wireParams as object);
-    const unsigned = _extractObject<LinkRpcUnsigned>(wireParams, LINKRPC_UNSIGNED_KEY);
+    const unsigned = _extractObject<LinkRpcUnsigned>(wireParams, HUBRPC_UNSIGNED_KEY);
     const capabilities = Array.isArray(unsigned?.capabilities)
         ? (unsigned!.capabilities as SignedCapability[])
         : [];

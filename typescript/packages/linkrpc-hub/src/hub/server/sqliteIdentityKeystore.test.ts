@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import { createSqliteIdentityKeystore } from "./sqliteIdentityKeystore";
 import type { IdentitySlot } from "./identityKeystore";
 import { crypto, principalForPublicKey } from "@hediet/linkrpc";
@@ -23,6 +24,29 @@ async function isSlot(v: unknown): Promise<IdentitySlot> {
 }
 
 describe("SqliteIdentityKeystore", () => {
+    it("does not load node:sqlite when the module is only imported", () => {
+        const moduleUrl = new URL("./sqliteIdentityKeystore.ts", import.meta.url).href;
+        const env = { ...process.env };
+        delete env.NODE_NO_WARNINGS;
+        delete env.NODE_OPTIONS;
+
+        const result = spawnSync(
+            process.execPath,
+            [
+                "--import",
+                "tsx",
+                "--input-type=module",
+                "--eval",
+                `await import(${JSON.stringify(moduleUrl)})`,
+            ],
+            { encoding: "utf8", env },
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).not.toContain("ExperimentalWarning");
+        expect(result.stderr).not.toContain("node:sqlite");
+    });
+
     it("creates and persists an identity per slot (stable principal)", async () => {
         const ks = memKeystore();
         const slot = ks.slotById("docker/echo");

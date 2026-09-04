@@ -158,7 +158,7 @@ export function publicKeyForKeyId(keyId: KeyId): PublicKey {
 export interface ResolveSigningKeyArgs {
     /** The identity the signature claims to be from. */
     readonly principal: PrincipalId;
-    /** Which key (per `$linkrpcSignature[domain].keyId`) is claimed to have signed. */
+    /** Which key (per `$hubrpcSignature[domain].keyId`) is claimed to have signed. */
     readonly keyId: KeyId;
     /** Presented key-binding records. Unused in Phase 1 (perpetual ids need none). */
     readonly bindings?: Record<KeyId, unknown>;

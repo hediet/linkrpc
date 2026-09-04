@@ -16,6 +16,9 @@ import {
 import type { SigningIdentity } from "./identity";
 
 export {
+    HUBRPC_META_KEY,
+    HUBRPC_SIGNATURE_KEY,
+    HUBRPC_UNSIGNED_KEY,
     LINKRPC_META_KEY,
     LINKRPC_SIGNATURE_KEY,
     LINKRPC_UNSIGNED_KEY,
@@ -32,7 +35,7 @@ export {
 
 /**
  * Sign `obj` in `domain` with `identity`, returning a copy with
- * `$linkrpcSignature[domain]` populated (sibling signatures preserved). The
+ * `$hubrpcSignature[domain]` populated (sibling signatures preserved). The
  * signature commits to {@link signingInput}`(domain, obj)`; the signer's
  * {@link SigningIdentity.publicSigningIdentity}.keyId is stamped alongside it
  * as the (unsigned) routing hint.
@@ -41,12 +44,12 @@ export async function signObject<T extends object>(
     domain: SignDomain,
     obj: T,
     identity: SigningIdentity,
-): Promise<T & { $linkrpcSignature: Record<string, { keyId: string; sig: string }> }> {
+): Promise<T & { $hubrpcSignature: Record<string, { keyId: string; sig: string }> }> {
     const sig = await identity.sign(signingInput(domain, obj));
     return withSignature(obj, domain, {
         keyId: identity.publicSigningIdentity.keyId,
         sig: bytesToBase64Url(sig),
-    }) as T & { $linkrpcSignature: Record<string, { keyId: string; sig: string }> };
+    }) as T & { $hubrpcSignature: Record<string, { keyId: string; sig: string }> };
 }
 
 /**
@@ -71,7 +74,7 @@ export async function verifyObject(
 
 /**
  * Convenience: verify against a signer {@link PrincipalId}. Reads the keyId off
- * `$linkrpcSignature[domain]`, resolves the verifying key via
+ * `$hubrpcSignature[domain]`, resolves the verifying key via
  * {@link resolveSigningKey} (fail-closed on an unresolvable/mismatched key),
  * then checks the signature.
  */

@@ -20,7 +20,7 @@ A node implementing the hub interfaces (08) additionally serves those member con
 
 ## 2. Self-description
 
-A node MUST make its served contract discoverable through reflection (chapters 05 and 09): `linkrpc.directory::list` enumerates its services and their `interfaceHash`es, and `linkrpc.schemas::get` returns each advertised interface schema. A conformance checker discovers the node's contract this way, then verifies each obligation against it.
+A node MUST make its served contract discoverable through reflection (chapters 05 and 09): `hubrpc.directory::list` enumerates its services and their `interfaceHash`es, and `hubrpc.schemas::get` returns each advertised interface schema. A conformance checker discovers the node's contract this way, then verifies each obligation against it.
 
 ## 3. Vector corpus
 
@@ -30,7 +30,7 @@ The interop-critical behavior is byte-level and is pinned by a corpus of vectors
 |---|---|---|
 | `jcs.json` | RFC 8785 canonicalization (key order, number/string encoding, control escapes) | 04 §4, 06 §2 |
 | `method_name.json` | bare/addressed method parsing, ASCII alphabets, separators, and malformed-name rejection | 01 §2 |
-| `framing.json` | NDJSON framing — line splitting, whitespace trim, empty/invalid-line handling, `linkrpc::initialize` handshake | 02 §2 |
+| `framing.json` | NDJSON framing — line splitting, whitespace trim, empty/invalid-line handling, `hubrpc::initialize` handshake | 02 §2 |
 | `normalize.json` | JSON Schema normalization (the canonical form before hashing) | 04 §3.1 |
 | `interface_hash.json` | full interface-hash derivation from a schema | 04 §4 |
 | `pizza_interface.json` | a complete worked interface schema + its hash (the running example) | 04 |
@@ -39,4 +39,4 @@ The interop-critical behavior is byte-level and is pinned by a corpus of vectors
 
 ## 4. Versioning
 
-This document specifies linkrpc **v1**. The signing domain value (`linkrpc-sig/v1/<domain>`) and the reserved key names carry the version. A future major version changes the domain value and is therefore cryptographically non-interoperable with v1 by construction, never by accident.
+This document specifies linkrpc **v1**. The signing domain value (`hubrpc-sig/v1/<domain>`) and the reserved key names carry the version. A future major version changes the domain value and is therefore cryptographically non-interoperable with v1 by construction, never by accident.

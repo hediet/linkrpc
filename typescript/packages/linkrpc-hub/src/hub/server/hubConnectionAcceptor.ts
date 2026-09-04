@@ -38,7 +38,7 @@ export interface HubConnectionAcceptorBaseOptions<TTransport extends Transport> 
     /**
      * Ordered connection handlers. For each accepted transport the acceptor
      * resolves the first handler whose {@link ConnectionHandlerFactory.handle}
-     * claims the presented `linkrpc::initialize` token; that handler installs the
+     * claims the presented `hubrpc::initialize` token; that handler installs the
      * participant's root services (identity, granted namespace, minting, …). If
      * no handler claims, the connection is dropped. An empty array accepts
      * nothing.

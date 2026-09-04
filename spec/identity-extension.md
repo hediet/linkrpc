@@ -1,6 +1,6 @@
 # Identity extension — key documents and rotation
 
-**Optional. Extends [chapter 06](06-identity.md).** Chapter 06 resolves an inline `key:` keyId directly and binds it to one perpetual `PrincipalId`. This extension generalizes **key resolution and principal binding** so a principal can commit its genesis key by a *document* (carrying a genesis-key expiry and a rotation admin) and rotate to later keys — **without changing any wire shape defined in chapter 06**. It adds only (a) two `KeyId` schemes, (b) the `$linkrpcUnsigned.bindings` member that carries the resolving documents, and (c) one signing domain. A node that resolves only inline keys is unaffected; it ignores `bindings`.
+**Optional. Extends [chapter 06](06-identity.md).** Chapter 06 resolves an inline `key:` keyId directly and binds it to one perpetual `PrincipalId`. This extension generalizes **key resolution and principal binding** so a principal can commit its genesis key by a *document* (carrying a genesis-key expiry and a rotation admin) and rotate to later keys — **without changing any wire shape defined in chapter 06**. It adds only (a) two `KeyId` schemes, (b) the `$hubrpcUnsigned.bindings` member that carries the resolving documents, and (c) one signing domain. A node that resolves only inline keys is unaffected; it ignores `bindings`.
 
 ## 1. KeyId schemes
 
@@ -22,7 +22,7 @@ A `PrincipalId` remains `"id:" + <its genesis KeyId>` (06 §3). The genesis keyI
 `keydoc:` keyIds are resolved against documents the caller presents under the unsigned attachment object (chapter 07 §2):
 
 ```
-params.$linkrpcUnsigned.bindings = { [keyId: KeyId]: KeyGenesis | RotationRecord }
+params.$hubrpcUnsigned.bindings = { [keyId: KeyId]: KeyGenesis | RotationRecord }
 ```
 
 `bindings` is **unsigned**: every entry is self-verifying. A resolver MUST accept an entry only if its key equals `"keydoc:" + signedHash(d, doc)` for the entry's role domain `d` (§4) — a tampered document yields a different keyId and resolves to nothing. A `key:` keyId never consults `bindings`.
@@ -53,11 +53,11 @@ RotationRecord = {
   expiresMs:    number,      // working-key window end
   supersedes?:  KeyId,       // a prior key this retires
   nonce:        string,      // base64url
-  $linkrpcSignature: { keyRotation: SignatureEntry }   // signed by the admin (chapter 06 §2)
+  $hubrpcSignature: { keyRotation: SignatureEntry }   // signed by the admin (chapter 06 §2)
 }
 ```
 
-The signing domain value for the new domain is `linkrpc-sig/v1/keyRotation` (06 §2). The record's own keyId is `"keydoc:" + signedHash("keyRotation", record)`.
+The signing domain value for the new domain is `hubrpc-sig/v1/keyRotation` (06 §2). The record's own keyId is `"keydoc:" + signedHash("keyRotation", record)`.
 
 ## 5. Principal-key resolution
 
@@ -85,6 +85,6 @@ The same resolution and binding checks apply to call principals, capability issu
 
 ## 7. Versioning
 
-There is **no per-message algorithm field**. The signing domain value encodes the version: `linkrpc-sig/v1/<domain>` (06 §2) fixes one frozen suite `(Ed25519, SHA-256)` and, being inside the signed bytes, cannot be downgraded. Algorithm agility is achieved by **adding** a version (a new domain value, e.g. `linkrpc-sig/v2/<domain>`), never by negotiating within one. The algorithm is a property of the resolved key, never of caller-supplied input.
+There is **no per-message algorithm field**. The signing domain value encodes the version: `hubrpc-sig/v1/<domain>` (06 §2) fixes one frozen suite `(Ed25519, SHA-256)` and, being inside the signed bytes, cannot be downgraded. Algorithm agility is achieved by **adding** a version (a new domain value, e.g. `hubrpc-sig/v2/<domain>`), never by negotiating within one. The algorithm is a property of the resolved key, never of caller-supplied input.
 
 > **Note.** This follows PASETO's versioned-fixed-suite model and the DID subject / verificationMethod / proof split (`principal` / `keyId` / `{keyId, sig}`), borrowing the models without their serialization machinery.

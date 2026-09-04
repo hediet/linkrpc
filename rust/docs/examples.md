@@ -326,9 +326,9 @@ impl PizzaService for PizzaShop {
 Registering `PizzaService` on a connection also exposes the three reflection interfaces, so
 any peer can discover and introspect the service without prior knowledge:
 
-- **`linkrpc.directory`** — list the interfaces this connection serves (`id@hash`).
-- **`linkrpc.schemas`** — fetch the full `LinkRpcInterfaceSchema` for an `id@hash`.
-- **`linkrpc.defaults`** — connection defaults (preset interface, etc.).
+- **`hubrpc.directory`** — list the interfaces this connection serves (`id@hash`).
+- **`hubrpc.schemas`** — fetch the full `LinkRpcInterfaceSchema` for an `id@hash`.
+- **`hubrpc.defaults`** — connection defaults (preset interface, etc.).
 
 Because the interface identity is a content hash of the (normalized) schema, a Rust server
 and a TS client agree on `com.acme.pizza@<hash>` only when their contracts are structurally

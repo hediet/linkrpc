@@ -94,7 +94,7 @@ export type ForwardedCallGateOptions =
  *   prefix} (the hub's own services, which gate themselves).
  *
  * The gate **does not strip** the envelope: signed wire params keep the real
- * call params at the top level alongside `$hubrpc`/`$linkrpcUnsigned`, so the
+ * call params at the top level alongside `$hubrpc`/`$hubrpcUnsigned`, so the
  * target's typed handler recovers them via schema-stripping while a target that
  * cares may re-verify as defense-in-depth. Authorization is *not* this gate's
  * job (unless {@link ForwardedCallGateOptions.requireCapability} is set): it

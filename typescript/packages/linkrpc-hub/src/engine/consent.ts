@@ -16,7 +16,7 @@
  * lives on {@link HubAccessManifestHost} (`hubAccessConfig`), not here.
  */
 import {
-    LINKRPC_META_KEY,
+    HUBRPC_META_KEY,
     type CallMeta,
     type JsonValue,
     type PrincipalId,
@@ -150,7 +150,7 @@ export async function computeCallBindHash(
         ...(intent.interfaceHash !== undefined ? { interfaceHash: intent.interfaceHash } : {}),
     };
     const userParams = requireObjectParams(intent.params as JsonValue | undefined);
-    const signedParams = { ...userParams, [LINKRPC_META_KEY]: callMeta };
+    const signedParams = { ...userParams, [HUBRPC_META_KEY]: callMeta };
     return signedHash('call', signedParams);
 }
 

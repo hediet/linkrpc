@@ -11,7 +11,7 @@ import type { ParsedLine } from './parse';
 import { type CommandTree, type FlagDef, findFlag, type SlotType, type SubcommandDef } from './tree';
 
 export type Slot =
-    | { readonly kind: 'subcommand' }
+    | { readonly kind: 'subcommand'; readonly parent: SubcommandDef | undefined }
     | { readonly kind: 'flag-name'; readonly subcommand: SubcommandDef | undefined }
     | { readonly kind: 'flag-value'; readonly flag: FlagDef; readonly subcommand: SubcommandDef | undefined }
     | {
@@ -26,6 +26,8 @@ export interface ResolvedContext {
     readonly slot: Slot;
     /** Subcommand parsed from the tokens (undefined if none seen yet). */
     readonly subcommand: SubcommandDef | undefined;
+    /** Selected commands from the root command through the active leaf. */
+    readonly commandPath: readonly SubcommandDef[];
     /**
      * Flags already present on the line that take a value, paired with their
      * value (or `undefined` if the value followed in the next token).
@@ -49,6 +51,7 @@ export interface ResolvedContext {
 export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedContext {
     const tokens = parsed.tokensBefore;
     let subcommand: SubcommandDef | undefined;
+    const commandPath: SubcommandDef[] = [];
     let positionalIndex = 0;
     let expectingValueFor: FlagDef | undefined;
     const seenFlagValues = new Map<string, string | undefined>();
@@ -67,7 +70,7 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
         if (t.startsWith('-') && t.length > 1) {
             const eq = t.indexOf('=');
             const flagName = eq >= 0 ? t.slice(0, eq) : t;
-            const flag = findFlag(flagName, subcommand, tree);
+            const flag = findFlag(flagName, commandPath, tree);
             if (flag?.takesValue) {
                 if (eq >= 0) {
                     seenFlagValues.set(flag.name, t.slice(eq + 1));
@@ -80,7 +83,7 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
             continue;
         }
 
-        // Positional.
+        // Command or positional.
         if (subcommand === undefined) {
             const sub = tree.subcommands.find((s) => s.name === t);
             if (!sub) {
@@ -88,12 +91,34 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
                 return {
                     slot: { kind: 'none' },
                     subcommand: undefined,
+                    commandPath,
                     seenFlagValues,
                     seenPositionals,
                 };
             }
             subcommand = sub;
+            commandPath.push(sub);
             positionalIndex = 0;
+        } else if (subcommand.subcommands !== undefined && seenPositionals.length === 0) {
+            const child = subcommand.subcommands.find((candidate) => candidate.name === t);
+            if (child === undefined) {
+                if (subcommand.positionals.length === 0 && subcommand.variadic === undefined) {
+                    return {
+                        slot: { kind: 'none' },
+                        subcommand,
+                        commandPath,
+                        seenFlagValues,
+                        seenPositionals,
+                    };
+                }
+                seenPositionals.push(t);
+                positionalIndex++;
+                continue;
+            }
+            subcommand = child;
+            commandPath.push(child);
+            positionalIndex = 0;
+            seenPositionals.length = 0;
         } else {
             seenPositionals.push(t);
             positionalIndex++;
@@ -106,6 +131,7 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
         return {
             slot: { kind: 'flag-value', flag: expectingValueFor, subcommand },
             subcommand,
+            commandPath,
             seenFlagValues,
             seenPositionals,
         };
@@ -117,21 +143,65 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
             // `--foo=<value>`: still a flag-value slot, but only if `--foo`
             // exists and takes a value. Otherwise treat as flag-name (the
             // user might be mid-type).
-            const flag = findFlag(word.slice(0, eq), subcommand, tree);
+            const flag = findFlag(word.slice(0, eq), commandPath, tree);
             if (flag?.takesValue) {
                 return {
                     slot: { kind: 'flag-value', flag, subcommand },
                     subcommand,
+                    commandPath,
                     seenFlagValues,
                     seenPositionals,
                 };
             }
         }
-        return { slot: { kind: 'flag-name', subcommand }, subcommand, seenFlagValues, seenPositionals };
+        return {
+            slot: { kind: 'flag-name', subcommand },
+            subcommand,
+            commandPath,
+            seenFlagValues,
+            seenPositionals,
+        };
     }
 
     if (subcommand === undefined) {
-        return { slot: { kind: 'subcommand' }, subcommand: undefined, seenFlagValues, seenPositionals };
+        return {
+            slot: { kind: 'subcommand', parent: undefined },
+            subcommand: undefined,
+            commandPath,
+            seenFlagValues,
+            seenPositionals,
+        };
+    }
+
+    if (subcommand.subcommands !== undefined && seenPositionals.length === 0) {
+        const childMatches = subcommand.subcommands.some((child) =>
+            child.name.startsWith(word));
+        if (
+            word.length > 0
+            && !childMatches
+            && subcommand.positionals[positionalIndex] !== undefined
+        ) {
+            const positional = subcommand.positionals[positionalIndex];
+            return {
+                slot: {
+                    kind: 'positional',
+                    type: positional.type,
+                    subcommand,
+                    index: positionalIndex,
+                },
+                subcommand,
+                commandPath,
+                seenFlagValues,
+                seenPositionals,
+            };
+        }
+        return {
+            slot: { kind: 'subcommand', parent: subcommand },
+            subcommand,
+            commandPath,
+            seenFlagValues,
+            seenPositionals,
+        };
     }
 
     const positional = subcommand.positionals[positionalIndex];
@@ -139,6 +209,7 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
         return {
             slot: { kind: 'positional', type: positional.type, subcommand, index: positionalIndex },
             subcommand,
+            commandPath,
             seenFlagValues,
             seenPositionals,
         };
@@ -147,9 +218,10 @@ export function resolveSlot(parsed: ParsedLine, tree: CommandTree): ResolvedCont
         return {
             slot: { kind: 'positional', type: subcommand.variadic, subcommand, index: positionalIndex },
             subcommand,
+            commandPath,
             seenFlagValues,
             seenPositionals,
         };
     }
-    return { slot: { kind: 'none' }, subcommand, seenFlagValues, seenPositionals };
+    return { slot: { kind: 'none' }, subcommand, commandPath, seenFlagValues, seenPositionals };
 }

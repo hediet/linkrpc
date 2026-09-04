@@ -1,6 +1,6 @@
 import { Command, InvalidArgumentError } from 'commander';
 import { LinkRpcConnection } from '@hediet/linkrpc';
-import { isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
+import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
 import { connectionTokenBinderInterface } from '@hediet/linkrpc-hub/hub/server/connection-token-binder';
 import { tapTransport } from '@hediet/linkrpc-hub/hub/server/transit';
 import { callCommand, notifyCommand } from './commands/call';
@@ -51,7 +51,6 @@ import { type HubConfig } from '@hediet/linkrpc-client';
 import { runHub, type RunningHub } from './engine/runHub';
 import {
     type ResolvedEndpoint,
-    resolveEndpoint,
     resolveTargetEndpoint,
     resolvedEndpointToConfig,
 } from '@hediet/linkrpc-client';
@@ -72,14 +71,40 @@ import {
     loadStaticHubSchema,
     resolveStaticHubSchemaSource,
 } from './staticHubSchema';
+import {
+    ContextStore,
+    type ContextReference,
+    type ContextValues,
+    type ValidationMode,
+    formatContextReference,
+} from './contexts';
+import {
+    type CliProfile,
+    type ResolvedInvocationContext,
+    mutationReference,
+    resolveInvocationContext,
+    resolveInvocationEndpoint,
+    validationDefault,
+} from './invocationContext';
+import { resolveCliInvocation } from './cliInvocation';
+import { withStaticHubReflection } from './commands/staticHubReflection';
 
-async function main(rawArgv: readonly string[]): Promise<void> {
+export async function main(
+    rawArgv: readonly string[],
+    executableName: 'linkrpc' | 'rpc' | 'hub' = 'linkrpc',
+): Promise<void> {
+    const cliInvocation = resolveCliInvocation(rawArgv, executableName);
+    const profile = cliInvocation.profile;
     const program = new Command();
+    program.configureHelp({ showGlobalOptions: true });
     program
-        .name('linkrpc')
+        .name(cliInvocation.programName)
         .description(
-            'CLI / TUI for linkrpc endpoints. Specify the server with --endpoint <uri>, ' +
-            '--endpoint-cmd <command>, --endpoint-cmd-stdio <command>, or the LINKRPC_ENDPOINT env var.',
+            profile === 'hub'
+                ? 'CLI / TUI for LinkRPC hubs. Shared RPC commands use hub initialization, signing, '
+                    + 'capability negotiation, and required schema validation by default.'
+                : 'CLI / TUI for JSON-RPC and LinkRPC endpoints. Shared commands use the RPC profile '
+                    + 'with automatic schema validation and no endpoint environment override by default.',
         )
         .option(
             '--endpoint <uri>',
@@ -102,15 +127,34 @@ async function main(rawArgv: readonly string[]): Promise<void> {
                 return next;
             },
         )
-        .option('--endpoint-token <token>', 'token overriding the URI token / LINKRPC_TOKEN')
+        .option(
+            '--endpoint-token <token>',
+            'fill the exact token=% placeholder in --endpoint (or a context endpoint)',
+        )
         .option(
             '--endpoint-cmd-cwd <dir>',
             'working directory for the --endpoint-cmd / --endpoint-cmd-stdio child',
         )
         .option(
-            '-c, --config <file>',
-            'run an in-process hub from this declarative config file and target it (see `serve --print-schema`)',
+            '--context <selector>',
+            'use an exact folder, id:<name>, :root, or :empty context; otherwise look up from cwd',
         )
+        .option(
+            '--context-set',
+            'persist context-capable overrides supplied on this command to the active context',
+        )
+        .option(
+            '--new-context <selector>',
+            'create a new context from the effective command values; fails if it already exists',
+        )
+        .option('--schema <path-or-url>', 'static schema catalog used for discovery and validation')
+        .option(
+            '--validation <mode>',
+            'schema validation mode: auto, required, or off',
+            parseValidationMode,
+        )
+        .option('--use-env', 'allow LINKRPC_* / legacy HUBRPC_* endpoint variables to override context')
+        .option('--no-use-env', 'ignore LINKRPC_* / legacy HUBRPC_* endpoint variables')
         .option(
             '--provision-identity',
             'with --endpoint-cmd: provision & reuse a persistent identity (slot derived from cwd + command)',
@@ -121,7 +165,7 @@ async function main(rawArgv: readonly string[]): Promise<void> {
         )
         .option(
             '--principal <spec>',
-            'identity to sign calls with: "managed" (default, falls back to user:linkrpc-cli), ' +
+            'identity to sign calls with: "managed" (default, falls back to user:hubrpc-cli), ' +
             '"user:<id>" (per-user data dir), or "file:<path>"',
             (v) => {
                 try {
@@ -134,10 +178,13 @@ async function main(rawArgv: readonly string[]): Promise<void> {
         )
         .option(
             '--log-messages',
-            'log every JSON-RPC message to stderr, one coalesced flow per line (like the ' +
-            'VS Code "linkrpc Flows" channel). For `serve` / `-c, --config` this is the ' +
-            'in-process hub\'s routed traffic; for a direct `--endpoint` connection it taps ' +
-            'the client transport. Ignored by `ui`.',
+            profile === 'hub'
+                ? 'log every JSON-RPC message to stderr, one coalesced flow per line (like the ' +
+                    'VS Code "linkrpc Flows" channel). For `serve` / `-c, --config` this is the ' +
+                    'in-process hub\'s routed traffic; for a direct `--endpoint` connection it taps ' +
+                    'the client transport. Ignored by `ui`.'
+                : 'log every JSON-RPC message on a direct endpoint connection to stderr, one ' +
+                    'coalesced flow per line (like the VS Code "linkrpc Flows" channel). Ignored by `ui`.',
         )
         .option(
             '--log-transport',
@@ -145,40 +192,92 @@ async function main(rawArgv: readonly string[]): Promise<void> {
             + 'may expose tokens and other sensitive payloads',
         )
         .showHelpAfterError();
-    /** Parse the (already-validated) `--principal` value once opts are populated. */
+    if (profile === 'hub') {
+        program.option(
+            '-c, --config <file>',
+            'run an in-process hub from this declarative config file and target it (see `serve --print-schema`)',
+        );
+    }
+    /** Parse the effective context/flag principal once the pre-action hook has resolved it. */
     const getPrincipalSpec = (): PrincipalSpec =>
-        parsePrincipalSpec(program.opts().principal as string | undefined);
+        parsePrincipalSpec(g_invocation?.values.principal);
 
-    /** Resolve the endpoint from global flags + env once opts are populated. */
-    const getEndpoint = (
-        provisioningHandledElsewhere = false,
-    ): ResolvedEndpoint | undefined => {
-        const opts = program.opts();
-        const r = resolveEndpoint({
-            endpoint: opts.endpoint as string | undefined,
-            endpointCmd: opts.endpointCmd as string | undefined,
-            endpointCmdStdio: opts.endpointCmdStdio as string | undefined,
-            endpointCmdEnv: opts.endpointCmdEnv as Record<string, string> | undefined,
-            endpointToken: opts.endpointToken as string | undefined,
-            endpointCmdCwd: opts.endpointCmdCwd as string | undefined,
-            provisionIdentity: opts.provisionIdentity as boolean | undefined,
-            provisionIdentitySlot: opts.provisionIdentitySlot as string | undefined,
-            provisioningHandledElsewhere,
-        });
-        if (r.error) {
-            process.stderr.write(`linkrpc: ${r.error}\n`);
-            process.exit(2);
-        }
-        return r.endpoint;
-    };
-
-    // Resolved once per command, after global options are parsed. For `tunnel`,
-    // global `--provision-identity[-slot]` binds to the target cmd \u2014 not the
-    // source \u2014 so we tell the source resolver to skip its own provisioning check.
+    // Resolved once per command after inherited options, context defaults, and
+    // the profile-specific environment policy have been merged.
     let endpoint: ResolvedEndpoint | undefined;
-    program.hook('preAction', (_thisCommand, actionCommand) => {
-        endpoint = getEndpoint(actionCommand.name() === 'tunnel');
-        g_hubConfigPath = program.opts().config as string | undefined;
+    let pendingContextSet:
+        | {
+            readonly store: ContextStore;
+            readonly reference: Exclude<ContextReference, { readonly kind: 'empty'; }>;
+            readonly values: ContextValues;
+        }
+        | undefined;
+    let pendingNewContext:
+        | {
+            readonly store: ContextStore;
+            readonly reference: Exclude<ContextReference, { readonly kind: 'empty'; }>;
+            readonly values: ContextValues;
+        }
+        | undefined;
+    let preparedNewContext:
+        | {
+            readonly store: ContextStore;
+            readonly reference: Exclude<ContextReference, { readonly kind: 'empty'; }>;
+        }
+        | undefined;
+    program.hook('preAction', async (_thisCommand, actionCommand) => {
+        const commandPath = getCommandPath(actionCommand);
+        const allowMissingContext = commandPath === 'context set';
+        const store = new ContextStore();
+        const cliOverrides = collectContextOverrides(program, actionCommand);
+        const selector = explicitOption<string>(program, 'context');
+        const useEnvironment = explicitOption<boolean>(program, 'useEnv');
+        g_contextStore = store;
+        g_invocation = await resolveInvocationContext({
+            profile,
+            store,
+            ...(selector !== undefined ? { selector } : {}),
+            cliOverrides,
+            ...(useEnvironment !== undefined ? { useEnvironment } : {}),
+            allowMissingContext,
+        });
+        if (profile === 'rpc' && g_invocation.values.config !== undefined) {
+            throw new Error('--config is only available in the hub profile');
+        }
+
+        if (program.opts().contextSet === true) {
+            if (program.opts().newContext !== undefined) {
+                throw new Error('--context-set cannot be combined with --new-context');
+            }
+            if (Object.keys(cliOverrides).length === 0) {
+                throw new Error('--context-set requires at least one context-capable override');
+            }
+            pendingContextSet = {
+                store,
+                reference: await mutationReference(store, g_invocation.selected),
+                values: cliOverrides,
+            };
+        }
+
+        if (program.opts().newContext !== undefined) {
+            const reference = mutableReference(
+                await store.resolveReference(program.opts().newContext as string),
+            );
+            await store.assertCanCreate(reference);
+            preparedNewContext = { store, reference };
+        }
+        if (preparedNewContext !== undefined && commandPath !== 'connection create') {
+            pendingNewContext = {
+                store,
+                reference: preparedNewContext.reference,
+                values: g_invocation.values,
+            };
+        }
+
+        endpoint = commandUsesEndpoint(commandPath) || hasEndpointOverrides(cliOverrides)
+            ? resolveInvocationEndpoint(g_invocation, actionCommand.name() === 'tunnel')
+            : undefined;
+        g_hubConfigPath = g_invocation.values.config;
         // Message logging goes to stderr, which would corrupt the full-screen
         // TUI — so it applies to every command except `ui`.
         g_logMessages = program.opts().logMessages === true
@@ -186,11 +285,31 @@ async function main(rawArgv: readonly string[]): Promise<void> {
         g_logTransport = program.opts().logTransport === true
             && actionCommand.name() !== 'ui';
     });
+    program.hook('postAction', async () => {
+        if (pendingContextSet !== undefined) {
+            await pendingContextSet.store.set(
+                pendingContextSet.reference,
+                pendingContextSet.values,
+            );
+            process.stderr.write(
+                `linkrpc: updated context ${formatContextReference(pendingContextSet.reference)}.\n`,
+            );
+            pendingContextSet = undefined;
+        }
+        if (pendingNewContext !== undefined) {
+            await createContextFromInvocation(
+                pendingNewContext.store,
+                pendingNewContext.reference,
+                pendingNewContext.values,
+            );
+            pendingNewContext = undefined;
+        }
+    });
 
     program
         .command('ls')
         .description(
-            'List services and interfaces. Walks the bus recursively, following `linkrpc.directory` references.',
+            'List services and interfaces. Walks the bus recursively, following `hubrpc.directory` references.',
         )
         .option('--interface <id>', 'filter by interfaceId')
         .option('--interface-prefix <prefix>', 'filter by interfaceId prefix')
@@ -215,9 +334,7 @@ async function main(rawArgv: readonly string[]): Promise<void> {
                     stream: opts.stream === true,
                     watch: opts.watch === true,
                 });
-                const legacyOutput = opts.format === undefined
-                    && opts.watch !== true
-                    && (opts.json === true || opts.stream === true || opts.withMembers === true);
+                const legacyOutput = opts.format === undefined && opts.watch !== true;
                 const out = await lsCommand(channel, {
                     interfaceId: opts.interface,
                     interfacePrefix: opts.interfacePrefix,
@@ -242,99 +359,101 @@ async function main(rawArgv: readonly string[]): Promise<void> {
             });
         });
 
-    const topology = program
-        .command('topology')
-        .description('Inspect and optionally watch the merged transport topology.')
-        .option(
-            '--source <serviceId>',
-            'topology provider serviceId; repeat for multiple fixed sources',
-            collectOption,
-        )
-        .option('--depth <n>', 'directory discovery depth (default 5)', (v) => Number.parseInt(v, 10))
-        .option('--node <nodeId>', 'filter by exact node id')
-        .option('--service <serviceId>', 'filter route claims by exact service id')
-        .option('--kind <kind>', 'filter nodes by hub or endpoint')
-        .option('--search <regexp>', 'case-insensitive regexp over node metadata and routes')
-        .option('--format <format>', 'pretty, json, or jsonl')
-        .option('--json', 'alias for --format json')
-        .option('--stream', 'alias for --format jsonl')
-        .option('--watch', 'continue observing directory and topology changes')
-        .action(async (opts) => {
-            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
-                const format = resolveGraphFormat(opts.format, {
-                    json: opts.json === true,
-                    stream: opts.stream === true,
-                    watch: opts.watch === true,
+    if (profile === 'hub') {
+        const topology = program
+            .command('topology')
+            .description('Inspect and optionally watch the merged transport topology.')
+            .option(
+                '--source <serviceId>',
+                'topology provider serviceId; repeat for multiple fixed sources',
+                collectOption,
+            )
+            .option('--depth <n>', 'directory discovery depth (default 5)', (v) => Number.parseInt(v, 10))
+            .option('--node <nodeId>', 'filter by exact node id')
+            .option('--service <serviceId>', 'filter route claims by exact service id')
+            .option('--kind <kind>', 'filter nodes by hub or endpoint')
+            .option('--search <regexp>', 'case-insensitive regexp over node metadata and routes')
+            .option('--format <format>', 'pretty, json, or jsonl')
+            .option('--json', 'alias for --format json')
+            .option('--stream', 'alias for --format jsonl')
+            .option('--watch', 'continue observing directory and topology changes')
+            .action(async (opts) => {
+                await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                    const format = resolveGraphFormat(opts.format, {
+                        json: opts.json === true,
+                        stream: opts.stream === true,
+                        watch: opts.watch === true,
+                    });
+                    const kind = opts.kind === undefined ? undefined : String(opts.kind);
+                    if (kind !== undefined && kind !== 'hub' && kind !== 'endpoint') {
+                        throw new InvalidArgumentError("--kind must be 'hub' or 'endpoint'");
+                    }
+                    const out = await topologyCommand(channel, {
+                        sources: opts.source,
+                        maxDepth: typeof opts.depth === 'number' && !Number.isNaN(opts.depth)
+                            ? opts.depth
+                            : undefined,
+                        nodeId: opts.node,
+                        serviceId: opts.service,
+                        kind,
+                        search: opts.search,
+                        format,
+                        watch: opts.watch === true,
+                        emitLine: (line) => { process.stdout.write(line + '\n'); },
+                        emitFrame: (frame) => { repaintTerminal(frame); },
+                        stop: opts.watch ? _untilSignalled() : undefined,
+                    });
+                    if (out.length > 0) process.stdout.write(out + '\n');
+                }, {
+                    requestReflectionAccess: false,
+                    requestTopologyAccess: { sourceServiceIds: opts.source },
                 });
-                const kind = opts.kind === undefined ? undefined : String(opts.kind);
-                if (kind !== undefined && kind !== 'hub' && kind !== 'endpoint') {
-                    throw new InvalidArgumentError("--kind must be 'hub' or 'endpoint'");
+            });
+
+        topology
+            .command('participants')
+            .description('List participant nodes; --search accepts a case-insensitive regexp.')
+            .option('--search <regexp>', 'full-text regexp over participant metadata and routes')
+            .option('--json', 'raw JSON output')
+            .action(async (opts) => {
+                await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                    const out = await topologyParticipantsCommand(channel, opts.search);
+                    process.stdout.write(opts.json ? out + '\n' : out + '\n');
+                }, {
+                    requestReflectionAccess: false,
+                    requestTopologyAccess: {},
+                });
+            });
+
+        program
+            .command('traffic')
+            .description('Observe participant traffic.')
+            .command('watch')
+            .description('Watch node-wide traffic for a selected participant.')
+            .option('--search <regexp>', 'participant metadata search regexp')
+            .option('--node <nodeId>', 'select an exact topology node id')
+            .option('--method <prefix>', 'only methods beginning with this prefix')
+            .option('--payloads <bytes>', 'include payloads up to this many bytes', (v) => Number.parseInt(v, 10))
+            .option('--format <format>', 'pretty, plain, or jsonl')
+            .option('--resume [file]', 'restore the previous participant/filter selection')
+            .action(async (opts) => {
+                const format = opts.format as 'pretty' | 'plain' | 'jsonl';
+                if (!['pretty', 'plain', 'jsonl'].includes(format)) {
+                    throw new InvalidArgumentError('--format must be pretty, plain, or jsonl');
                 }
-                const out = await topologyCommand(channel, {
-                    sources: opts.source,
-                    maxDepth: typeof opts.depth === 'number' && !Number.isNaN(opts.depth)
-                        ? opts.depth
-                        : undefined,
-                    nodeId: opts.node,
-                    serviceId: opts.service,
-                    kind,
-                    search: opts.search,
-                    format,
-                    watch: opts.watch === true,
-                    emitLine: (line) => { process.stdout.write(line + '\n'); },
-                    emitFrame: (frame) => { repaintTerminal(frame); },
-                    stop: opts.watch ? _untilSignalled() : undefined,
-                });
-                if (out.length > 0) process.stdout.write(out + '\n');
-            }, {
-                requestReflectionAccess: false,
-                requestTopologyAccess: { sourceServiceIds: opts.source },
+                await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                    await trafficWatchCommand(channel, {
+                        search: opts.search,
+                        nodeId: opts.node,
+                        methodPrefix: opts.method,
+                        payloadBytes: opts.payloads,
+                        format,
+                        resume: opts.resume,
+                        stop: _untilSignalled(),
+                    });
+                }, { requestReflectionAccess: true });
             });
-        });
-
-    topology
-        .command('participants')
-        .description('List participant nodes; --search accepts a case-insensitive regexp.')
-        .option('--search <regexp>', 'full-text regexp over participant metadata and routes')
-        .option('--json', 'raw JSON output')
-        .action(async (opts) => {
-            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
-                const out = await topologyParticipantsCommand(channel, opts.search);
-                process.stdout.write(opts.json ? out + '\n' : out + '\n');
-            }, {
-                requestReflectionAccess: false,
-                requestTopologyAccess: {},
-            });
-        });
-
-    program
-        .command('traffic')
-        .description('Observe participant traffic.')
-        .command('watch')
-        .description('Watch node-wide traffic for a selected participant.')
-        .option('--search <regexp>', 'participant metadata search regexp')
-        .option('--node <nodeId>', 'select an exact topology node id')
-        .option('--method <prefix>', 'only methods beginning with this prefix')
-        .option('--payloads <bytes>', 'include payloads up to this many bytes', (v) => Number.parseInt(v, 10))
-        .option('--format <format>', 'pretty, plain, or jsonl')
-        .option('--resume [file]', 'restore the previous participant/filter selection')
-        .action(async (opts) => {
-            const format = opts.format as 'pretty' | 'plain' | 'jsonl';
-            if (!['pretty', 'plain', 'jsonl'].includes(format)) {
-                throw new InvalidArgumentError('--format must be pretty, plain, or jsonl');
-            }
-            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
-                await trafficWatchCommand(channel, {
-                    search: opts.search,
-                    nodeId: opts.node,
-                    methodPrefix: opts.method,
-                    payloadBytes: opts.payloads,
-                    format,
-                    resume: opts.resume,
-                    stop: _untilSignalled(),
-                });
-            }, { requestReflectionAccess: true });
-        });
+    }
 
     program
         .command('defaults')
@@ -347,8 +466,12 @@ async function main(rawArgv: readonly string[]): Promise<void> {
             });
         });
 
-    program
-        .command('schema <interfaceRef>')
+    const schema = program
+        .command('schema')
+        .description('Inspect, hash, and compare LinkRPC interface schemas.');
+
+    schema
+        .command('show <interfaceRef>')
         .description('Print an interface schema. `<interfaceRef>` is `id[@hash]`.')
         .option('--method <name>', 'show only this method')
         .option('--service <id>', 'route the lookup to this service (form-3); needed behind a hub')
@@ -364,6 +487,25 @@ async function main(rawArgv: readonly string[]): Promise<void> {
                     json: !!opts.json,
                 });
                 process.stdout.write(out + '\n');
+            });
+        });
+
+    schema
+        .command('hash <schema>')
+        .description('Compute the hash of a local LinkRpcInterfaceSchema JSON file.')
+        .action((schemaPath: string) => {
+            const out = hashCommand({ schemaPath });
+            process.stdout.write(out + '\n');
+        });
+
+    schema
+        .command('check-compat <interfaceId> <local>')
+        .description('Compare a local schema against the live interface schema.')
+        .action(async (interfaceId: string, local: string) => {
+            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                const verdict = await checkCompatCommand(channel, { interfaceId, localPath: local });
+                process.stdout.write(formatVerdict(verdict) + '\n');
+                if (verdict.kind === 'incompatible') process.exitCode = 1;
             });
         });
 
@@ -451,14 +593,17 @@ async function main(rawArgv: readonly string[]): Promise<void> {
                 process.exit(2);
             }
             await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                const validation = opts.validate === false
+                    ? 'off'
+                    : effectiveValidation(profile);
                 const out = await callCommand(channel, {
                     methodRef,
                     paramsArg: opts.params,
                     paramOverrides: opts.param,
-                    noValidate: opts.validate === false,
+                    validation,
                 });
                 process.stdout.write(out + '\n');
-            }, { requestReflectionAccess: opts.validate !== false });
+            }, { requestReflectionAccess: effectiveValidation(profile) !== 'off' });
         });
 
     program
@@ -482,14 +627,17 @@ async function main(rawArgv: readonly string[]): Promise<void> {
                 process.exit(2);
             }
             await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                const validation = opts.validate === false
+                    ? 'off'
+                    : effectiveValidation(profile);
                 const out = await notifyCommand(channel, {
                     methodRef,
                     paramsArg: opts.params,
                     paramOverrides: opts.param,
-                    noValidate: opts.validate === false,
+                    validation,
                 });
                 process.stdout.write(out + '\n');
-            }, { requestReflectionAccess: opts.validate !== false });
+            }, { requestReflectionAccess: effectiveValidation(profile) !== 'off' });
         });
 
     program
@@ -516,6 +664,7 @@ Batch options:
                     call: (options) => callCommand(channel, options),
                     notify: (options) => notifyCommand(channel, options),
                 }, {
+                    validation: effectiveValidation(profile),
                     onStreamChunk: ({ index, method, payload }) => {
                         const text = typeof payload === 'string'
                             ? payload
@@ -525,54 +674,79 @@ Batch options:
                 });
                 process.stdout.write(JSON.stringify(results, undefined, 2) + '\n');
             }, {
-                requestReflectionAccess: plan.operations.some((operation) => !operation.noValidate),
+                requestReflectionAccess: effectiveValidation(profile) !== 'off'
+                    && plan.operations.some((operation) => !operation.noValidate),
             });
         });
 
-    program
-        .command('connect')
-        .description(
-            'Keep the configured endpoint connected in a detached broker process and print its local endpoint.',
-        )
-        .option('--timeout <duration>', 'exit after this much transport inactivity', '30s')
-        .option('--ttl <duration>', 'hard maximum broker lifetime', '5min')
+    const connection = program
+        .command('connection')
+        .description('Create, inspect, consume, and destroy persistent RPC connections.');
+
+    connection
+        .command('create')
+        .description('Create a detached persistent connection and print its local endpoint.')
+        .option('--timeout <duration>', 'exit after this much transport inactivity')
+        .option('--ttl <duration>', 'hard maximum broker lifetime')
         .option(
             '--notification-limit <count>',
             'maximum buffered incoming notifications',
             (value) => parsePositiveInteger(value, '--notification-limit'),
-            1_000,
-        )
-        .option(
-            '--schema <path-or-url>',
-            'serve static directory, interface schemas, and default-interface reflection from this JSON file or URL',
         )
         .action(async (opts: {
-            timeout: string;
-            ttl: string;
-            notificationLimit: number;
-            schema?: string;
+            timeout?: string;
+            ttl?: string;
+            notificationLimit?: number;
         }) => {
             if (g_hubConfigPath !== undefined) {
-                throw new Error('connect does not support --config; use an endpoint URI or command endpoint');
+                throw new Error('connection create does not support --config; use an endpoint URI or command endpoint');
             }
-            const schemaSource = opts.schema === undefined
+            const schemaSource = g_invocation?.values.schema === undefined
                 ? undefined
-                : resolveStaticHubSchemaSource(opts.schema);
+                : resolveStaticHubSchemaSource(g_invocation.values.schema);
             if (schemaSource !== undefined) {
                 await loadStaticHubSchema(schemaSource);
             }
+            const timeout = opts.timeout ?? g_invocation?.values.connectionTimeout ?? '30s';
+            const ttl = opts.ttl ?? g_invocation?.values.connectionTtl ?? '5min';
+            const notificationLimit = opts.notificationLimit
+                ?? g_invocation?.values.notificationLimit
+                ?? 1_000;
             const brokerEndpoint = await spawnConnectionBroker({
                 remote: needEndpoint(endpoint),
-                timeoutMs: parseDuration(opts.timeout),
-                ttlMs: parseDuration(opts.ttl),
-                notificationLimit: opts.notificationLimit,
+                timeoutMs: parseDuration(timeout),
+                ttlMs: parseDuration(ttl),
+                notificationLimit,
                 schemaSource,
             });
+            if (preparedNewContext !== undefined) {
+                if (g_invocation === undefined) {
+                    throw new Error('context resolver is unavailable');
+                }
+                try {
+                    await createConnectionContext(
+                        preparedNewContext.store,
+                        preparedNewContext.reference,
+                        g_invocation.values,
+                        brokerEndpoint,
+                    );
+                } catch (error) {
+                    try {
+                        await stopConnectionBroker(brokerEndpoint);
+                    } catch (cleanupError) {
+                        throw new AggregateError(
+                            [error, cleanupError],
+                            'failed to create the context and stop the new connection broker',
+                        );
+                    }
+                    throw error;
+                }
+            }
             process.stdout.write(brokerEndpoint + '\n');
         });
 
-    program
-        .command('connection-status')
+    connection
+        .command('status')
         .description('Read status from the connection broker at the configured endpoint.')
         .action(async () => {
             await withRawConnection(endpoint, async (channel) => {
@@ -580,8 +754,8 @@ Batch options:
             });
         });
 
-    program
-        .command('disconnect')
+    connection
+        .command('destroy')
         .description('Stop the connection broker at the configured endpoint.')
         .action(async () => {
             await withRawConnection(endpoint, async (channel) => {
@@ -589,9 +763,11 @@ Batch options:
             });
         });
 
-    program
+    connection
         .command('notifications')
-        .description('Read incoming notifications buffered by the configured connection broker.')
+        .description(
+            'Read server notifications buffered by the persistent connection; --follow emits JSON Lines.',
+        )
         .option('--after <sequence>', 'read notifications after this sequence', (value) =>
             parseNonNegativeInteger(value, '--after'), 0)
         .option('--wait <duration>', 'wait for a notification before returning')
@@ -614,6 +790,77 @@ Batch options:
                     after = batch.next;
                 } while (opts.follow);
             });
+        });
+
+    const context = program
+        .command('context')
+        .description('Show how the active context resolves, or explicitly modify shared context defaults.')
+        .action(() => {
+            printSelectedContext(true);
+        });
+
+    context
+        .command('show')
+        .description('Show only the selected context and its stored defaults.')
+        .action(() => {
+            printSelectedContext(false);
+        });
+
+    context
+        .command('list')
+        .description('List every path, named, and root context in the global store.')
+        .action(async () => {
+            if (g_contextStore === undefined) throw new Error('context store is unavailable');
+            for (const item of await g_contextStore.list()) {
+                process.stdout.write(`${formatContextReference(item.reference)}\n`);
+            }
+        });
+
+    context
+        .command('set')
+        .description(
+            'Set explicit context-capable flags on the active context; creates a cwd context when none exists.',
+        )
+        .option('--unset <key...>', 'remove one or more stored context values')
+        .action(async (opts: { unset?: string[] }) => {
+            if (g_contextStore === undefined || g_invocation === undefined) {
+                throw new Error('context resolver is unavailable');
+            }
+            const target = explicitOption<string>(program, 'context') !== undefined
+                ? mutableReference(g_invocation.selected.reference)
+                : await mutationReference(g_contextStore, g_invocation.selected);
+            const overrides = g_invocation.cliOverrides;
+            const unset = (opts.unset ?? []).map(parseContextValueKey);
+            if (Object.keys(overrides).length === 0 && unset.length === 0) {
+                throw new Error('context set requires at least one context-capable flag or --unset');
+            }
+            let result = Object.keys(overrides).length === 0
+                ? g_invocation.selected.context
+                : await g_contextStore.set(target, overrides);
+            if (unset.length > 0) {
+                result = await g_contextStore.unset(target, unset);
+            }
+            process.stdout.write(`Updated context ${formatContextReference(target)}.\n`);
+            if (result !== undefined) printContextValues(result.values, false);
+        });
+
+    context
+        .command('remove')
+        .description('Remove the selected context from the global store.')
+        .action(async () => {
+            if (g_contextStore === undefined || g_invocation === undefined) {
+                throw new Error('context resolver is unavailable');
+            }
+            const reference = g_invocation.selected.reference;
+            if (
+                reference.kind === 'empty'
+                || (reference.kind === 'root' && explicitOption<string>(program, 'context') === undefined)
+            ) {
+                throw new Error('select the context to remove explicitly with --context');
+            }
+            const removed = await g_contextStore.remove(reference);
+            if (!removed) throw new Error(`context ${formatContextReference(reference)} does not exist`);
+            process.stdout.write(`Removed context ${formatContextReference(reference)}.\n`);
         });
 
     program
@@ -648,25 +895,6 @@ Batch options:
         });
 
     program
-        .command('hash <schema>')
-        .description('Compute the hash of a local SvcInterfaceSchema JSON file.')
-        .action((schema: string) => {
-            const out = hashCommand({ schemaPath: schema });
-            process.stdout.write(out + '\n');
-        });
-
-    program
-        .command('check-compat <interfaceId> <local>')
-        .description('Compare a local schema against the live one.')
-        .action(async (interfaceId: string, local: string) => {
-            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
-                const verdict = await checkCompatCommand(channel, { interfaceId, localPath: local });
-                process.stdout.write(formatVerdict(verdict) + '\n');
-                if (verdict.kind === 'incompatible') process.exit(1);
-            });
-        });
-
-    program
         .command('ping')
         .description('One reflection round-trip; prints latency.')
         .action(async () => {
@@ -675,8 +903,9 @@ Batch options:
                 process.stdout.write(out + '\n');
             });
         });
-    program
-        .command('serve [config]')
+    if (profile === 'hub') {
+        program
+            .command('serve [config]')
         .description(
             'Run a hub from a declarative config file and block until interrupted. '
             + 'The same config format drives the CLI hub, the server hub, and the VS Code extension.',
@@ -1059,97 +1288,98 @@ Batch options:
             });
         });
 
-    const approval = program
-        .command('approval')
-        .description('Inspect and decide pending Hub access approval requests.');
+        const approval = program
+            .command('approval')
+            .description('Inspect and decide pending Hub access approval requests.');
 
-    approval
-        .command('requests')
-        .description('List pending requests whose capability audience is this CLI identity.')
-        .option('--json', 'stable machine-readable JSON output')
-        .action(async (opts: { json?: boolean; }) => {
-            await withApprovalClient(endpoint, getPrincipalSpec(), async (client) => {
-                const out = formatApprovalRequests(
-                    await client.requests(),
-                    client.principalId,
-                    opts.json === true,
-                );
-                process.stdout.write(out + '\n');
-            });
-        });
-
-    approval
-        .command('approve <request-id>')
-        .description('Approve one pending request for this CLI identity.')
-        .option('--json', 'stable machine-readable JSON output')
-        .action(async (requestId: string, opts: { json?: boolean; }) => {
-            await withApprovalClient(endpoint, getPrincipalSpec(), async (client) => {
-                const outcome = await client.approve(requestId);
-                process.stdout.write(
-                    formatApprovalDecision(
-                        'approved',
-                        requestId,
+        approval
+            .command('requests')
+            .description('List pending requests whose capability audience is this CLI identity.')
+            .option('--json', 'stable machine-readable JSON output')
+            .action(async (opts: { json?: boolean; }) => {
+                await withApprovalClient(endpoint, getPrincipalSpec(), async (client) => {
+                    const out = formatApprovalRequests(
+                        await client.requests(),
                         client.principalId,
                         opts.json === true,
-                        outcome,
-                    ) + '\n',
+                    );
+                    process.stdout.write(out + '\n');
+                });
+            });
+
+        approval
+            .command('approve <request-id>')
+            .description('Approve one pending request for this CLI identity.')
+            .option('--json', 'stable machine-readable JSON output')
+            .action(async (requestId: string, opts: { json?: boolean; }) => {
+                await withApprovalClient(endpoint, getPrincipalSpec(), async (client) => {
+                    const outcome = await client.approve(requestId);
+                    process.stdout.write(
+                        formatApprovalDecision(
+                            'approved',
+                            requestId,
+                            client.principalId,
+                            opts.json === true,
+                            outcome,
+                        ) + '\n',
+                    );
+                });
+            });
+
+        approval
+            .command('deny <request-id>')
+            .description('Deny one pending request for this CLI identity.')
+            .option('--reason <text>', 'optional denial reason')
+            .option('--json', 'stable machine-readable JSON output')
+            .action(async (requestId: string, opts: { reason?: string; json?: boolean; }) => {
+                await withApprovalClient(endpoint, getPrincipalSpec(), async (client) => {
+                    const outcome = await client.deny(requestId, opts.reason);
+                    process.stdout.write(
+                        formatApprovalDecision(
+                            'denied',
+                            requestId,
+                            client.principalId,
+                            opts.json === true,
+                            outcome,
+                        ) + '\n',
+                    );
+                });
+            });
+
+        approval
+            .command('ui')
+            .description('Watch pending requests and approve or deny them interactively in the terminal.')
+            .action(async () => {
+                if (
+                    process.stdin.isTTY !== true
+                    || process.stdout.isTTY !== true
+                    || !Number.isInteger(process.stdout.columns)
+                    || process.stdout.columns <= 0
+                    || !Number.isInteger(process.stdout.rows)
+                    || process.stdout.rows <= 0
+                ) {
+                    throw new Error('approval ui requires an interactive terminal with visible output');
+                }
+                const stop = new AbortController();
+                const onSignal = () => stop.abort();
+                await withApprovalClient(
+                    endpoint,
+                    getPrincipalSpec(),
+                    async (client) => {
+                        process.once('SIGINT', onSignal);
+                        process.once('SIGTERM', onSignal);
+                        try {
+                            const { runApprovalUi } = await import('./approval-ui/runApprovalUi');
+                            await runApprovalUi({ client, signal: stop.signal });
+                        } finally {
+                            process.removeListener('SIGINT', onSignal);
+                            process.removeListener('SIGTERM', onSignal);
+                        }
+                    },
+                    () => { /* Ink owns the terminal while the approval UI is active. */ },
                 );
             });
-        });
-
-    approval
-        .command('deny <request-id>')
-        .description('Deny one pending request for this CLI identity.')
-        .option('--reason <text>', 'optional denial reason')
-        .option('--json', 'stable machine-readable JSON output')
-        .action(async (requestId: string, opts: { reason?: string; json?: boolean; }) => {
-            await withApprovalClient(endpoint, getPrincipalSpec(), async (client) => {
-                const outcome = await client.deny(requestId, opts.reason);
-                process.stdout.write(
-                    formatApprovalDecision(
-                        'denied',
-                        requestId,
-                        client.principalId,
-                        opts.json === true,
-                        outcome,
-                    ) + '\n',
-                );
-            });
-        });
-
-    approval
-        .command('ui')
-        .description('Watch pending requests and approve or deny them interactively in the terminal.')
-        .action(async () => {
-            if (
-                process.stdin.isTTY !== true
-                || process.stdout.isTTY !== true
-                || !Number.isInteger(process.stdout.columns)
-                || process.stdout.columns <= 0
-                || !Number.isInteger(process.stdout.rows)
-                || process.stdout.rows <= 0
-            ) {
-                throw new Error('approval ui requires an interactive terminal with visible output');
-            }
-            const stop = new AbortController();
-            const onSignal = () => stop.abort();
-            await withApprovalClient(
-                endpoint,
-                getPrincipalSpec(),
-                async (client) => {
-                    process.once('SIGINT', onSignal);
-                    process.once('SIGTERM', onSignal);
-                    try {
-                        const { runApprovalUi } = await import('./approval-ui/runApprovalUi');
-                        await runApprovalUi({ client, signal: stop.signal });
-                    } finally {
-                        process.removeListener('SIGINT', onSignal);
-                        process.removeListener('SIGTERM', onSignal);
-                    }
-                },
-                () => { /* Ink owns the terminal while the approval UI is active. */ },
-            );
-        });
+    }
 
     program
         .command('ui')
@@ -1164,21 +1394,23 @@ Batch options:
             }
         });
 
-    program
-        .command('logout')
-        .description(
-            'Delete the stored CLI identity and cached capabilities. Next call will mint a fresh keypair and prompt for consent again.',
-        )
-        .action(async () => {
-            const removed = await logoutCliIdentity();
-            if (removed.length === 0) {
-                process.stdout.write('linkrpc: no stored identity found.\n');
-                return;
-            }
-            for (const f of removed) {
-                process.stdout.write(`removed ${f}\n`);
-            }
-        });
+    if (profile === 'hub') {
+        program
+            .command('logout')
+            .description(
+                'Delete the stored CLI identity and cached capabilities. Next call will mint a fresh keypair and prompt for consent again.',
+            )
+            .action(async () => {
+                const removed = await logoutCliIdentity();
+                if (removed.length === 0) {
+                    process.stdout.write('linkrpc: no stored identity found.\n');
+                    return;
+                }
+                for (const f of removed) {
+                    process.stdout.write(`removed ${f}\n`);
+                }
+            });
+    }
 
     program
         .command('completions <shell>')
@@ -1226,7 +1458,287 @@ Batch options:
             process.exit(0);
         });
 
-    await program.parseAsync(['node', 'linkrpc', ...rewriteParamShortcuts(rawArgv)]);
+    if (profile === 'rpc') {
+        program
+            .command('hub')
+            .description('Run the same shared commands with the hub profile and expose hub-only commands.');
+    }
+
+    await program.parseAsync([
+        'node',
+        cliInvocation.programName,
+        ...rewriteParamShortcuts(cliInvocation.argv),
+    ]);
+}
+
+function collectContextOverrides(program: Command, actionCommand: Command): ContextValues {
+    const opts = program.opts();
+    const result: Record<string, unknown> = {};
+    copyExplicit(program, opts, result, 'endpoint');
+    copyExplicit(program, opts, result, 'endpointCmd');
+    copyExplicit(program, opts, result, 'endpointCmdStdio');
+    copyExplicit(program, opts, result, 'endpointCmdEnv');
+    copyExplicit(program, opts, result, 'endpointToken');
+    copyExplicit(program, opts, result, 'endpointCmdCwd');
+    copyExplicit(program, opts, result, 'config');
+    copyExplicit(program, opts, result, 'provisionIdentity');
+    copyExplicit(program, opts, result, 'provisionIdentitySlot');
+    copyExplicit(program, opts, result, 'principal');
+    copyExplicit(program, opts, result, 'schema');
+    copyExplicit(program, opts, result, 'validation');
+
+    if (getCommandPath(actionCommand) === 'connection create') {
+        const actionOpts = actionCommand.opts();
+        copyExplicit(actionCommand, actionOpts, result, 'timeout', 'connectionTimeout');
+        copyExplicit(actionCommand, actionOpts, result, 'ttl', 'connectionTtl');
+        copyExplicit(actionCommand, actionOpts, result, 'notificationLimit');
+    }
+    return result as ContextValues;
+}
+
+function copyExplicit(
+    command: Command,
+    source: Record<string, unknown>,
+    target: Record<string, unknown>,
+    optionName: string,
+    contextName = optionName,
+): void {
+    if (command.getOptionValueSource(optionName) === 'cli') {
+        target[contextName] = source[optionName];
+    }
+}
+
+function explicitOption<T>(command: Command, name: string): T | undefined {
+    return command.getOptionValueSource(name) === 'cli'
+        ? command.opts()[name] as T
+        : undefined;
+}
+
+async function createContextFromInvocation(
+    store: ContextStore,
+    reference: Exclude<ContextReference, { readonly kind: 'empty'; }>,
+    values: ContextValues,
+): Promise<void> {
+    await store.replace(reference, values, { createOnly: true });
+    process.stderr.write(`linkrpc: created context ${formatContextReference(reference)}.\n`);
+}
+
+async function createConnectionContext(
+    store: ContextStore,
+    reference: Exclude<ContextReference, { readonly kind: 'empty'; }>,
+    values: ContextValues,
+    brokerEndpoint: string,
+): Promise<void> {
+    const {
+        endpoint: _endpoint,
+        endpointCmd: _endpointCmd,
+        endpointCmdStdio: _endpointCmdStdio,
+        endpointCmdEnv: _endpointCmdEnv,
+        endpointToken: _endpointToken,
+        endpointCmdCwd: _endpointCmdCwd,
+        provisionIdentity: _provisionIdentity,
+        provisionIdentitySlot: _provisionIdentitySlot,
+        ...rest
+    } = values;
+    const connectionEndpoint = splitEndpointToken(brokerEndpoint);
+    await createContextFromInvocation(store, reference, {
+        ...rest,
+        ...connectionEndpoint,
+    });
+}
+
+function splitEndpointToken(endpoint: string): Pick<ContextValues, 'endpoint' | 'endpointToken'> {
+    const parsed = parseEndpointUri(endpoint);
+    if ((parsed.kind !== 'socket' && parsed.kind !== 'ws') || parsed.token === undefined) {
+        return { endpoint };
+    }
+    const { token, ...withoutToken } = parsed;
+    const separator = formatEndpointUri(withoutToken).includes('?') ? '&' : '?';
+    return {
+        endpoint: `${formatEndpointUri(withoutToken)}${separator}token=%`,
+        endpointToken: token,
+    };
+}
+
+async function stopConnectionBroker(endpoint: string): Promise<void> {
+    const connection = await connectEndpoint(parseEndpointUri(endpoint));
+    try {
+        await disconnectBroker(connection.channel);
+    } finally {
+        connection.close();
+    }
+}
+
+function mutableReference(
+    reference: ContextReference,
+): Exclude<ContextReference, { readonly kind: 'empty'; }> {
+    if (reference.kind === 'empty') {
+        throw new Error(':empty is immutable and cannot be modified');
+    }
+    return reference;
+}
+
+function printSelectedContext(effective: boolean): void {
+    if (g_invocation === undefined) throw new Error('context resolver is unavailable');
+    const selected = g_invocation.selected;
+    process.stdout.write('Context\n');
+    process.stdout.write(`  Reference: ${formatContextReference(selected.reference)}\n`);
+    process.stdout.write(`  Selected via: ${contextSelectionDescription(selected.selectedBy)}\n`);
+    if (effective) {
+        process.stdout.write(`  Profile: ${g_invocation.profile}\n`);
+        const environmentStatus = g_invocation.environmentApplied
+            ? Object.keys(g_invocation.environmentValues).length > 0
+                ? 'enabled'
+                : 'enabled (no variables set)'
+            : 'disabled';
+        process.stdout.write(
+            `  Environment overrides: ${environmentStatus}\n`,
+        );
+    }
+
+    process.stdout.write('\nStored defaults\n');
+    printContextValues(selected.context?.values ?? {}, false);
+    if (!effective) return;
+
+    process.stdout.write('\nEffective values\n');
+    printContextValues(g_invocation.values, false, (key) => {
+        if (hasContextValue(g_invocation?.cliOverrides, key)) return 'command line';
+        if (hasContextValue(g_invocation?.environmentValues, key)) return 'environment';
+        if (hasContextValue(g_invocation?.contextValues, key)) return 'context';
+        return undefined;
+    });
+}
+
+function contextSelectionDescription(selectedBy: ResolvedInvocationContext['selected']['selectedBy']): string {
+    switch (selectedBy) {
+        case 'argument': return '--context';
+        case 'environment': return 'LINKRPC_CONTEXT (HUBRPC_CONTEXT fallback)';
+        case 'cwd': return 'current-directory lookup';
+        case 'root': return ':root fallback';
+        case 'empty': return 'no matching context (:empty)';
+    }
+}
+
+function hasContextValue(
+    values: ContextValues | undefined,
+    key: keyof ContextValues,
+): boolean {
+    return values !== undefined && values[key] !== undefined;
+}
+
+function printContextValues(
+    values: ContextValues,
+    revealToken: boolean,
+    source?: (key: keyof ContextValues) => string | undefined,
+): void {
+    const entries = Object.entries(values);
+    if (entries.length === 0) {
+        process.stdout.write('  (none)\n');
+        return;
+    }
+    for (const [key, value] of entries) {
+        const contextKey = key as keyof ContextValues;
+        const rendered = key === 'endpointToken' && !revealToken
+            ? '<stored>'
+            : key === 'endpoint' && typeof value === 'string' && !revealToken
+                ? redactEndpointTokens(value)
+            : typeof value === 'string'
+                ? value
+                : JSON.stringify(value);
+        const valueSource = source?.(contextKey);
+        process.stdout.write(
+            `  --${contextValueFlag(contextKey)} = ${rendered}${valueSource ? `  (${valueSource})` : ''}\n`,
+        );
+    }
+
+    function redactEndpointTokens(endpoint: string): string {
+        return endpoint.replace(/([?&]token=)([^&#]*)/g, (_match, prefix: string, token: string) =>
+            `${prefix}${token === '%' ? '%' : '<stored>'}`);
+    }
+}
+
+function contextValueFlag(key: keyof ContextValues): string {
+    const names: Record<keyof ContextValues, string> = {
+        endpoint: 'endpoint',
+        endpointCmd: 'endpoint-cmd',
+        endpointCmdStdio: 'endpoint-cmd-stdio',
+        endpointCmdEnv: 'endpoint-cmd-env',
+        endpointToken: 'endpoint-token',
+        endpointCmdCwd: 'endpoint-cmd-cwd',
+        config: 'config',
+        provisionIdentity: 'provision-identity',
+        provisionIdentitySlot: 'provision-identity-slot',
+        principal: 'principal',
+        schema: 'schema',
+        validation: 'validation',
+        connectionTimeout: 'connection-timeout',
+        connectionTtl: 'connection-ttl',
+        notificationLimit: 'notification-limit',
+    };
+    return names[key];
+}
+
+function parseContextValueKey(value: string): keyof ContextValues {
+    const entry = (Object.keys({
+        endpoint: true,
+        endpointCmd: true,
+        endpointCmdStdio: true,
+        endpointCmdEnv: true,
+        endpointToken: true,
+        endpointCmdCwd: true,
+        config: true,
+        provisionIdentity: true,
+        provisionIdentitySlot: true,
+        principal: true,
+        schema: true,
+        validation: true,
+        connectionTimeout: true,
+        connectionTtl: true,
+        notificationLimit: true,
+    }) as (keyof ContextValues)[]).find((key) => contextValueFlag(key) === value);
+    if (entry === undefined) throw new InvalidArgumentError(`unknown context value "${value}"`);
+    return entry;
+}
+
+function effectiveValidation(profile: CliProfile): ValidationMode {
+    return g_invocation?.values.validation ?? validationDefault(profile);
+}
+
+function parseValidationMode(value: string): ValidationMode {
+    if (value === 'auto' || value === 'required' || value === 'off') return value;
+    throw new InvalidArgumentError("--validation must be 'auto', 'required', or 'off'");
+}
+
+function getCommandPath(command: Command): string {
+    const names: string[] = [];
+    for (let cursor: Command | null = command; cursor?.parent !== null; cursor = cursor.parent) {
+        names.unshift(cursor.name());
+    }
+    return names.join(' ');
+}
+
+function commandUsesEndpoint(commandPath: string): boolean {
+    return !(
+        commandPath === 'context'
+        || commandPath.startsWith('context ')
+        || commandPath === 'schema hash'
+        || commandPath === 'completions'
+        || commandPath === '_complete'
+        || commandPath === '_connection-broker'
+        || commandPath === 'serve'
+        || commandPath === 'logout'
+    );
+}
+
+function hasEndpointOverrides(values: ContextValues): boolean {
+    return values.endpoint !== undefined
+        || values.endpointCmd !== undefined
+        || values.endpointCmdStdio !== undefined
+        || values.endpointCmdEnv !== undefined
+        || values.endpointToken !== undefined
+        || values.endpointCmdCwd !== undefined
+        || values.provisionIdentity !== undefined
+        || values.provisionIdentitySlot !== undefined;
 }
 
 async function withChannel(
@@ -1244,11 +1756,19 @@ async function withChannel(
     // remote connection, to avoid double-logging the control socket.
     const conn = await connectEndpoint(acquired.ep, acquired.running === undefined ? wireLog('hub') : undefined);
     try {
+        const schemaSource = g_invocation?.values.schema;
+        const channel = schemaSource === undefined
+            ? conn.channel
+            : withStaticHubReflection(conn.channel, await loadStaticHubSchema(schemaSource));
         if (
             acquired.ep.kind === 'ws-no-init'
             || (acquired.ep.kind === 'socket' && acquired.ep.brokerMode === 'raw')
         ) {
-            await fn(conn.channel);
+            await fn(channel);
+            return;
+        }
+        if (g_invocation?.profile === 'rpc') {
+            await fn(channel);
             return;
         }
 
@@ -1261,6 +1781,7 @@ async function withChannel(
         // per-call auto-cap negotiation installed by `setupSigning`.
         if (
             opts.requestReflectionAccess !== false
+            && schemaSource === undefined
             && (acquired.running !== undefined || isHubEndpoint(acquired.ep))
         ) {
             const status = await requestReflectionAccess(session);
@@ -1281,7 +1802,7 @@ async function withChannel(
                 );
             }
         }
-        await fn(conn.channel);
+        await fn(channel);
     } finally {
         conn.close();
         acquired.running?.dispose();
@@ -1374,6 +1895,8 @@ function parseNonNegativeInteger(value: string, option: string): number {
  * control socket instead of `--endpoint`.
  */
 let g_hubConfigPath: string | undefined;
+let g_contextStore: ContextStore | undefined;
+let g_invocation: ResolvedInvocationContext | undefined;
 
 /**
  * Module-level flag, set per-command in the `preAction` hook. When set, the
@@ -1520,10 +2043,12 @@ function parseInterfaceRef(raw: string): { id: string; hash: string | undefined;
     return { id: raw, hash: undefined };
 }
 
-main(process.argv.slice(2)).catch((e: unknown) => {
-    process.stderr.write(`linkrpc: ${formatCliError(e)}\n`);
-    process.exit(1);
-});
+export function runCli(executableName: 'linkrpc' | 'rpc' | 'hub'): void {
+    main(process.argv.slice(2), executableName).catch((e: unknown) => {
+        process.stderr.write(`linkrpc: ${formatCliError(e)}\n`);
+        process.exit(1);
+    });
+}
 
 function formatCliError(error: unknown): string {
     if (typeof error !== 'object' || error === null) return String(error);

@@ -10,7 +10,7 @@ import {
  * does not offer a managed identity overlay (e.g. a plain stdio server). Maps
  * to the same on-disk slot `logout` clears.
  */
-export const MANAGED_FALLBACK_USER_ID = 'linkrpc-cli';
+export const MANAGED_FALLBACK_USER_ID = 'hubrpc-cli';
 
 /**
  * Which identity the CLI signs outbound calls with, parsed from `--principal`:
@@ -107,7 +107,7 @@ export async function resolvePrincipal(
 /**
  * Render a one-line, human-readable description of the identity used to sign
  * calls, e.g. `managed (node abcd012345…)` or
- * `local user:linkrpc-cli (node abcd012345…)`. `nodeId` is truncated to its
+ * `local user:hubrpc-cli (node abcd012345…)`. `nodeId` is truncated to its
  * first 10 characters.
  */
 export function formatPrincipalSource(source: PrincipalSource, nodeId: string): string {

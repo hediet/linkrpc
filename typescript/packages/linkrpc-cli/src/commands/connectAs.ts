@@ -16,7 +16,7 @@ export interface TransportHandle {
 
 export interface ConnectAsDeps {
     /**
-     * Mint a single-use `linkrpc::initialize` token bound to the target's slot
+     * Mint a single-use `hubrpc::initialize` token bound to the target's slot
      * (identity + granted namespace), via a `connectionTokenBinder` service.
      */
     mintToken(): Promise<string>;

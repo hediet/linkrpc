@@ -44,8 +44,8 @@ display).
 - [ ] `linkrpc-cli/src/ui/UiModel.ts` `peekPendingCall` + `submit` (~L320): root
       branches → `::${interfaceId}::${methodName}`.
 - [ ] `linkrpc-cli/src/reflection.ts` (~L71): non-target branches
-      `"linkrpc.directory::list"` / `"linkrpc.schemas::get"` →
-      `"::linkrpc.directory::list"` / `"::linkrpc.schemas::get"`.
+      `"hubrpc.directory::list"` / `"hubrpc.schemas::get"` →
+      `"::hubrpc.directory::list"` / `"::hubrpc.schemas::get"`.
 - [ ] `linkrpc-cli/src/hubSigning.ts` `_resolveHubAccessMethod` (~L68): `bare` →
       `::hubAccess::requestAccess`, whoami → `::hubInfo::whoami`, **and fix the
       form-3 concat** `${hubServiceId}::${bare}` (bare now starts with `::`) →

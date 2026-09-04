@@ -1,6 +1,6 @@
 # 06 — Identity
 
-**Optional.** This chapter defines how a call is *signed*: the **principal** that names a signing identity (resolved to a public key via its **keyId**), the **signed-object standard** that fixes the bytes a signature commits to, the `$hubrpc` signing members and the `$linkrpcSignature` map that carry a call's signature, and the verification rules. Identity is self-contained: it authenticates *who* makes a call but grants no authority on its own (that is chapter 07). A node that does not implement identity omits these members; an unsigned call is well-formed (chapter 00 §3).
+**Optional.** This chapter defines how a call is *signed*: the **principal** that names a signing identity (resolved to a public key via its **keyId**), the **signed-object standard** that fixes the bytes a signature commits to, the `$hubrpc` signing members and the `$hubrpcSignature` map that carry a call's signature, and the verification rules. Identity is self-contained: it authenticates *who* makes a call but grants no authority on its own (that is chapter 07). A node that does not implement identity omits these members; an unsigned call is well-formed (chapter 00 §3).
 
 ## 1. Keys
 
@@ -45,10 +45,10 @@ interface SignatureEntry {
 
 type SignedObject<TDomain extends string> = {
   [propertyName: string]: unknown;
-  $linkrpcSignature:
+  $hubrpcSignature:
     Record<TDomain, SignatureEntry> &
     Partial<Record<string, SignatureEntry>>;
-  $linkrpcUnsigned?: object;
+  $hubrpcUnsigned?: object;
 };
 
 async function sign<TDomain extends string>(
@@ -63,32 +63,32 @@ async function sign<TDomain extends string>(
 
   return {
     ...getData(objectToSign),
-    $linkrpcSignature: {
+    $hubrpcSignature: {
       [domain]: { keyId: signingKey.keyId, sig },
     },
-    $linkrpcUnsigned: unsignedData,
+    $hubrpcUnsigned: unsignedData,
   };
 }
 ```
 
 The signing key owns the private key material; it need not expose or export it. Its `keyId` is copied into the signature entry. The returned value is the final wire object.
 
-The signature does not cover `$linkrpcSignature` (which contains the signature itself) or `$linkrpcUnsigned` (which contains attachments authored independently of the signer). It covers every other property, including `$hubrpc`.
+The signature does not cover `$hubrpcSignature` (which contains the signature itself) or `$hubrpcUnsigned` (which contains attachments authored independently of the signer). It covers every other property, including `$hubrpc`.
 
 The signed and unsigned parts are read independently:
 
 ```ts
 function getData(signedObject: object): object {
   const data = { ...signedObject } as Record<string, unknown>;
-  delete data.$linkrpcSignature;
-  delete data.$linkrpcUnsigned;
+  delete data.$hubrpcSignature;
+  delete data.$hubrpcUnsigned;
   return data;
 }
 
 function getUnsignedData<TDomain extends string>(
   signedObject: SignedObject<TDomain>,
 ): object | undefined {
-  return signedObject.$linkrpcUnsigned;
+  return signedObject.$hubrpcUnsigned;
 }
 ```
 
@@ -101,7 +101,7 @@ function signingInput(
   domain: "call" | "capability" | string,
   data: object,
 ): Uint8Array {
-  return jcsBytes({ [`linkrpc-sig/v1/${domain}`]: data });
+  return jcsBytes({ [`hubrpc-sig/v1/${domain}`]: data });
 }
 ```
 
@@ -146,7 +146,7 @@ async function verifySignature<TDomain extends string>(
 }
 ```
 
-`resolveKey` resolves the advertised `keyId` only. It MAY use `$linkrpcUnsigned` as untrusted resolution evidence, but MUST validate that evidence before returning a key. `verifySignature` does not know about principals.
+`resolveKey` resolves the advertised `keyId` only. It MAY use `$hubrpcUnsigned` as untrusted resolution evidence, but MUST validate that evidence before returning a key. `verifySignature` does not know about principals.
 
 Malformed signature data, failed key resolution, or a failed Ed25519 check returns `{ valid: false }`.
 
@@ -166,10 +166,10 @@ const signed = await sign(
 
 // signed = {
 //   action: "read",
-//   $linkrpcSignature: {
+//   $hubrpcSignature: {
 //     example: { keyId: "key:<public-key>", sig: "<signature>" },
 //   },
-//   $linkrpcUnsigned: { traceId: "<trace-id>" },
+//   $hubrpcUnsigned: { traceId: "<trace-id>" },
 // }
 
 getUnsignedData(signed);
@@ -184,7 +184,7 @@ await verifySignature(signed, "example", resolveKey);
 await verifySignature(signed, "other", resolveKey);
 // => { valid: false } (wrong domain)
 
-signed.$linkrpcUnsigned = { traceId: "<another-trace-id>" };
+signed.$hubrpcUnsigned = { traceId: "<another-trace-id>" };
 await verifySignature(signed, "example", resolveKey);
 // => { valid: true, ... } (unsigned attachments changed)
 
@@ -244,7 +244,7 @@ function resolvePrincipalKey<TDomain extends string>(
 }
 ```
 
-`signedObject` is unused by the inline resolver. The identity extension ([identity-extension.md](identity-extension.md)) uses its validated `$linkrpcUnsigned.bindings` evidence to resolve rotated keys while preserving the same function shape.
+`signedObject` is unused by the inline resolver. The identity extension ([identity-extension.md](identity-extension.md)) uses its validated `$hubrpcUnsigned.bindings` evidence to resolve rotated keys while preserving the same function shape.
 
 The principal is a claim inside the signed data: calls use `$hubrpc.principal`, capabilities use `issuer`, and rotation records use the genesis document's `admin`. A mismatched `(principalId, keyId)` pair MUST resolve to `undefined` (fail-closed).
 
@@ -265,17 +265,17 @@ interface JsonRpcMessage {
       principal?: PrincipalId;
       interfaceHash?: string; // optional version assertion (chapter 04 §5)
     };
-    $linkrpcSignature?: {
+    $hubrpcSignature?: {
       [domain: string]?: { keyId: KeyId; sig: string };
     };
-    $linkrpcUnsigned?: object;
+    $hubrpcUnsigned?: object;
   };
 }
 ```
 
 The method appears twice deliberately. The outer `message.method` is the JSON-RPC routing field and is not part of the signed `params` object. The inner `params.$hubrpc.method` is the signer's assertion of the intended route and is covered by the signature. A receiver MUST require the two values to be equal. Thus a forwarder may read the outer method to route the message, but cannot change it to redirect a signed call without verification failing.
 
-`$hubrpc` is present on both signed and unsigned calls (an unsigned call omits `principal` and carries no `$linkrpcSignature`).
+`$hubrpc` is present on both signed and unsigned calls (an unsigned call omits `principal` and carries no `$hubrpcSignature`).
 
 A **signed call** is one whose `params` object is call-signed (domain `call`, §2). On a signed call, `principal` MUST be present and `verifySignatureWithPrincipal(params, "call", principal, resolvePrincipalKey)` MUST succeed.
 
@@ -294,7 +294,7 @@ if (!verified.valid) reject();
 
 The resolver binds the signature entry's `keyId` to the principal claim carried by the signed bytes.
 
-> **Note.** The strip rule (§2) removes `$linkrpcSignature` and `$linkrpcUnsigned` but keeps `$hubrpc`, so the signature binds `$hubrpc.method`, `nonce`, `signedAtMs`, `principal`, and the user params. The equality check against the outer `method` binds that signed assertion to JSON-RPC routing, and the bound `nonce` makes the bytes unique per attempt.
+> **Note.** The strip rule (§2) removes `$hubrpcSignature` and `$hubrpcUnsigned` but keeps `$hubrpc`, so the signature binds `$hubrpc.method`, `nonce`, `signedAtMs`, `principal`, and the user params. The equality check against the outer `method` binds that signed assertion to JSON-RPC routing, and the bound `nonce` makes the bytes unique per attempt.
 
 ### 4.1 Verification
 
@@ -309,4 +309,4 @@ A call failing any step MUST be rejected. The error is `permissionRequired` when
 
 ### 4.2 Skipping identity
 
-A node MAY operate without identity, in which case calls carry no `principal` and no `$linkrpcSignature`. A node that requires identity for a given call but receives an unsigned one MUST reject it (§4.1); a node that does not require identity MUST NOT reject a call merely for being unsigned.
+A node MAY operate without identity, in which case calls carry no `principal` and no `$hubrpcSignature`. A node that requires identity for a given call but receives an unsigned one MUST reject it (§4.1); a node that does not require identity MUST NOT reject a call merely for being unsigned.

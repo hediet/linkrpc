@@ -138,7 +138,7 @@ async fn pizza_round_trips_over_socket_with_preamble() {
 
     // 2) reflection works the same way over the socket.
     let listing = client
-        .call_member(None, "linkrpc.directory", "list", json!({}))
+        .call_member(None, "hubrpc.directory", "list", json!({}))
         .await
         .expect("directory list");
     let items = listing["items"].as_array().unwrap();
@@ -148,7 +148,7 @@ async fn pizza_round_trips_over_socket_with_preamble() {
     let schema = client
         .call_member(
             None,
-            "linkrpc.schemas",
+            "hubrpc.schemas",
             "get",
             json!({ "interfaceId": PIZZA_ID }),
         )

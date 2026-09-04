@@ -26,17 +26,21 @@ The newline-delimited JSON binding runs over any reliable ordered byte stream �
 
 ### 2.1 Initialize handshake
 
-On a connection that authenticates or negotiates transport details — e.g. a socket or named-pipe connection that carries an attribution **token** — the dialing node MUST send, as the very first message before any other JSON-RPC message, a `linkrpc::initialize` **request**:
+On a connection that authenticates or negotiates transport details — e.g. a socket or named-pipe connection that carries an attribution **token** — the dialing node MUST send, as the very first message before any other JSON-RPC message, a `hubrpc::initialize` **request**:
 
 ```
-{"jsonrpc":"2.0","id":0,"method":"linkrpc::initialize","params":{"protocolVersion":1,"token":"<token>"}}\n
+{"jsonrpc":"2.0","id":0,"method":"hubrpc::initialize","params":{"protocolVersion":1,"token":"<token>"}}\n
 ```
 
-where `protocolVersion` is the transport protocol version (currently `1`) and `token` is the attribution token (the field is omitted when none). The accepting node MUST require `linkrpc::initialize` as the first message, validate the token, and reply on the same `id` with the result `{"protocolVersion":1}`. If the token is not accepted, the accepting node MUST reply with an error (`invalidRequest`, message `"unauthenticated"`) and then drop the connection.
+where `protocolVersion` is the transport protocol version (currently `1`) and `token` is the attribution token (the field is omitted when none). The accepting node MUST require `hubrpc::initialize` as the first message, validate the token, and reply on the same `id` with the result `{"protocolVersion":1}`. If the token is not accepted, the accepting node MUST reply with an error (`invalidRequest`, message `"unauthenticated"`) and then drop the connection.
 
-`linkrpc::initialize` is handled entirely by the transport layer: it is never forwarded to the hub or any service and is not a routed call. A node that requires the handshake MUST complete it before exchanging any other message. The handshake MAY be omitted for trusted links that need neither authentication nor negotiation (e.g. stdio, §4).
+For transition compatibility, accepting nodes SHOULD also recognize
+`linkrpc::initialize` with the same parameters and response. Dialing nodes send
+the canonical `hubrpc::initialize` spelling.
 
-> **Note.** Provenance-authenticated deployments may ignore the token; an omitted (or empty) token is therefore valid. The handshake is an *ordering predicate* (chapter 00 §4): the `linkrpc::initialize` request MUST be the first message on the stream and its reply the first message back.
+`hubrpc::initialize` is handled entirely by the transport layer: it is never forwarded to the hub or any service and is not a routed call. A node that requires the handshake MUST complete it before exchanging any other message. The handshake MAY be omitted for trusted links that need neither authentication nor negotiation (e.g. stdio, §4).
+
+> **Note.** Provenance-authenticated deployments may ignore the token; an omitted (or empty) token is therefore valid. The handshake is an *ordering predicate* (chapter 00 §4): the `hubrpc::initialize` request MUST be the first message on the stream and its reply the first message back.
 
 ## 3. WebSocket binding
 
@@ -44,7 +48,7 @@ Over a WebSocket, each message is one text frame containing the message's JSON t
 
 ## 4. stdio binding
 
-A node MAY be reached by spawning a child process and speaking the NDJSON binding (§2) over the child's stdin (node → child) and stdout (child → node). The child's stderr is not part of the transport. No `linkrpc::initialize` handshake is used on stdio; a spawned child receives its attribution out of band (§5.3).
+A node MAY be reached by spawning a child process and speaking the NDJSON binding (§2) over the child's stdin (node → child) and stdout (child → node). The child's stderr is not part of the transport. No `hubrpc::initialize` handshake is used on stdio; a spawned child receives its attribution out of band (§5.3).
 
 ## 5. Endpoint URIs
 
@@ -80,4 +84,4 @@ A node that starts from the environment reads its endpoint from `LINKRPC_ENDPOIN
 3. `LINKRPC_TOKEN`;
 4. the empty string.
 
-> **Rationale.** The north-star deployment is exactly this: a node reads `LINKRPC_ENDPOINT` + `LINKRPC_TOKEN`, dials a `unix:` socket, performs the `linkrpc::initialize` handshake, and speaks NDJSON.
+> **Rationale.** The north-star deployment is exactly this: a node reads `LINKRPC_ENDPOINT` + `LINKRPC_TOKEN`, dials a `unix:` socket, performs the `hubrpc::initialize` handshake, and speaks NDJSON.

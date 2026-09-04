@@ -88,7 +88,7 @@ export class TokenIdentityStore {
     }
 
     /**
-     * Non-consuming existence check for the `linkrpc::initialize` token gate.
+     * Non-consuming existence check for the `hubrpc::initialize` token gate.
      * Returns `true` iff the token is live (known and unexpired). Single-use is
      * enforced separately by {@link redeem}.
      */

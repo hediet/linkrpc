@@ -187,7 +187,7 @@ async fn unknown_interface_is_method_not_found() {
 async fn reflection_directory_lists_pizza() {
     let (client, _server) = make_pair(Arc::new(Mutex::new(Vec::new())));
     let listing = client
-        .call_member(None, "linkrpc.directory", "list", json!({}))
+        .call_member(None, "hubrpc.directory", "list", json!({}))
         .await
         .expect("directory list");
     let items = listing["items"].as_array().expect("items array");
@@ -206,7 +206,7 @@ async fn reflection_directory_filters_by_interface() {
     let listing = client
         .call_member(
             None,
-            "linkrpc.directory",
+            "hubrpc.directory",
             "list",
             json!({ "interfaceId": PIZZA_ID }),
         )
@@ -221,7 +221,7 @@ async fn reflection_directory_filters_by_interface() {
 async fn reflection_defaults_reports_preset() {
     let (client, _server) = make_pair(Arc::new(Mutex::new(Vec::new())));
     let defaults = client
-        .call_member(None, "linkrpc.defaults", "get", json!({}))
+        .call_member(None, "hubrpc.defaults", "get", json!({}))
         .await
         .expect("defaults get");
     assert_eq!(defaults["interfaceId"], PIZZA_ID);
@@ -234,7 +234,7 @@ async fn reflection_schemas_returns_interface() {
     let schema = client
         .call_member(
             None,
-            "linkrpc.schemas",
+            "hubrpc.schemas",
             "get",
             json!({ "interfaceId": PIZZA_ID }),
         )
@@ -251,7 +251,7 @@ async fn reflection_schemas_unknown_is_method_not_found() {
     let err = client
         .call_member(
             None,
-            "linkrpc.schemas",
+            "hubrpc.schemas",
             "get",
             json!({ "interfaceId": "com.acme.nope" }),
         )

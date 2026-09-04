@@ -55,9 +55,41 @@ describe("resolveEndpoint", () => {
         });
     });
 
-    it("--endpoint-token overrides the URI token", () => {
-        const r = resolveEndpoint({ endpoint: "unix:/x.sock?token=a", endpointToken: "b", env: {} });
+    it("--endpoint-token replaces an explicit token placeholder", () => {
+        const r = resolveEndpoint({ endpoint: "unix:/x.sock?token=%", endpointToken: "b", env: {} });
         expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "b" });
+    });
+
+    it("errors when --endpoint-token is used without a token placeholder", () => {
+        const r = resolveEndpoint({ endpoint: "unix:/x.sock", endpointToken: "b", env: {} });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/\?token=%' or '&token=%'/);
+    });
+
+    it("errors when --endpoint-token is used with a command endpoint", () => {
+        const r = resolveEndpoint({
+            endpointCmd: "node server.js",
+            endpointToken: "b",
+            env: {},
+        });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/--endpoint-token requires --endpoint/);
+    });
+
+    it("errors when --endpoint-token is used with a literal URI token", () => {
+        const r = resolveEndpoint({ endpoint: "unix:/x.sock?token=123", endpointToken: "b", env: {} });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/\?token=%' or '&token=%'/);
+    });
+
+    it("errors when --endpoint-token is used with ws-no-init", () => {
+        const r = resolveEndpoint({
+            endpoint: "ws-no-init://host:4123/?token=%&client=cli",
+            endpointToken: "b",
+            env: {},
+        });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/only supported for socket\/unix\/npipe and ws\/wss/);
     });
 
     it("ignores LINKRPC_TOKEN for an explicit --endpoint", () => {
@@ -75,6 +107,13 @@ describe("resolveEndpoint", () => {
         expect(r.endpoint).toEqual({ kind: "socket", path: "/tmp/x.sock", token: "abc" });
     });
 
+    it("resolves a socket endpoint from legacy HUBRPC_* env vars", () => {
+        const r = resolveEndpoint({
+            env: { HUBRPC_ENDPOINT: "/tmp/legacy.sock", HUBRPC_TOKEN: "legacy" },
+        });
+        expect(r.endpoint).toEqual({ kind: "socket", path: "/tmp/legacy.sock", token: "legacy" });
+    });
+
     it("env URI token wins over LINKRPC_TOKEN", () => {
         const r = resolveEndpoint({
             env: { LINKRPC_ENDPOINT: "unix:/x.sock?token=fromuri", LINKRPC_TOKEN: "fromenv" },
@@ -82,12 +121,64 @@ describe("resolveEndpoint", () => {
         expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "fromuri" });
     });
 
-    it("--endpoint-token overrides LINKRPC_TOKEN for an env endpoint", () => {
+    it("falls back to HUBRPC_TOKEN when LINKRPC_TOKEN is unset", () => {
+        const r = resolveEndpoint({
+            env: { LINKRPC_ENDPOINT: "/x.sock", HUBRPC_TOKEN: "legacy" },
+        });
+        expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "legacy" });
+    });
+
+    it("LINKRPC_* env vars take precedence over HUBRPC_*", () => {
+        const r = resolveEndpoint({
+            env: {
+                LINKRPC_ENDPOINT: "/current.sock",
+                LINKRPC_TOKEN: "current",
+                HUBRPC_ENDPOINT: "/legacy.sock",
+                HUBRPC_TOKEN: "legacy",
+            },
+        });
+        expect(r.endpoint).toEqual({ kind: "socket", path: "/current.sock", token: "current" });
+    });
+
+    it("--endpoint-token replaces the placeholder of an env endpoint", () => {
+        const r = resolveEndpoint({
+            endpointToken: "flag",
+            env: { LINKRPC_ENDPOINT: "unix:/x.sock?token=%", LINKRPC_TOKEN: "env" },
+        });
+        expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "flag" });
+    });
+
+    it("LINKRPC_TOKEN fills the placeholder of an env endpoint", () => {
+        const r = resolveEndpoint({
+            env: { LINKRPC_ENDPOINT: "unix:/x.sock?token=%", LINKRPC_TOKEN: "env" },
+        });
+        expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "env" });
+    });
+
+    it("errors when an endpoint placeholder has no token source", () => {
+        const r = resolveEndpoint({
+            endpoint: "unix:/x.sock?token=%",
+            env: {},
+        });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/contains token=% but no token value was provided/);
+    });
+
+    it("treats an encoded percent as a literal token rather than a placeholder", () => {
+        const r = resolveEndpoint({
+            endpoint: "unix:/x.sock?token=%25",
+            env: {},
+        });
+        expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "%" });
+    });
+
+    it("errors when --endpoint-token is used with an env endpoint that has no placeholder", () => {
         const r = resolveEndpoint({
             endpointToken: "flag",
             env: { LINKRPC_ENDPOINT: "/x.sock", LINKRPC_TOKEN: "env" },
         });
-        expect(r.endpoint).toEqual({ kind: "socket", path: "/x.sock", token: "flag" });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/\?token=%' or '&token=%'/);
     });
 
     it("resolves a bare ws endpoint from env", () => {
@@ -131,5 +222,26 @@ describe("resolveTargetEndpoint (cwd)", () => {
         const r = resolveTargetEndpoint({ targetEndpoint: "unix:/x.sock", targetEndpointCmdCwd: "/t/dir" });
         expect(r.endpoint).toBeUndefined();
         expect(r.error).toMatch(/--target-endpoint-cmd-cwd requires/);
+    });
+
+    it("applies target endpoint token placeholders with the same rules", () => {
+        const r = resolveTargetEndpoint({
+            targetEndpoint: "wss://hub.example.com/?token=%",
+            targetEndpointToken: "target-token",
+        });
+        expect(r.endpoint).toEqual({
+            kind: "ws",
+            url: "wss://hub.example.com/",
+            token: "target-token",
+        });
+    });
+
+    it("errors when a target token is used with a target command endpoint", () => {
+        const r = resolveTargetEndpoint({
+            targetEndpointCmd: "node server.js",
+            targetEndpointToken: "target-token",
+        });
+        expect(r.endpoint).toBeUndefined();
+        expect(r.error).toMatch(/--target-endpoint-token requires --target-endpoint/);
     });
 });

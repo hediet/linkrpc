@@ -145,15 +145,15 @@ describe("ConnectionBroker", () => {
         });
 
         try {
-            await expect(connections.localClient.channel.sendRequest("linkrpc.defaults::get", {}))
+            await expect(connections.localClient.channel.sendRequest("hubrpc.defaults::get", {}))
                 .resolves.toEqual({
                     interfaceId: schema.id,
                     interfaceHash: schema.hash,
                 });
-            await expect(connections.localClient.channel.sendRequest("linkrpc.directory::list", {}))
+            await expect(connections.localClient.channel.sendRequest("hubrpc.directory::list", {}))
                 .resolves.toEqual({ items: [] });
             await expect(connections.localClient.channel.sendRequest(
-                "linkrpc.schemas::get",
+                "hubrpc.schemas::get",
                 { interfaceId: schema.id },
             )).resolves.toEqual({ schema });
             await expect(connections.localClient.channel.sendRequest("hello", { name: "Ada" }))
@@ -250,7 +250,7 @@ describe("ConnectionBroker", () => {
         const connections = createConnections();
         try {
             await expect(connections.localClient.channel.sendRequest(
-                "linkrpc.connectionBroker::unknown",
+                "hubrpc.connectionBroker::unknown",
                 {},
             )).rejects.toEqual(expect.objectContaining<RpcError>({
                 code: ErrorCode.methodNotFound,

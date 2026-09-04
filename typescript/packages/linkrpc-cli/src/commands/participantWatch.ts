@@ -45,7 +45,7 @@ interface InspectionSource {
     readonly graph: TopologyGraph;
 }
 
-const TOPOLOGY_INTERFACE = 'linkrpc.topology';
+const TOPOLOGY_INTERFACE = 'hubrpc.topology';
 
 export async function topologyParticipantsCommand(
     channel: CliChannel,

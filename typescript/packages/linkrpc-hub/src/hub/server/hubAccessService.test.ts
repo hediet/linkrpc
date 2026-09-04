@@ -213,7 +213,7 @@ describe('registerHubAccessService', () => {
             consumer: { name: 'Explorer', principal: consumer.principal },
             permissions: [
                 {
-                    target: { serviceId: { exact: 'any' }, interfaceId: { exact: 'linkrpc.directory' }, members: [{ exact: 'list' }] },
+                    target: { serviceId: { exact: 'any' }, interfaceId: { exact: 'hubrpc.directory' }, members: [{ exact: 'list' }] },
                     canInvoke: true,
                 },
             ],

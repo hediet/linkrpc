@@ -95,7 +95,7 @@ export interface OpenWebSocketOptions {
  * socket errors before open.
  *
  * Authentication is NOT done here: the hub's WebSocket server authenticates
- * over the in-band `linkrpc::initialize` handshake (so browsers, which cannot
+ * over the in-band `hubrpc::initialize` handshake (so browsers, which cannot
  * set request headers on the `WebSocket` constructor, work too). Run
  * {@link runInitializeHandshake} on the resulting {@link WebSocketTransport}.
  *

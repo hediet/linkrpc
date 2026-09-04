@@ -3,18 +3,23 @@ import type { PrincipalId } from "../crypto/cryptoProvider";
 import type { SignedCapability } from "./capability";
 import type { JsonRpcNotification, JsonRpcRequest } from "./jsonRpc";
 import {
-    LINKRPC_META_KEY,
-    LINKRPC_SIGNATURE_KEY,
-    LINKRPC_UNSIGNED_KEY,
+    HUBRPC_META_KEY,
+    HUBRPC_SIGNATURE_KEY,
+    HUBRPC_UNSIGNED_KEY,
     type Signatures,
 } from "./signedObject";
 
-export { LINKRPC_META_KEY, LINKRPC_SIGNATURE_KEY, LINKRPC_UNSIGNED_KEY, type Signatures };
+export {
+    HUBRPC_META_KEY,
+    HUBRPC_SIGNATURE_KEY,
+    HUBRPC_UNSIGNED_KEY,
+    type Signatures,
+};
 
 /**
  * Signed call meta. Lives under `params.$hubrpc` so it can't collide with
  * the user's top-level param keys. Present on signed AND unsigned calls
- * (the latter omit {@link CallMeta.principal} and carry no `$linkrpcSignature`).
+ * (the latter omit {@link CallMeta.principal} and carry no `$hubrpcSignature`).
  *
  * Included verbatim in the bytes a call signature commits to — the
  * signature covers `signingInput("call", { ...userParams, $hubrpc })`.
@@ -33,7 +38,7 @@ export interface CallMeta {
 }
 
 /**
- * Extrinsic, unsigned attachments carried under `params.$linkrpcUnsigned`.
+ * Extrinsic, unsigned attachments carried under `params.$hubrpcUnsigned`.
  * Not covered by the call signature (they aren't authored by the signer).
  */
 export interface LinkRpcUnsigned {
@@ -43,9 +48,9 @@ export interface LinkRpcUnsigned {
 
 /** Reserved wire-key meta carried on a linkrpc call's params object. */
 export interface LinkRpcWireMeta {
-    readonly [LINKRPC_META_KEY]?: CallMeta;
-    readonly [LINKRPC_SIGNATURE_KEY]?: Signatures;
-    readonly [LINKRPC_UNSIGNED_KEY]?: LinkRpcUnsigned;
+    readonly [HUBRPC_META_KEY]?: CallMeta;
+    readonly [HUBRPC_SIGNATURE_KEY]?: Signatures;
+    readonly [HUBRPC_UNSIGNED_KEY]?: LinkRpcUnsigned;
 }
 
 
@@ -106,7 +111,7 @@ export function stripLinkRpcWireMeta(wireParams: unknown): JsonValue | undefined
         return wireParams as JsonValue;
     }
     const object = wireParams as Record<string, unknown>;
-    const reserved = [LINKRPC_META_KEY, LINKRPC_SIGNATURE_KEY, LINKRPC_UNSIGNED_KEY];
+    const reserved = [HUBRPC_META_KEY, HUBRPC_SIGNATURE_KEY, HUBRPC_UNSIGNED_KEY];
     if (!reserved.some((key) => key in object)) return object as JsonValue;
 
     const userParams: Record<string, unknown> = {};

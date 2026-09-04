@@ -17,7 +17,7 @@ describe('requestReflectionAccess', () => {
         const capBag = await CapBag.load();
         await capBag.add(await issueCapability(identity, {
             audience: identity.publicSigningIdentity,
-            permissions: ['linkrpc.directory', 'linkrpc.schemas', 'linkrpc.defaults'].map(
+            permissions: ['hubrpc.directory', 'hubrpc.schemas', 'hubrpc.defaults'].map(
                 (interfaceId) => ({
                     target: {
                         serviceId: { prefix: '' },
@@ -63,7 +63,7 @@ describe('requestReflectionAccess', () => {
                     {
                         target: {
                             serviceId: { prefix: '' },
-                            interfaceId: { exact: 'linkrpc.directory' },
+                            interfaceId: { exact: 'hubrpc.directory' },
                             members: [{ prefix: '' }],
                         },
                         canInvoke: true,
@@ -71,7 +71,7 @@ describe('requestReflectionAccess', () => {
                     {
                         target: {
                             serviceId: { prefix: '' },
-                            interfaceId: { exact: 'linkrpc.topology' },
+                            interfaceId: { exact: 'hubrpc.topology' },
                             members: [{ prefix: '' }],
                         },
                         canInvoke: true,
@@ -101,7 +101,7 @@ describe('requestReflectionAccess', () => {
                 {
                     target: {
                         serviceId: { exact: 'one' },
-                        interfaceId: { exact: 'linkrpc.topology' },
+                        interfaceId: { exact: 'hubrpc.topology' },
                         members: [{ prefix: '' }],
                     },
                     canInvoke: true,
@@ -109,7 +109,7 @@ describe('requestReflectionAccess', () => {
                 {
                     target: {
                         serviceId: { exact: 'two' },
-                        interfaceId: { exact: 'linkrpc.topology' },
+                        interfaceId: { exact: 'hubrpc.topology' },
                         members: [{ prefix: '' }],
                     },
                     canInvoke: true,

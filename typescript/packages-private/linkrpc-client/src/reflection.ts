@@ -21,7 +21,7 @@ import {
 export type CliChannel = IRequestSender<SigningCallCtx>;
 
 /**
- * The directory walk and the `linkrpc.directory` / `linkrpc.schemas` fetch
+ * The directory walk and the `hubrpc.directory` / `hubrpc.schemas` fetch
  * helpers now live in `@hediet/linkrpc` core (so the hub can share them for
  * access-candidate resolution). They are re-exported here so existing CLI
  * imports (`../reflection`) keep working.
@@ -50,7 +50,7 @@ export interface DefaultsResult {
 }
 
 export async function fetchDefaults(channel: CliChannel): Promise<DefaultsResult> {
-    const raw = await channel.sendRequest("linkrpc.defaults::get", {}) as {
+    const raw = await channel.sendRequest("hubrpc.defaults::get", {}) as {
         serviceId?: string;
         interfaceId?: string;
         interfaceHash?: string;

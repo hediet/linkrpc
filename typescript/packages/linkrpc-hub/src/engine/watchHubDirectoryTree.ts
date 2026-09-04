@@ -3,8 +3,8 @@
  * subscription.
  *
  * The hub directory is a **referral graph**: the root
- * (`<rootTarget>::linkrpc.directory`) lists sub-directories, each of which may
- * list more. A single `linkrpc.directory::watch` only reflects *its own* node —
+ * (`<rootTarget>::hubrpc.directory`) lists sub-directories, each of which may
+ * list more. A single `hubrpc.directory::watch` only reflects *its own* node —
  * the hub's global directory aggregates local, participant-root, and routing
  * invalidations, while every referred directory remains a separate node with
  * its own watch. To react to a manifest appearing *anywhere* in the tree, a
@@ -12,13 +12,13 @@
  * set of nodes itself changes.
  *
  * This uses {@link HubDirectoryExplorer} to open
- * `linkrpc.directory::watch` on the root and every discovered sub-directory.
+ * `hubrpc.directory::watch` on the root and every discovered sub-directory.
  * A tick re-lists only its source and reconciles affected descendant branches;
  * unchanged siblings are not re-listed or re-watched. Nodes that
  * serve the static {@link directoryWatchNever} handler simply never tick — the
  * watch is a harmless no-op there — while live nodes (the routing-backed root,
  * nested sub-hubs) drive discovery. Reads/watches are forwarded (form-3) calls,
- * so `connection` must carry a capability for `*::linkrpc.directory::*` when it is
+ * so `connection` must carry a capability for `*::hubrpc.directory::*` when it is
  * gated.
  *
  * Returns a teardown that cancels every open watch.

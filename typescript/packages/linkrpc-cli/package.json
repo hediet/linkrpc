@@ -5,14 +5,15 @@
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "bin": {
-        "linkrpc": "./dist/cli.js",
-        "hub": "./dist/cli.js"
+        "linkrpc": "./dist/linkrpc.js",
+        "rpc": "./dist/rpc.js",
+        "hub": "./dist/hub.js"
     },
     "files": [
         "dist"
     ],
     "scripts": {
-        "cli": "tsx src/cli.ts",
+        "cli": "tsx src/linkrpc.ts",
         "build": "tsdown",
         "dev": "tsdown --watch",
         "generate:ahp-schema": "tsx generate-ahp-schema.ts",

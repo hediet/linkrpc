@@ -29,7 +29,7 @@
     the WebSocket `tkn` query parameter. The token is intentionally not recorded
     here.
   - The original `ws:` attempt did not send the AHP request because the LinkRPC
-    connection first performs its mandatory `linkrpc::initialize` handshake.
+    connection first performs its mandatory `hubrpc::initialize` handshake.
     AHP sent no response to that unknown pre-initialize method, so LinkRPC threw
     when its 10-second handshake timeout expired.
   - The VS Code AHP server's pre-initialize dispatch currently returns without

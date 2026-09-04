@@ -1,6 +1,10 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { connectNdjson, INITIALIZE_METHOD } from './initialize';
+import {
+    connectNdjson,
+    INITIALIZE_METHOD,
+    LINKRPC_INITIALIZE_METHOD_ALIAS,
+} from './initialize';
 import type { JsonRpcMessage } from '../protocol/jsonRpc';
 
 /** A pair of streams wired back-to-back: what a sends, b receives. */
@@ -103,6 +107,26 @@ describe('connectNdjson handshake', () => {
         aToB.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'app::ping', params: {} }) + '\n');
 
         await expect(serverP).rejects.toThrow(/expected initialize/);
+    });
+
+    it('accepts the transitional linkrpc initialize spelling server-side', async () => {
+        const aToB = new PassThrough({ encoding: 'utf8' });
+        const bToA = new PassThrough({ encoding: 'utf8' });
+        const serverReply = collect(bToA);
+        const serverP = connectNdjson({
+            input: aToB,
+            output: bToA,
+            initialize: { kind: 'server', isTokenAccepted: async (token) => token === 'sekret' },
+        });
+        aToB.write(JSON.stringify({
+            jsonrpc: '2.0',
+            id: 0,
+            method: LINKRPC_INITIALIZE_METHOD_ALIAS,
+            params: { protocolVersion: 1, token: 'sekret' },
+        }) + '\n');
+
+        await expect(serverP).resolves.toMatchObject({ token: 'sekret' });
+        expect(serverReply()).toContain('"protocolVersion":1');
     });
 
     it('times out when no handshake arrives', async () => {

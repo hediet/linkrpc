@@ -68,6 +68,12 @@ describe("progressive graph commands", () => {
             const pretty = await lsCommand(fixture.client, { format: "pretty" });
             expect(pretty).toContain("LinkRPC directory (complete");
             expect(pretty).toContain("(connection root)");
+            expect(pretty).toContain(`@ ${pingInterface.schemaHash}`);
+            expect(pretty).not.toContain("@ undefined");
+
+            const compact = await lsCommand(fixture.client);
+            expect(compact).not.toContain("LinkRPC directory");
+            expect(compact).toContain(`test.graph-commands @ ${pingInterface.schemaHash}`);
         } finally {
             fixture.dispose();
         }

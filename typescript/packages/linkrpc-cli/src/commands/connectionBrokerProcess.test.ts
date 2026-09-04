@@ -110,7 +110,7 @@ describe("runConnectionBroker", () => {
 
         const client = await connect(parseEndpointUri(broker.endpoint));
         try {
-            await expect(client.channel.sendRequest("linkrpc.defaults::get", {})).resolves.toEqual({
+            await expect(client.channel.sendRequest("hubrpc.defaults::get", {})).resolves.toEqual({
                 interfaceId: schema.id,
                 interfaceHash: schema.hash,
             });

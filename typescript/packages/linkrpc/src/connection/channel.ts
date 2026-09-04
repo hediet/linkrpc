@@ -19,7 +19,7 @@ export class Channel<TInCtx = undefined, TOutCtx = undefined> {
     /**
      * Install the endpoint inspection observer at the JSON-RPC wire boundary.
      * Intended for {@link LinkRpcConnection}; ordinary consumers should use the
-     * public `linkrpc.traffic` service instead.
+     * public `hubrpc.traffic` service instead.
      */
     public setWireMessageObserver(
         observer: WireMessageObserver | undefined,

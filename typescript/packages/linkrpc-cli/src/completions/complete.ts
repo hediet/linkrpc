@@ -14,7 +14,13 @@ import {
 } from './directorySource';
 import { parseLine } from './parse';
 import { resolveSlot, type ResolvedContext, type Slot } from './resolve';
-import { COMMAND_TREE, type CommandTree, type SlotType } from './tree';
+import { normalizeCliExecutable } from '../cliInvocation';
+import {
+    HUB_COMMAND_TREE,
+    RPC_COMMAND_TREE,
+    type CommandTree,
+    type SlotType,
+} from './tree';
 
 export interface Completion {
     /** Text to replace the current word with. */
@@ -52,12 +58,14 @@ const SHELLS: readonly string[] = ['powershell', 'bash', 'zsh', 'fish'];
  * enumerate the result as-is. The output is sorted and de-duplicated.
  */
 export async function complete(opts: CompleteOptions): Promise<Completion[]> {
-    const tree = opts.tree ?? COMMAND_TREE;
     const parsed = parseLine(opts.line, opts.point);
+    const executable = normalizeCliExecutable(parsed.tokensBefore[0]?.text);
+    const tree = opts.tree
+        ?? (executable === 'hub' ? HUB_COMMAND_TREE : RPC_COMMAND_TREE);
     const ctx = resolveSlot(parsed, tree);
     const prefix = parsed.currentWordPrefix;
 
-    const stat = _staticCandidates(ctx.slot, prefix, tree);
+    const stat = _staticCandidates(ctx, prefix, tree);
     const dyn = opts.directory
         ? await _dynamicCandidates(ctx, prefix, opts.directory)
         : [];
@@ -72,14 +80,18 @@ export async function complete(opts: CompleteOptions): Promise<Completion[]> {
     return merged.sort((a, b) => (a.text < b.text ? -1 : a.text > b.text ? 1 : 0));
 }
 
-function _staticCandidates(slot: Slot, prefix: string, tree: CommandTree): Completion[] {
+function _staticCandidates(ctx: ResolvedContext, prefix: string, tree: CommandTree): Completion[] {
+    const slot = ctx.slot;
     if (slot.kind === 'subcommand') {
-        return tree.subcommands
+        return (slot.parent?.subcommands ?? tree.subcommands)
             .filter((s) => !s.hidden && s.name.startsWith(prefix))
             .map((s) => ({ text: s.name, tooltip: s.description }));
     }
     if (slot.kind === 'flag-name') {
-        const flags = [...(slot.subcommand?.options ?? []), ...tree.globalOptions];
+        const flags = [
+            ...ctx.commandPath.flatMap((command) => command.options),
+            ...tree.globalOptions,
+        ];
         const eq = prefix.indexOf('=');
         const lookupPrefix = eq >= 0 ? prefix.slice(0, eq) : prefix;
         return flags

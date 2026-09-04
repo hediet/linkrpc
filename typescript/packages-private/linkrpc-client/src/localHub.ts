@@ -126,7 +126,7 @@ export async function startLocalHub(opts: StartLocalHubOptions): Promise<LocalHu
 /**
  * A **RootOverlay** fronting a spawned `cmd-env` child, without a routing hub.
  * The child's root-form calls (`identity::*`, `hubGrantedServiceId::*`,
- * `linkrpc.directory`, `hubAccess`) are served locally on {@link RootOverlay.root};
+ * `hubrpc.directory`, `hubAccess`) are served locally on {@link RootOverlay.root};
  * every prefixed request/response is relayed verbatim over {@link uplink}.
  *
  * This is the tunnel's target front end: the tunnel drives {@link uplink} as the

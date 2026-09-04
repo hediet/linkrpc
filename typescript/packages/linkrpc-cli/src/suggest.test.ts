@@ -5,16 +5,16 @@ import { formatSuggestion, HubSnapshot, type SnapshotEntry } from './suggest';
 // A single fixed hub used by every case below. Mirrors the matrix discussed
 // in the design: a hub root + three "domain" services + an admin variant.
 const FIXTURE_ENTRIES: SnapshotEntry[] = [
-    { serviceId: '', interfaceId: 'linkrpc.directory', hash: 'a3f2b1', methods: ['list'] },
-    { serviceId: '', interfaceId: 'linkrpc.defaults', hash: 'a3f2b1', methods: ['get'] },
-    { serviceId: '', interfaceId: 'linkrpc.schemas', hash: 'a3f2b1', methods: ['get'] },
+    { serviceId: '', interfaceId: 'hubrpc.directory', hash: 'a3f2b1', methods: ['list'] },
+    { serviceId: '', interfaceId: 'hubrpc.defaults', hash: 'a3f2b1', methods: ['get'] },
+    { serviceId: '', interfaceId: 'hubrpc.schemas', hash: 'a3f2b1', methods: ['get'] },
     {
         serviceId: 'hub',
         interfaceId: 'hubAccess',
         hash: 'a3f2b1',
         methods: ['login', 'logout', 'getStatus', 'listSubscriptions'],
     },
-    { serviceId: 'hub', interfaceId: 'linkrpc.directory', hash: 'a3f2b1', methods: ['list'] },
+    { serviceId: 'hub', interfaceId: 'hubrpc.directory', hash: 'a3f2b1', methods: ['list'] },
     {
         serviceId: 'vscode',
         interfaceId: 'vscode.lm',
@@ -57,7 +57,7 @@ const FIXTURE_ENTRIES: SnapshotEntry[] = [
         hash: 'a3f2b1',
         methods: ['runCommand', 'getStatus'],
     },
-    { serviceId: 'azure-cli', interfaceId: 'linkrpc.directory', hash: 'a3f2b1', methods: ['list'] },
+    { serviceId: 'azure-cli', interfaceId: 'hubrpc.directory', hash: 'a3f2b1', methods: ['list'] },
     {
         serviceId: 'hub-admin',
         interfaceId: 'hubAccess',
@@ -323,7 +323,7 @@ describe('HubSnapshot indexing', () => {
         const snap = FIXTURE;
         expect(snap.services()).toContain('hub');
         expect(snap.services()).toContain('azure-cli');
-        expect(snap.interfacesOnService('azure-cli')).toEqual(['Runner', 'linkrpc.directory']);
+        expect(snap.interfacesOnService('azure-cli')).toEqual(['Runner', 'hubrpc.directory']);
         expect(snap.servicesHostingInterface('hubAccess')).toEqual(['hub', 'hub-admin']);
         expect(snap.methodsOn('vscode', 'vscode.lm')).toEqual(['sendChatRequest', 'listModels']);
         expect(snap.locationsOfMethod('getStatus')).toEqual([

@@ -538,8 +538,8 @@ function summarizeTraffic(
 ) {
     return {
         inspectionTrafficObserved: traffic.some(({ transit }) =>
-            transit.method?.includes('linkrpc.topology')
-            || transit.method?.includes('linkrpc.traffic')),
+            transit.method?.includes('hubrpc.topology')
+            || transit.method?.includes('hubrpc.traffic')),
         sources: ['hub-a', 'hub-b'].map((source) => {
             const transits = traffic
                 .filter((entry) => entry.source === source)
