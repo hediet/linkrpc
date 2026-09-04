@@ -15,3 +15,10 @@ pnpm install
 pnpm build
 pnpm test
 ```
+
+## Publishing
+
+The [package artifacts workflow](../.github/workflows/package-artifacts.yml)
+builds npm tarballs for the public packages on pushes to `main` and on manual
+runs. ArtifactGate picks up these workflow artifacts and publishes them after
+the publication is approved.
