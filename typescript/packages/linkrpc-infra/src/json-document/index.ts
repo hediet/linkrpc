@@ -9,7 +9,7 @@ import {
     unknown,
 } from 'zod/mini';
 import type { output as zInfer } from 'zod/v4/core';
-import type { JsonValue } from './jsonValue';
+import type { JsonValue } from '@hediet/linkrpc';
 
 /**
  * Incremental edits addressed by RFC 6901 JSON Pointers.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { applyJsonDocumentEdits, parseJsonPointer } from './jsonDocument';
-import type { JsonValue } from './jsonValue';
+import type { JsonValue } from '@hediet/linkrpc';
+import { applyJsonDocumentEdits, parseJsonPointer } from './index';
 
 describe('JSON document edits', () => {
     it('applies set, remove, append, splice, and insert operations', () => {

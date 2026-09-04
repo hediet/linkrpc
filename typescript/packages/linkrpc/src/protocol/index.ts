@@ -1,5 +1,4 @@
 export * from "./jsonValue";
-export * from "./jsonDocument";
 export * from "./jcs";
 export * from "./jsonRpc";
 export * from "./capability";

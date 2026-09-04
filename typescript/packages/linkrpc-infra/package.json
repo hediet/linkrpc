@@ -14,9 +14,17 @@
             "@hediet/source": "./src/index.ts",
             "default": "./dist/index.js"
         },
+        "./json-document": {
+            "@hediet/source": "./src/json-document/index.ts",
+            "default": "./dist/json-document/index.js"
+        },
         "./json-rpc": {
             "@hediet/source": "./src/json-rpc/index.ts",
             "default": "./dist/json-rpc/index.js"
+        },
+        "./logging": {
+            "@hediet/source": "./src/logging/index.ts",
+            "default": "./dist/logging/index.js"
         },
         "./package.json": "./package.json"
     },
@@ -44,7 +52,9 @@
     "publishConfig": {
         "exports": {
             ".": "./dist/index.js",
+            "./json-document": "./dist/json-document/index.js",
             "./json-rpc": "./dist/json-rpc/index.js",
+            "./logging": "./dist/logging/index.js",
             "./package.json": "./package.json"
         }
     }

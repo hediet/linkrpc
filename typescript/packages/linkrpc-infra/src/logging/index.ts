@@ -12,9 +12,8 @@ import {
     unknown,
 } from 'zod/mini';
 import type { output as zInfer } from 'zod/v4/core';
-import { defineInterface } from '../connection/interfaceDefinition';
-import { jsonDocumentEditSchema } from '../protocol/jsonDocument';
-import { requestType, type Schema } from '../schema/memberTypes';
+import { defineInterface, requestType, type Schema } from '@hediet/linkrpc';
+import { jsonDocumentEditSchema } from '../json-document/index';
 
 export const logLevelSchema = zEnum(['trace', 'debug', 'info', 'warn', 'error', 'off']);
 export type LogLevel = zInfer<typeof logLevelSchema>;

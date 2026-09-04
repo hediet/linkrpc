@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loggingInterface, logStreamEventSchema } from './logging';
+import { loggingInterface, logStreamEventSchema } from './index';
 
 describe('loggingInterface', () => {
     it('uses the LinkRPC namespace and exposes snapshot/patch streaming', () => {

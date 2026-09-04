@@ -2,6 +2,12 @@
 
 Reusable infrastructure protocols and adapters built on LinkRPC.
 
+## JSON documents
+
+The `@hediet/linkrpc-infra/json-document` entry point provides revisioned
+document events and atomic `set`, `remove`, `append`, `splice`, and `insert`
+operations addressed by RFC 6901 JSON Pointers.
+
 ## JSON-RPC
 
 The `@hediet/linkrpc-infra/json-rpc` entry point provides:
@@ -13,3 +19,9 @@ The `@hediet/linkrpc-infra/json-rpc` entry point provides:
 
 The bridge treats JSON-RPC frames as opaque JSON values. Applications remain
 responsible for JSON-RPC method semantics, initialization, and authorization.
+
+## Logging
+
+The `@hediet/linkrpc-infra/logging` entry point defines the protocol-only
+`linkrpc.logging` interface and its revisioned structured-log schemas.
+Implementations remain responsible for storage, retention, and sinks.
