@@ -12,6 +12,7 @@
     "files": [],
     "references": [
         { "path": "./packages/linkrpc" },
+        { "path": "./packages/linkrpc-infra" },
         { "path": "./packages/linkrpc-cli" }
     ]
 }

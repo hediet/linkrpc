@@ -1,0 +1,51 @@
+{
+    "name": "@hediet/linkrpc-infra",
+    "version": "0.0.1",
+    "type": "module",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/hediet/linkrpc.git",
+        "directory": "typescript/packages/linkrpc-infra"
+    },
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "@hediet/source": "./src/index.ts",
+            "default": "./dist/index.js"
+        },
+        "./json-rpc": {
+            "@hediet/source": "./src/json-rpc/index.ts",
+            "default": "./dist/json-rpc/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist/"
+    ],
+    "sideEffects": false,
+    "scripts": {
+        "build": "tsdown",
+        "test": "vitest --run",
+        "test:watch": "vitest"
+    },
+    "peerDependencies": {
+        "@hediet/linkrpc": "workspace:*",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@hediet/linkrpc": "workspace:*",
+        "@types/node": "^20.0.0",
+        "tsdown": "^0.22.3",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0",
+        "zod": "^4.4.3"
+    },
+    "publishConfig": {
+        "exports": {
+            ".": "./dist/index.js",
+            "./json-rpc": "./dist/json-rpc/index.js",
+            "./package.json": "./package.json"
+        }
+    }
+}

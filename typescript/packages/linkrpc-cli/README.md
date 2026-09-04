@@ -224,6 +224,7 @@ initial document:
 | `connection status`                                   | Read lifecycle and buffer status from the broker configured by the effective endpoint. |
 | `connection notifications [--after n] [--wait 25s] [--follow]` | Read incoming remote notifications from the broker's bounded buffer. `--follow` emits one JSON object per line and can run alongside calls. |
 | `connection destroy`                                  | Stop the configured connection broker through its local overlay. |
+| `json-rpc-stdio <serviceId> [--params <json>]`         | In the Hub profile, expose `<serviceId>::jsonRpcConnection::connectRaw` as newline-delimited JSON-RPC on stdin/stdout. Diagnostics remain on stderr. |
 
 The inherited `--schema <path-or-url>` option also overlays static
 `hubrpc.defaults`, `hubrpc.directory`, and `hubrpc.schemas` reflection for
@@ -234,6 +235,14 @@ JSON-RPC servers.
 The former `connect`, `connection-status`, `notifications`, `disconnect`,
 `hash`, `check-compat`, and `schema <interface>` spellings are accepted as
 compatibility aliases.
+
+`json-rpc-stdio` lets JSON-RPC tools consume a remote service without knowing
+about LinkRPC. Each non-empty input line must contain one complete JSON-RPC
+frame, and each remote frame is written as one JSON line:
+
+```sh
+hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
+```
 
 ### Identity and approvals
 

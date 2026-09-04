@@ -23,6 +23,7 @@
     "dependencies": {
         "@hediet/linkrpc": "workspace:*",
         "@hediet/linkrpc-hub": "workspace:*",
+        "@hediet/linkrpc-infra": "workspace:*",
         "commander": "^12.1.0",
         "ink": "^5.1.0",
         "ink-select-input": "^6.0.0",

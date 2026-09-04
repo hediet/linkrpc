@@ -1,5 +1,5 @@
 import { Command, InvalidArgumentError } from 'commander';
-import { LinkRpcConnection } from '@hediet/linkrpc';
+import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
 import { connectionTokenBinderInterface } from '@hediet/linkrpc-hub/hub/server/connection-token-binder';
 import { tapTransport } from '@hediet/linkrpc-hub/hub/server/transit';
@@ -33,6 +33,7 @@ import { tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpForwardCommand } from './commands/mcpForward';
+import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import {
     bootstrapApprovalCommandCapability,
     createHubApprovalCommandClient,
@@ -904,6 +905,41 @@ Batch options:
             });
         });
     if (profile === 'hub') {
+        program
+            .command('json-rpc-stdio <serviceId>')
+            .description(
+                'Expose <serviceId>::jsonRpcConnection::connectRaw as a newline-delimited '
+                + "JSON-RPC endpoint on this process's stdin/stdout.",
+            )
+            .option('--params <json>', 'JSON value passed to the remote transport factory')
+            .action(async (serviceId: string, opts: { params?: string; }) => {
+                const localEp = needEndpoint(endpoint);
+                let params: JsonValue | undefined;
+                if (opts.params !== undefined) {
+                    try {
+                        params = JSON.parse(opts.params) as JsonValue;
+                    } catch (error) {
+                        throw new InvalidArgumentError(
+                            `invalid --params JSON: ${error instanceof Error ? error.message : String(error)}`,
+                        );
+                    }
+                }
+                const local = await connectEndpoint(localEp, wireLog('hub'));
+                try {
+                    const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
+                        negotiateHubCaps: isHubEndpoint(localEp),
+                    });
+                    reportIdentity(session);
+                    await jsonRpcStdioCommand({
+                        local,
+                        serviceId,
+                        ...(params === undefined ? {} : { params }),
+                    });
+                } finally {
+                    local.close();
+                }
+            });
+
         program
             .command('serve [config]')
         .description(

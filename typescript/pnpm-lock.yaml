@@ -119,6 +119,9 @@ importers:
       '@hediet/linkrpc-hub':
         specifier: workspace:*
         version: link:../linkrpc-hub
+      '@hediet/linkrpc-infra':
+        specifier: workspace:*
+        version: link:../linkrpc-infra
       commander:
         specifier: ^12.1.0
         version: 12.1.0
@@ -202,6 +205,27 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.7(@types/node@22.20.1)(tsx@4.22.4)
+
+  packages/linkrpc-infra:
+    devDependencies:
+      '@hediet/linkrpc':
+        specifier: workspace:*
+        version: link:../linkrpc
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.43
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.14(tsx@4.22.4)(typescript@6.0.3)
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^3.0.0
+        version: 3.2.7(@types/node@20.19.43)(tsx@4.22.4)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/linkrpc-mcp:
     dependencies:
