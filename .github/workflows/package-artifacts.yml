@@ -6,6 +6,10 @@ on:
     paths:
       - "typescript/**"
       - ".github/workflows/package-artifacts.yml"
+  pull_request:
+    paths:
+      - "typescript/**"
+      - ".github/workflows/package-artifacts.yml"
   workflow_dispatch:
 
 jobs:
