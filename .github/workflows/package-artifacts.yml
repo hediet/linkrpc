@@ -1,4 +1,4 @@
-name: Package artifacts
+name: TypeScript
 
 on:
   push:
@@ -10,7 +10,7 @@ on:
 
 jobs:
   npm:
-    name: npm tarballs
+    name: Build, test, and package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,9 +25,16 @@ jobs:
       - name: Install dependencies
         working-directory: typescript
         run: pnpm install --frozen-lockfile
-      - name: Build packages
+      - name: Restore Turborepo cache
+        uses: actions/cache@v4
+        with:
+          path: typescript/.turbo
+          key: ${{ runner.os }}-turbo-typescript-${{ hashFiles('typescript/pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-typescript-${{ hashFiles('typescript/pnpm-lock.yaml') }}-
+      - name: Build and test packages
         working-directory: typescript
-        run: pnpm build
+        run: pnpm check
       - name: Create npm tarballs
         id: package
         working-directory: typescript

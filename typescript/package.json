@@ -4,6 +4,7 @@
     "packageManager": "pnpm@11.10.0",
     "scripts": {
         "build": "turbo build",
+        "check": "turbo run build test typecheck:guest",
         "dev": "turbo dev",
         "test": "turbo test"
     },

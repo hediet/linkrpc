@@ -1,17 +1,33 @@
 {
     "$schema": "https://turbo.build/schema.json",
-    "concurrency": "20",
+    "concurrency": "100%",
+    "globalDependencies": ["tsconfig.json"],
+    "globalEnv": ["CI"],
     "tasks": {
         "build": {
             "dependsOn": ["^build"],
-            "outputs": ["dist/**", "*.tsbuildinfo"]
+            "inputs": [
+                "$TURBO_DEFAULT$",
+                "!README.md",
+                "!docs/**",
+                "!src/**/*.test.ts",
+                "!src/**/*.test.tsx"
+            ],
+            "outputs": ["dist/**", "*.tsbuildinfo"],
+            "outputLogs": "new-only"
         },
         "dev": {
             "persistent": true,
             "cache": false
         },
         "test": {
-            "dependsOn": ["^build"]
+            "dependsOn": ["build"],
+            "outputs": [],
+            "outputLogs": "new-only"
+        },
+        "typecheck:guest": {
+            "outputs": [],
+            "outputLogs": "new-only"
         }
     }
 }
