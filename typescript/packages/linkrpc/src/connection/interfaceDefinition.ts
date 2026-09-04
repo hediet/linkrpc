@@ -217,15 +217,15 @@ export class InterfaceDefinition<TMembers extends MemberMap> {
             schemaCache: undefined,
             hashCache: undefined,
         });
-        this.ref = new Proxy(
-            {},
-            {
-                get: (_target, member: string): InterfaceMemberRef => ({
+        this.ref = Object.fromEntries(
+            Object.keys(members).map((member) => [
+                member,
+                {
                     interfaceId: this.info.id,
                     interfaceHash: this.schemaHash,
                     member,
-                }),
-            },
+                },
+            ]),
         ) as InterfaceMemberRefMap<TMembers>;
         if (info.hash !== undefined && this.schemaHash !== info.hash) {
             throw new Error(

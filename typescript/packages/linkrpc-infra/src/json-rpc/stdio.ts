@@ -2,6 +2,8 @@ import * as readline from 'node:readline';
 import type { JsonValue } from '@hediet/linkrpc';
 import type { Disposable, JsonRpcTransport } from './transport';
 
+const MAX_FRAME_BACKLOG = 1_024;
+
 export interface NdjsonJsonRpcTransportOptions {
     readonly input: NodeJS.ReadableStream;
     readonly output: NodeJS.WritableStream;
@@ -16,10 +18,12 @@ export function createNdjsonJsonRpcTransport(
     const backlog: JsonValue[] = [];
     const lines = readline.createInterface({ input: options.input });
     let closed = false;
+    let closeReason: string | undefined;
 
     const finish = (reason?: string): void => {
         if (closed) return;
         closed = true;
+        closeReason = reason;
         lines.close();
         for (const listener of closeListeners) listener(reason);
     };
@@ -35,6 +39,10 @@ export function createNdjsonJsonRpcTransport(
             return;
         }
         if (messageListeners.size === 0) {
+            if (backlog.length >= MAX_FRAME_BACKLOG) {
+                finish('JSON-RPC stdio frame backlog exceeded');
+                return;
+            }
             backlog.push(frame);
             return;
         }
@@ -45,6 +53,9 @@ export function createNdjsonJsonRpcTransport(
     options.output.on('error', (error) => finish(error.message));
 
     return {
+        get closed(): boolean {
+            return closed;
+        },
         send(frame): Promise<void> {
             if (closed) return Promise.reject(new Error('JSON-RPC stdio transport is closed'));
             return new Promise<void>((resolve, reject) => {
@@ -60,6 +71,13 @@ export function createNdjsonJsonRpcTransport(
             return { dispose: () => messageListeners.delete(listener) };
         },
         onClose(listener): Disposable {
+            if (closed) {
+                let disposed = false;
+                queueMicrotask(() => {
+                    if (!disposed) listener(closeReason);
+                });
+                return { dispose: () => { disposed = true; } };
+            }
             closeListeners.add(listener);
             return { dispose: () => closeListeners.delete(listener) };
         },

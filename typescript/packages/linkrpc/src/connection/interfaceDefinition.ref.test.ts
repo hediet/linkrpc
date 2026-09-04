@@ -28,4 +28,10 @@ describe('InterfaceDefinition.ref', () => {
     it('preserves the member name in the reference type', () => {
         expectTypeOf(iface.ref.echo).toEqualTypeOf<InterfaceMemberRef<'echo'>>();
     });
+
+    it('enumerates only actual interface members', () => {
+        expect(Object.keys(iface.ref)).toEqual(['echo', 'changed']);
+        expect('echo' in iface.ref).toBe(true);
+        expect((iface.ref as Record<string, unknown>).missing).toBeUndefined();
+    });
 });

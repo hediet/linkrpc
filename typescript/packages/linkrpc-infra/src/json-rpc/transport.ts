@@ -6,6 +6,7 @@ export interface Disposable {
 
 /** A message-oriented transport carrying already parsed JSON-RPC frames. */
 export interface JsonRpcTransport {
+    readonly closed: boolean;
     send(frame: JsonValue): Promise<void>;
     onMessage(listener: (frame: JsonValue) => void): Disposable;
     onClose(listener: (reason?: string) => void): Disposable;
@@ -63,6 +64,7 @@ class InMemoryJsonRpcTransport implements JsonRpcTransport {
     private readonly _closeListeners = new Set<(reason?: string) => void>();
     private readonly _backlog: JsonValue[] = [];
     private _closed = false;
+    private _closeReason: string | undefined;
 
     public send(frame: JsonValue): Promise<void> {
         if (this._closed || this.peer._closed) {
@@ -72,6 +74,10 @@ class InMemoryJsonRpcTransport implements JsonRpcTransport {
         return Promise.resolve();
     }
 
+    public get closed(): boolean {
+        return this._closed;
+    }
+
     public onMessage(listener: (frame: JsonValue) => void): Disposable {
         this._messageListeners.add(listener);
         for (const frame of this._backlog.splice(0)) listener(frame);
@@ -79,6 +85,13 @@ class InMemoryJsonRpcTransport implements JsonRpcTransport {
     }
 
     public onClose(listener: (reason?: string) => void): Disposable {
+        if (this._closed) {
+            let disposed = false;
+            queueMicrotask(() => {
+                if (!disposed) listener(this._closeReason);
+            });
+            return { dispose: () => { disposed = true; } };
+        }
         this._closeListeners.add(listener);
         return { dispose: () => this._closeListeners.delete(listener) };
     }
@@ -86,6 +99,7 @@ class InMemoryJsonRpcTransport implements JsonRpcTransport {
     public close(reason?: string): void {
         if (this._closed) return;
         this._closed = true;
+        this._closeReason = reason;
         for (const listener of this._closeListeners) listener(reason);
         this.peer._remoteClosed(reason);
     }
@@ -102,6 +116,7 @@ class InMemoryJsonRpcTransport implements JsonRpcTransport {
     private _remoteClosed(reason?: string): void {
         if (this._closed) return;
         this._closed = true;
+        this._closeReason = reason;
         for (const listener of this._closeListeners) listener(reason);
     }
 }

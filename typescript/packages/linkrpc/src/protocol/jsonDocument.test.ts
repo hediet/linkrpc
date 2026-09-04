@@ -32,6 +32,15 @@ describe('JSON document edits', () => {
         ])).toEqual({ current: true });
     });
 
+    it('applies batches atomically without mutating the source', () => {
+        const source: JsonValue = { text: 'before', items: [] };
+        expect(() => applyJsonDocumentEdits(source, [
+            { op: 'set', path: '/text', value: 'changed' },
+            { op: 'append', path: '/items', value: 'invalid' },
+        ])).toThrow();
+        expect(source).toEqual({ text: 'before', items: [] });
+    });
+
     it('decodes RFC 6901 pointer escapes', () => {
         expect(parseJsonPointer('/a~1b/~0key')).toEqual(['a/b', '~key']);
     });

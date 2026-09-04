@@ -92,7 +92,10 @@ export type LogStreamEvent = zInfer<typeof logStreamEventSchema>;
 export const loggingInterface = defineInterface(
     {
         id: 'linkrpc.logging',
-        description: 'Structured service logs exposed as a revisioned JSON document stream.',
+        description:
+            'Structured service logs exposed as a revisioned JSON document stream. '
+            + 'watchLog emits a snapshot first and then patches in revision order. '
+            + 'Clients that observe a revision gap must resynchronize with getLogSnapshot.',
     },
     {
         getLogLevel: requestType(object({}), object({ level: logLevelSchema })),

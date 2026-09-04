@@ -34,6 +34,24 @@ describe('raw JSON-RPC bridge', () => {
 
         remote.close();
     });
+
+    it('rejects instead of hanging when the service closes before ready', async () => {
+        const link = new TransportPair();
+        const server = LinkRpcConnection.fromTransport(link.a);
+        const client = LinkRpcConnection.fromTransport(link.b);
+        registerJsonRpcConnectionService({
+            connection: server,
+            openTransport: () => {
+                const pair = new JsonRpcTransportPair();
+                pair.a.close('already closed');
+                return Promise.resolve(pair.a);
+            },
+        });
+
+        await expect(connectRawJsonRpcTransport(
+            client.get(jsonRpcConnectionInterface),
+        )).rejects.toThrow('closed before it was ready');
+    });
 });
 
 function nextFrame(

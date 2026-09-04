@@ -34,6 +34,9 @@ export function registerJsonRpcConnectionService(
                     transport.close('cancelled');
                     return { reason: 'cancelled' as const };
                 }
+                if (transport.closed) {
+                    throw new Error('JSON-RPC transport closed before it was ready');
+                }
 
                 let settle!: (reason: JsonRpcConnectionCloseReason) => void;
                 const closed = new Promise<JsonRpcConnectionCloseReason>((resolve) => {
@@ -44,19 +47,27 @@ export function registerJsonRpcConnectionService(
                         resolve(reason);
                     };
                 });
+                let outbound = Promise.resolve();
                 const messages = transport.onMessage((frame) => {
-                    void stream.send({ type: 'frame', frame }).catch(() => settle('remoteClosed'));
+                    outbound = outbound
+                        .then(() => stream.send({ type: 'frame', frame }))
+                        .catch(() => settle('remoteClosed'));
                 });
                 const closure = transport.onClose(() => settle('remoteClosed'));
+                let inbound = Promise.resolve();
                 stream.onMessage(({ frame }) => {
-                    void transport.send(frame as JsonValue).catch(() => settle('remoteClosed'));
+                    inbound = inbound
+                        .then(() => transport.send(frame as JsonValue))
+                        .catch(() => settle('remoteClosed'));
                 });
                 await stream.send({ type: 'ready' });
 
+                const abort = waitForAbort(stream.signal);
                 const reason = await Promise.race([
                     closed,
-                    waitForAbort(stream.signal).then(() => 'cancelled' as const),
+                    abort.promise.then(() => 'cancelled' as const),
                 ]);
+                abort.dispose();
                 messages.dispose();
                 closure.dispose();
                 transport.close(reason);
@@ -67,9 +78,16 @@ export function registerJsonRpcConnectionService(
     );
 }
 
-function waitForAbort(signal: AbortSignal): Promise<void> {
-    if (signal.aborted) return Promise.resolve();
-    return new Promise((resolve) => {
-        signal.addEventListener('abort', () => resolve(), { once: true });
-    });
+function waitForAbort(signal: AbortSignal): { promise: Promise<void>; dispose(): void; } {
+    if (signal.aborted) return { promise: Promise.resolve(), dispose() {} };
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => { resolve = r; });
+    const onAbort = (): void => resolve();
+    signal.addEventListener('abort', onAbort, { once: true });
+    return {
+        promise,
+        dispose(): void {
+            signal.removeEventListener('abort', onAbort);
+        },
+    };
 }

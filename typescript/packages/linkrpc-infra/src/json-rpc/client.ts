@@ -20,6 +20,7 @@ export async function connectRawJsonRpcTransport(
         if (closed) return;
         closed = true;
         closeReason = reason;
+        rejectReady(new Error(`Raw JSON-RPC transport closed before ready: ${reason ?? 'closed'}`));
         for (const listener of closeListeners) listener(reason);
     };
 
@@ -62,6 +63,9 @@ export async function connectRawJsonRpcTransport(
     await ready;
 
     return {
+        get closed(): boolean {
+            return closed;
+        },
         async send(frame): Promise<void> {
             if (closed) {
                 throw new Error(`JSON-RPC transport is closed: ${closeReason ?? 'closed'}`);

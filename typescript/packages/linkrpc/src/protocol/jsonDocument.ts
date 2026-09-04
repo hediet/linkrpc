@@ -171,7 +171,7 @@ export function applyJsonDocumentEdits(
     root: JsonValue,
     edits: readonly JsonDocumentEdit[],
 ): JsonValue {
-    let current = root;
+    let current = structuredClone(root);
     for (const edit of edits) current = applyJsonDocumentEdit(current, edit);
     return current;
 }
