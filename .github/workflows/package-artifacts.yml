@@ -49,6 +49,7 @@ jobs:
           }
 
           pack_package @hediet/linkrpc linkrpc
+          pack_package @hediet/linkrpc-infra linkrpc_infra
           pack_package @hediet/linkrpc-hub linkrpc_hub
           pack_package @hediet/linkrpc-cli linkrpc_cli
           pack_package @hediet/linkrpc-mcp linkrpc_mcp
@@ -58,6 +59,13 @@ jobs:
         with:
           name: ${{ steps.package.outputs.linkrpc_artifact }}
           path: ${{ steps.package.outputs.linkrpc_path }}
+          if-no-files-found: error
+
+      - name: Upload @hediet/linkrpc-infra
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.linkrpc_infra_artifact }}
+          path: ${{ steps.package.outputs.linkrpc_infra_path }}
           if-no-files-found: error
 
       - name: Upload @hediet/linkrpc-hub
