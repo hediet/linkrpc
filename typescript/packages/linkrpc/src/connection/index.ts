@@ -23,6 +23,11 @@ export {
 } from './channelConnector';
 export { JsonRpcChannel } from './jsonRpcChannel';
 export {
+    DEFAULT_RPC_TIMEOUT_MS,
+    type CancellableRequest,
+    withRpcTimeout,
+} from './requestTimeout';
+export {
     type CmdEnvEndpoint,
     type CmdStdioEndpoint,
     type EndpointCommand,

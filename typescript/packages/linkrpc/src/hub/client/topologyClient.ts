@@ -1,4 +1,5 @@
 import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import { DEFAULT_RPC_TIMEOUT_MS, withRpcTimeout } from '../../connection/requestTimeout';
 import {
     topologyInterface,
     type TopologyGraph,
@@ -22,12 +23,18 @@ export class TopologyClient<TInCtx = unknown, TOutCtx = unknown> {
     constructor(
         private readonly _connection: LinkRpcConnection<TInCtx, TOutCtx>,
         public readonly serviceId: string,
+        private readonly _timeoutMs = DEFAULT_RPC_TIMEOUT_MS,
     ) { }
 
     public getGraph(): Promise<TopologyGraph> {
-        return this._connection.service(this.serviceId)
+        const request = this._connection.service(this.serviceId)
             .get(topologyInterface)
             .getGraph({});
+        return withRpcTimeout(
+            request,
+            `topology service '${this.serviceId}'`,
+            this._timeoutMs,
+        );
     }
 
     public watch(callbacks: TopologyWatchCallbacks): TopologyWatch {
@@ -60,7 +67,11 @@ export class TopologyClient<TInCtx = unknown, TOutCtx = unknown> {
                 while (active && dirty) {
                     dirty = false;
                     try {
-                        const graph = await client.getGraph({});
+                        const graph = await withRpcTimeout(
+                            client.getGraph({}),
+                            `topology service '${this.serviceId}'`,
+                            this._timeoutMs,
+                        );
                         if (!active) break;
                         try {
                             callbacks.onGraph(graph);

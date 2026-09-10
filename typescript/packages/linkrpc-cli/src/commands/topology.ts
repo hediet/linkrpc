@@ -16,6 +16,7 @@ export type TopologyFormat = "pretty" | "json" | "jsonl";
 export interface TopologyCommandOptions {
     readonly sources?: readonly string[];
     readonly maxDepth?: number;
+    readonly timeoutMs?: number;
     readonly watch?: boolean;
     readonly format?: TopologyFormat;
     readonly nodeId?: string;
@@ -62,6 +63,7 @@ export async function topologyCommand(
     const sourceOptions = {
         ...(options.sources !== undefined ? { sourceServiceIds: options.sources } : {}),
         ...(options.maxDepth !== undefined ? { maxDepth: options.maxDepth } : {}),
+        ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     };
 
     if (options.watch === true) {

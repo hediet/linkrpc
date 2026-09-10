@@ -3,6 +3,7 @@ import type {
     HubAccessManifestRequest,
     IHubAccessManifest,
 } from '@hediet/linkrpc/hub/common';
+import { DEFAULT_RPC_TIMEOUT_MS, withRpcTimeout } from '@hediet/linkrpc';
 import {
     observableValue,
     type IObservable,
@@ -23,6 +24,7 @@ export interface ApproveClientOptions {
     readonly ownPrincipalId?: string;
     readonly log?: (line: string) => void;
     readonly reconnectDelayMs?: number;
+    readonly timeoutMs?: number;
 }
 
 /**
@@ -43,6 +45,7 @@ export class ApproveClient {
     private readonly _ownPrincipalId: string | undefined;
     private readonly _log: (line: string) => void;
     private readonly _reconnectDelayMs: number;
+    private readonly _timeoutMs: number;
     private _watch: ReturnType<IHubAccessManifest['watchDesired']> | undefined;
     private _watchGeneration = 0;
     private _retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -55,6 +58,7 @@ export class ApproveClient {
         this._ownPrincipalId = options.ownPrincipalId;
         this._log = options.log ?? (() => { /* no-op */ });
         this._reconnectDelayMs = options.reconnectDelayMs ?? 250;
+        this._timeoutMs = options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
         this._requests = observableValue(this, []);
         this.requests = this._requests;
         this._state = observableValue(this, 'connecting');
@@ -92,13 +96,13 @@ export class ApproveClient {
         decision: HubAccessManifestDecision,
     ): Promise<'applied' | 'gone' | 'still-pending'> {
         if (!this._requests.get().some((request) => request.id === id)) return 'gone';
-        await this._manifest.setCurrent({
+        await withRpcTimeout(this._manifest.setCurrent({
             patches: [{
                 op: 'set',
                 path: `/current/${escapePointer(id)}`,
                 value: decision,
             }],
-        });
+        }), 'hubAccessManifest::setCurrent', this._timeoutMs);
         await this.refresh();
         if (this._requests.get().some((request) => request.id === id)) {
             this._log(
@@ -127,7 +131,11 @@ export class ApproveClient {
         while (this._refreshPending && !this._disposed) {
             this._refreshPending = false;
             try {
-                const snapshot = await this._manifest.getDesired({});
+                const snapshot = await withRpcTimeout(
+                    this._manifest.getDesired({}),
+                    'hubAccessManifest::getDesired',
+                    this._timeoutMs,
+                );
                 if (this._disposed) return;
                 const requests = Object.entries(snapshot.requested)
                     .filter(([, request]) => rootAccepted(request.acceptableRootIds, this._ownPrincipalId))

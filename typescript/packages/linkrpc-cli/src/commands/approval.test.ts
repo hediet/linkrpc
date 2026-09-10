@@ -32,6 +32,8 @@ class FakeManifest {
     public requested: Record<string, HubAccessManifestRequest> = {};
     public revision = 0;
     public acknowledgeDecisions = true;
+    public hangGetDesired = false;
+    public getDesiredCancelled = false;
     public readonly decisions: Array<{ id: string; value: HubAccessManifestDecision }> = [];
     private readonly _watchers = new Set<() => void>();
 
@@ -40,7 +42,17 @@ class FakeManifest {
     }
 
     public readonly client: IHubAccessManifest = {
-        getDesired: async () => ({ requested: this.requested, revision: this.revision }),
+        getDesired: () => {
+            if (!this.hangGetDesired) {
+                return cancellable(Promise.resolve({
+                    requested: this.requested,
+                    revision: this.revision,
+                }));
+            }
+            return cancellable(new Promise(() => {}), () => {
+                this.getDesiredCancelled = true;
+            });
+        },
         watchDesired: (_params, options) => {
             const onMessage = () => options.onMessage?.({});
             this._watchers.add(onMessage);
@@ -59,7 +71,7 @@ class FakeManifest {
             });
         },
         getCurrent: async () => ({ current: {}, revision: this.revision }),
-        setCurrent: async ({ patches }) => {
+        setCurrent: ({ patches }) => cancellable((async () => {
             for (const patch of patches) {
                 if (patch.op !== 'set' || !patch.path.startsWith('/current/')) continue;
                 const id = unescapePointer(patch.path.slice('/current/'.length));
@@ -69,7 +81,7 @@ class FakeManifest {
             this.revision++;
             for (const watcher of this._watchers) watcher();
             return { revision: this.revision };
-        },
+        })()),
         watchCurrent: () => idleWatch(),
     };
 }
@@ -90,6 +102,29 @@ describe('approval commands', () => {
         });
         expect(first.expiresAtMs).toBeUndefined();
         expect(first.parentHash).toBeUndefined();
+    });
+
+    it('cancels and reports an approval manifest read that exceeds its timeout', async () => {
+        const identity = await createSeededSigningIdentity({ seed: 101 });
+        const manifest = new FakeManifest();
+        manifest.hangGetDesired = true;
+        const logs: string[] = [];
+        const client = new ApprovalCommandClient({
+            manifest: manifest.client,
+            identity,
+            timeoutMs: 10,
+            log: (line) => logs.push(line),
+        });
+
+        await expect(client.requests()).rejects.toThrow(
+            'hubAccessManifest::getDesired timed out after 10ms',
+        );
+        expect(manifest.getDesiredCancelled).toBe(true);
+        expect(logs).toContain(
+            'hubAccess approver: getDesired failed: '
+            + 'hubAccessManifest::getDesired timed out after 10ms',
+        );
+        client.dispose();
     });
 
     it('scopes bootstrap authority to manifests and directory discovery', () => {
@@ -421,4 +456,14 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
     } finally {
         if (timer !== undefined) clearTimeout(timer);
     }
+}
+
+function cancellable<T>(promise: Promise<T>, onCancel: () => void = () => {}): Promise<T> & {
+    cancel(reason?: string): Promise<void>;
+    dispose(reason?: string): void;
+} {
+    return Object.assign(promise, {
+        cancel: async () => onCancel(),
+        dispose: () => undefined,
+    });
 }

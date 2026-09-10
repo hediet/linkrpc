@@ -569,7 +569,7 @@ export const hubAccessManifestInterface = defineInterface(
                 /** Bumped whenever `requested` changes; lets watchers dedupe ticks. */
                 revision: number(),
             }),
-        ),
+        ).withStream({ client: object({}) }),
         /**
          * Coarse change tap on the desired document. Emits an empty tick when
          * `requested` may have changed; the caller re-`getDesired`. Resolves when
@@ -601,7 +601,7 @@ export const hubAccessManifestInterface = defineInterface(
         setCurrent: requestType(
             object({ patches: array(zManifestPatch) }),
             object({ revision: number() }),
-        ),
+        ).withStream({ client: object({}) }),
         /**
          * Coarse change tap on the current document. Emits an empty tick when
          * `current` may have changed; the participant re-`getCurrent` and applies

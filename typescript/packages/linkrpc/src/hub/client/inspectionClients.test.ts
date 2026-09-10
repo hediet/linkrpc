@@ -8,6 +8,7 @@ import { topologyInterface } from '../common/inspection.interfaces';
 import { mergeTopologyGraphs, NetworkInspectionClient } from './networkInspectionClient';
 import { NodeInfoClient } from './nodeInfoClient';
 import { TopologyClient } from './topologyClient';
+import { TopologyNetworkClient } from './topologyNetworkClient';
 import { TrafficClient } from './trafficClient';
 
 const pingInterface = defineInterface(
@@ -82,6 +83,39 @@ describe('inspection clients', () => {
             code: -32800,
             message: 'test complete',
         });
+        dispose();
+    });
+
+    it('cancels and identifies a topology service that exceeds its timeout', async () => {
+        const { client, server, dispose } = makePair();
+        let cancelled = false;
+        server.service('slow').register(topologyInterface, {
+            getGraph: (_params, _ctx, stream) => new Promise((resolve) => {
+                stream.signal.addEventListener('abort', () => {
+                    cancelled = true;
+                    resolve({
+                        observerServiceId: 'slow',
+                        entryNodeId: 'slow',
+                        nodes: [],
+                        links: [],
+                        routes: [],
+                    });
+                }, { once: true });
+            }),
+            watchGraph: () => new Promise(() => {}),
+        });
+
+        const snapshot = await new TopologyNetworkClient(client).query({
+            sourceServiceIds: ['slow'],
+            timeoutMs: 10,
+        });
+
+        expect(snapshot.sources).toEqual([{
+            serviceId: 'slow',
+            state: 'error',
+            error: "topology service 'slow' timed out after 10ms",
+        }]);
+        await waitFor(() => cancelled);
         dispose();
     });
 

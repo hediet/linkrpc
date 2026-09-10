@@ -1,4 +1,5 @@
 import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import { DEFAULT_RPC_TIMEOUT_MS } from '../../connection/requestTimeout';
 import {
     HubDirectoryExplorer,
     topologyInterface,
@@ -36,6 +37,8 @@ export interface TopologyNetworkOptions {
      */
     readonly sourceServiceIds?: readonly string[];
     readonly maxDepth?: number;
+    /** Hard deadline for each directory and topology request. Defaults to 5 seconds. */
+    readonly timeoutMs?: number;
 }
 
 export interface TopologyNetworkQueryCallbacks {
@@ -73,7 +76,7 @@ export class TopologyNetworkClient {
                 const serviceIds = uniqueSorted(options.sourceServiceIds);
                 store.reconcileSources(serviceIds);
                 await Promise.all(serviceIds.map((serviceId) =>
-                    this._querySource(store, serviceId)));
+                    this._querySource(store, serviceId, options.timeoutMs)));
             } else {
                 await this._queryDiscovered(store, options);
             }
@@ -95,6 +98,7 @@ export class TopologyNetworkClient {
         const explorer = new HubDirectoryExplorer(this._connection.channel, {
             interfaceId: topologyInterface.info.id,
             maxDepth: options.maxDepth,
+            timeoutMs: options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
         });
         const queries = new Map<string, Promise<void>>();
         const reconcile = (snapshot: HubDirectoryGraphSnapshot): void => {
@@ -103,7 +107,7 @@ export class TopologyNetworkClient {
             store.reconcileSources(serviceIds);
             for (const serviceId of serviceIds) {
                 if (!queries.has(serviceId)) {
-                    queries.set(serviceId, this._querySource(store, serviceId));
+                    queries.set(serviceId, this._querySource(store, serviceId, options.timeoutMs));
                 }
             }
         };
@@ -123,9 +127,14 @@ export class TopologyNetworkClient {
     private async _querySource(
         store: TopologyNetworkStore,
         serviceId: string,
+        timeoutMs = DEFAULT_RPC_TIMEOUT_MS,
     ): Promise<void> {
         try {
-            const graph = await new TopologyClient(this._connection, serviceId).getGraph();
+            const graph = await new TopologyClient(
+                this._connection,
+                serviceId,
+                timeoutMs,
+            ).getGraph();
             if (store.hasSource(serviceId)) store.setSourceGraph(serviceId, graph);
         } catch (error) {
             if (store.hasSource(serviceId)) store.setSourceError(serviceId, error);
@@ -159,6 +168,7 @@ class TopologyNetworkWatchImpl implements TopologyNetworkWatch {
             ? new HubDirectoryExplorer(_connection.channel, {
                 interfaceId: topologyInterface.info.id,
                 maxDepth: _options.maxDepth,
+                timeoutMs: _options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
             })
             : undefined;
         void this._initialize();
@@ -229,7 +239,11 @@ class TopologyNetworkWatchImpl implements TopologyNetworkWatch {
     private _startSourceWatch(serviceId: string): void {
         if (this._sourceWatches.has(serviceId) || this._cancelled) return;
         this._store.ensureSource(serviceId);
-        const watch = new TopologyClient(this._connection, serviceId).watch({
+        const watch = new TopologyClient(
+            this._connection,
+            serviceId,
+            this._options.timeoutMs,
+        ).watch({
             onGraph: (graph) => {
                 if (!this._cancelled && this._sourceWatches.get(serviceId) === watch) {
                     this._store.setSourceGraph(serviceId, graph);

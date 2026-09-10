@@ -132,6 +132,7 @@ export interface ApprovalCommandClientOptions {
     readonly fetchDirectory?: () => Promise<readonly DirectoryEntry[]>;
     readonly log?: (line: string) => void;
     readonly dispose?: () => void;
+    readonly timeoutMs?: number;
 }
 
 /**
@@ -161,6 +162,7 @@ export class ApprovalCommandClient {
         this._client = new ApproveClient({
             manifest: this._manifest,
             ownPrincipalId: this._principalId,
+            timeoutMs: options.timeoutMs,
             log: (line) => {
                 this._lastClientError = line;
                 this._log(line);

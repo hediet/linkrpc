@@ -1,8 +1,13 @@
 import type { IRequestSender, RawStreamingCall } from '../../connection/channel';
+import { DEFAULT_RPC_TIMEOUT_MS, withRpcTimeout } from '../../connection/requestTimeout';
 import type { SigningCallCtx } from '../../identity/signingSender';
 import type { JsonValue } from '../../protocol/jsonValue';
 import type { LinkRpcInterfaceSchema, MethodSchema } from '../../schema/linkRpcInterfaceSchema';
-import { type RootPrincipalSet, type ServiceIdPattern } from './reflection.interfaces';
+import {
+    directoryInterface,
+    type RootPrincipalSet,
+    type ServiceIdPattern,
+} from './reflection.interfaces';
 
 /**
  * Portable reflection walk over the `hubrpc.directory` referral tree.
@@ -80,7 +85,18 @@ export async function fetchDirectory(
         if (opts.timeoutMs !== undefined) params.timeoutMs = opts.timeoutMs;
         if (cursor !== undefined) params.cursor = cursor;
 
-        const raw = await channel.sendRequest(method, params);
+        const call = channel.sendRequestWithStream(method, params, {
+            interfaceHash: directoryInterface.schemaHash,
+        });
+        const target = opts.target ?? '<root>';
+        const raw = await withRpcTimeout(
+            Object.assign(call.result, {
+                cancel: (reason?: string) => call.cancel(reason),
+                dispose: (reason?: string) => call.dispose?.(reason),
+            }),
+            `hub directory service '${target}'`,
+            opts.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
+        );
         const page = raw as unknown as {
             items: {
                 serviceId: string;
@@ -284,6 +300,8 @@ export interface WalkHubResult {
  */
 export interface WalkHubOptions {
     readonly maxDepth?: number;
+    /** Hard deadline for each directory page request. Defaults to 5 seconds. */
+    readonly timeoutMs?: number;
     /** Return only listings for this exact interface id after traversing directories. */
     readonly interfaceId?: string;
     /** Return only listings whose interface id starts with this prefix after traversal. */
@@ -612,6 +630,7 @@ export class HubDirectoryExplorer {
                     listings = await fetchDirectory(this._channel, {
                         target: node.target,
                         serviceIdScopes: scopesAtRequest,
+                        timeoutMs: this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
                     });
                     if (this._disposed) break;
                 } catch (error) {

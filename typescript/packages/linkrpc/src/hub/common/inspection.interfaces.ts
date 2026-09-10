@@ -108,7 +108,7 @@ export const topologyInterface = defineInterface(
             + "ticks; consumers re-fetch getGraph after each tick.",
     },
     {
-        getGraph: requestType(object({}), zTopologyGraph),
+        getGraph: requestType(object({}), zTopologyGraph).withStream({ client: object({}) }),
         watchGraph: requestType(object({}), object({})).withStream({
             server: object({}),
         }),

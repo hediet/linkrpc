@@ -31,7 +31,11 @@
  * `*::hubAccessManifest::*` (and the directory) — without it the gate rejects the
  * scan. This is the aggregator's whole reason to hold the approver's identity.
  */
-import { type LinkRpcConnection } from '@hediet/linkrpc';
+import {
+    DEFAULT_RPC_TIMEOUT_MS,
+    type LinkRpcConnection,
+    withRpcTimeout,
+} from '@hediet/linkrpc';
 import { hubAccessManifestInterface, type IHubAccessManifest } from '@hediet/linkrpc/hub/common';
 import { safeParse } from 'zod/v4/core';
 
@@ -82,6 +86,8 @@ export interface AggregatingManifestOptions {
     readonly watchSources?: (onChange: () => void) => () => void;
     /** Human log sink. */
     readonly log?: (line: string) => void;
+    /** Hard deadline for each source request. Defaults to 5 seconds. */
+    readonly timeoutMs?: number;
 }
 
 /** Delimiter between a source `tag` and the source-local entryId. Absent from serviceIds/UUIDs. */
@@ -202,7 +208,11 @@ export class AggregatingHubAccessManifest {
         for (const s of sources) {
             let doc: GetDesiredResult;
             try {
-                doc = await s.manifest.getDesired({});
+                doc = await withRpcTimeout(
+                    s.manifest.getDesired({}),
+                    `hubAccessManifest service '${s.tag || '<root>'}'`,
+                    this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
+                );
             } catch (e) {
                 this._options.log?.(`aggregator: getDesired(${s.tag}) failed: ${(e as Error).message}`);
                 continue;
@@ -246,7 +256,11 @@ export class AggregatingHubAccessManifest {
             if (!src) {
                 throw new Error(`aggregator: setCurrent for unknown source '${tag}'`);
             }
-            await src.manifest.setCurrent({ patches: ps });
+            await withRpcTimeout(
+                src.manifest.setCurrent({ patches: ps }),
+                `hubAccessManifest service '${tag || '<root>'}'`,
+                this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
+            );
         }));
     }
 

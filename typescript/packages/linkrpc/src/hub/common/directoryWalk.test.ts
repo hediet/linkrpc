@@ -401,6 +401,22 @@ describe('HubDirectoryExplorer', () => {
     });
 });
 
+it('cancels and reports a directory service that exceeds its timeout', async () => {
+    const endpoint = new FakeDirectoryEndpoint();
+    endpoint.set(undefined, [referral('slow')]);
+    endpoint.hang('slow');
+    const explorer = new HubDirectoryExplorer(endpoint, { timeoutMs: 10 });
+
+    await explorer.explore();
+
+    expect(endpoint.cancelledLists).toEqual(['slow']);
+    expect(explorer.graphSnapshot.directories[0]).toMatchObject({
+        target: { kind: 'addressed', serviceId: 'slow' },
+        state: 'inaccessible',
+        inaccessibleReason: "hub directory service 'slow' timed out after 10ms",
+    });
+});
+
 function listing(serviceId: string, interfaceId: string): ServiceListing {
     return { serviceId, interfaceId, hash: `hash:${interfaceId}` };
 }
@@ -428,6 +444,8 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
     private readonly _watchCalls = new Map<string, number>();
     private readonly _watchSettlers = new Map<string, Set<() => void>>();
     private readonly _afterList = new Map<string, () => void>();
+    private readonly _hanging = new Set<string>();
+    public readonly cancelledLists: Array<string | undefined> = [];
 
     public set(target: string | undefined, items: readonly ServiceListing[]): void {
         this._directories.set(key(target), items);
@@ -436,6 +454,10 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
 
     public fail(target: string | undefined, reason: string): void {
         this._failures.set(key(target), reason);
+    }
+
+    public hang(target: string | undefined): void {
+        this._hanging.add(key(target));
     }
 
     public afterNextList(target: string | undefined, callback: () => void): void {
@@ -497,9 +519,25 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
 
     public sendRequestWithStream(
         method: string,
-        _params: JsonValue | undefined,
+        params: JsonValue | undefined,
         opts?: StreamSendOpts<SigningCallCtx>,
     ): RawStreamingCall {
+        if (method.endsWith('hubrpc.directory::list')) {
+            const target = parseTarget(method, 'list');
+            let rejectResult!: (error: Error) => void;
+            const result = this._hanging.has(key(target))
+                ? new Promise<JsonValue>((_resolve, reject) => { rejectResult = reject; })
+                : this.sendRequest(method, params);
+            return {
+                result,
+                send: () => undefined,
+                cancel: () => {
+                    this.cancelledLists.push(target);
+                },
+                dispose: (reason) => rejectResult?.(new Error(reason)),
+                ping: async () => undefined,
+            };
+        }
         const target = parseTarget(method, 'watch');
         const targetKey = key(target);
         this._watchCalls.set(targetKey, (this._watchCalls.get(targetKey) ?? 0) + 1);

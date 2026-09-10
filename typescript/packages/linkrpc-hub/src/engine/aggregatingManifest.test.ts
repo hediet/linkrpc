@@ -26,6 +26,34 @@ function fakeManifest(doc: unknown): IHubAccessManifest {
 }
 
 describe('AggregatingHubAccessManifest — result validation at the boundary', () => {
+    it('cancels and identifies a manifest source that exceeds its timeout', async () => {
+        let cancelled = false;
+        const pending = Object.assign(new Promise<never>(() => {}), {
+            cancel: async () => { cancelled = true; },
+            dispose: () => undefined,
+        });
+        const slow = {
+            ...fakeManifest({ requested: {}, revision: 0 }),
+            getDesired: () => pending,
+        } as IHubAccessManifest;
+        const logs: string[] = [];
+        const agg = new AggregatingHubAccessManifest({
+            resolveSources: () => [{ tag: 'slow-service', manifest: slow }],
+            timeoutMs: 10,
+            log: (line) => logs.push(line),
+        });
+
+        const doc = await agg.getDesired();
+
+        expect(doc.requested).toEqual({});
+        expect(cancelled).toBe(true);
+        expect(logs).toContain(
+            "aggregator: getDesired(slow-service) failed: "
+            + "hubAccessManifest service 'slow-service' timed out after 10ms",
+        );
+        agg.dispose();
+    });
+
     it('skips a source whose getDesired document violates the schema, and logs it', async () => {
         const good = fakeManifest({
             requested: { e1: { kind: 'direct', consumer: { name: 'good', principal: 'id:key:good' }, permissions: [PERMISSION] } },

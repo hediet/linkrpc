@@ -53,6 +53,8 @@ export interface LsOptions {
      * just list that one service).
      */
     readonly maxDepth?: number;
+    /** Hard deadline for each directory request. Defaults to 5 seconds. */
+    readonly timeoutMs?: number;
 }
 
 export interface LsState {
@@ -195,6 +197,7 @@ function explorerOptions(opts: LsOptions): WalkHubOptions {
         ...(opts.serviceId !== undefined
             ? { rootTarget: opts.serviceId, serviceId: opts.serviceId }
             : {}),
+        ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
     };
 }
 
