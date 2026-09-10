@@ -3,7 +3,9 @@ name = "linkrpc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish.workspace = true
+repository.workspace = true
+description = "Typed JSON-RPC interfaces, clients, servers, and transports for LinkRPC"
+publish = true
 
 [dependencies]
 serde.workspace = true
@@ -15,7 +17,7 @@ sha2.workspace = true
 schemars.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
-linkrpc-macros = { path = "../linkrpc-macros" }
+linkrpc-macros = { version = "0.0.0", path = "../linkrpc-macros" }
 
 [dev-dependencies]
 tokio.workspace = true

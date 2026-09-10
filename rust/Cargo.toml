@@ -12,6 +12,7 @@ version = "0.0.0"
 edition = "2021"
 license = "MIT"
 publish = false
+repository = "https://github.com/hediet/linkrpc"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

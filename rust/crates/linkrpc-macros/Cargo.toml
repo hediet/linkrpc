@@ -3,7 +3,9 @@ name = "linkrpc-macros"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-publish = false
+repository.workspace = true
+description = "Procedural macros for defining typed LinkRPC interfaces"
+publish = true
 
 [lib]
 proc-macro = true

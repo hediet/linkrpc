@@ -1,14 +1,22 @@
-name: TypeScript
+name: Packages
 
 on:
   push:
     branches: [main]
     paths:
       - "typescript/**"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - "rust/crates/linkrpc/**"
+      - "rust/crates/linkrpc-macros/**"
       - ".github/workflows/package-artifacts.yml"
   pull_request:
     paths:
       - "typescript/**"
+      - "rust/Cargo.toml"
+      - "rust/Cargo.lock"
+      - "rust/crates/linkrpc/**"
+      - "rust/crates/linkrpc-macros/**"
       - ".github/workflows/package-artifacts.yml"
   workflow_dispatch:
 
@@ -98,4 +106,51 @@ jobs:
         with:
           name: ${{ steps.package.outputs.linkrpc_mcp_artifact }}
           path: ${{ steps.package.outputs.linkrpc_mcp_path }}
+          if-no-files-found: error
+
+  cargo:
+    name: Package Rust crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore packaged crates
+        id: crate-cache
+        uses: actions/cache@v4
+        with:
+          path: artifacts/cargo
+          key: cargo-packages-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml', 'rust/Cargo.lock', 'rust/crates/linkrpc/Cargo.toml', 'rust/crates/linkrpc/README.md', 'rust/crates/linkrpc/src/**', 'rust/crates/linkrpc-macros/Cargo.toml', 'rust/crates/linkrpc-macros/src/**') }}
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.crate-cache.outputs.cache-hit != 'true'
+      - name: Create crate archives
+        if: steps.crate-cache.outputs.cache-hit != 'true'
+        working-directory: rust
+        run: |
+          cargo package --locked --exclude-lockfile -p linkrpc-macros
+          # The packaged macro cannot be resolved from crates.io before its first publication.
+          cargo package --locked --exclude-lockfile --no-verify -p linkrpc
+
+          mkdir -p ../artifacts/cargo/linkrpc-macros ../artifacts/cargo/linkrpc
+          cp target/package/linkrpc-macros-*.crate ../artifacts/cargo/linkrpc-macros/
+          cp target/package/linkrpc-[0-9]*.crate ../artifacts/cargo/linkrpc/
+      - name: Identify crate archives
+        id: crates
+        run: |
+          mapfile -t macros_crates < <(find artifacts/cargo/linkrpc-macros -maxdepth 1 -type f -name '*.crate')
+          mapfile -t linkrpc_crates < <(find artifacts/cargo/linkrpc -maxdepth 1 -type f -name '*.crate')
+          test "${#macros_crates[@]}" -eq 1
+          test "${#linkrpc_crates[@]}" -eq 1
+
+          echo "macros_artifact=cargo-crate-$(basename "${macros_crates[0]}")" >> "$GITHUB_OUTPUT"
+          echo "linkrpc_artifact=cargo-crate-$(basename "${linkrpc_crates[0]}")" >> "$GITHUB_OUTPUT"
+      - name: Upload linkrpc-macros crate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.crates.outputs.macros_artifact }}
+          path: artifacts/cargo/linkrpc-macros/*.crate
+          if-no-files-found: error
+      - name: Upload linkrpc crate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.crates.outputs.linkrpc_artifact }}
+          path: artifacts/cargo/linkrpc/*.crate
           if-no-files-found: error
