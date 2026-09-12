@@ -35,6 +35,7 @@
     "scripts": {
         "build": "tsdown",
         "test": "vitest --run",
+        "test:interop": "vitest --run test/protocols/protocolInterop.live.test.ts",
         "test:watch": "vitest"
     },
     "peerDependencies": {
@@ -47,6 +48,7 @@
         "tsdown": "^0.22.3",
         "typescript": "^6.0.3",
         "vitest": "^3.0.0",
+        "vscode-json-languageserver": "1.3.4",
         "zod": "^4.4.3"
     },
     "publishConfig": {

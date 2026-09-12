@@ -30,6 +30,7 @@ The interop-critical behavior is byte-level and is pinned by a corpus of vectors
 |---|---|---|
 | `jcs.json` | RFC 8785 canonicalization (key order, number/string encoding, control escapes) | 04 §4, 06 §2 |
 | `method_name.json` | bare/addressed method parsing, ASCII alphabets, separators, and malformed-name rejection | 01 §2 |
+| `bare_bindings.json` | CDP/LSP bare-prefix dispatch, longest-match selection, no fallback on missing members, and invalid prefixes | 05 §2.1 |
 | `framing.json` | NDJSON framing — line splitting, whitespace trim, empty/invalid-line handling, `hubrpc::initialize` handshake | 02 §2 |
 | `normalize.json` | JSON Schema normalization (the canonical form before hashing) | 04 §3.1 |
 | `interface_hash.json` | full interface-hash derivation from a schema | 04 §4 |

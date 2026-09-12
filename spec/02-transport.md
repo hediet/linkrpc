@@ -50,6 +50,12 @@ Over a WebSocket, each message is one text frame containing the message's JSON t
 
 A node MAY be reached by spawning a child process and speaking the NDJSON binding (§2) over the child's stdin (node → child) and stdout (child → node). The child's stderr is not part of the transport. No `hubrpc::initialize` handshake is used on stdio; a spawned child receives its attribution out of band (§5.3).
 
+### 4.1 External protocol adapters
+
+The native bindings above are not wire-compatibility requirements for an external JSON-RPC protocol. An adapter for LSP uses that protocol's UTF-8 `Content-Length` framing, while a CDP adapter translates CDP envelopes and, where supported, flattened target-session identifiers. Neither changes the native LinkRPC NDJSON binding.
+
+External connections use the peer's exact bare method names, possibly constructed from local bare-method bindings (chapter 05 §2.1). An adapter MUST NOT inject a LinkRPC initialize handshake, interface-hash assertion, signing metadata, or LinkRPC stream-control messages into an unmodified external peer's protocol. Application initialization, cancellation, progress, and shutdown remain governed by that external protocol. Incoming requests and notifications are supported independently of which endpoint established the transport.
+
 ## 5. Endpoint URIs
 
 An **endpoint URI** names where a linkrpc node lives and how to reach or start it. Every endpoint URI is a valid [RFC 3986](https://www.rfc-editor.org/rfc/rfc3986) URI and is safe to place in environment variables, logs, and configuration.

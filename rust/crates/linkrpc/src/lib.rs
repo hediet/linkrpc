@@ -35,8 +35,9 @@ pub mod prelude {
     // Typed clients (+ their result types) for the built-in reflection interfaces, so consumers
     // can introspect an endpoint without hand-rolling `call_member` calls.
     pub use crate::connection::reflection::iface::{
-        DefaultsGetResult, DefaultsServiceClient, DirectoryListResult, DirectoryServiceClient,
-        SchemasGetResult, SchemasServiceClient, ServiceListing,
+        BareBindingListing, DefaultsGetResult, DefaultsListBindingsResult, DefaultsServiceClient,
+        DirectoryListResult, DirectoryServiceClient, SchemasGetResult, SchemasServiceClient,
+        ServiceListing,
     };
     pub use crate::protocol::json_value::JsonValue;
     pub use crate::protocol::jsonrpc::{

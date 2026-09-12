@@ -6,6 +6,7 @@ import type { LinkRpcJsonSchema } from './linkRpcJsonSchema';
  * contract of a single interface (methods + reusable JSON Schemas).
  */
 export interface LinkRpcInterfaceSchema {
+    [key: `x-${string}`]: unknown;
     /** Stable interface id, e.g. "de.hediet.notification-target". */
     id: string;
 
@@ -40,6 +41,7 @@ export interface LinkRpcInterfaceSchema {
 }
 
 export interface MethodSchema {
+    [key: `x-${string}`]: unknown;
     /** Schema for the user params object. */
     params: LinkRpcJsonSchema;
 

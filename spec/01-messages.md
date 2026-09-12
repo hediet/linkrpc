@@ -60,6 +60,8 @@ A node that receives a syntactically malformed method MUST respond with `methodN
 
 > **Note.** The bare syntax preserves the freedom of ordinary JSON-RPC method names while keeping addressed names predictable for routing, matching, and display. A bare method has no interface context; an intermediary that routes on interface (a hub) does not accept it. See chapter 04 for the addressing model and chapter 08 for hub routing surfaces.
 
+An endpoint MAY locally dispatch bare methods through prefix-to-interface bindings, including an empty-prefix default (chapter 05 §2.1). Such bindings do not change the method grammar or make bare calls routable by a hub.
+
 ## 3. The reserved `$hubrpc` namespace
 
 On a call's `params` object, member keys beginning with `$hubrpc` are **reserved by linkrpc**; no other keys are reserved. Three are defined:

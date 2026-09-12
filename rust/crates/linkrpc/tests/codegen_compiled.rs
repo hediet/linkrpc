@@ -11,6 +11,7 @@
 mod generated;
 
 use generated::*;
+use std::sync::{Arc, Mutex};
 
 /// A transport stub that returns canned results so the generated async client's
 /// method bodies (params encode + result decode) are fully type-checked and
@@ -28,6 +29,7 @@ impl linkrpc::prelude::RpcCall for StubCaller {
         if method.ends_with("raw_echo") {
             return Ok(params);
         }
+
         if method.ends_with("paint") || method.ends_with("configure") {
             return Ok(serde_json::json!(true));
         }
@@ -42,6 +44,44 @@ impl linkrpc::prelude::RpcCall for StubCaller {
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         Ok(())
     }
+}
+
+struct RecordingCaller(Arc<Mutex<Vec<String>>>);
+
+#[async_trait::async_trait]
+impl linkrpc::prelude::RpcCall for RecordingCaller {
+    async fn call(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
+        self.0.lock().unwrap().push(method.to_string());
+        Ok(params)
+    }
+
+    async fn notify(
+        &self,
+        method: &str,
+        _params: serde_json::Value,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        self.0.lock().unwrap().push(method.to_string());
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn explicit_prefix_is_used_as_a_raw_wire_prefix() {
+    let methods = Arc::new(Mutex::new(Vec::new()));
+    let client = ComExampleGraphClient::with_prefix(RecordingCaller(methods.clone()), "Runtime.");
+    client
+        .raw_echo(serde_json::json!({ "expression": "1 + 1" }))
+        .await
+        .unwrap();
+    client.reset(ResetParams::new()).await.unwrap();
+    assert_eq!(
+        *methods.lock().unwrap(),
+        ["Runtime.raw_echo", "Runtime.reset"]
+    );
 }
 
 #[test]

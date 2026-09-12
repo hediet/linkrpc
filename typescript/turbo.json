@@ -25,6 +25,14 @@
             "outputs": [],
             "outputLogs": "new-only"
         },
+        "@hediet/linkrpc#test": {
+            "dependsOn": ["build"],
+            "cache": false
+        },
+        "@hediet/linkrpc-infra#test": {
+            "dependsOn": ["build"],
+            "cache": false
+        },
         "typecheck:guest": {
             "outputs": [],
             "outputLogs": "new-only"

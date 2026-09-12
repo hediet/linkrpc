@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import ts from "typescript";
 import { computeInterfaceHash } from "../hash";
 import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
 import { notificationType, requestType } from "../memberTypes";
 import type { LinkRpcInterfaceSchema } from "../linkRpcInterfaceSchema";
+import type { LinkRpcJsonSchema } from "../linkRpcJsonSchema";
 import {
     defaultsInterface,
     directoryInterface,
@@ -21,12 +23,18 @@ import { generateTsInterface } from "./generateTsInterface";
 async function _evalGenerated(source: string): Promise<{
     toSchema(): LinkRpcInterfaceSchema;
     schemaHash: string;
+    members: Record<string, { paramsSchema: z.ZodType }>;
 }> {
-    // Strip imports, rebuild as an inline function call that closes over
-    // the symbols we expose by name.
-    const body = source
+    // Erase TypeScript syntax, then rebuild as an inline function call that
+    // closes over the symbols we expose by name.
+    const js = ts.transpileModule(source, {
+        compilerOptions: {
+            target: ts.ScriptTarget.ES2022,
+            module: ts.ModuleKind.ESNext,
+        },
+    }).outputText;
+    const body = js
         .replace(/^import [^\n]*\n/gm, "")
-        .replace(": LinkRpcInterfaceSchema =", "=")
         .replace(/^export const /m, "return ");
 
     const fn = new Function(
@@ -243,4 +251,219 @@ describe("generateInterface", () => {
         expect(regenerated.schemaHash).toBe(schema.hash);
         expect(regenerated.toSchema()).toEqual(schema);
     });
+
+    it("emits untagged oneOf as the normative Zod union", () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.one-of",
+            hash: "",
+            methods: {
+                parse: {
+                    params: { oneOf: [{ type: "string" }, { type: "number" }] },
+                    result: { type: "boolean" },
+                },
+            },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        expect(generateTsInterface(schema)).toContain("z.union([");
+    });
+
+    it("generates guarded mutually recursive component schemas", async () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.mutual-recursion",
+            hash: "",
+            methods: {
+                inspect: {
+                    params: { $ref: "#/components/schemas/A" },
+                    result: { type: "boolean" },
+                },
+            },
+            components: {
+                schemas: {
+                    A: {
+                        type: "object",
+                        properties: { b: { $ref: "#/components/schemas/B" } },
+                        required: ["b"],
+                        additionalProperties: false,
+                    },
+                    B: {
+                        type: "object",
+                        properties: { a: { $ref: "#/components/schemas/A" } },
+                        additionalProperties: false,
+                    },
+                },
+            },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        const source = generateTsInterface(schema, { preserveWireSchema: true });
+        expect(source).toContain("type A = { b: B; };");
+        expect(source).toContain("type B = { a?: A; };");
+        expect(source).toContain("const ASchema: z.ZodType<A> = z.lazy");
+        expect(source).toContain("const BSchema: z.ZodType<B> = z.lazy");
+        const generated = await _evalGenerated(source);
+        expect(generated.schemaHash).toBe(schema.hash);
+        expect(generated.members.inspect.paramsSchema.safeParse({ b: {} }).success).toBe(true);
+    });
+
+    it("keeps precise recursive payload types across supported containers", () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.recursive-types",
+            hash: "",
+            methods: {
+                inspect: {
+                    params: { $ref: "#/components/schemas/Node" },
+                    result: { type: "boolean" },
+                },
+            },
+            components: {
+                schemas: {
+                    Leaf: {
+                        type: "object",
+                        properties: { label: { type: "string" } },
+                        required: ["label"],
+                        additionalProperties: false,
+                    },
+                    Node: {
+                        type: "object",
+                        properties: {
+                            value: { type: "string" },
+                            leaf: { $ref: "#/components/schemas/Leaf" },
+                            child: { $ref: "#/components/schemas/Node" },
+                            children: {
+                                type: "array",
+                                items: { $ref: "#/components/schemas/Node" },
+                            },
+                            pair: {
+                                type: "array",
+                                prefixItems: [
+                                    { type: "number" },
+                                    { $ref: "#/components/schemas/Node" },
+                                ],
+                                items: false,
+                            },
+                            restPair: {
+                                type: "array",
+                                prefixItems: [{ type: "number" }],
+                                items: {
+                                    anyOf: [
+                                        { type: "string" },
+                                        { $ref: "#/components/schemas/Node" },
+                                    ],
+                                },
+                            },
+                            choice: {
+                                anyOf: [
+                                    { type: "string" },
+                                    { $ref: "#/components/schemas/Node" },
+                                ],
+                            },
+                        },
+                        required: ["value", "leaf", "children"],
+                        additionalProperties: true,
+                    },
+                },
+            },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        const source = generateTsInterface(schema, {
+            linkRpcImport: "../../index",
+            preserveWireSchema: true,
+        });
+
+        expect(source).not.toMatch(/\btype Leaf =/);
+        expect(source).toContain("leaf: z.infer<typeof LeafSchema>");
+        expect(source).toContain("children: Array<Node>");
+        expect(source).toContain("pair?: [number, Node]");
+        expect(source).toContain("restPair?: [number, ...Array<string | Node>]");
+        expect(source).toContain("choice?: string | Node");
+        _expectTypeChecks(`${source}
+const valid: Node = {
+    value: "root",
+    leaf: { label: "leaf" },
+    children: [{ value: "child", leaf: { label: "nested" }, children: [] }],
+    extra: 123,
+};
+const optionalFieldsMayBeAbsent: Node = { value: "root", leaf: { label: "leaf" }, children: [] };
+const validRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, "text", optionalFieldsMayBeAbsent] };
+const inferred: z.infer<typeof NodeSchema> = valid;
+const inferredValue: string = inferred.children[0]!.value;
+// @ts-expect-error recursive children retain their value type
+const invalidNestedValue: Node = { value: "root", leaf: { label: "leaf" }, children: [{ value: 1, leaf: { label: "nested" }, children: [] }] };
+// @ts-expect-error required fields remain required recursively
+const invalidNestedRequired: Node = { value: "root", leaf: { label: "leaf" }, children: [{ value: "child", leaf: { label: "nested" } }] };
+// @ts-expect-error schema inference retains recursive field types
+const invalidInferredValue: number = inferred.children[0]!.value;
+// @ts-expect-error tuple rest values must satisfy one of the union branches
+const invalidRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, false] };
+`);
+    });
+
+    it("allocates distinct safe names for colliding recursive components", () => {
+        const recursiveObject = (ref: string): LinkRpcJsonSchema => ({
+            type: "object",
+            properties: { next: { $ref: `#/components/schemas/${ref}` } },
+            additionalProperties: false,
+        });
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.recursive-name-collisions",
+            hash: "",
+            methods: {
+                inspect: {
+                    params: { $ref: "#/components/schemas/A-B" },
+                    result: { $ref: "#/components/schemas/z" },
+                },
+            },
+            components: {
+                schemas: {
+                    "A-B": recursiveObject("A-B"),
+                    A_B: recursiveObject("A_B"),
+                    z: recursiveObject("z"),
+                    type: recursiveObject("type"),
+                    Array: {
+                        type: "array",
+                        items: { $ref: "#/components/schemas/Array" },
+                    },
+                },
+            },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        const source = generateTsInterface(schema, {
+            linkRpcImport: "../../index",
+            preserveWireSchema: true,
+        });
+        expect(source).toContain("type A_B =");
+        expect(source).toContain("type A_B_2 =");
+        expect(source).toContain("type z_2 =");
+        expect(source).toContain("type type_2 =");
+        expect(source).toContain("type Array_2 = Array<Array_2>");
+        expect(source).toContain("const A_BSchema:");
+        expect(source).toContain("const A_BSchema_2:");
+        _expectTypeChecks(source);
+    });
 });
+
+function _expectTypeChecks(source: string): void {
+    const fileName = new URL("./generated-type-test.ts", import.meta.url).pathname;
+    const options: ts.CompilerOptions = {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        strict: true,
+        skipLibCheck: true,
+        noEmit: true,
+    };
+    const host = ts.createCompilerHost(options);
+    const getSourceFile = host.getSourceFile.bind(host);
+    const fileExists = host.fileExists.bind(host);
+    const readFile = host.readFile.bind(host);
+    host.fileExists = (candidate) => candidate === fileName || fileExists(candidate);
+    host.readFile = (candidate) => candidate === fileName ? source : readFile(candidate);
+    host.getSourceFile = (candidate, languageVersion, onError, shouldCreateNewSourceFile) =>
+        candidate === fileName
+            ? ts.createSourceFile(candidate, source, languageVersion, true, ts.ScriptKind.TS)
+            : getSourceFile(candidate, languageVersion, onError, shouldCreateNewSourceFile);
+    const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram([fileName], options, host));
+    expect(diagnostics.map((diagnostic) => ts.flattenDiagnosticMessageText(
+        diagnostic.messageText,
+        "\n",
+    ))).toEqual([]);
+}

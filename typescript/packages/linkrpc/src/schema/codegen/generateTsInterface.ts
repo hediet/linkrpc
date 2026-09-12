@@ -33,7 +33,8 @@ export interface GenerateInterfaceOptions {
  * therefore the same `schemaHash`).
  *
  * Components in `components.schemas` are emitted as named `const`
- * declarations referenced from the bodies via `$ref`.
+ * declarations referenced from the bodies via `$ref`. Only recursive
+ * components receive explicit payload types; other types remain Zod-inferred.
  */
 export function generateTsInterface(
     schema: LinkRpcInterfaceSchema,
@@ -52,16 +53,28 @@ export function generateTsInterface(
     w.writeLine();
 
     const componentSchemas = schema.components?.schemas ?? {};
-    const componentNames = new Map<string, string>();
-    for (const name of Object.keys(componentSchemas)) {
-        componentNames.set(name, _toComponentVar(name));
+    const cyclicComponents = _findCyclicComponents(componentSchemas);
+    const componentNames = _allocateComponentNames(componentSchemas);
+    const payloadNames = _allocatePayloadNames(componentSchemas, cyclicComponents);
+
+    for (const [name, sub] of _sortComponents(componentSchemas)) {
+        if (!cyclicComponents.has(name)) continue;
+        w.writeLine(
+            `type ${payloadNames.get(name)!} = ${_schemaType(sub, componentNames, payloadNames)};`,
+        );
     }
+    if (cyclicComponents.size > 0) w.writeLine();
 
     for (const [name, sub] of _sortComponents(componentSchemas)) {
         const varName = componentNames.get(name)!;
         _writeJsDoc(w, _schemaDescription(sub));
-        w.append(`const ${varName} = `);
+        if (cyclicComponents.has(name)) {
+            w.append(`const ${varName}: z.ZodType<${payloadNames.get(name)!}> = z.lazy(() => `);
+        } else {
+            w.append(`const ${varName} = `);
+        }
         _writeSchema(w, sub, componentNames, preserveWireSchema, name);
+        if (cyclicComponents.has(name)) w.append(')');
         w.append(';');
         w.newline();
         w.writeLine();
@@ -96,6 +109,76 @@ export function generateTsInterface(
 }
 
 // ---------------------------------------------------------------- info
+
+function _schemaType(
+    schema: LinkRpcJsonSchema,
+    components: Map<string, string>,
+    payloads: Map<string, string>,
+): string {
+    if (schema === true) return 'unknown';
+    if (schema === false) return 'never';
+
+    const s = schema as unknown as Record<string, unknown>;
+    if (typeof s['$ref'] === 'string') {
+        const name = _parseRef(s['$ref']);
+        const payload = payloads.get(name);
+        if (payload !== undefined) return payload;
+        const component = components.get(name);
+        if (component === undefined) {
+            throw new Error(`generateInterface: dangling $ref "${s['$ref']}"`);
+        }
+        return `z.infer<typeof ${component}>`;
+    }
+    if ('const' in s) return _jsonLiteral(s['const'] as JsonValue);
+    if (Array.isArray(s['enum'])) {
+        return (s['enum'] as JsonValue[]).map(_jsonLiteral).join(' | ') || 'never';
+    }
+
+    const union = (s['oneOf'] ?? s['anyOf']) as LinkRpcJsonSchema[] | undefined;
+    if (Array.isArray(union)) {
+        return union.map((item) => _schemaType(item, components, payloads)).join(' | ') || 'never';
+    }
+
+    if (s['type'] === 'object') {
+        const properties = (s['properties'] as Record<string, LinkRpcJsonSchema> | undefined) ?? {};
+        const required = new Set((s['required'] as string[] | undefined) ?? []);
+        const members = Object.entries(properties).map(([name, property]) =>
+            `${_propKey(name)}${required.has(name) ? '' : '?'}: ${_schemaType(property, components, payloads)};`,
+        );
+        const objectType = `{ ${members.join(' ')} }`;
+        const additional = s['additionalProperties'];
+        if (additional === true) return `${objectType} & { [key: string]: unknown }`;
+        if (additional !== undefined && additional !== false) {
+            return `${objectType} & { [key: string]: ${_schemaType(additional as LinkRpcJsonSchema, components, payloads)} }`;
+        }
+        return objectType;
+    }
+
+    if (s['type'] === 'array' && Array.isArray(s['prefixItems'])) {
+        const prefix = (s['prefixItems'] as LinkRpcJsonSchema[])
+            .map((item) => _schemaType(item, components, payloads));
+        const rest = s['items'];
+        if (rest !== undefined && rest !== false) {
+            prefix.push(`...Array<${_schemaType(rest as LinkRpcJsonSchema, components, payloads)}>`);
+        }
+        return `[${prefix.join(', ')}]`;
+    }
+    if (s['type'] === 'array') {
+        const item = (s['items'] as LinkRpcJsonSchema | undefined) ?? true;
+        return `Array<${_schemaType(item, components, payloads)}>`;
+    }
+
+    switch (s['type']) {
+        case 'null': return 'null';
+        case 'boolean': return 'boolean';
+        case 'string': return 'string';
+        case 'integer':
+            return s['format'] === 'int64' || s['format'] === 'uint64' ? 'bigint' : 'number';
+        case 'number': return 'number';
+        default:
+            throw new Error(`generateInterface: unsupported schema: ${JSON.stringify(schema)}`);
+    }
+}
 
 function _writeInterfaceInfo(
     w: CodeWriter,
@@ -296,15 +379,10 @@ function _writeSchema(
                 currentComponent,
                 disc.propertyName,
             );
-        } else if (preserveWireSchema) {
-            _writeUnion(w, 'z.union', branches, components, preserveWireSchema, currentComponent);
         } else {
-            // No usable discriminator: fall back to `z.union`. The
-            // resulting JSON schema will say `anyOf` instead of `oneOf`,
-            // which changes structurally — we surface that loudly.
-            throw new Error(
-                'generateInterface: `oneOf` without a `discriminator` is not representable.',
-            );
+            // General exclusive unions are not representable in Zod. LinkRPC
+            // treats oneOf and anyOf identically, so emit the normative union.
+            _writeUnion(w, 'z.union', branches, components, preserveWireSchema, currentComponent);
         }
         _writeMetaSuffix(w, _metaOf(s));
         return;
@@ -619,11 +697,7 @@ function _sortComponents(
 
     const visit = (name: string): void => {
         if (visited.has(name)) return;
-        if (visiting.has(name)) {
-            throw new Error(
-                `generateInterface: mutually recursive component schemas are not supported (cycle at "${name}").`,
-            );
-        }
+        if (visiting.has(name)) return;
 
         const schema = schemas[name];
         if (schema === undefined) return;
@@ -642,6 +716,49 @@ function _sortComponents(
     return result;
 }
 
+/** Find every node belonging to a strongly-connected component with a cycle. */
+function _findCyclicComponents(
+    schemas: Record<string, LinkRpcJsonSchema>,
+): Set<string> {
+    let nextIndex = 0;
+    const index = new Map<string, number>();
+    const lowLink = new Map<string, number>();
+    const stack: string[] = [];
+    const onStack = new Set<string>();
+    const cyclic = new Set<string>();
+
+    const visit = (name: string): void => {
+        index.set(name, nextIndex);
+        lowLink.set(name, nextIndex++);
+        stack.push(name);
+        onStack.add(name);
+        const dependencies = [..._collectRefs(schemas[name])].filter((ref) => schemas[ref] !== undefined);
+        for (const dependency of dependencies) {
+            if (!index.has(dependency)) {
+                visit(dependency);
+                lowLink.set(name, Math.min(lowLink.get(name)!, lowLink.get(dependency)!));
+            } else if (onStack.has(dependency)) {
+                lowLink.set(name, Math.min(lowLink.get(name)!, index.get(dependency)!));
+            }
+        }
+        if (lowLink.get(name) !== index.get(name)) return;
+        const component: string[] = [];
+        let current: string;
+        do {
+            current = stack.pop()!;
+            onStack.delete(current);
+            component.push(current);
+        } while (current !== name);
+        if (component.length > 1 || _collectRefs(schemas[name]).has(name)) {
+            for (const item of component) cyclic.add(item);
+        }
+    };
+    for (const name of Object.keys(schemas)) {
+        if (!index.has(name)) visit(name);
+    }
+    return cyclic;
+}
+
 function _collectRefs(value: unknown, refs = new Set<string>()): Set<string> {
     if (value === null || typeof value !== 'object') return refs;
     if (Array.isArray(value)) {
@@ -652,7 +769,9 @@ function _collectRefs(value: unknown, refs = new Set<string>()): Set<string> {
     if (typeof record['$ref'] === 'string') {
         refs.add(_parseRef(record['$ref']));
     }
-    for (const child of Object.values(record)) _collectRefs(child, refs);
+    for (const [key, child] of Object.entries(record)) {
+        if (!key.startsWith("x-")) _collectRefs(child, refs);
+    }
     return refs;
 }
 
@@ -677,9 +796,70 @@ function _parseRef(ref: string): string {
 }
 
 function _toComponentVar(name: string): string {
+    return _toIdentifier(name) + 'Schema';
+}
+
+function _toIdentifier(name: string): string {
     const sanitized = name.replace(/[^A-Za-z0-9_$]/g, '_');
-    const base = /^[A-Za-z_$]/.test(sanitized) ? sanitized : `_${sanitized}`;
-    return base + 'Schema';
+    return /^[A-Za-z_$]/.test(sanitized) ? sanitized : `_${sanitized}`;
+}
+
+function _allocateComponentNames(
+    schemas: Record<string, LinkRpcJsonSchema>,
+): Map<string, string> {
+    return _allocateNames(Object.keys(schemas), _toComponentVar, new Set([
+        'z',
+        'defineInterface',
+        'InterfaceDefinition',
+        'notificationType',
+        'requestType',
+        'wireSchema',
+    ]));
+}
+
+function _allocatePayloadNames(
+    schemas: Record<string, LinkRpcJsonSchema>,
+    cyclic: Set<string>,
+): Map<string, string> {
+    return _allocateNames(
+        Object.keys(schemas).filter((name) => cyclic.has(name)),
+        _toIdentifier,
+        new Set([
+            ..._typescriptReservedWords,
+            'z', 'Array', 'LinkRpcInterfaceSchema', 'InterfaceDefinition',
+        ]),
+    );
+}
+
+const _typescriptReservedWords = [
+    'any', 'as', 'asserts', 'async', 'await', 'bigint', 'boolean', 'break',
+    'case', 'catch', 'class', 'const', 'constructor', 'continue', 'debugger',
+    'declare', 'default', 'delete', 'do', 'else', 'enum', 'export', 'extends',
+    'false', 'finally', 'for', 'from', 'function', 'get', 'global', 'if',
+    'implements', 'import', 'in', 'infer', 'instanceof', 'interface',
+    'intrinsic', 'is', 'keyof', 'let', 'module', 'namespace', 'never', 'new',
+    'null', 'number', 'object', 'of', 'package', 'private', 'protected',
+    'public', 'readonly', 'require', 'return', 'satisfies', 'set', 'static',
+    'string', 'super', 'switch', 'symbol', 'this', 'throw', 'true', 'try',
+    'type', 'typeof', 'undefined', 'unique', 'unknown', 'using', 'var', 'void',
+    'while', 'with', 'yield',
+] as const;
+
+function _allocateNames(
+    names: string[],
+    candidate: (name: string) => string,
+    used: Set<string>,
+): Map<string, string> {
+    const result = new Map<string, string>();
+    for (const name of names) {
+        const base = candidate(name);
+        let allocated = base;
+        let suffix = 2;
+        while (used.has(allocated)) allocated = `${base}_${suffix++}`;
+        used.add(allocated);
+        result.set(name, allocated);
+    }
+    return result;
 }
 
 function _deriveExportName(id: string): string {

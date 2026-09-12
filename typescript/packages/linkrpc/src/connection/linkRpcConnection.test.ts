@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { z } from 'zod';
 import { nodeInterface } from '../hub/common/node.interfaces';
 import {
@@ -7,9 +8,9 @@ import {
     type TrafficEvent,
 } from '../hub/common/inspection.interfaces';
 import { defaultsInterface, directoryInterface, schemasInterface } from '../hub/common/reflection.interfaces';
-import { defineInterface } from './interfaceDefinition';
+import { defineInterface, interfaceFromSchema } from './interfaceDefinition';
 import { notificationType, requestType } from '../schema/memberTypes';
-import { TransportPair } from '../transport/messageTransport';
+import { traceMessageTransport, TransportPair } from '../transport/messageTransport';
 import type { IMessageTransport } from '../transport/messageTransport';
 import type { JsonRpcMessage } from '../protocol/jsonRpc';
 import { getLocalMessageContext } from '../transport/messageTransport';
@@ -27,6 +28,33 @@ const greeter = defineInterface(
         shout: notificationType(z.object({ msg: z.string() })),
     },
 );
+
+interface BareBindingVector {
+    prefix: string;
+    interfaceId: string;
+    serviceId?: string;
+    members: string[];
+}
+
+interface BareBindingCase {
+    name: string;
+    bindings: BareBindingVector[];
+    method: string;
+    expected: {
+        interfaceId?: string;
+        serviceId?: string;
+        member?: string;
+        error?: 'methodNotFound';
+    };
+}
+
+const bareBindingVectors = JSON.parse(readFileSync(
+    new URL('../../../../../conformance/vectors/bare_bindings.json', import.meta.url),
+    'utf8',
+)) as {
+    invalidPrefixes: string[];
+    cases: BareBindingCase[];
+};
 
 function makePair(): { client: LinkRpcConnection; server: LinkRpcConnection; dispose: () => void; } {
     const pair = new TransportPair();
@@ -607,6 +635,325 @@ describe('LinkRpcConnection — preset (form 1)', () => {
     });
 });
 
+describe('LinkRpcConnection — bare bindings', () => {
+    const language = defineInterface(
+        { id: 'test.language' },
+        {
+            hover: requestType(z.object({ value: z.string() }), z.string()),
+            changed: notificationType(z.object({ value: z.string() })),
+        },
+    );
+
+    it('uses the longest prefix without falling back when its member is absent', async () => {
+        const pair = new TransportPair();
+        const client = JsonRpcChannel.create(pair.a).sender;
+        const server = LinkRpcConnection.fromTransport(pair.b);
+        server.register(language, {
+            hover: ({ value }) => `root:${value}`,
+            changed: () => { },
+        });
+        server.service('mounted').register(greeter, {
+            hello: ({ name }) => ({ greeting: `mounted:${name}` }),
+            shout: () => { },
+        });
+        server.bindBare(language, { prefix: 'text/' });
+        server.bindBare(greeter, { prefix: 'text/document/', serviceId: 'mounted' });
+
+        await expect(client.sendRequest('text/hover', { value: 'x' })).resolves.toBe('root:x');
+        await expect(client.sendRequest('text/document/hello', { name: 'x' }))
+            .resolves.toEqual({ greeting: 'mounted:x' });
+        await expect(client.sendRequest('text/document/hover', { value: 'x' }))
+            .rejects.toMatchObject({ code: -32601, data: { reason: 'unknown-method' } });
+        client.close();
+        server.close();
+    });
+
+    it('validates prefixes, registration targets, and duplicate prefixes', () => {
+        const { server, dispose } = makePair();
+        server.register(language, { hover: ({ value }) => value, changed: () => { } });
+        expect(() => server.bindBare(language, { prefix: '\n' })).toThrow(/printable ASCII/);
+        expect(() => server.bindBare(language, { prefix: 'a::b' })).toThrow(/must not contain/);
+        expect(() => server.bindBare(greeter, { prefix: 'x' })).toThrow(/not registered/);
+        server.bindBare(language, { prefix: 'x' });
+        expect(() => server.bindBare(language, { prefix: 'x' })).toThrow(/already bound/);
+        dispose();
+    });
+
+    describe('shared conformance vectors', () => {
+        for (const vector of bareBindingVectors.cases) {
+            it(vector.name, async () => {
+                const pair = new TransportPair();
+                const client = JsonRpcChannel.create(pair.a).sender;
+                const server = LinkRpcConnection.fromTransport(pair.b);
+                for (const binding of vector.bindings) {
+                    const resultSchema = z.object({
+                        interfaceId: z.string(),
+                        serviceId: z.string().optional(),
+                        member: z.string(),
+                    });
+                    const iface = defineInterface(
+                        { id: binding.interfaceId },
+                        Object.fromEntries(binding.members.map((member) => [
+                            member,
+                            requestType(z.object({}), resultSchema),
+                        ])),
+                    );
+                    const handlers = Object.fromEntries(binding.members.map((member) => [
+                        member,
+                        () => ({
+                            interfaceId: binding.interfaceId,
+                            ...(binding.serviceId === undefined ? {} : { serviceId: binding.serviceId }),
+                            member,
+                        }),
+                    ]));
+                    server.register(iface, handlers as never, { serviceId: binding.serviceId });
+                    server.bindBare(iface, {
+                        prefix: binding.prefix,
+                        serviceId: binding.serviceId,
+                    });
+                }
+
+                if (vector.expected.error === 'methodNotFound') {
+                    await expect(client.sendRequest(vector.method, {}))
+                        .rejects.toMatchObject({ code: -32601 });
+                } else {
+                    await expect(client.sendRequest(vector.method, {}))
+                        .resolves.toEqual(vector.expected);
+                }
+                client.close();
+                server.close();
+            });
+        }
+
+        it('rejects every invalid prefix', () => {
+            const { server, dispose } = makePair();
+            server.register(language, { hover: ({ value }) => value, changed: () => { } });
+            for (const prefix of bareBindingVectors.invalidPrefixes) {
+                expect(() => server.bindBare(language, { prefix })).toThrow(/prefix/);
+            }
+            dispose();
+        });
+    });
+
+    it('removes bindings on either binding or interface disposal', async () => {
+        const pair = new TransportPair();
+        const client = JsonRpcChannel.create(pair.a).sender;
+        const server = LinkRpcConnection.fromTransport(pair.b);
+        const registration = server.register(language, {
+            hover: ({ value }) => value,
+            changed: () => { },
+        });
+        const first = server.bindBare(language, { prefix: 'a/' });
+        first.dispose();
+        await expect(client.sendRequest('a/hover', { value: 'x' }))
+            .rejects.toMatchObject({ data: { reason: 'no-preset' } });
+        server.bindBare(language, { prefix: 'b/' });
+        registration.dispose();
+        await expect(client.sendRequest('b/hover', { value: 'x' }))
+            .rejects.toMatchObject({ data: { reason: 'no-preset' } });
+        client.close();
+        server.close();
+    });
+
+    it('shares the empty slot with setPreset and reflects bindings deterministically', async () => {
+        const { client, server, dispose } = makePair();
+        server.register(language, { hover: ({ value }) => value, changed: () => { } });
+        server.register(greeter, {
+            hello: ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        });
+        const explicit = server.bindBare(language, { prefix: '' });
+        expect(() => server.bindBare(greeter, { prefix: '' })).toThrow(/already bound/);
+        server.setPreset(greeter);
+        explicit.dispose(); // Must not remove the replacement preset.
+        server.bindBare(language, { prefix: 'z/' });
+        server.bindBare(language, { prefix: 'a/' });
+        server.enableReflection();
+
+        await expect(client.getBare(greeter).hello({ name: 'x' }))
+            .resolves.toEqual({ greeting: 'x' });
+        await expect(client.get(defaultsInterface).get({})).resolves.toMatchObject({
+            interfaceId: greeter.info.id,
+            interfaceHash: greeter.schemaHash,
+        });
+        await expect(client.get(defaultsInterface).listBindings({})).resolves.toEqual({
+            bindings: [
+                {
+                    prefix: '',
+                    serviceId: undefined,
+                    interfaceId: greeter.info.id,
+                    interfaceHash: greeter.schemaHash,
+                },
+                {
+                    prefix: 'a/',
+                    serviceId: undefined,
+                    interfaceId: language.info.id,
+                    interfaceHash: language.schemaHash,
+                },
+                {
+                    prefix: 'z/',
+                    serviceId: undefined,
+                    interfaceId: language.info.id,
+                    interfaceHash: language.schemaHash,
+                },
+            ],
+        });
+        dispose();
+    });
+
+    it('defaults get reports only the empty binding, including its mounted service', async () => {
+        const { client, server, dispose } = makePair();
+        server.service('mounted').register(language, {
+            hover: ({ value }) => value,
+            changed: () => { },
+        });
+        server.bindBare(language, { prefix: 'nonempty/', serviceId: 'mounted' });
+        server.enableReflection();
+        await expect(client.get(defaultsInterface).get({})).resolves.toEqual({});
+
+        server.bindBare(language, { prefix: '', serviceId: 'mounted' });
+        await expect(client.get(defaultsInterface).get({})).resolves.toEqual({
+            serviceId: 'mounted',
+            interfaceId: language.info.id,
+            interfaceHash: language.schemaHash,
+        });
+        dispose();
+    });
+
+    it('getBare sends exact method names without interface metadata and supports reverse calls', async () => {
+        const pair = new TransportPair();
+        const a = LinkRpcConnection.fromTransport(pair.a);
+        const b = LinkRpcConnection.fromTransport(pair.b);
+        const changes: string[] = [];
+        b.register(language, {
+            hover: ({ value }) => `b:${value}`,
+            changed: ({ value }) => { changes.push(value); },
+        });
+        b.bindBare(language, { prefix: 'lsp/' });
+        a.register(language, {
+            hover: ({ value }) => `a:${value}`,
+            changed: () => { },
+        });
+        a.bindBare(language, { prefix: 'reverse/' });
+
+        const dynamicLanguage = interfaceFromSchema(language.toSchema());
+        await expect(a.getBare(dynamicLanguage, { prefix: 'lsp/' }).hover({ value: 'x' }))
+            .resolves.toBe('b:x');
+        a.getBare(language, { prefix: 'lsp/' }).changed({ value: 'notice' });
+        await expect(b.getBare(language, { prefix: 'reverse/' }).hover({ value: 'y' }))
+            .resolves.toBe('a:y');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(changes).toEqual(['notice']);
+        a.close();
+        b.close();
+    });
+
+    it('getBare preserves legitimate null and rejects streaming interfaces', async () => {
+        const nullable = defineInterface(
+            { id: 'test.nullable' },
+            { read: requestType(z.object({}), z.null()) },
+        );
+        const sender = {
+            sendRequest: async () => null,
+            sendNotification: async () => { },
+            sendRequestWithStream: () => { throw new Error('unused'); },
+            close: () => { },
+        };
+        const connection = new LinkRpcConnection(sender);
+        await expect(connection.getBare(nullable).read({})).resolves.toBeNull();
+        await expect(connection.getBare(interfaceFromSchema(nullable.toSchema())).read({}))
+            .resolves.toBeNull();
+
+        const streaming = defineInterface(
+            { id: 'test.streaming' },
+            {
+                watch: requestType(z.object({}), z.object({}))
+                    .withStream({ server: z.object({}) }),
+            },
+        );
+        expect(() => connection.getBare(streaming)).toThrow(/streaming method/);
+    });
+
+    it('getBare omits LinkRPC metadata for requests and notifications', async () => {
+        const sent: Array<{ method: string; opts: unknown; }> = [];
+        const sender = {
+            sendRequest: async (method: string, _params: unknown, opts?: unknown) => {
+                sent.push({ method, opts });
+                return 'ok';
+            },
+            sendNotification: async (method: string, _params: unknown, opts?: unknown) => {
+                sent.push({ method, opts });
+            },
+            sendRequestWithStream: () => { throw new Error('unused'); },
+            close: () => { },
+        };
+        const connection = new LinkRpcConnection(sender);
+        const client = connection.getBare(language, { prefix: 'cdp.' });
+        await expect(client.hover({ value: 'x' })).resolves.toBe('ok');
+        client.changed({ value: 'x' });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(sent).toEqual([
+            { method: 'cdp.hover', opts: undefined },
+            { method: 'cdp.changed', opts: undefined },
+        ]);
+    });
+
+    it('getBare omits params from the JSON-RPC envelope when undefined', async () => {
+        const noParams = defineInterface(
+            { id: 'test.noParams' },
+            { ping: requestType(z.undefined(), z.string()) },
+        );
+        const pair = new TransportPair();
+        const outbound: JsonRpcMessage[] = [];
+        const client = LinkRpcConnection.fromTransport(traceMessageTransport(
+            pair.a,
+            (direction, message) => {
+                if (direction === 'send') outbound.push(message);
+            },
+        ));
+        const server = LinkRpcConnection.fromTransport(pair.b);
+        server.register(noParams, { ping: () => 'pong' });
+        server.bindBare(noParams, { prefix: 'cdp.' });
+
+        await expect(client.getBare(noParams, { prefix: 'cdp.' }).ping(undefined))
+            .resolves.toBe('pong');
+        expect(outbound[0]).toEqual({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'cdp.ping',
+        });
+        client.close();
+        server.close();
+    });
+
+    it('does not emit native stream keepalives for slow foreign requests', async () => {
+        vi.useFakeTimers();
+        try {
+            const outbound: JsonRpcMessage[] = [];
+            const transport: IMessageTransport = {
+                send: (message) => { outbound.push(message); },
+                setListener: () => { },
+                dispose: () => { },
+            };
+            const connection = LinkRpcConnection.fromTransport(transport);
+            const pending = connection.getBare(language, { prefix: 'lsp/' }).hover({ value: 'x' });
+
+            await vi.advanceTimersByTimeAsync(11 * 60_000);
+            expect(outbound).toEqual([{
+                jsonrpc: '2.0',
+                id: 1,
+                method: 'lsp/hover',
+                params: { value: 'x' },
+            }]);
+
+            connection.close();
+            await expect(pending).rejects.toMatchObject({ code: -32402 });
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
+
 describe('LinkRpcConnection — reflection', () => {
     it('hubrpc.defaults reports the preset', async () => {
         const { client, server, dispose } = makePair();
@@ -716,7 +1063,7 @@ describe('LinkRpcConnection — reflection', () => {
         const rootPrincipalSets = [
             [{ principal: 'node:X', transitive: true }],
             [{ principal: 'node:Y' }],
-        ] as const;
+        ];
 
         server.service('acme').register(greeter, {
             hello: async ({ name }) => ({ greeting: name }),

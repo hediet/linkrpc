@@ -21,6 +21,8 @@ pub const SCHEMAS_ID: &str = "hubrpc.schemas";
 // rolling `call_member` calls; some items are unused inside this crate.
 #[allow(dead_code)]
 pub mod iface {
+    #![allow(non_snake_case)]
+
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
 
@@ -32,18 +34,39 @@ pub mod iface {
     #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "camelCase")]
     pub struct DefaultsGetResult {
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
         pub service_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
         pub interface_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
         pub interface_hash: Option<String>,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "camelCase")]
+    pub struct BareBindingListing {
+        pub prefix: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub service_id: Option<String>,
+        pub interface_id: String,
+        pub interface_hash: String,
+    }
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    pub struct DefaultsListBindingsResult {
+        pub bindings: Vec<BareBindingListing>,
     }
 
     /// Reflection: preset default service / interface on this connection.
     #[link_rpc_interface(id = "hubrpc.defaults")]
+    #[allow(non_snake_case)]
     pub trait DefaultsService {
         async fn get() -> Result<DefaultsGetResult, JsonRpcError>;
+        async fn listBindings() -> Result<DefaultsListBindingsResult, JsonRpcError>;
     }
 
     // ── hubrpc.directory ──────────────────────────────────────────────────────

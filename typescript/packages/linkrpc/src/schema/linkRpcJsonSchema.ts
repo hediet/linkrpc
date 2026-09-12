@@ -38,8 +38,15 @@ export type LinkRpcJsonSchema =
     | RefSchema;
 
 export interface SchemaBase {
+    [key: `x-${string}`]: unknown;
     title?: string;
     description?: string;
+    /**
+     * Additional draft 2020-12 constraints that refine (never replace) this
+     * node. This extension is non-normative for LinkRPC identity; use
+     * {@link materializeJsonSchema} when exporting to a general validator.
+     */
+    "x-json-schema"?: boolean | Record<string, unknown>;
 }
 
 export interface NullSchema extends SchemaBase {

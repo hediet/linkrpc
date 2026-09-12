@@ -111,7 +111,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private readonly _serviceInspectionRegistrations = new Map<string, InterfaceRegistration[]>();
     private readonly _wireChannel: Channel<TInCtx, TOutCtx> | undefined;
     private readonly _validateOutboundParams: boolean;
-    private _preset: Preset | undefined;
+    /** Bare-method bindings, keyed by their exact wire prefix. */
+    private readonly _bareBindings = new Map<string, BareBinding>();
 
     /**
      * Construct from a {@link Channel} (binds the inbound handler and uses
@@ -143,6 +144,27 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         opts: GetOptions<TOutCtx> = {},
     ): InterfaceClient<TDef> {
         return this._buildClient(iface, opts) as InterfaceClient<TDef>;
+    }
+
+    /**
+     * Get a typed client that emits foreign-protocol bare method names.
+     * Unlike {@link get}, these calls carry no LinkRPC interface metadata.
+     */
+    public getBare<TDef extends InterfaceDefinition<any>>(
+        iface: TDef,
+        opts: BareGetOptions = {},
+    ): InterfaceClient<TDef> {
+        const prefix = opts.prefix ?? '';
+        validateBarePrefix(prefix, 'getBare');
+        for (const [name, member] of Object.entries(iface.members)) {
+            if (
+                member instanceof RequestType
+                && (member.clientStreamSchema !== undefined || member.serverStreamSchema !== undefined)
+            ) {
+                throw new Error(`getBare: streaming method "${name}" is not supported on foreign wires.`);
+            }
+        }
+        return this._buildBareClient(iface, prefix) as InterfaceClient<TDef>;
     }
 
     /** Get a service-scoped handle; all interfaces obtained from it route via `serviceId` (form 3). */
@@ -234,13 +256,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 if (this._registry.get(key) !== entry) return;
 
                 this._registry.delete(key);
-                this._notifyDirectoryWatchers(entry);
-                if (
-                    serviceId === undefined
-                    && this._preset?.interfaceId === iface.info.id
-                ) {
-                    this._preset = undefined;
+                for (const [prefix, binding] of this._bareBindings) {
+                    if (binding.entry === entry) this._bareBindings.delete(prefix);
                 }
+                this._notifyDirectoryWatchers(entry);
                 if (
                     serviceId !== undefined
                     && !this._hasBusinessServiceRegistration(serviceId)
@@ -260,13 +279,47 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
      */
     public setPreset(iface: InterfaceDefinition<any>): void {
         const key = `::${iface.info.id}`;
-        if (!this._registry.has(key)) {
+        const entry = this._registry.get(key);
+        if (!entry) {
             throw new Error(`setPreset: interface "${iface.info.id}" is not registered under the root service.`);
         }
-        this._preset = {
-            serviceId: undefined,
-            interfaceId: iface.info.id,
-            hash: iface.schemaHash,
+        // The preset and an explicit empty-prefix binding intentionally share
+        // one slot. Legacy setPreset replacement semantics win deterministically.
+        this._bareBindings.set('', { prefix: '', entry });
+    }
+
+    /**
+     * Bind foreign-protocol bare methods to an already registered interface.
+     * Matching uses the longest prefix; once selected, a missing member does
+     * not fall through to a shorter binding.
+     */
+    public bindBare(
+        iface: InterfaceDefinition<any>,
+        opts: { prefix: string; serviceId?: string; },
+    ): InterfaceRegistration {
+        validateBarePrefix(opts.prefix, 'bindBare');
+        const key = `${opts.serviceId ?? ''}::${iface.info.id}`;
+        const entry = this._registry.get(key);
+        if (!entry) {
+            throw new Error(
+                `bindBare: interface "${iface.info.id}" is not registered`
+                + (opts.serviceId === undefined ? ' under the root service.' : ` under service "${opts.serviceId}".`),
+            );
+        }
+        if (this._bareBindings.has(opts.prefix)) {
+            throw new Error(`bindBare: prefix "${opts.prefix}" is already bound.`);
+        }
+        const binding: BareBinding = { prefix: opts.prefix, entry };
+        this._bareBindings.set(opts.prefix, binding);
+        let disposed = false;
+        return {
+            dispose: () => {
+                if (disposed) return;
+                disposed = true;
+                if (this._bareBindings.get(opts.prefix) === binding) {
+                    this._bareBindings.delete(opts.prefix);
+                }
+            },
         };
     }
 
@@ -353,13 +406,24 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
 
         registrations.push(this.register(defaultsInterface, {
             get: () => {
-                if (!this._preset) return {};
+                const binding = this._bareBindings.get('');
+                if (!binding) return {};
                 return {
-                    serviceId: this._preset.serviceId,
-                    interfaceId: this._preset.interfaceId,
-                    interfaceHash: this._preset.hash,
+                    serviceId: binding.entry.serviceId,
+                    interfaceId: binding.entry.iface.info.id,
+                    interfaceHash: binding.entry.iface.schemaHash,
                 };
             },
+            listBindings: () => ({
+                bindings: Array.from(this._bareBindings.values())
+                    .sort((a, b) => a.prefix < b.prefix ? -1 : a.prefix > b.prefix ? 1 : 0)
+                    .map((binding) => ({
+                        prefix: binding.prefix,
+                        serviceId: binding.entry.serviceId,
+                        interfaceId: binding.entry.iface.info.id,
+                        interfaceHash: binding.entry.iface.schemaHash,
+                    })),
+            }),
         }, regOpts));
 
         registrations.push(this.register(directoryInterface, {
@@ -675,6 +739,46 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         return proxy;
     }
 
+    private _buildBareClient(
+        iface: InterfaceDefinition<any>,
+        prefix: string,
+    ): Record<string, (params: any) => any> {
+        const proxy: Record<string, (params: any) => any> = {};
+        for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
+            const wireMethod = `${prefix}${name}`;
+            if (member instanceof RequestType) {
+                proxy[name] = async (params: unknown) => {
+                    this._validateOutboundParamsFor(member, wireMethod, params);
+                    const raw = await this.channel.sendRequest(
+                        wireMethod,
+                        params as JsonValue | undefined,
+                    );
+                    const validationValue = raw === null && isVoidResultSchema(member.resultSchema)
+                        ? undefined
+                        : raw;
+                    const checked = safeParse(member.resultSchema, validationValue);
+                    if (!checked.success) {
+                        throw new RpcError(
+                            `Invalid result for ${wireMethod}`,
+                            ErrorCode.internalError,
+                            { issues: checked.error.issues as unknown as JsonValue },
+                        );
+                    }
+                    return validationValue;
+                };
+            } else {
+                proxy[name] = (params: unknown) => {
+                    this._validateOutboundParamsFor(member, wireMethod, params);
+                    void this.channel.sendNotification(
+                        wireMethod,
+                        params as JsonValue | undefined,
+                    );
+                };
+            }
+        }
+        return proxy;
+    }
+
     private _validateOutboundParamsFor(
         member: MemberType,
         wireMethod: string,
@@ -739,7 +843,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             // call with `internalError` (the fault is the callee's, not the
             // caller's). Conformant results are sent unchanged (we validate as a
             // gate, not to strip), so extra keys behave exactly as before.
-            const checked = safeParse((member as MemberType).resultSchema, result);
+            const checked = safeParse((member as RequestType).resultSchema, result);
             if (!checked.success) {
                 return {
                     error: {
@@ -823,10 +927,21 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         if (!parsed) return { ok: false, reason: 'bad-method-grammar' };
 
         if (parsed.kind === 'bare') {
-            if (!this._preset) return { ok: false, reason: 'no-preset' };
-            const entry = this._registry.get(`::${this._preset.interfaceId}`);
-            if (!entry) return { ok: false, reason: 'no-preset' };
-            return { ok: true, entry, memberName: parsed.member };
+            let selected: BareBinding | undefined;
+            for (const binding of this._bareBindings.values()) {
+                if (
+                    parsed.member.startsWith(binding.prefix)
+                    && (selected === undefined || binding.prefix.length > selected.prefix.length)
+                ) {
+                    selected = binding;
+                }
+            }
+            if (!selected) return { ok: false, reason: 'no-preset' };
+            return {
+                ok: true,
+                entry: selected.entry,
+                memberName: parsed.member.slice(selected.prefix.length),
+            };
         }
 
         const serviceId = parsed.kind === 'full' ? parsed.serviceId : undefined;
@@ -954,6 +1069,11 @@ export type GetOptions<TOutCtx = undefined> = {
     serviceId?: string;
 } & Partial<TOutCtx>;
 
+/** Options for a metadata-free, bare-method typed client. */
+export interface BareGetOptions {
+    prefix?: string;
+}
+
 export interface RegisterOptions {
     /**
      * If set, this interface is mounted under this service id (form 3).
@@ -1043,10 +1163,20 @@ function directoryWatcherMatchesEntry(
         && serviceIdMatchesScopes(serviceId, watcher.serviceIdScopes);
 }
 
-interface Preset {
-    serviceId: string | undefined;
-    interfaceId: string;
-    hash: string;
+interface BareBinding {
+    readonly prefix: string;
+    readonly entry: RegisteredInterface;
+}
+
+function validateBarePrefix(prefix: string, api: 'bindBare' | 'getBare'): void {
+    if (prefix.includes('::') || !/^[\x20-\x7e]*$/.test(prefix)) {
+        throw new Error(`${api}: prefix must contain only printable ASCII and must not contain "::".`);
+    }
+}
+
+function isVoidResultSchema(schema: { _zod?: { def?: { type?: string; }; }; }): boolean {
+    const type = schema._zod?.def?.type;
+    return type === 'void' || type === 'undefined';
 }
 
 

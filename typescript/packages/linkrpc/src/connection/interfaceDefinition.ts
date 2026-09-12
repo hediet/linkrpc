@@ -149,13 +149,16 @@ type _HasStream<TClient, TServer> = [TClient] extends [never] ? ([TServer] exten
  *   type Client = InterfaceClient<typeof myInterface>;
  *   // => { bar(p: {...}): Promise<string>; foo(p: {...}): void; }
  */
-export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
-    [K in keyof TDef['members']]: TDef['members'][K] extends RequestType<infer P, infer R, any, infer TC, infer TS> ? (
+type InterfaceClientMember<TMember> =
+    TMember extends RequestType<infer P, infer R, any, infer TC, infer TS> ? (
         _HasStream<TC, TS> extends true ? (params: P, opts?: StreamCallOptions<TS>) => StreamingCall<R, TC> :
         (params: P) => Promise<R>
     ) :
-    TDef['members'][K] extends NotificationType<infer P> ? (params: P) => void :
+    TMember extends NotificationType<infer P> ? (params: P) => void :
     never;
+
+export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
+    [K in keyof TDef['members']]: InterfaceClientMember<TDef['members'][K]>;
 };
 
 /**
@@ -170,14 +173,17 @@ export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
  * concrete type. A 1-arg handler remains assignable where a 2-arg handler
  * is expected, so existing handlers compile unchanged.
  */
+type InterfaceHandler<TMember, TCtx> =
+    TMember extends RequestType<infer P, infer R, any, infer TC, infer TS> ?
+    (params: P, ctx: TCtx, stream: StreamApi<TC, TS>) => R | Promise<R> :
+    TMember extends NotificationType<infer P> ? (params: P, ctx: TCtx) => void | Promise<void> :
+    never;
+
 export type InterfaceHandlers<
     TDef extends InterfaceDefinition<any>,
     TCtx = undefined,
 > = {
-        [K in keyof TDef['members']]: TDef['members'][K] extends RequestType<infer P, infer R, any, infer TC, infer TS> ?
-        (params: P, ctx: TCtx, stream: StreamApi<TC, TS>) => R | Promise<R> :
-        TDef['members'][K] extends NotificationType<infer P> ? (params: P, ctx: TCtx) => void | Promise<void> :
-        never;
+        [K in keyof TDef['members']]: InterfaceHandler<TDef['members'][K], TCtx>;
     };
 
 /**

@@ -16,9 +16,9 @@ use crate::connection::channel::{Channel, RequestHandler};
 use crate::connection::dispatch::{CallCtx, InterfaceHandler, ServiceExport};
 use crate::connection::interface_def::{InterfaceDefinition, Member};
 use crate::connection::reflection::iface::{
-    DefaultsGetResult, DefaultsService, DefaultsServiceServer, DirectoryListResult,
-    DirectoryService, DirectoryServiceServer, SchemasGetResult, SchemasService,
-    SchemasServiceServer, ServiceListing,
+    BareBindingListing, DefaultsGetResult, DefaultsListBindingsResult, DefaultsService,
+    DefaultsServiceServer, DirectoryListResult, DirectoryService, DirectoryServiceServer,
+    SchemasGetResult, SchemasService, SchemasServiceServer, ServiceListing,
 };
 use crate::connection::reflection::DEFAULTS_ID;
 use crate::protocol::json_value::JsonValue;
@@ -36,6 +36,15 @@ pub enum ConnError {
     },
     #[error("setPreset: interface \"{0}\" is not registered under the root service")]
     PresetNotRegistered(String),
+    #[error("bindBare: prefix must contain only printable ASCII and must not contain \"::\"")]
+    InvalidBarePrefix,
+    #[error("bindBare: prefix \"{0}\" is already bound")]
+    BarePrefixAlreadyBound(String),
+    #[error("bindBare: interface \"{interface_id}\" is not registered{}", .service.as_deref().map(|s| format!(" under service \"{s}\"")).unwrap_or_else(|| " under the root service".to_string()))]
+    BareTargetNotRegistered {
+        interface_id: String,
+        service: Option<String>,
+    },
 }
 
 /// Options for [`LinkRpcConnection::register`].
@@ -62,7 +71,9 @@ impl RegisteredInterface {
 }
 
 #[derive(Clone)]
-struct Preset {
+struct BareBinding {
+    prefix: String,
+    service_id: Option<String>,
     interface_id: String,
     hash: String,
 }
@@ -70,7 +81,7 @@ struct Preset {
 #[derive(Default)]
 struct RegistryInner {
     entries: RwLock<Vec<RegisteredInterface>>,
-    preset: RwLock<Option<Preset>>,
+    bare_bindings: RwLock<Vec<BareBinding>>,
 }
 
 fn registry_key(service_id: Option<&str>, interface_id: &str) -> String {
@@ -181,14 +192,58 @@ impl LinkRpcConnection {
             .inner
             .find(None, interface_id)
             .ok_or_else(|| ConnError::PresetNotRegistered(interface_id.to_string()))?;
-        *self.inner.preset.write().unwrap() = Some(Preset {
+        let binding = BareBinding {
+            prefix: String::new(),
+            service_id: None,
             interface_id: entry.iface.id().to_string(),
+            hash: entry.iface.schema_hash().to_string(),
+        };
+        let mut bindings = self.inner.bare_bindings.write().unwrap();
+        bindings.retain(|b| !b.prefix.is_empty());
+        bindings.push(binding);
+        Ok(())
+    }
+
+    /// Bind bare wire methods beginning with `prefix` to a registered interface.
+    ///
+    /// The prefix may be empty, must consist only of printable ASCII, and must not contain `::`.
+    /// The target must be registered before it is bound. Prefixes are unique; use
+    /// [`unbind_bare`](Self::unbind_bare) before replacing an explicit binding.
+    pub fn bind_bare(
+        &self,
+        prefix: &str,
+        service_id: Option<&str>,
+        interface_id: &str,
+    ) -> Result<(), ConnError> {
+        validate_bare_prefix(prefix)?;
+        let entry = self.inner.find(service_id, interface_id).ok_or_else(|| {
+            ConnError::BareTargetNotRegistered {
+                interface_id: interface_id.to_string(),
+                service: service_id.map(str::to_string),
+            }
+        })?;
+        let mut bindings = self.inner.bare_bindings.write().unwrap();
+        if bindings.iter().any(|b| b.prefix == prefix) {
+            return Err(ConnError::BarePrefixAlreadyBound(prefix.to_string()));
+        }
+        bindings.push(BareBinding {
+            prefix: prefix.to_string(),
+            service_id: service_id.map(str::to_string),
+            interface_id: interface_id.to_string(),
             hash: entry.iface.schema_hash().to_string(),
         });
         Ok(())
     }
 
-    /// Register the three reflection interfaces (`defaults`, `directory`, `schemas`) backed by
+    /// Remove the bare-method binding for `prefix`, returning whether one existed.
+    pub fn unbind_bare(&self, prefix: &str) -> bool {
+        let mut bindings = self.inner.bare_bindings.write().unwrap();
+        let old_len = bindings.len();
+        bindings.retain(|b| b.prefix != prefix);
+        bindings.len() != old_len
+    }
+
+    /// Register the reflection interfaces (`defaults`, `directory`, `schemas`) backed by
     /// this connection's live registry. Idempotent.
     pub fn enable_reflection(&self) {
         if self.inner.find(None, DEFAULTS_ID).is_some() {
@@ -268,6 +323,13 @@ impl LinkRpcConnection {
     }
 }
 
+fn validate_bare_prefix(prefix: &str) -> Result<(), ConnError> {
+    if prefix.contains("::") || !prefix.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+        return Err(ConnError::InvalidBarePrefix);
+    }
+    Ok(())
+}
+
 fn wire_method(service_id: Option<&str>, interface_id: &str, member: &str) -> String {
     match service_id {
         Some(sid) => format!("{sid}::{interface_id}::{member}"),
@@ -298,14 +360,25 @@ impl RegistryInner {
         };
         match parsed {
             ParsedMethodName::Bare { member } => {
-                let preset = self.preset.read().unwrap().clone();
-                let Some(preset) = preset else {
+                let selected = self
+                    .bare_bindings
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .filter(|binding| member.starts_with(&binding.prefix))
+                    .max_by_key(|binding| binding.prefix.len())
+                    .cloned();
+                let Some(binding) = selected else {
                     return Err(not_found("no-preset", method));
                 };
-                let Some(entry) = self.find(None, &preset.interface_id) else {
+                let Some(entry) = self.find(binding.service_id.as_deref(), &binding.interface_id)
+                else {
                     return Err(not_found("no-preset", method));
                 };
-                Ok(Routed { entry, member })
+                Ok(Routed {
+                    entry,
+                    member: member[binding.prefix.len()..].to_string(),
+                })
             }
             ParsedMethodName::Interface {
                 interface_id,
@@ -393,11 +466,19 @@ struct Reflection {
 #[async_trait]
 impl DefaultsService for Reflection {
     async fn get(&self, _ctx: &CallCtx) -> Result<DefaultsGetResult, JsonRpcError> {
-        Ok(match self.inner.preset.read().unwrap().clone() {
-            Some(p) => DefaultsGetResult {
-                service_id: None,
-                interface_id: Some(p.interface_id),
-                interface_hash: Some(p.hash),
+        let binding = self
+            .inner
+            .bare_bindings
+            .read()
+            .unwrap()
+            .iter()
+            .find(|binding| binding.prefix.is_empty())
+            .cloned();
+        Ok(match binding {
+            Some(binding) => DefaultsGetResult {
+                service_id: binding.service_id,
+                interface_id: Some(binding.interface_id),
+                interface_hash: Some(binding.hash),
             },
             None => DefaultsGetResult {
                 service_id: None,
@@ -405,6 +486,28 @@ impl DefaultsService for Reflection {
                 interface_hash: None,
             },
         })
+    }
+
+    #[allow(non_snake_case)]
+    async fn listBindings(
+        &self,
+        _ctx: &CallCtx,
+    ) -> Result<DefaultsListBindingsResult, JsonRpcError> {
+        let mut bindings: Vec<BareBindingListing> = self
+            .inner
+            .bare_bindings
+            .read()
+            .unwrap()
+            .iter()
+            .map(|binding| BareBindingListing {
+                prefix: binding.prefix.clone(),
+                service_id: binding.service_id.clone(),
+                interface_id: binding.interface_id.clone(),
+                interface_hash: binding.hash.clone(),
+            })
+            .collect();
+        bindings.sort_by(|a, b| a.prefix.cmp(&b.prefix));
+        Ok(DefaultsListBindingsResult { bindings })
     }
 }
 

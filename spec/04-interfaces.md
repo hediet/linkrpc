@@ -59,7 +59,7 @@ Each key of `methods` MUST conform to the `member` production in chapter 01 §2.
 
 ## 3. The JSON Schema subset
 
-`JsonSchema` is a deliberately restricted subset of JSON Schema chosen so that *assignability* — does every value matching schema `X` also match schema `Y` — is structurally decidable. A `JsonSchema` is one of:
+`JsonSchema` is a deliberately restricted subset of JSON Schema chosen to support language-independent structural *assignability* checks — does every value matching schema `X` also match schema `Y`? A `JsonSchema` is one of:
 
 ```
 JsonSchema =
@@ -92,6 +92,8 @@ Every node MAY additionally carry the annotation keys `title` and `description`.
 
 **`oneOf` vs `anyOf`.** `oneOf` is structurally identical to `anyOf` for assignability; the distinction is preserved only to record that the source was a tagged (discriminated) union. `discriminator.propertyName` names the property branches dispatch on; it is a consumer hint and is not otherwise enforced.
 
+This chapter does not prescribe a complete decision procedure for every semantic inclusion involving unions. A structural assignability implementation MAY be conservative: in particular, checking branches pairwise need not recognize cases where several branches together cover another schema.
+
 ### 3.1 Normalization
 
 Before an interface schema is hashed (§4), every `JsonSchema` in it MUST be in the following canonical form, so that structurally-equal schemas produce byte-identical bytes:
@@ -103,18 +105,75 @@ Before an interface schema is hashed (§4), every `JsonSchema` in it MUST be in 
 5. `required` is sorted ascending.
 6. For a `oneOf` with no explicit `discriminator`, a `discriminator` MAY be synthesized when every branch is an object schema sharing exactly one property that is `const`-valued and pairwise-distinct across branches; a `discriminator` with no `oneOf` to attach to is dropped.
 
-> **Rationale.** The subset trades JSON Schema's full expressivity for decidable assignability and a stable, language-independent canonical form — both prerequisites for the interface hash (§4) and for schema-compatibility checks across versions.
+> **Rationale.** The subset trades JSON Schema's full expressivity for interoperable structural checks and a stable, language-independent canonical form — both prerequisites for the interface hash (§4) and for schema-compatibility checks across versions.
+
+### 3.2 References and guarded recursion
+
+A `$ref` is local to its containing `InterfaceSchema`. The only valid form is `#/components/schemas/<encoded-name>`, where `<encoded-name>` is one complete JSON Pointer reference-token encoded according to RFC 6901 (`~` as `~0` and `/` as `~1`). After decoding that final segment, it resolves to the value stored under the exact decoded key in that document's `components.schemas` map. The segment MUST NOT be interpreted as an arbitrary subpath. A `$ref` in a method schema, error schema, stream schema, or component uses that same map. External references, other JSON Pointer forms, and references to a missing entry are invalid.
+
+The schema document and every JSON value being validated are finite. The component map may nevertheless form a recursive reference graph, including direct self-recursion and mutual recursion. Such a graph is valid only when **every cycle is guarded**: every cycle, after following both schema-containment edges and `$ref` resolution edges, MUST traverse at least one **child-instance edge**. The child-instance edges are precisely:
+
+- an object schema to each schema in `properties`;
+- an object schema to its schema-valued `additionalProperties`;
+- an array schema to schema-valued `items`; and
+- an array schema to each entry in `prefixItems`.
+
+Edges into `anyOf` or `oneOf` branches and `$ref` resolution edges are not child-instance edges and do not guard recursion. Equivalently, deleting all child-instance edges from the schema/reference graph MUST leave an acyclic graph. A dangling `$ref` or an unguarded cycle makes the entire interface schema invalid.
+
+For example, this finite `components` object validly describes a linked list:
+
+```json
+{
+  "schemas": {
+    "StringList": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "properties": {
+            "value": { "type": "string" },
+            "next": { "$ref": "#/components/schemas/StringList" }
+          },
+          "required": ["value", "next"],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}
+```
+
+The recursive cycle passes through the `next` property, whose value is a strict child of the containing object. By contrast, both of these `components` objects are invalid:
+
+```json
+{ "schemas": { "Loop": { "$ref": "#/components/schemas/Loop" } } }
+```
+
+```json
+{
+  "schemas": {
+    "A": { "anyOf": [{ "type": "string" }, { "$ref": "#/components/schemas/B" }] },
+    "B": { "oneOf": [{ "$ref": "#/components/schemas/A" }] }
+  }
+}
+```
+
+The second cycle passes only through union branches and references; a union does not move validation to a child JSON value.
+
+Guardedness is a well-formedness condition, not a non-emptiness or productivity guarantee. For example, an object component whose required `next` property refers to itself is guarded, but no finite JSON value can satisfy it unless some reachable alternative supplies a finite base case. Such an empty schema is still well-formed.
 
 ## 4. Interface hash
 
 The **interface hash** is the content identity of an interface schema. It is computed as:
 
-1. **Canonical document.** Take the schema with each `JsonSchema` normalized (§3.1), recursively remove every `comment` field, every specification-extension field (any key beginning with `x-`, §4.1), and, at the top level, the `hash` field itself, and remove members whose value is `undefined`. (No other field is removed; `description` and `annotations` remain.)
+1. **Canonical document.** Take the finite schema document with each `JsonSchema` normalized (§3.1), recursively remove every `comment` field, every specification-extension field (any key beginning with `x-`, §4.1), and, at the top level, the `hash` field itself, and remove members whose value is `undefined`. (No other field is removed; `description` and `annotations` remain.) Hash the component definitions and their `$ref` strings as written; do not unfold references.
 2. **Canonicalize.** Serialize the canonical document with [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JCS).
 3. **Hash.** Compute SHA-256 ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) over the UTF-8 bytes of the JCS output.
 4. **Truncate.** Take the first 8 bytes of the digest and render them as 16 lowercase hexadecimal characters. This string is the hash.
 
-Two schemas have the same hash iff their canonical documents are byte-identical.
+Byte-identical canonical documents necessarily have the same hash. Differing canonical documents are distinguished only subject to the deliberate 64-bit collision budget described below.
+
+Component names and `$ref` strings are therefore part of the canonical document. Renaming a component and updating its references can change the hash even when the resulting reference graph accepts the same values; the interface hash does not claim rename-insensitive semantic identity.
 
 > **Note.** `id@hash` is a human/diagnostic notation for "interface `id` at version `hash`". It is never sent as a single token on the wire: a method (chapter 01 §2) carries only the id, and a version assertion travels as the separate `$hubrpc.interfaceHash` field (§5).
 
@@ -135,6 +194,25 @@ Extension keys are **non-normative**: step 1 of §4 strips every `x-…` key bef
 This is a purely additive rule. No interface that avoids `x-…` keys is affected, so every hash computed before this rule existed is preserved. Because `x-…` keys are reserved (§3), they cannot collide with member names (which are alphanumeric per chapter 01 §2) or with subset property names.
 
 > **Note (normative vs. non-normative).** The stripping rule and the reservation of the `x-` prefix are **normative** (an implementation MUST strip these keys to interoperate on the hash). The *meaning* of any particular extension (e.g. `x-codegen`, `x-validation`) is **non-normative** and outside this specification — extensions are for producers and their tooling, and a conformant peer that does not understand an extension simply ignores it.
+
+### 4.2 Non-normative JSON Schema specialization
+
+A richer authoring document MAY attach an `x-json-schema` fragment to a schema node. In this specialization profile the fragment is an additional JSON Schema Draft 2020-12 constraint on the same JSON value, not a replacement for the structural schema and not a merge patch. For example:
+
+```json
+{
+  "type": "integer",
+  "x-json-schema": { "minimum": 1, "maximum": 65535 }
+}
+```
+
+The normative projection describes an integer. A specialization-aware consumer additionally restricts it to the indicated range. The type and surrounding object structure need not be duplicated in the extension.
+
+A specialization exporter derives a separate JSON Schema view by translating the structural schema, recursively specializing its child schemas, and conjoining each node with its fragment. It can represent conjunction using `allOf`; it must not implement it by overwriting conflicting keys. Component definitions remain shared and recursive references remain finite, for example by exporting components under `$defs` and rewriting references. Reference resolution does not imply permission to fetch external documents.
+
+Specialization can narrow but cannot widen the structural contract. In particular, an extension cannot add allowed properties to a closed object by overriding `additionalProperties`. A producer lowering a richer protocol must ensure that its structural approximation includes every value permitted by the richer contract; simply dropping keywords and applying object-closure defaults is not, in general, sufficient.
+
+This profile is non-normative for LinkRPC interoperability. Peers may ignore it; changing a fragment does not change the interface hash, and structural compatibility checks do not prove that a specialization-aware peer will accept a value. Consumers that need to detect specialization changes must separately version or hash the exported rich view. Implementations should preserve the rich source document and derive the normalized hash projection rather than replace the source with that projection.
 
 ## 5. `$hubrpc.interfaceHash`
 

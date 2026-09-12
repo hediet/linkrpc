@@ -1,0 +1,74 @@
+{
+  "invalidPrefixes": ["DOM::", "text\n", "é"],
+  "cases": [
+    {
+      "name": "CDP domain prefix",
+      "bindings": [
+        { "prefix": "DOM.", "interfaceId": "cdp.DOM", "members": ["getDocument"] },
+        { "prefix": "Runtime.", "interfaceId": "cdp.Runtime", "members": ["evaluate"] }
+      ],
+      "method": "Runtime.evaluate",
+      "expected": { "interfaceId": "cdp.Runtime", "member": "evaluate" }
+    },
+    {
+      "name": "LSP document prefix",
+      "bindings": [
+        { "prefix": "", "interfaceId": "lsp.lifecycle", "members": ["initialize"] },
+        { "prefix": "textDocument/", "interfaceId": "lsp.textDocument", "members": ["hover"] }
+      ],
+      "method": "textDocument/hover",
+      "expected": { "interfaceId": "lsp.textDocument", "member": "hover" }
+    },
+    {
+      "name": "LSP lifecycle fallback",
+      "bindings": [
+        { "prefix": "", "interfaceId": "lsp.lifecycle", "members": ["initialize"] },
+        { "prefix": "textDocument/", "interfaceId": "lsp.textDocument", "members": ["hover"] }
+      ],
+      "method": "initialize",
+      "expected": { "interfaceId": "lsp.lifecycle", "member": "initialize" }
+    },
+    {
+      "name": "LSP protocol-control prefix",
+      "bindings": [
+        { "prefix": "$/", "interfaceId": "lsp.protocol", "members": ["cancelRequest", "progress"] }
+      ],
+      "method": "$/cancelRequest",
+      "expected": { "interfaceId": "lsp.protocol", "member": "cancelRequest" }
+    },
+    {
+      "name": "Longest prefix on a named service",
+      "bindings": [
+        { "prefix": "a", "interfaceId": "test.short", "members": ["bc"] },
+        { "prefix": "ab", "interfaceId": "test.long", "serviceId": "tools", "members": ["c"] }
+      ],
+      "method": "abc",
+      "expected": { "interfaceId": "test.long", "serviceId": "tools", "member": "c" }
+    },
+    {
+      "name": "Missing selected member never falls back",
+      "bindings": [
+        { "prefix": "a", "interfaceId": "test.short", "members": ["bc"] },
+        { "prefix": "ab", "interfaceId": "test.long", "members": ["other"] }
+      ],
+      "method": "abc",
+      "expected": { "error": "methodNotFound" }
+    },
+    {
+      "name": "No matching prefix",
+      "bindings": [
+        { "prefix": "DOM.", "interfaceId": "cdp.DOM", "members": ["getDocument"] }
+      ],
+      "method": "initialize",
+      "expected": { "error": "methodNotFound" }
+    },
+    {
+      "name": "Prefix with an empty member",
+      "bindings": [
+        { "prefix": "DOM.", "interfaceId": "cdp.DOM", "members": ["getDocument"] }
+      ],
+      "method": "DOM.",
+      "expected": { "error": "methodNotFound" }
+    }
+  ]
+}

@@ -13,6 +13,8 @@
 //!    representation hint zod never emits. String formats (`date-time`, `uuid`, …) are kept.
 //! 4. **Single-element `enum` → `const`** — schemars lowers a unit/`literal` to `enum: [x]`,
 //!    zod to `const: x`; the latter is also what `normalize`'s discriminator synthesis keys on.
+//! 5. **Materialize empty `properties` maps** — zod emits `properties: {}` for
+//!    empty objects while schemars omits it.
 //!
 //! After this pass the shared `normalize_json_schema` (required-sort, object closure,
 //! discriminator synthesis, `{}`/`{"not":{}}` collapse) yields a value byte-identical to the TS
@@ -119,6 +121,12 @@ fn prepare_object(
         }
     }
 
+    if out.get("type").and_then(JsonValue::as_str) == Some("object") {
+        if !matches!(out.get("properties"), Some(JsonValue::Object(_))) {
+            out.insert("properties".to_string(), JsonValue::Object(JsonMap::new()));
+        }
+    }
+
     Ok(JsonValue::Object(out))
 }
 
@@ -206,6 +214,39 @@ mod tests {
         assert_eq!(
             got["oneOf"][0]["properties"]["t"],
             json!({ "type": "string", "const": "x" })
+        );
+    }
+
+    #[test]
+    fn optional_nullable_properties_are_preserved_and_empty_objects_keep_properties() {
+        let raw = json!({
+            "type": "object",
+            "properties": {
+                "optional": { "type": ["string", "null"] },
+                "requiredNullable": { "type": ["string", "null"] }
+            },
+            "required": ["requiredNullable"]
+        });
+        assert_eq!(
+            schemars_to_subset(&raw).unwrap(),
+            json!({
+                "type": "object",
+                "properties": {
+                    "optional": { "type": ["string", "null"] },
+                    "requiredNullable": { "type": ["string", "null"] }
+                },
+                "required": ["requiredNullable"],
+                "additionalProperties": false
+            })
+        );
+
+        assert_eq!(
+            schemars_to_subset(&json!({ "type": "object" })).unwrap(),
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            })
         );
     }
 

@@ -1,0 +1,18 @@
+{
+  "cdp": {
+    "package": "devtools-protocol@0.0.1677763",
+    "browserProtocolSha256": "e55633447016ec834e7de831a7567e9760506e3fb9cb7a8755d1521750b50907",
+    "jsProtocolSha256": "cf124bf143bf361a7900bcfeea3926c1cfcc1da36d83756c228c43d84321539a",
+    "domains": 58,
+    "methods": 896,
+    "types": 607
+  },
+  "lsp": {
+    "version": "3.17.5",
+    "commit": "4f782ceac1b4444d335a32561bda0ded305c401e",
+    "metaModelSha256": "ba382feb60d4bab4249073c0508b19c67ba2b32c53d70505f452bb49a6f39997",
+    "messages": 93,
+    "directionalBindings": 95,
+    "definitions": 382
+  }
+}

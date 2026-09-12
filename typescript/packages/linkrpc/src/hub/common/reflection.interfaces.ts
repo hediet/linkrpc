@@ -18,6 +18,17 @@ export const defaultsInterface = defineInterface(
                 interfaceHash: optional(string()),
             }),
         ),
+        listBindings: requestType(
+            object({}),
+            object({
+                bindings: array(object({
+                    prefix: string(),
+                    serviceId: optional(string()),
+                    interfaceId: string(),
+                    interfaceHash: string(),
+                })),
+            }),
+        ),
     },
 );
 

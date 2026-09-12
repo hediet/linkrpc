@@ -34,7 +34,10 @@ export {
 export { fileManagedIdentityStorage } from './node/fileManagedIdentityStorage';
 export { createManagedPrincipal } from './identity/managedPrincipal';
 export { createSelfManagedPrincipal, createSelfManagedPrincipalFromFile } from './node/principal';
-export { HeaderDelimitedTransport } from './node/headerDelimitedTransport';
+export {
+    HeaderDelimitedTransport,
+    type HeaderDelimitedTransportOptions,
+} from './node/headerDelimitedTransport';
 export {
     type ConnectedNdjson,
     type ConnectNdjsonOptions,
