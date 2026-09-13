@@ -77,7 +77,7 @@ function attachPeer(hub: RunningHub) {
 function attachEcho(hub: RunningHub, serviceId: string, location: string) {
     const link = hub.hub.attachOut();
     const connection = LinkRpcConnection.fromTransport(link.transport);
-    link.claimPrefix(serviceId);
+    link.addPrefixRoute(serviceId);
     connection.register(echoInterface, {
         echo: ({ value }) => ({ value: `${location}:${value}` }),
     }, { serviceId });
@@ -193,7 +193,7 @@ describe('runHub far-end federation', () => {
         const logs: string[] = [];
         let primary = await runHub({ config: primaryConfig(socketPath), log: () => { } });
         const conflict = primary.hub.attachOut();
-        conflict.claimPrefix(SECONDARY_SERVICE_ID);
+        conflict.addPrefixRoute(SECONDARY_SERVICE_ID);
 
         const secondary = await runHub({
             config: secondaryConfig(socketPath),

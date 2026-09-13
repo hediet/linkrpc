@@ -1,5 +1,5 @@
 import { type IMessageTransport, type JsonValue } from '@hediet/linkrpc';
-import { hubGrantedServiceIdInterface, type NodeInfo } from '@hediet/linkrpc/hub/common';
+import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import {
     connectNdjson,
     openWebSocket,
@@ -43,7 +43,6 @@ export interface ConfiguredParticipants {
 export interface ConfiguredParticipantAttachment {
     claimPrefix(prefix: string): void;
     setDefaultRoute(): void;
-    identifyPeer(): Promise<NodeInfo>;
     request(method: string, params: JsonValue, timeoutMs?: number): Promise<JsonValue | undefined>;
     dispose(): void;
 }
@@ -223,9 +222,6 @@ async function _connectParticipant(
     try {
         attachment = attachParticipant(opened.transport);
         onAttached(attachment);
-        void attachment.identifyPeer().catch((error: unknown) => {
-            log(`[${name}] peer identification failed: ${_errorMessage(error)}`);
-        });
         for (const serviceId of config.claimServiceIds) {
             await _registerOnRemote(attachment, serviceId);
         }

@@ -217,9 +217,8 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
             attachParticipant: transport => {
                 const link = hub.attach(transport);
                 return {
-                    claimPrefix: prefix => link.claimPrefix(prefix),
+                    claimPrefix: prefix => link.addPrefixRoute(prefix),
                     setDefaultRoute: () => hub.setUplink(transport),
-                    identifyPeer: () => link.identifyPeer(),
                     request: (method, params, timeoutMs) =>
                         link.request(method, params, timeoutMs),
                     dispose: () => link.dispose(),

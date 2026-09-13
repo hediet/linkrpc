@@ -309,7 +309,7 @@ describe('HubInspector', () => {
         const caller = new Endpoint(callerPair.b);
         const ownerPair = new TransportPair();
         const ownerLink = hub.attach(ownerPair.a);
-        ownerLink.claimPrefix('calc');
+        ownerLink.addPrefixRoute('calc');
         const owner = new Endpoint(ownerPair.b);
 
         const response = caller.request('calc::math::add', { a: 1 });
@@ -519,10 +519,10 @@ describe('hub traffic services', () => {
             onGraph: () => { },
         });
         await watch.ready;
-        await waitFor(() => hub.routingObserverCount === 1);
+        await waitFor(() => hub.topologyObserverCount === 1);
 
         services.dispose();
-        await waitFor(() => hub.routingObserverCount === 0);
+        await waitFor(() => hub.topologyObserverCount === 0);
         await watch.done.catch(() => undefined);
 
         connection.close();

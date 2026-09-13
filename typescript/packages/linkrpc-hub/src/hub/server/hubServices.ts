@@ -1,15 +1,12 @@
 import {
     directoryInterface,
     directoryWatchNever,
-    ErrorCode,
-    JsonRpcChannel,
-    nodeInterface,
+    ErrorCode, nodeInterface,
     type RootPrincipalSet,
     type ServiceIdPattern,
     RpcError,
     schemasInterface,
-    LinkRpcConnection,
-    TransportPair,
+    LinkRpcConnection
 } from '@hediet/linkrpc';
 import type { StreamApi } from '@hediet/linkrpc';
 import {
@@ -56,24 +53,15 @@ interface Listing {
 
 export function createHubServiceInterfaces(hub: Hub, options: HubServicesOptions = {}): HubServices {
     const hubServiceId = options.hubServiceId ?? 'hub';
-    const pair = new TransportPair();
-    const link = hub.attach(pair.a);
-    hub.setLoopback(pair.a);
-    link.claimPrefix(hubServiceId);
+    const link = hub.attachOut({ exclusiveHubRootHandler: true, routePrefixes: [hubServiceId] });
     hub.markInspectionService(link, hubServiceId);
+    const connection = LinkRpcConnection.fromTransport(withRequestIdContext(link.transport));
+
     const inspector = new HubInspector(hub);
-    const baseChannel = JsonRpcChannel.create(withRequestIdContext(pair.b));
-    const connection = new LinkRpcConnection<RegisterCallContext>(baseChannel);
-    registerInspectionInterfaces(
-        connection,
-        hub,
-        inspector,
-        hubServiceId,
-        link.portId,
-        options.descriptors,
-    );
+    registerInspectionInterfaces(connection, hub, inspector, hubServiceId, link.portId, options.descriptors);
     registerHubReflection(connection, hub, hubServiceId, options.beforeDirectoryQuery);
     registerHubServiceIdRegistry(connection, { hub, hubServiceId });
+
     return {
         connection,
         hubServiceId,
@@ -114,7 +102,7 @@ function registerInspectionInterfaces(
                 pending = false;
                 if (!stream.signal.aborted) void stream.send({}).catch(() => undefined);
             };
-            const unsubscribe = hub.onDidChangeRouting(() => {
+            const unsubscribe = hub.onDidChangeTopology(() => {
                 if (pending) return;
                 pending = true;
                 queueMicrotask(flush);

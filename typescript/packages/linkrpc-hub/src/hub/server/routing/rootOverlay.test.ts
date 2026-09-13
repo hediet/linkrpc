@@ -167,7 +167,7 @@ describe('RootOverlay + hub services (end-to-end)', () => {
         );
         await consumer.service('hub').get(directoryInterface).list({});
 
-        child.claimPrefix('child');
+        child.addPrefixRoute('child');
         await until(() => ticks === 1);
         const afterClaim = await consumer.service('hub').get(directoryInterface).list({
             interfaceId: directoryInterface.info.id,
@@ -190,7 +190,7 @@ describe('RootOverlay + hub services (end-to-end)', () => {
         const pair = new TransportPair();
         const child = hub.attach(pair.a);
         const participant = LinkRpcConnection.fromTransport(pair.b);
-        child.claimPrefix('acme');
+        child.addPrefixRoute('acme');
         participant.enableReflection({ serviceId: 'acme' });
         const consumer = attachConsumer(hub);
         let ticks = 0;

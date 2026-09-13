@@ -1,19 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
-    defineInterface,
-    LinkRpcConnection,
-    requestType,
-    TransportPair,
+  defineInterface,
+  LinkRpcConnection,
+  requestType,
+  TransportPair,
 } from '@hediet/linkrpc';
 import {
-    NetworkInspectionClient,
-    NodeInfoClient,
-    TrafficClient,
-    type NetworkTopologyGraph,
-    type TrafficWatch,
+  NetworkInspectionClient,
+  NodeInfoClient,
+  TrafficClient,
+  type NetworkTopologyGraph,
+  type TrafficWatch,
 } from '@hediet/linkrpc/hub/client';
-import type { TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+import type { TopologyIdGenerator, TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
 import { createHubServiceInterfaces } from './hubServices';
 import { Hub, type AttachedLink } from './routing/routingHub';
 
@@ -48,43 +48,42 @@ interface ServiceParticipant {
 
 describe('federated Hub inspection', () => {
     it('inspects federated topology and routed participant traffic end to end', async () => {
-        const hubA = new Hub({ nodeId: 'hub-a-node', debugName: 'Hub A' });
-        const hubB = new Hub({ nodeId: 'hub-b-node', debugName: 'Hub B' });
-        const servicesA = createHubServiceInterfaces(hubA, { hubServiceId: 'hub-a' });
-        const servicesB = createHubServiceInterfaces(hubB, { hubServiceId: 'hub-b' });
-
-        const nesting = new TransportPair();
-        const aToB = hubA.attach(nesting.a);
-        const bToA = hubB.attach(nesting.b);
-        hubB.setUplink(nesting.b);
-        aToB.claimPrefix('hub-b');
-        aToB.claimPrefix('beta');
-
-        const alpha = attachService(hubA, 'alpha', ({ value }) => ({ value: `alpha:${value}` }));
-        const beta = attachService(hubB, 'beta', ({ value }) => ({ value: `beta:${value}` }));
-
-        const observerLink = hubB.attachOut();
-        const observer = LinkRpcConnection.fromTransport(observerLink.transport);
-
-        const network = new NetworkInspectionClient(observer);
-        const nodeInfo = new NodeInfoClient(observer);
-        const traffic: Array<{ source: string; transit: TrafficTransitEvent; }> = [];
-        const alphaTraffic: TrafficTransitEvent[] = [];
-        const betaTraffic: TrafficTransitEvent[] = [];
-        const endpointWatches: TrafficWatch[] = [];
-        let latestGraph: NetworkTopologyGraph | undefined;
-        let gamma: ServiceParticipant | undefined;
-
+        const disposableStore = new AsyncDisposableStore();
         try {
-            await Promise.all([
-                aToB.identifyPeer(),
-                bToA.identifyPeer(),
-                alpha.link.identifyPeer(),
-                beta.link.identifyPeer(),
-            ]);
+            const hubA = new Hub({ generateTopologyId: topologyIds('hub-a'), debugName: 'Hub A' });
+            const hubB = new Hub({ generateTopologyId: topologyIds('hub-b'), debugName: 'Hub B' });
+            const servicesA = disposableStore.add(createHubServiceInterfaces(hubA, { hubServiceId: 'hub-a' }));
+            const servicesB = disposableStore.add(createHubServiceInterfaces(hubB, { hubServiceId: 'hub-b' }));
+
+            const nesting = new TransportPair();
+            const aToB = disposableStore.add(hubA.attach(nesting.a));
+            const bToA = disposableStore.add(hubB.attach(nesting.b));
+            hubB.setUplink(nesting.b);
+            aToB.addPrefixRoute('hub-b');
+            aToB.addPrefixRoute('beta');
+
+            const alpha = disposableStore.add(attachService(hubA, 'alpha', ({ value }) => ({ value: `alpha:${value}` })));
+            const beta = disposableStore.add(attachService(hubB, 'beta', ({ value }) => ({ value: `beta:${value}` })));
+
+            const observer = LinkRpcConnection.fromTransport(disposableStore.add(hubB.attachOut()).transport);
+            disposableStore.defer(() => observer.close());
+
+            const network = disposableStore.add(new NetworkInspectionClient(observer));
+            const nodeInfo = new NodeInfoClient(observer);
+            const traffic: Array<{ source: string; transit: TrafficTransitEvent; }> = [];
+            const alphaTraffic: TrafficTransitEvent[] = [];
+            const betaTraffic: TrafficTransitEvent[] = [];
+            const endpointWatches: TrafficWatch[] = [];
+            let latestGraph: NetworkTopologyGraph | undefined;
 
             await network.addTopologyService('hub-a');
             await network.addTopologyService('hub-b');
+            await waitFor(() => {
+                const graph = network.getGraph();
+                return graph.routes.some((route) => route.serviceId === 'alpha' && route.nodeId === alpha.nodeId)
+                    && graph.routes.some((route) => route.serviceId === 'beta' && route.nodeId === beta.nodeId)
+                    && graph.links.some((link) => link.sources.length === 2);
+            });
             latestGraph = network.getGraph();
 
             const nodeNames = new Map([
@@ -226,8 +225,8 @@ describe('federated Hub inspection', () => {
                   ],
                 },
                 "serviceNodeIds": {
-                  "hubA": "hub-a-node",
-                  "hubB": "hub-b-node",
+                  "hubA": "hub-a-node-1",
+                  "hubB": "hub-b-node-1",
                 },
               }
             `);
@@ -245,6 +244,12 @@ describe('federated Hub inspection', () => {
                     { onTransit: (transit) => betaTraffic.push(transit) },
                 ),
             );
+            for (const watch of endpointWatches) {
+                disposableStore.defer(async () => {
+                    await watch.cancel('test-cleanup');
+                    await watch.done;
+                });
+            }
             await waitFor(() =>
                 alpha.connection.trafficObserverCount === 1
                 && beta.connection.trafficObserverCount === 1);
@@ -288,19 +293,35 @@ describe('federated Hub inspection', () => {
                       "events": [
                         {
                           "disposition": "forwarded",
-                          "hasIn": true,
-                          "hasOut": true,
+                          "in": {
+                            "edgeId": "alpha",
+                            "portId": "hub-a-port-4",
+                            "requestId": 1,
+                          },
                           "kind": "request",
                           "method": "beta::test.echo::echo",
                           "node": "hub-a",
+                          "out": {
+                            "edgeId": "hub-b",
+                            "portId": "hub-a-port-3",
+                            "requestId": 12,
+                          },
                         },
                         {
                           "disposition": "forwarded",
-                          "hasIn": true,
-                          "hasOut": true,
+                          "in": {
+                            "edgeId": "hub-b",
+                            "portId": "hub-a-port-3",
+                            "requestId": 12,
+                          },
                           "kind": "response",
                           "method": "beta::test.echo::echo",
                           "node": "hub-a",
+                          "out": {
+                            "edgeId": "alpha",
+                            "portId": "hub-a-port-4",
+                            "requestId": 1,
+                          },
                         },
                       ],
                       "source": "hub-a",
@@ -310,19 +331,35 @@ describe('federated Hub inspection', () => {
                       "events": [
                         {
                           "disposition": "forwarded",
-                          "hasIn": true,
-                          "hasOut": true,
+                          "in": {
+                            "edgeId": "uplink",
+                            "portId": "hub-b-port-3",
+                            "requestId": 12,
+                          },
                           "kind": "request",
                           "method": "beta::test.echo::echo",
                           "node": "hub-b",
+                          "out": {
+                            "edgeId": "beta",
+                            "portId": "hub-b-port-4",
+                            "requestId": 22,
+                          },
                         },
                         {
                           "disposition": "forwarded",
-                          "hasIn": true,
-                          "hasOut": true,
+                          "in": {
+                            "edgeId": "beta",
+                            "portId": "hub-b-port-4",
+                            "requestId": 22,
+                          },
                           "kind": "response",
                           "method": "beta::test.echo::echo",
                           "node": "hub-b",
+                          "out": {
+                            "edgeId": "uplink",
+                            "portId": "hub-b-port-3",
+                            "requestId": 12,
+                          },
                         },
                       ],
                       "source": "hub-b",
@@ -342,17 +379,29 @@ describe('federated Hub inspection', () => {
                     {
                       "direction": "outbound",
                       "disposition": "forwarded",
+                      "in": undefined,
                       "kind": "request",
                       "method": "beta::test.echo::echo",
                       "node": "alpha",
+                      "out": {
+                        "edgeId": "alpha-port-2",
+                        "portId": "alpha-port-2",
+                        "requestId": 1,
+                      },
                       "payload": "<omitted>",
                     },
                     {
                       "direction": "inbound",
                       "disposition": "consumed",
+                      "in": {
+                        "edgeId": "alpha-port-2",
+                        "portId": "alpha-port-2",
+                        "requestId": 1,
+                      },
                       "kind": "response",
                       "method": "beta::test.echo::echo",
                       "node": "alpha",
+                      "out": undefined,
                       "payload": "<omitted>",
                     },
                   ],
@@ -363,17 +412,29 @@ describe('federated Hub inspection', () => {
                     {
                       "direction": "inbound",
                       "disposition": "consumed",
+                      "in": {
+                        "edgeId": "beta-port-2",
+                        "portId": "beta-port-2",
+                        "requestId": 22,
+                      },
                       "kind": "request",
                       "method": "beta::test.echo::echo",
                       "node": "beta",
+                      "out": undefined,
                       "payload": "{"value":"he",
                     },
                     {
                       "direction": "outbound",
                       "disposition": "forwarded",
+                      "in": undefined,
                       "kind": "response",
                       "method": "beta::test.echo::echo",
                       "node": "beta",
+                      "out": {
+                        "edgeId": "beta-port-2",
+                        "portId": "beta-port-2",
+                        "requestId": 22,
+                      },
                       "payload": "{"value":"be",
                     },
                   ],
@@ -388,16 +449,15 @@ describe('federated Hub inspection', () => {
                 alpha.connection.trafficObserverCount === 0
                 && beta.connection.trafficObserverCount === 0);
 
-            gamma = attachService(
+            const gamma = disposableStore.add(attachService(
                 hubA,
                 'gamma',
                 ({ value }) => ({ value: `gamma:${value}` }),
-            );
+            ));
             nodeNames.set(gamma.nodeId, 'gamma');
-            await gamma.link.identifyPeer();
             await waitFor(() =>
                 network.getGraph().routes.some((service) =>
-                    service.serviceId === 'gamma' && service.nodeId === gamma?.nodeId));
+                    service.serviceId === 'gamma' && service.nodeId === gamma.nodeId));
             const topologyAfterAdd = summarizeParticipantTopology(
                 network.getGraph(),
                 gamma.nodeId,
@@ -405,8 +465,7 @@ describe('federated Hub inspection', () => {
             );
 
             const gammaNodeId = gamma.nodeId;
-            gamma.dispose();
-            gamma = undefined;
+            disposableStore.remove(gamma).dispose();
             await waitFor(() =>
                 !network.getGraph().routes.some((service) =>
                     service.serviceId === 'gamma'));
@@ -455,66 +514,64 @@ describe('federated Hub inspection', () => {
                 servicesA.inspector.observerCount === 0
                 && servicesB.inspector.observerCount === 0);
         } finally {
-            await Promise.allSettled(endpointWatches.map(async (watch) => {
-                await watch.cancel('test-cleanup');
-                await watch.done;
-            }));
-            gamma?.dispose();
-            await network.dispose();
-            observer.close();
-            observerLink.dispose();
-            alpha.dispose();
-            beta.dispose();
-            servicesA.dispose();
-            servicesB.dispose();
-            aToB.dispose();
-            bToA.dispose();
+            await disposableStore.dispose();
         }
     });
 
     it('follows an ongoing stream from a farther hub on the closer hub', async () => {
-        const hubA = new Hub({ nodeId: 'hub-a-node' });
-        const hubB = new Hub({ nodeId: 'hub-b-node' });
-        const servicesA = createHubServiceInterfaces(hubA, { hubServiceId: 'hub-a' });
-        const servicesB = createHubServiceInterfaces(hubB, { hubServiceId: 'hub-b' });
-
-        const nesting = new TransportPair();
-        const aToB = hubA.attach(nesting.a);
-        const bToA = hubB.attach(nesting.b);
-        hubB.setUplink(nesting.b);
-        aToB.claimPrefix('hub-b');
-        aToB.claimPrefix('beta');
-
-        const alphaLink = hubA.attachOut();
-        alphaLink.claimPrefix('alpha');
-        const alpha = LinkRpcConnection.fromTransport(alphaLink.transport);
-
-        const betaLink = hubB.attachOut();
-        betaLink.claimPrefix('beta');
-        const beta = LinkRpcConnection.fromTransport(betaLink.transport);
-        let releaseSecondFrame!: () => void;
-        const secondFrame = new Promise<void>((resolve) => releaseSecondFrame = resolve);
-        beta.service('beta').register(streamingInterface, {
-            run: async (_params, _ctx, stream) => {
-                await stream.send({ step: 1 });
-                await secondFrame;
-                await stream.send({ step: 2 });
-                return { done: true };
-            },
-        });
-
-        const observerLink = hubB.attachOut();
-        const observer = LinkRpcConnection.fromTransport(observerLink.transport);
-        const fartherEvents: TrafficTransitEvent[] = [];
-        const closerEvents: TrafficTransitEvent[] = [];
-        const frames: number[] = [];
-        const fartherWatch = new TrafficClient(observer, 'hub-a').watchWithPayloads(
-            { maxPayloadBytes: 1_000_000 },
-            { onTransit: (transit) => fartherEvents.push(transit) },
-        );
-        let closerWatch: TrafficWatch | undefined;
-
+        const disposableStore = new AsyncDisposableStore();
         try {
+            const hubA = new Hub({ generateTopologyId: topologyIds('hub-a') });
+            const hubB = new Hub({ generateTopologyId: topologyIds('hub-b') });
+            const servicesA = disposableStore.add(createHubServiceInterfaces(hubA, { hubServiceId: 'hub-a' }));
+            const servicesB = disposableStore.add(createHubServiceInterfaces(hubB, { hubServiceId: 'hub-b' }));
+
+            const nesting = new TransportPair();
+            const aToB = disposableStore.add(hubA.attach(nesting.a));
+            const bToA = disposableStore.add(hubB.attach(nesting.b));
+            hubB.setUplink(nesting.b);
+            aToB.addPrefixRoute('hub-b');
+            aToB.addPrefixRoute('beta');
+
+            const alphaLink = disposableStore.add(hubA.attachOut());
+            alphaLink.addPrefixRoute('alpha');
+            const alpha = LinkRpcConnection.fromTransport(alphaLink.transport, {
+                generateTopologyId: topologyIds('alpha'),
+            });
+            disposableStore.defer(() => alpha.close());
+
+            const betaLink = disposableStore.add(hubB.attachOut());
+            betaLink.addPrefixRoute('beta');
+            const beta = LinkRpcConnection.fromTransport(betaLink.transport, {
+                generateTopologyId: topologyIds('beta'),
+            });
+            disposableStore.defer(() => beta.close());
+            let releaseSecondFrame!: () => void;
+            const secondFrame = new Promise<void>((resolve) => releaseSecondFrame = resolve);
+            disposableStore.defer(() => releaseSecondFrame());
+            beta.service('beta').register(streamingInterface, {
+                run: async (_params, _ctx, stream) => {
+                    await stream.send({ step: 1 });
+                    await secondFrame;
+                    await stream.send({ step: 2 });
+                    return { done: true };
+                },
+            });
+
+            const observer = LinkRpcConnection.fromTransport(disposableStore.add(hubB.attachOut()).transport);
+            disposableStore.defer(() => observer.close());
+            const fartherEvents: TrafficTransitEvent[] = [];
+            const closerEvents: TrafficTransitEvent[] = [];
+            const frames: number[] = [];
+            const fartherWatch = new TrafficClient(observer, 'hub-a').watchWithPayloads(
+                { maxPayloadBytes: 1_000_000 },
+                { onTransit: (transit) => fartherEvents.push(transit) },
+            );
+            disposableStore.defer(async () => {
+                await fartherWatch.cancel('test-cleanup');
+                await fartherWatch.done;
+            });
+
             await waitFor(() => servicesA.inspector.observerCount === 1);
             const call = alpha.service('beta').get(streamingInterface).run({}, {
                 onMessage: ({ step }) => frames.push(step),
@@ -531,7 +588,7 @@ describe('federated Hub inspection', () => {
                 && event.method === 'beta::test.streaming::run'
             )!;
             expect(fartherRequest.out?.requestId).toBeDefined();
-            closerWatch = new TrafficClient(observer, 'hub-b').watchWithPayloads(
+            const closerWatch = new TrafficClient(observer, 'hub-b').watchWithPayloads(
                 {
                     maxPayloadBytes: 1_000_000,
                     focusRequest: {
@@ -541,6 +598,10 @@ describe('federated Hub inspection', () => {
                 },
                 { onTransit: (transit) => closerEvents.push(transit) },
             );
+            disposableStore.defer(async () => {
+                await closerWatch.cancel('test-cleanup');
+                await closerWatch.done;
+            });
             await waitFor(() => servicesB.inspector.observerCount === 1);
 
             releaseSecondFrame();
@@ -563,19 +624,7 @@ describe('federated Hub inspection', () => {
                 event.method?.includes('hubrpc.traffic')
             )).toBe(false);
         } finally {
-            releaseSecondFrame();
-            await closerWatch?.cancel('test-cleanup').catch(() => undefined);
-            await fartherWatch.cancel('test-cleanup').catch(() => undefined);
-            observer.close();
-            observerLink.dispose();
-            alpha.close();
-            alphaLink.dispose();
-            beta.close();
-            betaLink.dispose();
-            servicesA.dispose();
-            servicesB.dispose();
-            aToB.dispose();
-            bToA.dispose();
+            await disposableStore.dispose();
         }
     });
 });
@@ -586,8 +635,10 @@ function attachService(
     echo: (params: { value: string }) => { value: string },
 ): ServiceParticipant {
     const link = hub.attachOut();
-    link.claimPrefix(serviceId);
-    const connection = LinkRpcConnection.fromTransport(link.transport);
+    link.addPrefixRoute(serviceId);
+    const connection = LinkRpcConnection.fromTransport(link.transport, {
+        generateTopologyId: topologyIds(serviceId),
+    });
     const inspection = connection.enableInspection();
     connection.service(serviceId).register(echoInterface, { echo });
     return {
@@ -674,8 +725,8 @@ function summarizeTraffic(
                     method: transit.method,
                     disposition: transit.disposition,
                     node: nodeNames.get(transit.nodeId) ?? transit.nodeId,
-                    hasIn: transit.in !== undefined,
-                    hasOut: transit.out !== undefined,
+                    in: transit.in,
+                    out: transit.out,
                 })),
             };
         }),
@@ -696,12 +747,59 @@ function summarizeEndpointTraffic(
             method: transit.method,
             disposition: transit.disposition,
             direction: transit.in !== undefined ? 'inbound' : 'outbound',
+            in: transit.in,
+            out: transit.out,
             payload: transit.kind === 'request'
                 ? ('params' in transit ? transit.params : '<omitted>')
                 : ('result' in transit ? transit.result : '<omitted>'),
             node: nodeNames.get(transit.nodeId) ?? transit.nodeId,
         })),
     };
+}
+
+function topologyIds(participant: string): TopologyIdGenerator {
+    let nextId = 0;
+    return (kind) => `${participant}-${kind}-${++nextId}`;
+}
+
+interface AsyncDisposable {
+    dispose(): void | Promise<void>;
+}
+
+/** Test cleanup in reverse acquisition order, awaiting each resource before its dependencies. */
+class AsyncDisposableStore {
+    private readonly _items: AsyncDisposable[] = [];
+    private _disposal: Promise<void> | undefined;
+
+    public add<T extends AsyncDisposable>(item: T): T {
+        if (this._disposal !== undefined) throw new Error('Disposable store is already disposed');
+        this._items.push(item);
+        return item;
+    }
+
+    public defer(dispose: () => void | Promise<void>): void {
+        this.add({ dispose });
+    }
+
+    public remove<T extends AsyncDisposable>(item: T): T {
+        const index = this._items.indexOf(item);
+        if (index !== -1) this._items.splice(index, 1);
+        return item;
+    }
+
+    public dispose(): Promise<void> {
+        return this._disposal ??= Promise.resolve().then(async () => {
+            const errors: unknown[] = [];
+            for (const item of this._items.splice(0).reverse()) {
+                try {
+                    await item.dispose();
+                } catch (error) {
+                    errors.push(error);
+                }
+            }
+            if (errors.length !== 0) throw new AggregateError(errors, 'Test cleanup failed');
+        });
+    }
 }
 
 function summarizeParticipantTopology(

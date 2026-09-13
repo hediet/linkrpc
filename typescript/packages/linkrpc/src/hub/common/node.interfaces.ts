@@ -21,6 +21,13 @@ export type NodeInfo = zInfer<typeof zNodeInfo>;
 export type { ParticipantDescriptorSource };
 
 /**
+ * Generates unique topology-correlation labels, not security identities.
+ * Custom generators must avoid collisions across nodes and ports. Tests can
+ * supply an independent deterministic sequence for each participant.
+ */
+export type TopologyIdGenerator = (kind: 'node' | 'port') => string;
+
+/**
  * Minimal root service for aligning the independently observed topologies at
  * both ends of a connection.
  */

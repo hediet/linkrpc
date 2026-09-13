@@ -32,6 +32,7 @@ import {
 import { object, strictObject, string } from 'zod/mini';
 import { withForwardedCallGate, withFullyQualifiedCallGate } from './forwardedCallGate';
 import { Hub } from './routing/routingHub';
+import { GET_NODE_ID_METHOD } from './routing/peerDiscovery';
 import { crypto } from '@hediet/linkrpc';
 
 /** Tiny test client: send a request and await the matching response. */
@@ -75,6 +76,13 @@ class RecordingProvider {
     ) {
         _transport.setListener((m) => {
             if (isRequest(m)) {
+                if (m.method === GET_NODE_ID_METHOD) {
+                    void _transport.send({
+                        jsonrpc: '2.0', id: m.id,
+                        error: { code: ErrorCode.methodNotFound, message: 'Discovery unsupported' },
+                    });
+                    return;
+                }
                 this.received.push(m);
                 void _transport.send({ jsonrpc: '2.0', id: m.id, result: this._result });
             }

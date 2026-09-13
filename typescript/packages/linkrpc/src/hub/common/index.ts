@@ -35,7 +35,7 @@ export type {
 } from './hubAccess';
 export { findCoveringCapabilities } from './hubAccess';
 export { nodeInterface } from './node.interfaces';
-export type { NodeInfo, ParticipantDescriptorSource } from './node.interfaces';
+export type { NodeInfo, ParticipantDescriptorSource, TopologyIdGenerator } from './node.interfaces';
 export {
     topologyInterface,
     trafficInterface,

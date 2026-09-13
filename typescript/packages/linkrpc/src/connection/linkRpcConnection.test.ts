@@ -275,6 +275,33 @@ describe('LinkRpcConnection', () => {
         dispose();
     });
 
+    it('uses an injected topology generator and keeps IDs stable until registration disposal', async () => {
+        const pair = new TransportPair();
+        const client = LinkRpcConnection.fromTransport(pair.a);
+        let nextId = 0;
+        const server = LinkRpcConnection.fromTransport(pair.b, {
+            generateTopologyId: (kind) => `test-${kind}-${++nextId}`,
+        });
+        try {
+            const first = server.enableInspection();
+            expect(server.enableInspection()).toBe(first);
+            expect(nextId).toBe(2);
+            await expect(client.get(nodeInterface).getNodeId({})).resolves.toEqual({
+                nodeId: 'test-node-1',
+                portId: 'test-port-2',
+            });
+            first.dispose();
+            server.enableInspection();
+            await expect(client.get(nodeInterface).getNodeId({})).resolves.toEqual({
+                nodeId: 'test-node-3',
+                portId: 'test-port-4',
+            });
+        } finally {
+            client.close();
+            server.close();
+        }
+    });
+
     it('keeps outbound inspection requests as plain JSON-RPC messages', () => {
         let sent: JsonRpcMessage | undefined;
         const transport: IMessageTransport = {

@@ -27,7 +27,7 @@ import type { ServiceId } from '@hediet/linkrpc/hub/common';
  */
 export function hubRegisterServiceId(hub: Hub, serviceId: ServiceId): RegisteredServiceId {
     const link = hub.attachOut();
-    link.claimPrefix(serviceId);
+    link.addPrefixRoute(serviceId);
 
     const connection = LinkRpcConnection.fromTransport(link.transport);
     connection.enableReflection({ serviceId });

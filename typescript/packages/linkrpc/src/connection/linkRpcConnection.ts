@@ -9,7 +9,7 @@ import {
     type ServiceIdPattern,
 } from '../hub/common/reflection.interfaces';
 import { serviceIdMatchesScopes } from '../hub/common/directoryWalk';
-import { nodeInterface, type NodeInfo } from '../hub/common/node.interfaces';
+import { nodeInterface, type NodeInfo, type TopologyIdGenerator } from '../hub/common/node.interfaces';
 import {
     topologyInterface,
     trafficInterface,
@@ -45,6 +45,8 @@ import {
 } from './endpointTrafficInspector';
 
 export interface LinkRpcConnectionOptions {
+    /** Topology node/port ID generator. Defaults to cryptographic randomness. */
+    readonly generateTopologyId?: TopologyIdGenerator;
     /**
      * Validate parameters passed through typed interface clients before sending
      * them. Enabled by default. Disable only when interoperating with a peer
@@ -110,6 +112,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private readonly _serviceInspectionRegistrations = new Map<string, InterfaceRegistration[]>();
     private readonly _wireChannel: Channel<TInCtx, TOutCtx> | undefined;
     private readonly _validateOutboundParams: boolean;
+    private readonly _generateTopologyId: TopologyIdGenerator;
     private _preset: Preset | undefined;
 
     /**
@@ -123,6 +126,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         options: LinkRpcConnectionOptions = {},
     ) {
         this._validateOutboundParams = options.validateOutboundParams !== false;
+        this._generateTopologyId = options.generateTopologyId ?? createInspectionId;
         if ('sender' in channel) {
             this._wireChannel = channel;
             this.channel = channel.sender;
@@ -487,8 +491,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         if (this._inspection !== undefined) return this._inspection;
 
         const info: NodeInfo = {
-            nodeId: createInspectionId('node'),
-            portId: createInspectionId('port'),
+            nodeId: this._generateTopologyId('node'),
+            portId: this._generateTopologyId('port'),
             ...(descriptors !== undefined ? { descriptors: [...descriptors] } : {}),
         };
         const registration = this._register(nodeInterface, {

@@ -262,14 +262,6 @@ export class HubConnectionAcceptor<TTransport extends Transport> {
             // so does not depend on this.
             const verifySignatures = this._options.verifyForwardedCalls === true;
             overlay.connectParticipant(withVerifiedSignature(transport, { verifySignatures }));
-            void upstream.identifyPeer().catch((error: unknown) => {
-                this._options.onError?.(new Error(
-                    `peer identification failed: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-                    { cause: error },
-                ));
-            });
             return { overlay, upstream, topology };
         } catch (error) {
             overlay.dispose();
