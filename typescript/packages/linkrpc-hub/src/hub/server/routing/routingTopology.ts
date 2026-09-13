@@ -50,7 +50,6 @@ export interface RoutingTopologyOptions {
         link: IMessageTransport,
         method: string,
         params: JsonValue,
-        inspection: boolean,
         timeoutMs?: number,
     ) => Promise<JsonValue | undefined>;
     readonly onDidChange: () => void;
@@ -299,7 +298,6 @@ export class RoutingTopology {
             link,
             GET_NODE_ID_METHOD,
             {},
-            true,
             this._options.peerIdentificationTimeoutMs ?? 1000,
         )
             .then((raw) => {

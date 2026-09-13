@@ -8,14 +8,10 @@ import {
     type JsonRpcNotification,
     type JsonRpcRequest,
     methodNameToTarget, permits,
+    parseMethodName,
     type PublicSigningIdentity,
     verifyCall
 } from '@hediet/linkrpc';
-import { parseMethodName } from '@hediet/linkrpc';
-import {
-    isReservedInspectionInterface,
-    markInspectionLifecycle,
-} from './inspectionLifecycle';
 
 /** Options common to both gate modes (authenticity-only and capability). */
 interface ForwardedCallGateBaseOptions {
@@ -224,10 +220,6 @@ class ForwardedCallGate implements IMessageTransport {
         // Admitted: record the nonce, then forward verbatim (envelope intact
         // for re-verification / schema-stripping at the target).
         this._seenNonces.add(res.nonce);
-        const parsed = parseMethodName(call.method);
-        if (parsed?.kind === 'full' && isReservedInspectionInterface(parsed.interfaceId)) {
-            markInspectionLifecycle(call);
-        }
         this._downstream?.(call);
     }
 

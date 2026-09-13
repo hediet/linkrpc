@@ -193,7 +193,7 @@ async function callBindHashOf(wireParams: JsonObject, method: string): Promise<s
 }
 
 describe('withForwardedCallGate (hub signature front door)', () => {
-    it('marks accepted reserved inspection calls but not similarly named methods', async () => {
+    it('forwards reserved inspection calls without affecting transit logging', async () => {
         const { hub, provider, caller } = makeHarness();
         const identity = await makeIdentity();
         const transits: string[] = [];
@@ -207,14 +207,19 @@ describe('withForwardedCallGate (hub signature front door)', () => {
             await signedCall(identity, inspectionMethod, {}),
         );
         expect(provider.received.at(-1)?.method).toBe(inspectionMethod);
-        expect(transits).toEqual([]);
+        expect(transits).toEqual([inspectionMethod, inspectionMethod]);
 
         const visibleMethod = 'svc::hubrpc.topology.extra::getGraph';
         await caller.sendRequest(
             visibleMethod,
             await signedCall(identity, visibleMethod, {}),
         );
-        expect(transits).toEqual([visibleMethod, visibleMethod]);
+        expect(transits).toEqual([
+            inspectionMethod,
+            inspectionMethod,
+            visibleMethod,
+            visibleMethod,
+        ]);
         observation.dispose();
     });
 

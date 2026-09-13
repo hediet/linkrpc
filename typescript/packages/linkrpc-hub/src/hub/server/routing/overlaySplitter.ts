@@ -8,7 +8,6 @@ import type { JsonValue } from '@hediet/linkrpc';
 import { parseMethodName } from '@hediet/linkrpc';
 import { STREAM_METHOD, StreamDir } from '@hediet/linkrpc';
 import type { NodeTransit, NodeTransitObserver, TransitError, TransitKind } from '../nodeTransit';
-import { isInspectionLifecycle } from '../inspectionLifecycle';
 
 /** Which upstream port an inbound-to-participant request came from. */
 type Origin = 'H' | 'C';
@@ -128,9 +127,7 @@ export class OverlaySplitter<TContext = undefined> {
      */
     private readonly _pInitiated = new Map<RequestId, {
         readonly target: 'C' | 'H';
-        readonly inspection: boolean;
     }>();
-    private readonly _inboundInspectionRequests = new Set<RequestId>();
 
     constructor(
         private readonly _participant: IMessageTransport<MessageWithCtx<TContext>>,
@@ -152,7 +149,6 @@ export class OverlaySplitter<TContext = undefined> {
         this._root.setListener(undefined);
         this._uplink.setListener(undefined);
         this._pInitiated.clear();
-        this._inboundInspectionRequests.clear();
     }
 
     /** Edge id of an upstream origin port. */
@@ -171,14 +167,13 @@ export class OverlaySplitter<TContext = undefined> {
             if (m.id === null) return;
             const dec = _decodeId(m.id);
             if (!dec) return; // untagged response from P → unexpected, drop
-            const inspection = this._inboundInspectionRequests.delete(m.id);
             if (dec.origin === 'H') {
-                if (this._inspect && !inspection) {
+                if (this._inspect) {
                     this._emit(this._mkResponse(this._inspect.edges.p, m.id, this._inspect.edges.h, dec.id, m));
                 }
                 void this._uplink.send({ ...m, id: dec.id });
             } else {
-                if (this._inspect && !inspection) {
+                if (this._inspect) {
                     this._emit(this._mkResponse(this._inspect.edges.p, m.id, this._inspect.edges.c, dec.id, m));
                 }
                 // An ordinary context-stamping transport uses an enumerable
@@ -208,18 +203,17 @@ export class OverlaySplitter<TContext = undefined> {
         // stamp (if any) rides along verbatim so the root connection can read it.
         // Remember the resolved target for a participant-initiated *request* so
         // its (untagged) stream frames can be routed back to the same port.
-        const inspection = isInspectionLifecycle(m);
         if (rootForm) {
-            if (this._inspect && !inspection) {
+            if (this._inspect) {
                 this._emit(this._mkForward(this._inspect.edges.p, m, this._inspect.edges.c, method, 'forwarded'));
             }
-            if (isRequest(m)) this._pInitiated.set(m.id, { target: 'C', inspection });
+            if (isRequest(m)) this._pInitiated.set(m.id, { target: 'C' });
             void this._root.send(m);
         } else {
-            if (this._inspect && !inspection) {
+            if (this._inspect) {
                 this._emit(this._mkForward(this._inspect.edges.p, m, this._inspect.edges.h, method, 'forwarded'));
             }
-            if (isRequest(m)) this._pInitiated.set(m.id, { target: 'H', inspection });
+            if (isRequest(m)) this._pInitiated.set(m.id, { target: 'H' });
             void this._uplink.send(m);
         }
     }
@@ -261,7 +255,7 @@ export class OverlaySplitter<TContext = undefined> {
             // request is now complete, so drop its stream-routing entry.
             const initiated = m.id === null ? undefined : this._pInitiated.get(m.id);
             if (m.id !== null) this._pInitiated.delete(m.id);
-            if (this._inspect && initiated?.inspection !== true) {
+            if (this._inspect) {
                 this._emit(this._mkResponse(this._originEdge(origin), m.id, this._inspect.edges.p, m.id, m));
             }
             void this._participant.send(m);
@@ -300,14 +294,12 @@ export class OverlaySplitter<TContext = undefined> {
 
         if (isRequest(m)) {
             const encodedId = _encodeId(origin, m.id);
-            const inspection = isInspectionLifecycle(m);
-            if (inspection) this._inboundInspectionRequests.add(encodedId);
-            if (this._inspect && !inspection) {
+            if (this._inspect) {
                 this._emit(this._mkForward(this._originEdge(origin), m, this._inspect.edges.p, method, 'forwarded', encodedId));
             }
             void this._participant.send({ ...m, id: encodedId });
         } else if (isNotification(m)) {
-            if (this._inspect && !isInspectionLifecycle(m)) {
+            if (this._inspect) {
                 this._emit(this._mkForward(this._originEdge(origin), m, this._inspect.edges.p, method, 'forwarded'));
             }
             void this._participant.send(m);
@@ -330,7 +322,7 @@ export class OverlaySplitter<TContext = undefined> {
             ? undefined
             : { edgeId: outEdge, ...(isReq ? { requestId: outRequestId ?? id } : {}) };
         return {
-            ts: Date.now(),
+            timeMs: Date.now(),
             nodeId: this._inspect!.nodeId,
             in: inEp,
             out: outEp,
@@ -350,7 +342,7 @@ export class OverlaySplitter<TContext = undefined> {
         m: JsonRpcMessage,
     ): NodeTransit {
         return {
-            ts: Date.now(),
+            timeMs: Date.now(),
             nodeId: this._inspect!.nodeId,
             in: { edgeId: inEdge, ...(inId !== null ? { requestId: inId } : {}) },
             out: { edgeId: outEdge, ...(outId !== null ? { requestId: outId } : {}) },

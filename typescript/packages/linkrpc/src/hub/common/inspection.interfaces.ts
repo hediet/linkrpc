@@ -123,7 +123,7 @@ export const zTrafficTransitEndpoint = object({
 
 export const zTrafficTransitEvent = object({
     type: literal("transit"),
-    ts: number(),
+    timeMs: number(),
     nodeId: string(),
     in: optional(zTrafficTransitEndpoint),
     out: optional(zTrafficTransitEndpoint),
@@ -160,10 +160,20 @@ export type TrafficWatchResult = zInfer<typeof zTrafficWatchResult>;
 
 const zTrafficWatchParams = object({
     methodPrefix: optional(string()),
+    trafficIgnoreKey: optional(string()),
+    focusRequest: optional(object({
+        portId: string(),
+        requestId: union([number(), string()]),
+    })),
 });
 
 const zTrafficWatchWithPayloadsParams = object({
     methodPrefix: optional(string()),
+    trafficIgnoreKey: optional(string()),
+    focusRequest: optional(object({
+        portId: string(),
+        requestId: union([number(), string()]),
+    })),
     maxPayloadBytes: number().check(int(), nonnegative()),
 });
 

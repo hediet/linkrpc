@@ -77,6 +77,14 @@ export type {
     TrafficSubscriptionOptions,
 } from './boundedTrafficSubscription';
 export {
+    TrafficFlowFilter,
+    TrafficWatchFlowTracker,
+} from './trafficFlowFilter';
+export type {
+    TrafficFlowFilterOptions,
+    TrafficRequestRef,
+} from './trafficFlowFilter';
+export {
     registerGrantedServiceId,
 } from './baseCapabilities';
 export {

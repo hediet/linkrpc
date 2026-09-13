@@ -126,7 +126,7 @@ describe('HubInspector', () => {
         });
 
         hub.publishManagedTransit({
-            ts: 1,
+            timeMs: 1,
             nodeId: 'overlay-a',
             in: { edgeId: 'app', requestId: 7 },
             out: { edgeId: 'shared', requestId: 7 },
@@ -135,7 +135,7 @@ describe('HubInspector', () => {
             method: 'target::service::call',
         });
         hub.publishManagedTransit({
-            ts: 2,
+            timeMs: 2,
             nodeId: 'hub-a',
             in: { edgeId: 'shared', requestId: 7 },
             out: { edgeId: 'target', requestId: 12 },
@@ -144,7 +144,7 @@ describe('HubInspector', () => {
             method: 'target::service::call',
         });
         hub.publishManagedTransit({
-            ts: 3,
+            timeMs: 3,
             nodeId: 'hub-a',
             in: { edgeId: 'target', requestId: 12 },
             out: { edgeId: 'shared', requestId: 7 },
@@ -153,7 +153,7 @@ describe('HubInspector', () => {
             result: { ok: true },
         });
         hub.publishManagedTransit({
-            ts: 4,
+            timeMs: 4,
             nodeId: 'overlay-a',
             in: { edgeId: 'shared', requestId: 7 },
             out: { edgeId: 'app', requestId: 7 },
@@ -180,7 +180,7 @@ describe('HubInspector', () => {
                 "portId": "shared",
                 "requestId": 7,
               },
-              "ts": 1,
+              "timeMs": 1,
               "type": "transit",
             },
             {
@@ -198,7 +198,7 @@ describe('HubInspector', () => {
                 "portId": "target",
                 "requestId": 12,
               },
-              "ts": 2,
+              "timeMs": 2,
               "type": "transit",
             },
             {
@@ -216,7 +216,7 @@ describe('HubInspector', () => {
                 "portId": "shared",
                 "requestId": 7,
               },
-              "ts": 3,
+              "timeMs": 3,
               "type": "transit",
             },
             {
@@ -234,7 +234,7 @@ describe('HubInspector', () => {
                 "portId": "app",
                 "requestId": 7,
               },
-              "ts": 4,
+              "timeMs": 4,
               "type": "transit",
             },
           ]
@@ -270,7 +270,7 @@ describe('HubInspector', () => {
         expect(sourceActive).toBe(true);
         sourceObserver?.({
             type: 'transit',
-            ts: 1,
+            timeMs: 1,
             nodeId: 'shell-node',
             in: {
                 edgeId: 'shell',
@@ -328,7 +328,7 @@ describe('HubInspector', () => {
 
         subscription.dispose();
         await expect(subscription.closed).resolves.toEqual({ delivered: 2, dropped: 0 });
-        expect(hub.transitObserverCount).toBe(0);
+        expect(hub.transitObserverCount).toBe(1);
     });
 
     it('filters methods and removes payloads per subscriber', async () => {
@@ -413,7 +413,7 @@ describe('hub traffic services', () => {
         services.dispose();
     });
 
-    it('observes ordinary calls, excludes its own inspection lifecycle, and cancels cleanly', async () => {
+    it('observes inspection calls, excludes only its own lifecycle, and cancels cleanly', async () => {
         const hub = new Hub({ nodeId: 'hub-a' });
         const services = createHubServiceInterfaces(hub);
         const callerLink = hub.attachOut();
@@ -429,24 +429,68 @@ describe('hub traffic services', () => {
         await connection.service(services.hubServiceId)
             .get(topologyInterface)
             .getGraph({});
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        expect(events).toHaveLength(0);
+        await waitFor(() => events.length === 2);
+        expect(events.map((event) => event.method)).toEqual([
+            `${services.hubServiceId}::hubrpc.topology::getGraph`,
+            `${services.hubServiceId}::hubrpc.topology::getGraph`,
+        ]);
 
         await connection.service(services.hubServiceId)
             .get(directoryInterface)
             .list({});
         await waitFor(() =>
-            events.some((event) => event.kind === 'request')
-            && events.some((event) => event.kind === 'response'),
+            events.filter((event) =>
+                event.method === `${services.hubServiceId}::hubrpc.directory::list`
+            ).length === 2,
         );
-        expect(events.every((event) =>
-            event.method === `${services.hubServiceId}::hubrpc.directory::list`
-        )).toBe(true);
+        expect(events.some((event) =>
+            event.method?.includes('hubrpc.traffic')
+        )).toBe(false);
 
         await watch.cancel();
         await watch.done;
         expect(services.inspector.observerCount).toBe(0);
-        expect(hub.transitObserverCount).toBe(0);
+        expect(hub.transitObserverCount).toBe(1);
+
+        connection.close();
+        callerLink.dispose();
+        services.dispose();
+    });
+
+    it('prevents concurrent traffic watches from observing each other', async () => {
+        const hub = new Hub({ nodeId: 'hub-a', emitStreamTransits: () => true });
+        const services = createHubServiceInterfaces(hub);
+        const callerLink = hub.attachOut();
+        const connection = LinkRpcConnection.fromTransport(callerLink.transport);
+        const firstEvents: TrafficTransitEvent[] = [];
+        const secondEvents: TrafficTransitEvent[] = [];
+        const traffic = new TrafficClient(connection, services.hubServiceId);
+        const first = traffic.watch({}, {
+            onTransit: (event) => firstEvents.push(event),
+        });
+        const second = traffic.watch({}, {
+            onTransit: (event) => secondEvents.push(event),
+        });
+
+        await waitFor(() => services.inspector.observerCount === 2);
+        await connection.service(services.hubServiceId)
+            .get(directoryInterface)
+            .list({});
+        await waitFor(() =>
+            firstEvents.some((event) => event.kind === 'response')
+            && secondEvents.some((event) => event.kind === 'response'),
+        );
+
+        expect(firstEvents.every((event) =>
+            !event.method?.includes('hubrpc.traffic')
+        )).toBe(true);
+        expect(secondEvents.every((event) =>
+            !event.method?.includes('hubrpc.traffic')
+        )).toBe(true);
+        await Promise.all([
+            first.cancel('test-complete'),
+            second.cancel('test-complete'),
+        ]);
 
         connection.close();
         callerLink.dispose();

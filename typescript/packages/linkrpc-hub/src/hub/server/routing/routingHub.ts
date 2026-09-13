@@ -19,11 +19,6 @@ import {
     type TopologyGraph,
     type TopologyTransportInfo,
 } from '@hediet/linkrpc/hub/common';
-import {
-    isInspectionLifecycle,
-    isReservedInspectionInterface,
-    markInspectionLifecycle,
-} from '../inspectionLifecycle';
 import { ParticipantRoots } from './participantRoots';
 import {
     GET_NODE_ID_METHOD,
@@ -50,8 +45,6 @@ interface PendingForward {
      * sequential id) to a request that was actually routed elsewhere.
      */
     readonly target: IMessageTransport;
-    /** Suppress observation for the trusted inspection call's whole lifecycle. */
-    readonly inspection: boolean;
     /**
      * Idle-timeout handle. Armed when the request is forwarded, reset on
      * every stream message (incl. keepalive pings), and cleared when the
@@ -263,8 +256,8 @@ export class Hub {
             edgeId: (link) => this._edgeId(link),
             transportInfo: (link) => this._transportInfo.get(link),
             isAttached: (link) => this._links.has(link),
-            requestOnLink: (link, method, params, inspection, timeoutMs) =>
-                this._requestOnLink(link, method, params, inspection, timeoutMs),
+            requestOnLink: (link, method, params, timeoutMs) =>
+                this._requestOnLink(link, method, params, timeoutMs),
             onDidChange: () => this._fireRoutingChanged(),
         });
         this._participantRoots = new ParticipantRoots({
@@ -401,7 +394,7 @@ export class Hub {
         if (this._transitObservers.size === 0) return;
         if (this._options.emitStreamTransits?.() !== true) return;
         this._emit({
-            ts: Date.now(),
+            timeMs: Date.now(),
             nodeId: this.nodeId,
             in: inEp,
             out: outEp,
@@ -454,7 +447,7 @@ export class Hub {
             portId: this._topology.portId(link),
             identifyPeer: () => this._topology.identifyPeer(link),
             request: (method, params, timeoutMs) =>
-                this._requestOnLink(link, method, params, false, timeoutMs),
+                this._requestOnLink(link, method, params, timeoutMs),
         };
         this._topology.registerHandle(handle, link);
         if (this._links.has(link)) return handle;
@@ -508,9 +501,9 @@ export class Hub {
                 // The caller is gone. Cancel the callee's now-orphaned work
                 // (it streams to nobody) before dropping the entry.
                 this._injectCancel(p.target, id, StreamControlReason.clientDisconnected);
-                if (!p.inspection && this._transitObservers.size !== 0) {
+                if (this._transitObservers.size !== 0) {
                     this._emit({
-                        ts: Date.now(),
+                        timeMs: Date.now(),
                         nodeId: this.nodeId,
                         in: this._transitEndpoint(p.target, id),
                         disposition: 'dropped',
@@ -527,9 +520,9 @@ export class Hub {
                 this._log?.warn(
                     `${this._tag()}target detached mid-request (hubId=${id}); failing origin`,
                 );
-                if (!p.inspection && this._transitObservers.size !== 0) {
+                if (this._transitObservers.size !== 0) {
                     this._emit({
-                        ts: Date.now(),
+                        timeMs: Date.now(),
                         nodeId: this.nodeId,
                         in: this._transitEndpoint(p.target, id),
                         out: this._transitEndpoint(p.origin, p.originalId),
@@ -671,7 +664,6 @@ export class Hub {
         link: IMessageTransport,
         method: string,
         params: JsonValue,
-        inspection = false,
         timeoutMs?: number,
     ): Promise<JsonValue | undefined> {
         return new Promise<JsonValue | undefined>((resolve, reject) => {
@@ -711,7 +703,6 @@ export class Hub {
                 target: link,
                 method,
                 startedAtMs: Date.now(),
-                inspection,
             });
             this._armIdle(key);
             if (timeoutMs !== undefined && timeoutMs > 0) {
@@ -805,7 +796,6 @@ export class Hub {
             target: link,
             method,
             startedAtMs: Date.now(),
-            inspection: true,
         });
         this._armIdle(key);
         establishedTimer = setTimeout(() => {
@@ -901,17 +891,6 @@ export class Hub {
         return { kind: 'uplink', link: this._uplink };
     }
 
-    private _isInspectionRequest(
-        request: JsonRpcRequest,
-        target: IMessageTransport,
-    ): boolean {
-        if (isInspectionLifecycle(request)) return true;
-        const parsed = parseMethodName(request.method);
-        return parsed?.kind === 'full'
-            && isReservedInspectionInterface(parsed.interfaceId)
-            && this._topology.isInspectionService(target, parsed.serviceId);
-    }
-
     private _routeRequest(from: IMessageTransport, req: JsonRpcRequest): void {
         const res = this._resolve(req.method, from);
         const target = res.kind === 'malformed' ? undefined : res.link;
@@ -922,7 +901,7 @@ export class Hub {
             );
             if (this._transitObservers.size !== 0) {
                 this._emit({
-                    ts: Date.now(),
+                    timeMs: Date.now(),
                     nodeId: this.nodeId,
                     in: this._transitEndpoint(from, req.id),
                     disposition: 'unroutable',
@@ -936,23 +915,21 @@ export class Hub {
         }
         const hubId = this._nextId++;
         const key = String(hubId);
-        const inspection = this._isInspectionRequest(req, target);
         this._pending.set(key, {
             origin: from,
             originalId: req.id,
             target,
             method: req.method,
             startedAtMs: Date.now(),
-            inspection,
         });
         this._armIdle(key);
         this._log?.trace(
             `${this._tag()}route '${req.method}' (${res.kind}${res.kind === 'prefix' ? ` ${res.prefix}` : ''
             }) id=${String(req.id)}\u2192${hubId}`,
         );
-        if (!inspection && this._transitObservers.size !== 0) {
+        if (this._transitObservers.size !== 0) {
             this._emit({
-                ts: Date.now(),
+                timeMs: Date.now(),
                 nodeId: this.nodeId,
                 in: this._transitEndpoint(from, req.id),
                 out: this._transitEndpoint(target, hubId),
@@ -963,7 +940,6 @@ export class Hub {
             });
         }
         const forwarded = { ...req, id: hubId };
-        if (inspection) markInspectionLifecycle(forwarded);
         const onSendError = (error: unknown): void => {
             const pending = this._pending.get(key);
             if (pending === undefined || pending.target !== target) return;
@@ -972,9 +948,9 @@ export class Hub {
                 error instanceof Error ? error.message : String(error)
             }`;
             this._log?.warn(`${this._tag()}${message} (hubId=${key})`);
-            if (!pending.inspection && this._transitObservers.size !== 0) {
+            if (this._transitObservers.size !== 0) {
                 this._emit({
-                    ts: Date.now(),
+                    timeMs: Date.now(),
                     nodeId: this.nodeId,
                     in: this._transitEndpoint(pending.target, hubId),
                     out: this._transitEndpoint(pending.origin, pending.originalId),
@@ -1007,7 +983,7 @@ export class Hub {
         if (target) {
             if (this._transitObservers.size !== 0) {
                 this._emit({
-                    ts: Date.now(),
+                    timeMs: Date.now(),
                     nodeId: this.nodeId,
                     in: this._transitEndpoint(from),
                     out: this._transitEndpoint(target),
@@ -1021,7 +997,7 @@ export class Hub {
         } else {
             if (this._transitObservers.size !== 0) {
                 this._emit({
-                    ts: Date.now(),
+                    timeMs: Date.now(),
                     nodeId: this.nodeId,
                     in: this._transitEndpoint(from),
                     disposition: res.kind === 'malformed' ? 'unroutable' : 'dropped',
@@ -1044,9 +1020,9 @@ export class Hub {
         // sequential id) to a request routed to a different link.
         if (from !== pending.target) return;
         this._deletePending(key);
-        if (!pending.inspection && this._transitObservers.size !== 0) {
+        if (this._transitObservers.size !== 0) {
             this._emit({
-                ts: Date.now(),
+                timeMs: Date.now(),
                 nodeId: this.nodeId,
                 in: this._transitEndpoint(pending.target, res.id),
                 out: this._transitEndpoint(pending.origin, pending.originalId),
@@ -1103,13 +1079,11 @@ export class Hub {
             }
             this._resetIdle(key);
             void pending.origin.send(_withRequestId(note, pending.originalId));
-            if (!pending.inspection && this._transitObservers.size !== 0) {
-                this._emitStream(
-                    note,
-                    this._transitEndpoint(pending.target, p.requestId),
-                    this._transitEndpoint(pending.origin, pending.originalId),
-                );
-            }
+            this._emitStream(
+                note,
+                this._transitEndpoint(pending.target, p.requestId),
+                this._transitEndpoint(pending.origin, pending.originalId),
+            );
             return;
         }
         // toCallee: reverse traversal. The origin streams with the id it sent;
@@ -1118,13 +1092,11 @@ export class Hub {
             if (pending.origin === from && String(pending.originalId) === String(p.requestId)) {
                 this._resetIdle(hubId);
                 void pending.target.send(_withRequestId(note, Number(hubId)));
-                if (!pending.inspection && this._transitObservers.size !== 0) {
-                    this._emitStream(
-                        note,
-                        this._transitEndpoint(pending.origin, p.requestId),
-                        this._transitEndpoint(pending.target, Number(hubId)),
-                    );
-                }
+                this._emitStream(
+                    note,
+                    this._transitEndpoint(pending.origin, p.requestId),
+                    this._transitEndpoint(pending.target, Number(hubId)),
+                );
                 return;
             }
         }
@@ -1172,9 +1144,9 @@ export class Hub {
         this._log?.warn(`${this._tag()}request idle-timed-out (hubId=${key}); cancelling + failing origin`);
         this._injectCancel(p.target, key, StreamControlReason.idleTimeout);
         this._deletePending(key);
-        if (!p.inspection && this._transitObservers.size !== 0) {
+        if (this._transitObservers.size !== 0) {
             this._emit({
-                ts: Date.now(),
+                timeMs: Date.now(),
                 nodeId: this.nodeId,
                 in: this._transitEndpoint(p.target, key),
                 out: this._transitEndpoint(p.origin, p.originalId),

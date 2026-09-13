@@ -36,7 +36,6 @@ import {
     type IRequestSender, type Result,
     RpcError,
     type StreamSendOpts,
-    markInspectionCall,
 } from './channel';
 import { JsonRpcChannel } from './jsonRpcChannel';
 import { bytesToBase64Url } from '../crypto/cryptoProvider';
@@ -501,10 +500,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             info.portId,
             (active) => this._wireChannel?.setWireMessageObserver(
                 active ? trafficInspector.observe : undefined,
-                active ? (method) => this._isInspectionMethod(method) : undefined,
             ),
         );
         this._trafficInspector = trafficInspector;
+        trafficInspector.start();
 
         let disposed = false;
         const result: InspectionRegistration = {
@@ -560,7 +559,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         const { serviceId, ...ctxRest } = opts;
         const baseCtx = ctxRest as unknown as TOutCtx;
         const interfaceHash = iface.schemaHash;
-        const inspectionCall = isInspectionInterface(iface);
         const proxy: Record<string, (p: any) => any> = {};
         for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
             const wireMethod = serviceId ?
@@ -602,7 +600,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         const channelOpts: StreamSendOpts<TOutCtx> = onStreamMessage !== undefined ?
                             { ctx: baseCtx, interfaceHash, onStreamMessage } :
                             { ctx: baseCtx, interfaceHash };
-                        if (inspectionCall) markInspectionCall(channelOpts);
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const call = this.channel.sendRequestWithStream(
                             wireMethod,
@@ -635,7 +632,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                     const resultSchema = (member as RequestType).resultSchema;
                     proxy[name] = async (params: unknown) => {
                         const sendOpts = { ctx: baseCtx, interfaceHash };
-                        if (inspectionCall) markInspectionCall(sendOpts);
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const raw = await this.channel.sendRequest(
                             wireMethod,
@@ -662,7 +658,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             } else {
                 proxy[name] = async (params: unknown) => {
                     const sendOpts = { ctx: baseCtx, interfaceHash };
-                    if (inspectionCall) markInspectionCall(sendOpts);
                     this._validateOutboundParamsFor(member, wireMethod, params);
                     void this.channel.sendNotification(
                         wireMethod,
@@ -727,9 +722,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         const stream = this._buildStreamApi(call.stream, call.signal, member);
         try {
             const pendingResult = handler(parsedParams.data, call.context, stream);
-            if (isInspectionInterface(entry.iface)) {
-                call.stream.markInspectionLifecycle();
-            }
             const result = await pendingResult;
             // Result data validation: a handler must return what its declared
             // `resultSchema` promises. Symmetric with the inbound `paramsSchema`
@@ -861,12 +853,26 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 },
             }, opts, true));
             registrations.push(this._register(trafficInterface, {
-                watch: ({ methodPrefix }, _ctx, stream) =>
-                    this._watchTraffic(trafficInspector, { methodPrefix }, stream),
-                watchWithPayloads: ({ methodPrefix, maxPayloadBytes }, _ctx, stream) =>
+                watch: ({ methodPrefix, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
                     this._watchTraffic(
                         trafficInspector,
-                        { methodPrefix, maxPayloadBytes },
+                        { methodPrefix, trafficIgnoreKey, focusRequest },
+                        stream,
+                    ),
+                watchWithPayloads: ({
+                    methodPrefix,
+                    maxPayloadBytes,
+                    trafficIgnoreKey,
+                    focusRequest,
+                }, _ctx, stream) =>
+                    this._watchTraffic(
+                        trafficInspector,
+                        {
+                            methodPrefix,
+                            maxPayloadBytes,
+                            trafficIgnoreKey,
+                            focusRequest,
+                        },
                         stream,
                     ),
             }, opts, true));
@@ -887,11 +893,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private _hasBusinessServiceRegistration(serviceId: string): boolean {
         return Array.from(this._registry.values()).some((entry) =>
             entry.serviceId === serviceId && !entry.internalInspection);
-    }
-
-    private _isInspectionMethod(method: string): boolean {
-        const parsed = this._parseRouted(method);
-        return parsed.ok && isInspectionInterface(parsed.entry.iface);
     }
 
     private _endpointGraph(serviceId: string, info: NodeInfo): TopologyGraph {

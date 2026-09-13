@@ -127,10 +127,15 @@ function registerInspectionInterfaces(
     }, { serviceId: hubServiceId });
 
     connection.register(trafficInterface, {
-        watch: ({ methodPrefix }, _ctx, stream) =>
-            runTrafficWatch(inspector, { methodPrefix }, stream),
-        watchWithPayloads: ({ methodPrefix, maxPayloadBytes }, _ctx, stream) =>
-            runTrafficWatch(inspector, { methodPrefix, maxPayloadBytes }, stream),
+        watch: ({ methodPrefix, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
+            runTrafficWatch(inspector, { methodPrefix, trafficIgnoreKey, focusRequest }, stream),
+        watchWithPayloads: ({ methodPrefix, maxPayloadBytes, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
+            runTrafficWatch(inspector, {
+                methodPrefix,
+                maxPayloadBytes,
+                trafficIgnoreKey,
+                focusRequest,
+            }, stream),
     }, { serviceId: hubServiceId });
 }
 

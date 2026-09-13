@@ -27,6 +27,18 @@ const echoInterface = defineInterface(
     },
 );
 
+const streamingInterface = defineInterface(
+    { id: 'test.streaming' },
+    {
+        run: requestType(
+            z.object({}),
+            z.object({ done: z.boolean() }),
+        ).withStream({
+            server: z.object({ step: z.number() }),
+        }),
+    },
+);
+
 interface ServiceParticipant {
     readonly connection: LinkRpcConnection;
     readonly link: AttachedLink;
@@ -454,6 +466,122 @@ describe('federated Hub inspection', () => {
             observerLink.dispose();
             alpha.dispose();
             beta.dispose();
+            servicesA.dispose();
+            servicesB.dispose();
+            aToB.dispose();
+            bToA.dispose();
+        }
+    });
+
+    it('follows an ongoing stream from a farther hub on the closer hub', async () => {
+        const hubA = new Hub({
+            nodeId: 'hub-a-node',
+            emitStreamTransits: () => true,
+        });
+        const hubB = new Hub({
+            nodeId: 'hub-b-node',
+            emitStreamTransits: () => true,
+        });
+        const servicesA = createHubServiceInterfaces(hubA, { hubServiceId: 'hub-a' });
+        const servicesB = createHubServiceInterfaces(hubB, { hubServiceId: 'hub-b' });
+
+        const nesting = new TransportPair();
+        const aToB = hubA.attach(nesting.a);
+        const bToA = hubB.attach(nesting.b);
+        hubB.setUplink(nesting.b);
+        aToB.claimPrefix('hub-b');
+        aToB.claimPrefix('beta');
+
+        const alphaPair = new TransportPair();
+        const alphaLink = hubA.attach(alphaPair.a);
+        alphaLink.claimPrefix('alpha');
+        const alpha = LinkRpcConnection.fromTransport(alphaPair.b);
+
+        const betaPair = new TransportPair();
+        const betaLink = hubB.attach(betaPair.a);
+        betaLink.claimPrefix('beta');
+        const beta = LinkRpcConnection.fromTransport(betaPair.b);
+        let releaseSecondFrame!: () => void;
+        const secondFrame = new Promise<void>((resolve) => releaseSecondFrame = resolve);
+        beta.service('beta').register(streamingInterface, {
+            run: async (_params, _ctx, stream) => {
+                await stream.send({ step: 1 });
+                await secondFrame;
+                await stream.send({ step: 2 });
+                return { done: true };
+            },
+        });
+
+        const observerPair = new TransportPair();
+        const observerLink = hubB.attach(observerPair.a);
+        const observer = LinkRpcConnection.fromTransport(observerPair.b);
+        const fartherEvents: TrafficTransitEvent[] = [];
+        const closerEvents: TrafficTransitEvent[] = [];
+        const frames: number[] = [];
+        const fartherWatch = new TrafficClient(observer, 'hub-a').watchWithPayloads(
+            { maxPayloadBytes: 1_000_000 },
+            { onTransit: (transit) => fartherEvents.push(transit) },
+        );
+        let closerWatch: TrafficWatch | undefined;
+
+        try {
+            await waitFor(() => servicesA.inspector.observerCount === 1);
+            const call = alpha.service('beta').get(streamingInterface).run({}, {
+                onMessage: ({ step }) => frames.push(step),
+            });
+            await waitFor(() =>
+                frames.includes(1)
+                && fartherEvents.some((event) =>
+                    event.kind === 'request'
+                    && event.method === 'beta::test.streaming::run'),
+            );
+
+            const fartherRequest = fartherEvents.find((event) =>
+                event.kind === 'request'
+                && event.method === 'beta::test.streaming::run'
+            )!;
+            expect(fartherRequest.out?.requestId).toBeDefined();
+            closerWatch = new TrafficClient(observer, 'hub-b').watchWithPayloads(
+                {
+                    maxPayloadBytes: 1_000_000,
+                    focusRequest: {
+                        portId: bToA.portId,
+                        requestId: fartherRequest.out!.requestId!,
+                    },
+                },
+                { onTransit: (transit) => closerEvents.push(transit) },
+            );
+            await waitFor(() => servicesB.inspector.observerCount === 1);
+
+            releaseSecondFrame();
+            await expect(call).resolves.toEqual({ done: true });
+            await waitFor(() =>
+                closerEvents.some((event) => event.kind === 'stream')
+                && closerEvents.some((event) => event.kind === 'response'),
+            );
+
+            expect(frames).toEqual([1, 2]);
+            expect(closerEvents.map((event) => event.kind)).toEqual([
+                'stream',
+                'response',
+            ]);
+            expect(closerEvents[0].params).toMatchObject({
+                payload: { step: 2 },
+            });
+            expect(closerEvents[1].result).toEqual({ done: true });
+            expect(closerEvents.some((event) =>
+                event.method?.includes('hubrpc.traffic')
+            )).toBe(false);
+        } finally {
+            releaseSecondFrame();
+            await closerWatch?.cancel('test-cleanup').catch(() => undefined);
+            await fartherWatch.cancel('test-cleanup').catch(() => undefined);
+            observer.close();
+            observerLink.dispose();
+            alpha.close();
+            alphaLink.dispose();
+            beta.close();
+            betaLink.dispose();
             servicesA.dispose();
             servicesB.dispose();
             aToB.dispose();
