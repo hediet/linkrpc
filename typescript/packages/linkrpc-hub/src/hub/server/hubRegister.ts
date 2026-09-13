@@ -1,15 +1,11 @@
 import {
-    type MessageWithCtx,
     type ChannelTransport,
     ErrorCode,
     type LinkRpcConnection,
-    getLocalMessageContext,
     type IMessageTransport,
     isRequest,
     type RequestId,
     RpcError,
-    type LocalMessageContext,
-    setLocalMessageContext,
 } from '@hediet/linkrpc';
 import { hubServiceIdRegistryInterface } from '@hediet/linkrpc/hub/common';
 import { validatePrefix } from './routing/forwardingTable';
@@ -24,7 +20,7 @@ import type { Hub } from './routing/routingHub';
  * The register handler uses it to resolve the link a forwarded claim arrived on
  * via {@link Hub.getSourceTransport}.
  */
-export interface RegisterCallContext extends LocalMessageContext {
+export interface RegisterCallContext {
     /**
      * The hub-rewritten wire id of the inbound request, or `undefined` for
      * responses / notifications. Keyed lookups into
@@ -53,14 +49,9 @@ export function withRequestIdContext(
             }
             link.setListener((message) => {
                 const requestId = isRequest(message) ? message.id : undefined;
-                const context: RegisterCallContext = {
-                    ...getLocalMessageContext(message),
-                    requestId,
-                };
-                listener(setLocalMessageContext(
-                    { ...message },
-                    context,
-                ) as MessageWithCtx<RegisterCallContext>);
+                const contextual = { ...message, context: { requestId } };
+                Object.defineProperty(contextual, 'context', { enumerable: false, writable: false });
+                listener(contextual);
             });
         },
         dispose: () => link.dispose(),
