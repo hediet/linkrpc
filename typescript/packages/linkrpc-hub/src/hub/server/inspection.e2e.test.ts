@@ -63,9 +63,8 @@ describe('federated Hub inspection', () => {
         const alpha = attachService(hubA, 'alpha', ({ value }) => ({ value: `alpha:${value}` }));
         const beta = attachService(hubB, 'beta', ({ value }) => ({ value: `beta:${value}` }));
 
-        const observerPair = new TransportPair();
-        const observerLink = hubB.attach(observerPair.a);
-        const observer = LinkRpcConnection.fromTransport(observerPair.b);
+        const observerLink = hubB.attachOut();
+        const observer = LinkRpcConnection.fromTransport(observerLink.transport);
 
         const network = new NetworkInspectionClient(observer);
         const nodeInfo = new NodeInfoClient(observer);
@@ -486,15 +485,13 @@ describe('federated Hub inspection', () => {
         aToB.claimPrefix('hub-b');
         aToB.claimPrefix('beta');
 
-        const alphaPair = new TransportPair();
-        const alphaLink = hubA.attach(alphaPair.a);
+        const alphaLink = hubA.attachOut();
         alphaLink.claimPrefix('alpha');
-        const alpha = LinkRpcConnection.fromTransport(alphaPair.b);
+        const alpha = LinkRpcConnection.fromTransport(alphaLink.transport);
 
-        const betaPair = new TransportPair();
-        const betaLink = hubB.attach(betaPair.a);
+        const betaLink = hubB.attachOut();
         betaLink.claimPrefix('beta');
-        const beta = LinkRpcConnection.fromTransport(betaPair.b);
+        const beta = LinkRpcConnection.fromTransport(betaLink.transport);
         let releaseSecondFrame!: () => void;
         const secondFrame = new Promise<void>((resolve) => releaseSecondFrame = resolve);
         beta.service('beta').register(streamingInterface, {
@@ -506,9 +503,8 @@ describe('federated Hub inspection', () => {
             },
         });
 
-        const observerPair = new TransportPair();
-        const observerLink = hubB.attach(observerPair.a);
-        const observer = LinkRpcConnection.fromTransport(observerPair.b);
+        const observerLink = hubB.attachOut();
+        const observer = LinkRpcConnection.fromTransport(observerLink.transport);
         const fartherEvents: TrafficTransitEvent[] = [];
         const closerEvents: TrafficTransitEvent[] = [];
         const frames: number[] = [];
@@ -589,10 +585,9 @@ function attachService(
     serviceId: string,
     echo: (params: { value: string }) => { value: string },
 ): ServiceParticipant {
-    const pair = new TransportPair();
-    const link = hub.attach(pair.a);
+    const link = hub.attachOut();
     link.claimPrefix(serviceId);
-    const connection = LinkRpcConnection.fromTransport(pair.b);
+    const connection = LinkRpcConnection.fromTransport(link.transport);
     const inspection = connection.enableInspection();
     connection.service(serviceId).register(echoInterface, { echo });
     return {
