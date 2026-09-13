@@ -1,14 +1,13 @@
-import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import type { LinkRpcConnection } from '@hediet/linkrpc';
 import {
     HubDirectoryExplorer,
-    topologyInterface,
     type HubDirectoryGraphSnapshot,
-    type TopologyGraph,
-} from '../common';
+} from '@hediet/linkrpc/hub/common';
+import { topologyInterface, type TopologyGraph } from '@hediet/linkrpc/inspection';
 import {
     mergeTopologyGraphs,
     type NetworkTopologyGraph,
-} from './networkInspectionClient';
+} from './topologyGraph';
 import { TopologyClient, type TopologyWatch } from './topologyClient';
 
 export type TopologySourceState = 'loading' | 'ready' | 'error';

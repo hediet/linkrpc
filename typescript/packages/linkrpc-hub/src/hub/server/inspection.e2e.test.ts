@@ -12,8 +12,8 @@ import {
   TrafficClient,
   type NetworkTopologyGraph,
   type TrafficWatch,
-} from '@hediet/linkrpc/hub/client';
-import type { TopologyIdGenerator, TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc-infra/inspection';
+import type { TopologyIdGenerator, TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 import { createHubServiceInterfaces } from './hubServices';
 import { Hub, type AttachedLink } from './routing/routingHub';
 

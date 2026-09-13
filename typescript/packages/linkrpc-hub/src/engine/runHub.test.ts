@@ -1,5 +1,5 @@
 import { LinkRpcConnection, defineInterface, requestType } from '@hediet/linkrpc';
-import { mergeTopologyGraphs } from '@hediet/linkrpc/hub/client';
+import { mergeTopologyGraphs } from '@hediet/linkrpc-infra/inspection';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { HubConfigSchema } from '../config';

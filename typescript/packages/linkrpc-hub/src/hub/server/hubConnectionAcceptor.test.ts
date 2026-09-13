@@ -14,8 +14,8 @@ import {
 import { z } from 'zod';
 import {
     hubGrantedServiceIdInterface,
-    type TopologyTransportInfo,
 } from '@hediet/linkrpc/hub/common';
+import type { TopologyTransportInfo } from '@hediet/linkrpc/inspection';
 import { HubConnectionAcceptor } from './hubConnectionAcceptor';
 import { type ConnectionHandlerFactory, provisionRoot } from './connectionHandler';
 import { createHubServiceInterfaces } from './hubServices';

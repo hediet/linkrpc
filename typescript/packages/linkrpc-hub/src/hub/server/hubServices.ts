@@ -14,10 +14,9 @@ import {
     trafficInterface,
     type TrafficEvent,
     type TrafficWatchResult,
-    normalizeServiceIdScopes,
-    serviceIdMatchesScopes,
     type ParticipantDescriptorSource,
-} from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc/inspection';
+import { normalizeServiceIdScopes, serviceIdMatchesScopes } from '@hediet/linkrpc/hub/common';
 import { HubInspector, type HubTrafficWatchOptions } from './hubInspector';
 import { registerHubServiceIdRegistry, type RegisterCallContext, withRequestIdContext } from './hubRegister';
 import type { Hub } from './routing/routingHub';

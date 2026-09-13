@@ -1,4 +1,3 @@
-import type { JsonValue } from '../../protocol/jsonRpc';
 import type {
     TrafficTransitEndpoint,
     TrafficTransitEvent,
@@ -170,8 +169,8 @@ function isTrafficWatchMethod(method: string | undefined): boolean {
         || method === 'hubrpc.traffic::watchWithPayloads';
 }
 
-function readTrafficIgnoreKey(params: JsonValue | undefined): string | undefined {
-    if (params === null || Array.isArray(params) || typeof params !== 'object') {
+function readTrafficIgnoreKey(params: unknown): string | undefined {
+    if (params === null || Array.isArray(params) || typeof params !== 'object' || !('trafficIgnoreKey' in params)) {
         return undefined;
     }
     const value = params.trafficIgnoreKey;

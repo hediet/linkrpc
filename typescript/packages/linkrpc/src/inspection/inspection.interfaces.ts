@@ -14,8 +14,8 @@ import {
     unknown,
 } from "zod/mini";
 import type { output as zInfer } from "zod/v4/core";
-import { defineInterface } from "../../connection/interfaceDefinition";
-import { requestType } from "../../schema/memberTypes";
+import { defineInterface } from "../connection/interfaceDefinition";
+import { requestType } from "../schema/memberTypes";
 
 export const zTopologyPort = object({
     portId: string(),

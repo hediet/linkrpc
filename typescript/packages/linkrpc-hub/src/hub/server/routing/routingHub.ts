@@ -15,11 +15,11 @@ import { ForwardingTable, validatePrefix } from './forwardingTable';
 import {
     type NodeInfo,
     type ParticipantDescriptorSource,
-    type ServiceId,
     type TopologyGraph,
     type TopologyTransportInfo,
     type TopologyIdGenerator,
-} from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc/inspection';
+import type { ServiceId } from '@hediet/linkrpc/hub/common';
 import { ParticipantRoots } from './participantRoots';
 import {
     GET_NODE_ID_METHOD,

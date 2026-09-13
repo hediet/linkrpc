@@ -1,5 +1,5 @@
 import { ErrorCode, RpcError, type IMessageTransport, type JsonValue } from '@hediet/linkrpc';
-import { nodeInterface, type NodeInfo } from '@hediet/linkrpc/hub/common';
+import { nodeInterface, type NodeInfo } from '@hediet/linkrpc/inspection';
 import { safeParse } from 'zod/v4/core';
 
 export const GET_NODE_ID_METHOD = `${nodeInterface.info.id}::getNodeId`;

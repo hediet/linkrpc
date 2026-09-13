@@ -8,18 +8,18 @@ import {
 import {
     STREAM_METHOD,
     type StreamSendParams,
-} from './streaming';
+} from '../connection/streaming';
 import type {
     TrafficEvent,
     TrafficTransitEvent,
-} from '../hub/common/inspection.interfaces';
+} from './inspection.interfaces';
 import {
     BoundedTrafficSubscription,
     type TrafficSubscription,
     type TrafficSubscriptionOptions,
-} from '../hub/common/boundedTrafficSubscription';
-import { TrafficWatchFlowTracker } from '../hub/common/trafficFlowFilter';
-import type { WireMessageDirection, WireMessageObserver } from './channel';
+} from './boundedTrafficSubscription';
+import { TrafficWatchFlowTracker } from './trafficFlowFilter';
+import type { WireMessageDirection, WireMessageObserver } from '../connection/channel';
 
 interface RequestCorrelation {
     readonly method: string;

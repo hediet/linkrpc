@@ -17,7 +17,7 @@ import {
     formatFlowSummary,
     TrafficFlowAggregator,
 } from '@hediet/linkrpc-hub';
-import { TopologyClient, TrafficClient } from '@hediet/linkrpc/hub/client';
+import { TopologyClient, TrafficClient } from '@hediet/linkrpc-infra/inspection';
 import type { CliChannel } from '@hediet/linkrpc-client';
 import { formatJson } from '../output';
 

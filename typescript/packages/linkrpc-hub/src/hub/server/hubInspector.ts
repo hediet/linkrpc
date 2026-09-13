@@ -1,13 +1,13 @@
 import {
     BoundedTrafficSubscription,
     TrafficWatchFlowTracker,
-} from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc/inspection';
 import type {
     TrafficEvent,
     TrafficSubscription,
     TrafficSubscriptionOptions,
     TrafficTransitEvent,
-} from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc/inspection';
 import type { NodeTransit, TransitEndpoint } from './nodeTransit';
 import type { Hub, IDisposable } from './routing/routingHub';
 

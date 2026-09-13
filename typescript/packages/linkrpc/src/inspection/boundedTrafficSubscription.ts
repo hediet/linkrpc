@@ -3,7 +3,7 @@ import type {
     TrafficTransitEvent,
     TrafficWatchResult,
 } from './inspection.interfaces';
-import type { JsonValue } from '../../protocol/jsonRpc';
+import type { JsonValue } from '../protocol/jsonRpc';
 import {
     TrafficFlowFilter,
 } from './trafficFlowFilter';

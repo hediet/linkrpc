@@ -1,8 +1,8 @@
-import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import type { LinkRpcConnection } from '@hediet/linkrpc';
 import {
     topologyInterface,
     type TopologyGraph,
-} from '../common/inspection.interfaces';
+} from '@hediet/linkrpc/inspection';
 
 export interface TopologyWatch {
     /** Resolves with the initial snapshot after its callback has run. */

@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { nodeInterface } from '../hub/common/node.interfaces';
+import { nodeInterface } from '../inspection/node.interfaces';
 import {
     topologyInterface,
     trafficInterface,
     type TrafficEvent,
-} from '../hub/common/inspection.interfaces';
+} from '../inspection/inspection.interfaces';
 import { defaultsInterface, directoryInterface, schemasInterface } from '../hub/common/reflection.interfaces';
 import { defineInterface } from './interfaceDefinition';
 import { notificationType, requestType } from '../schema/memberTypes';

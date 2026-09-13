@@ -9,7 +9,7 @@ import {
     type ServiceIdPattern,
 } from '../hub/common/reflection.interfaces';
 import { serviceIdMatchesScopes } from '../hub/common/directoryWalk';
-import { nodeInterface, type NodeInfo, type TopologyIdGenerator } from '../hub/common/node.interfaces';
+import { nodeInterface, type NodeInfo, type TopologyIdGenerator } from '../inspection/node.interfaces';
 import {
     topologyInterface,
     trafficInterface,
@@ -18,7 +18,7 @@ import {
     type TrafficEvent,
     type TrafficTransitEvent,
     type TrafficWatchResult,
-} from '../hub/common/inspection.interfaces';
+} from '../inspection/inspection.interfaces';
 import type {
     InterfaceClient,
     InterfaceDefinition,
@@ -42,7 +42,7 @@ import { bytesToBase64Url } from '../crypto/cryptoProvider';
 import {
     EndpointTrafficInspector,
     type EndpointTrafficWatchOptions,
-} from './endpointTrafficInspector';
+} from '../inspection/endpointTrafficInspector';
 
 export interface LinkRpcConnectionOptions {
     /** Topology node/port ID generator. Defaults to cryptographic randomness. */

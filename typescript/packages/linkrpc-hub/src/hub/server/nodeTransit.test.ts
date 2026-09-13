@@ -9,7 +9,7 @@ import {
 } from './nodeTransit';
 import type { IMessageTransport } from '@hediet/linkrpc';
 import type { JsonRpcMessage } from '@hediet/linkrpc';
-import type { TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+import type { TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 
 /** Deterministic clock + timer wheel for driving the aggregator's debounce. */
 class FakeClock {

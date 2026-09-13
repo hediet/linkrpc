@@ -24,7 +24,7 @@ import type {
     RequestId,
 } from '@hediet/linkrpc';
 import type { IMessageTransport } from '@hediet/linkrpc';
-import type { TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+import type { TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 import { STREAM_METHOD } from '@hediet/linkrpc';
 
 /** What kind of message crossed the node. Cancel/ping/pong are stream controls. */

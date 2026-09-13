@@ -6,7 +6,7 @@ import {
     type JsonRpcRequest,
     TransportPair,
 } from '@hediet/linkrpc';
-import { nodeInterface } from '@hediet/linkrpc/hub/common';
+import { nodeInterface } from '@hediet/linkrpc/inspection';
 import { Hub } from './routingHub';
 
 describe('Hub topology', () => {

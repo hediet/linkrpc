@@ -3,6 +3,7 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
     entry: {
         index: 'src/index.ts',
+        'inspection/index': 'src/inspection/index.ts',
         'json-document/index': 'src/json-document/index.ts',
         'json-rpc/index': 'src/json-rpc/index.ts',
         'logging/index': 'src/logging/index.ts',

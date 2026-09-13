@@ -10,8 +10,8 @@ import {
     type JsonRpcResponse,
     TransportPair,
 } from '@hediet/linkrpc';
-import { TopologyClient, TrafficClient } from '@hediet/linkrpc/hub/client';
-import { topologyInterface, type TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+import { TopologyClient, TrafficClient } from '@hediet/linkrpc-infra/inspection';
+import { topologyInterface, type TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 import { createHubServiceInterfaces } from './hubServices';
 import { HubInspector } from './hubInspector';
 import { Hub } from './routing/routingHub';

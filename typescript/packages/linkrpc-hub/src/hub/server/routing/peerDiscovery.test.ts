@@ -3,7 +3,7 @@ import {
     ErrorCode, isRequest, LinkRpcConnection, TransportPair,
     type JsonRpcRequest, type JsonValue,
 } from '@hediet/linkrpc';
-import { nodeInterface } from '@hediet/linkrpc/hub/common';
+import { nodeInterface } from '@hediet/linkrpc/inspection';
 import { Hub } from './routingHub';
 import { GET_NODE_ID_METHOD } from './peerDiscovery';
 

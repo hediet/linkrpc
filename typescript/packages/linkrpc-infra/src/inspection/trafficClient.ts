@@ -1,11 +1,11 @@
-import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import type { LinkRpcConnection } from '@hediet/linkrpc';
 import {
     trafficInterface,
     type TrafficOverflowEvent,
     type TrafficTransitEvent,
     type TrafficWatchResult,
-} from '../common/inspection.interfaces';
-import type { TrafficRequestRef } from '../common/trafficFlowFilter';
+    type TrafficRequestRef,
+} from '@hediet/linkrpc/inspection';
 
 export interface TrafficCallbacks {
     onTransit(transit: TrafficTransitEvent): void;

@@ -3,11 +3,11 @@ import type { JsonValue } from '@hediet/linkrpc';
 import {
     type NodeInfo,
     type ParticipantDescriptorSource,
-    type ServiceId,
     type TopologyGraph,
     type TopologyTransportInfo,
     type TopologyIdGenerator,
-} from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc/inspection';
+import type { ServiceId } from '@hediet/linkrpc/hub/common';
 
 import { GET_NODE_ID_METHOD, PeerDiscovery } from './peerDiscovery';
 export { GET_NODE_ID_METHOD } from './peerDiscovery';
