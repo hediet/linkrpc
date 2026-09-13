@@ -158,12 +158,9 @@ describe('Hub transit emission', () => {
         expect(hub.pendingRequests()).toHaveLength(0);
     });
 
-    it('emits a stream transit (merging into the request flow) when gated on', async () => {
+    it('emits a stream transit that merges into the request flow', async () => {
         const transits: NodeTransit[] = [];
-        const hub = new Hub({
-            onTransit: (t) => transits.push(t),
-            emitStreamTransits: () => true,
-        });
+        const hub = new Hub({ onTransit: (t) => transits.push(t) });
 
         const callerPair = new TransportPair();
         hub.attach(callerPair.a);
@@ -203,36 +200,6 @@ describe('Hub transit emission', () => {
         expect(String(stream!.in?.requestId)).toBe(String(request.out?.requestId));
         expect(stream!.out?.edgeId).toBe(request.in?.edgeId);
         expect(String(stream!.out?.requestId)).toBe(String(request.in?.requestId));
-    });
-
-    it('emits no stream transit when the gate is off (default)', async () => {
-        const transits: NodeTransit[] = [];
-        const hub = new Hub({ onTransit: (t) => transits.push(t) }); // no emitStreamTransits
-
-        const callerPair = new TransportPair();
-        hub.attach(callerPair.a);
-        const caller = new Endpoint(callerPair.b);
-
-        const ownerPair = new TransportPair();
-        hub.claimPrefix(ownerPair.a, 'calc');
-        const owner = new Endpoint(ownerPair.b);
-
-        const pending = caller.request('calc::math::add', { a: 1 });
-        await waitFor(() => owner.inbox.length > 0);
-
-        const received = owner.lastRequest();
-        owner.notify(STREAM_METHOD, {
-            requestId: received.id,
-            dir: StreamDir.toCaller,
-            payload: { chunk: 'hi' },
-        });
-        // Frame is still forwarded to the caller even though no transit is emitted.
-        await waitFor(() => caller.inbox.some((m) => (m as { method?: string; }).method === STREAM_METHOD));
-
-        owner.respond(received, 1);
-        await pending;
-
-        expect(transits.some((t) => t.kind === 'stream')).toBe(false);
     });
 
     it('allocates nothing and stays silent when no observer is attached', async () => {

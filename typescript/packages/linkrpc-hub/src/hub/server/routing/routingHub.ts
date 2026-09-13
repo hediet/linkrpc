@@ -116,17 +116,6 @@ export interface HubOptions {
      * method/params/result the hub already handles.
      */
     readonly onTransit?: NodeTransitObserver;
-    /**
-     * Gate for emitting `kind:'stream'` transits to transit observers. Stream
-     * frames (`$stream::send` — app stdout/stderr payloads plus cancel/ping/pong
-     * controls) are high-frequency, so they are **off by default**: when this is
-     * absent or returns `false`, stream routing allocates no transit (only
-     * request/response/notification frames are observed). Wire it to a verbosity
-     * check (e.g. log level ≥ debug) to fold per-frame stream detail into the
-     * owning request's flow. Evaluated per frame, so it tracks live level
-     * changes.
-     */
-    readonly emitStreamTransits?: () => boolean;
 }
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -383,16 +372,9 @@ export class Hub {
         }
     }
 
-    /**
-     * Emit a `kind:'stream'` transit for a routed `$stream::send` frame, gated by
-     * {@link HubOptions.emitStreamTransits}. Stream frames are high-frequency, so
-     * the gate is evaluated per frame and — when off — no transit object is
-     * built. The endpoints carry the same `(edgeId, requestId)` pairs the owning
-     * request used, so the aggregator folds these into that request's flow.
-     */
+    /** Emit a stream transit with the owning request's correlated endpoints. */
     private _emitStream(note: JsonRpcMessage, inEp: TransitEndpoint, outEp: TransitEndpoint): void {
         if (this._transitObservers.size === 0) return;
-        if (this._options.emitStreamTransits?.() !== true) return;
         this._emit({
             timeMs: Date.now(),
             nodeId: this.nodeId,

@@ -474,14 +474,8 @@ describe('federated Hub inspection', () => {
     });
 
     it('follows an ongoing stream from a farther hub on the closer hub', async () => {
-        const hubA = new Hub({
-            nodeId: 'hub-a-node',
-            emitStreamTransits: () => true,
-        });
-        const hubB = new Hub({
-            nodeId: 'hub-b-node',
-            emitStreamTransits: () => true,
-        });
+        const hubA = new Hub({ nodeId: 'hub-a-node' });
+        const hubB = new Hub({ nodeId: 'hub-b-node' });
         const servicesA = createHubServiceInterfaces(hubA, { hubServiceId: 'hub-a' });
         const servicesB = createHubServiceInterfaces(hubB, { hubServiceId: 'hub-b' });
 

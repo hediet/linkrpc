@@ -458,7 +458,7 @@ describe('hub traffic services', () => {
     });
 
     it('prevents concurrent traffic watches from observing each other', async () => {
-        const hub = new Hub({ nodeId: 'hub-a', emitStreamTransits: () => true });
+        const hub = new Hub({ nodeId: 'hub-a' });
         const services = createHubServiceInterfaces(hub);
         const callerLink = hub.attachOut();
         const connection = LinkRpcConnection.fromTransport(callerLink.transport);
