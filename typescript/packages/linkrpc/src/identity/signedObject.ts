@@ -5,7 +5,7 @@
  * `../protocol/signedObject`.
  */
 
-import { base64UrlToBytes, bytesToBase64Url, type PrincipalId, resolveSigningKey } from "../crypto/cryptoProvider";
+import { base64UrlToBytes, bytesToBase64Url, type PrincipalId, PublicKey, resolveSigningKey } from "../crypto/cryptoProvider";
 import * as crypto from "../crypto/crypto";
 import {
     type SignDomain,
@@ -59,7 +59,7 @@ export async function signObject<T extends object>(
 export async function verifyObject(
     domain: SignDomain,
     obj: object,
-    signerKey: Uint8Array,
+    signerKey: PublicKey,
 ): Promise<boolean> {
     const env = readSignature(obj, domain);
     if (env === undefined) return false;

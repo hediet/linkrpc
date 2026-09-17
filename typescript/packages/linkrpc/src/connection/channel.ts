@@ -5,9 +5,7 @@ export class Channel<TInCtx = undefined, TOutCtx = undefined> {
     constructor(
         public readonly sender: IRequestSender<TOutCtx>,
         private readonly _setHandler: (h: IRequestHandler<TInCtx> | undefined) => void,
-        private readonly _setWireObserver?: (
-            observer: WireMessageObserver | undefined,
-        ) => void,
+        private readonly _setWireObserver?: (observer: WireMessageObserver | undefined) => void,
     ) { }
 
     /** Bind the inbound request/notification handler. May be called before or after construction of {@link LinkRpcConnection}. */
@@ -20,9 +18,7 @@ export class Channel<TInCtx = undefined, TOutCtx = undefined> {
      * Intended for {@link LinkRpcConnection}; ordinary consumers should use the
      * public `hubrpc.traffic` service instead.
      */
-    public setWireMessageObserver(
-        observer: WireMessageObserver | undefined,
-    ): void {
+    public setWireMessageObserver(observer: WireMessageObserver | undefined): void {
         this._setWireObserver?.(observer);
     }
 
