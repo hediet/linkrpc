@@ -136,6 +136,12 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 | `schema show <interfaceId>[@hash]` | Print an interface schema (wraps `hubrpc.schemas::get`). `--method <name>`, `--json`.           |
 | `schema hash <schema.json>` | Compute `computeInterfaceHash` for a local schema without connecting.                                  |
 | `schema check-compat <interfaceId> <local.json>` | Compare a live interface schema with a local schema.                                  |
+| `codegen --input <bundle> --interface <id> --name <name> --output <file> [--preserve-wire-schema] [--check]` | Generate a TypeScript interface definition from a validated offline static bundle. |
+
+`codegen` uses the same `{ interfaceSchemas, services, defaultInterface }`
+bundle parser and interface-hash verification as static reflection. `--check`
+compares the generated source with the output file and exits unsuccessfully if
+the file is missing or stale; it never overwrites in check mode.
 
 `hub ls --format json` waits for finite exploration and prints the final state.
 `--format jsonl` emits progressive state while requests fan out: the first line

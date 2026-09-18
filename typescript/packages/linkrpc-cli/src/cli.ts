@@ -16,6 +16,7 @@ import {
 } from './commands/connectionBrokerProcess';
 import { parseDuration } from './duration';
 import { checkCompatCommand, formatVerdict } from './commands/checkCompat';
+import { codegenCommand } from './commands/codegen';
 import { completionsCommand } from './commands/completions';
 import { defaultsCommand } from './commands/defaults';
 import { hashCommand } from './commands/hash';
@@ -464,6 +465,29 @@ export async function main(
             await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
                 const out = await defaultsCommand(channel, { json: !!opts.json });
                 process.stdout.write(out + '\n');
+            });
+        });
+
+    program
+        .command('codegen')
+        .description('Generate a TypeScript interface definition from an offline schema bundle.')
+        .requiredOption('--input <bundle>', 'local static hub schema bundle')
+        .requiredOption('--interface <id>', 'interface id to generate')
+        .requiredOption('--name <name>', 'exported TypeScript const name')
+        .requiredOption('--output <file>', 'generated TypeScript output file')
+        .option(
+            '--preserve-wire-schema',
+            'freeze the canonical input schema verbatim in the generated definition',
+        )
+        .option('--check', 'fail if the output is missing or stale without overwriting it')
+        .action(async (opts) => {
+            await codegenCommand({
+                input: opts.input,
+                interfaceId: opts.interface,
+                name: opts.name,
+                output: opts.output,
+                preserveWireSchema: opts.preserveWireSchema === true,
+                check: opts.check === true,
             });
         });
 
@@ -1757,6 +1781,7 @@ function commandUsesEndpoint(commandPath: string): boolean {
     return !(
         commandPath === 'context'
         || commandPath.startsWith('context ')
+        || commandPath === 'codegen'
         || commandPath === 'schema hash'
         || commandPath === 'completions'
         || commandPath === '_complete'
