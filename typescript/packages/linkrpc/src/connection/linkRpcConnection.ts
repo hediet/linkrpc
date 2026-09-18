@@ -44,6 +44,11 @@ import {
     EndpointTrafficInspector,
     type EndpointTrafficWatchOptions,
 } from './endpointTrafficInspector';
+import {
+    isBareInterfaceTarget,
+    validateBarePrefix,
+    type BareInterfaceTarget,
+} from './bareInterfaceTarget';
 
 export interface LinkRpcConnectionOptions {
     /**
@@ -138,12 +143,30 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         }
     }
 
+    /** Get a typed metadata-free client for a bundled bare interface target. */
+    public get<TDef extends InterfaceDefinition<any>>(
+        target: BareInterfaceTarget<TDef>,
+    ): InterfaceClient<TDef>;
+
     /** Get a typed client for `iface`, routed to the implicit (root) service. */
     public get<TDef extends InterfaceDefinition<any>>(
         iface: TDef,
-        opts: GetOptions<TOutCtx> = {},
+        opts?: GetOptions<TOutCtx>,
+    ): InterfaceClient<TDef>;
+
+    public get<TDef extends InterfaceDefinition<any>>(
+        ifaceOrTarget: TDef | BareInterfaceTarget<TDef>,
+        opts?: GetOptions<TOutCtx>,
     ): InterfaceClient<TDef> {
-        return this._buildClient(iface, opts) as InterfaceClient<TDef>;
+        if (isBareInterfaceTarget(ifaceOrTarget)) {
+            if (opts !== undefined) {
+                throw new Error('get: bare interface targets do not accept service or call options.');
+            }
+            return this.getBare(ifaceOrTarget.interface, {
+                prefix: ifaceOrTarget.prefix,
+            });
+        }
+        return this._buildClient(ifaceOrTarget, opts ?? {}) as InterfaceClient<TDef>;
     }
 
     /**
@@ -1166,12 +1189,6 @@ function directoryWatcherMatchesEntry(
 interface BareBinding {
     readonly prefix: string;
     readonly entry: RegisteredInterface;
-}
-
-function validateBarePrefix(prefix: string, api: 'bindBare' | 'getBare'): void {
-    if (prefix.includes('::') || !/^[\x20-\x7e]*$/.test(prefix)) {
-        throw new Error(`${api}: prefix must contain only printable ASCII and must not contain "::".`);
-    }
 }
 
 function isVoidResultSchema(schema: { _zod?: { def?: { type?: string; }; }; }): boolean {

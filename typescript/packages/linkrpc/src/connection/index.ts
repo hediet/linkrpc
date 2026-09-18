@@ -15,6 +15,10 @@ export {
 } from './channel';
 export * from './linkRpcConnection';
 export {
+    bareInterfaceTarget,
+    type BareInterfaceTarget,
+} from './bareInterfaceTarget';
+export {
     ChannelConnector,
     type ConnectableChannel,
     type ExpBackoffOptions,

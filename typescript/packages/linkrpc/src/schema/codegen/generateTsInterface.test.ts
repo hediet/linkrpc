@@ -202,6 +202,50 @@ describe("generateInterface", () => {
         `);
     });
 
+    it("can emit a typed bare target alongside the interface definition", () => {
+        const runtime = defineInterface(
+            { id: "cdp.runtime" },
+            {
+                evaluate: requestType(
+                    z.object({ expression: z.string() }),
+                    z.object({ result: z.object({ value: z.number() }) }),
+                ),
+            },
+        );
+        const source = generateTsInterface(runtime.toSchema(), {
+            exportName: "cdpRuntimeInterface",
+            linkRpcImport: "../../index",
+            preserveWireSchema: true,
+            bareTarget: {
+                exportName: "cdpRuntime",
+                prefix: "Runtime.",
+            },
+        });
+        expect(source).toContain(
+            'import { bareInterfaceTarget, InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema } from "../../index";',
+        );
+        expect(source).toContain(
+            'export const cdpRuntime = bareInterfaceTarget(cdpRuntimeInterface, { prefix: "Runtime." });',
+        );
+
+        _expectTypeChecks(`${source}
+import { LinkRpcConnection } from "../../index";
+declare const connection: LinkRpcConnection;
+const result = await connection.get(cdpRuntime).evaluate({ expression: "6 * 7" });
+result.result.value satisfies number;
+// @ts-expect-error expression is required
+connection.get(cdpRuntime).evaluate({});
+// @ts-expect-error bare targets do not accept native get options
+connection.get(cdpRuntime, { serviceId: "runtime" });
+// @ts-expect-error bare targets cannot be routed through a service
+connection.service("runtime").get(cdpRuntime);
+`);
+
+        expect(() => generateTsInterface(runtime.toSchema(), {
+            bareTarget: { exportName: "invalid", prefix: "bad::prefix" },
+        })).toThrow(/bareInterfaceTarget: prefix/);
+    });
+
     it("preserves untagged oneOf and self-recursive components when requested", async () => {
         const schema: LinkRpcInterfaceSchema = {
             id: "test.preserved",

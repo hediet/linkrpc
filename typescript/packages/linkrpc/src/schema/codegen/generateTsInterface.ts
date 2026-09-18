@@ -5,6 +5,7 @@ import type {
     LinkRpcInterfaceSchema,
 } from '../linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from '../linkRpcJsonSchema';
+import { validateBarePrefix } from '../../connection/bareInterfaceTarget';
 import { CodeWriter } from './utils/codeWriter';
 
 export interface GenerateInterfaceOptions {
@@ -25,6 +26,14 @@ export interface GenerateInterfaceOptions {
      * wire shapes that Zod represents differently, such as untagged `oneOf`.
      */
     preserveWireSchema?: boolean;
+    /**
+     * Also export a metadata-free target for `connection.get(target)`.
+     * The interface definition remains a separate export.
+     */
+    bareTarget?: {
+        exportName: string;
+        prefix: string;
+    };
 }
 
 /**
@@ -43,11 +52,15 @@ export function generateTsInterface(
     const linkRpcImport = options.linkRpcImport ?? '@hediet/linkrpc';
     const exportName = options.exportName ?? _deriveExportName(schema.id);
     const preserveWireSchema = options.preserveWireSchema ?? false;
+    if (options.bareTarget !== undefined) {
+        validateBarePrefix(options.bareTarget.prefix, 'bareInterfaceTarget');
+    }
 
     const w = new CodeWriter();
+    const bareTargetImport = options.bareTarget === undefined ? '' : 'bareInterfaceTarget, ';
     const definitionImport = preserveWireSchema ?
-        'InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema' :
-        'defineInterface, notificationType, requestType';
+        `${bareTargetImport}InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema` :
+        `${bareTargetImport}defineInterface, notificationType, requestType`;
     w.writeLine(`import { ${definitionImport} } from "${linkRpcImport}";`);
     w.writeLine(`import { z } from "zod";`);
     w.writeLine();
@@ -104,6 +117,12 @@ export function generateTsInterface(
     }
     w.dedent();
     w.writeLine(');');
+    if (options.bareTarget !== undefined) {
+        w.writeLine();
+        w.writeLine(
+            `export const ${options.bareTarget.exportName} = bareInterfaceTarget(${exportName}, { prefix: ${JSON.stringify(options.bareTarget.prefix)} });`,
+        );
+    }
 
     return w.toString();
 }

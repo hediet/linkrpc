@@ -17,6 +17,7 @@ import { getLocalMessageContext } from '../transport/messageTransport';
 import { RpcError } from './channel';
 import { LinkRpcConnection } from './linkRpcConnection';
 import { JsonRpcChannel } from './jsonRpcChannel';
+import { bareInterfaceTarget } from './bareInterfaceTarget';
 
 const greeter = defineInterface(
     { id: 'test.greeter' },
@@ -896,6 +897,68 @@ describe('LinkRpcConnection — bare bindings', () => {
             { method: 'cdp.hover', opts: undefined },
             { method: 'cdp.changed', opts: undefined },
         ]);
+    });
+
+    it('get accepts an immutable bare interface target without changing normal get', async () => {
+        const runtime = defineInterface(
+            { id: 'cdp.runtime' },
+            {
+                evaluate: requestType(
+                    z.object({ expression: z.string() }),
+                    z.object({ result: z.object({ value: z.number() }) }),
+                ),
+            },
+        );
+        const sent: Array<{ method: string; params: unknown; opts: unknown; }> = [];
+        const sender = {
+            sendRequest: async (method: string, params: unknown, opts?: unknown) => {
+                sent.push({ method, params, opts });
+                return { result: { value: 42 } };
+            },
+            sendNotification: async () => { },
+            sendRequestWithStream: () => { throw new Error('unused'); },
+            close: () => { },
+        };
+        const connection = new LinkRpcConnection(sender);
+        const cdpRuntime = bareInterfaceTarget(runtime, { prefix: 'Runtime.' });
+
+        expect(Object.isFrozen(cdpRuntime)).toBe(true);
+        const response = await connection.get(cdpRuntime).evaluate({ expression: '6 * 7' });
+        response.result.value satisfies number;
+        expect(response).toEqual({ result: { value: 42 } });
+        expect(sent).toEqual([{
+            method: 'Runtime.evaluate',
+            params: { expression: '6 * 7' },
+            opts: undefined,
+        }]);
+
+        await connection.get(runtime).evaluate({ expression: 'normal' });
+        expect(sent[1]).toMatchObject({
+            method: 'cdp.runtime::evaluate',
+            opts: { interfaceHash: runtime.schemaHash },
+        });
+
+        if (false) {
+            // @ts-expect-error bare targets do not accept native service/call options
+            connection.get(cdpRuntime, { serviceId: 'runtime' });
+            // @ts-expect-error service-scoped get only accepts interface definitions
+            connection.service('runtime').get(cdpRuntime);
+        }
+        expect(() => (connection.service('runtime').get as (target: unknown) => unknown)(cdpRuntime))
+            .toThrow(/bare interface targets do not accept/);
+    });
+
+    it('bareInterfaceTarget and getBare reject the same invalid prefixes', () => {
+        const connection = new LinkRpcConnection({
+            sendRequest: async () => null,
+            sendNotification: async () => { },
+            sendRequestWithStream: () => { throw new Error('unused'); },
+            close: () => { },
+        });
+        for (const prefix of bareBindingVectors.invalidPrefixes) {
+            expect(() => bareInterfaceTarget(language, { prefix })).toThrow(/prefix/);
+            expect(() => connection.getBare(language, { prefix })).toThrow(/prefix/);
+        }
     });
 
     it('getBare omits params from the JSON-RPC envelope when undefined', async () => {
