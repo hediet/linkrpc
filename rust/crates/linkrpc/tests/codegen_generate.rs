@@ -22,6 +22,19 @@ fn generate() -> linkrpc::schema::codegen::GeneratedRust {
     generate_rust_interface(&schema, &GenerateRustOptions::default())
 }
 
+fn generate_server() -> linkrpc::schema::codegen::GeneratedRust {
+    let text = std::fs::read_to_string(codegen_dir().join("graph_interface.json")).unwrap();
+    let schema: LinkRpcInterfaceSchema = serde_json::from_str(&text).unwrap();
+    generate_rust_interface(
+        &schema,
+        &GenerateRustOptions {
+            generate_server: true,
+            default_server_methods: true,
+            ..GenerateRustOptions::default()
+        },
+    )
+}
+
 fn schema(json: &str) -> LinkRpcInterfaceSchema {
     serde_json::from_str(json).expect("valid interface schema")
 }
@@ -36,6 +49,18 @@ fn matches_golden_file() {
     assert_eq!(
         got, want,
         "generated code drifted from golden file; re-bless with `cargo test -p linkrpc --test codegen_bless -- --ignored`"
+    );
+}
+
+#[test]
+fn server_matches_golden_file() {
+    let generated = generate_server();
+    let golden = std::fs::read_to_string(codegen_dir().join("generated_graph_server.rs")).unwrap();
+    let got = generated.code.replace("\r\n", "\n");
+    let want = golden.replace("\r\n", "\n");
+    assert_eq!(
+        got, want,
+        "generated server code drifted from golden file; re-bless with `cargo test -p linkrpc --test codegen_bless -- --ignored`"
     );
 }
 
@@ -145,7 +170,9 @@ fn struct_constructors_are_generated_for_named_objects() {
         "constructor should take only the required field:\n{code}"
     );
     assert!(
-        code.contains("Self {\n            id,\n            label: None,\n        }"),
+        code.contains(
+            "Self {\n            id,\n            label: None,\n            payload: None,\n        }"
+        ),
         "optional field should default to None:\n{code}"
     );
 

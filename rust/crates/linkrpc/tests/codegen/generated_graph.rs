@@ -162,6 +162,8 @@ pub struct ConfigureParams {
     /// Optional display label.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload: Option<serde_json::Value>,
 }
 
 impl ConfigureParams {
@@ -171,6 +173,7 @@ impl ConfigureParams {
         Self {
             id,
             label: None,
+            payload: None,
         }
     }
 }

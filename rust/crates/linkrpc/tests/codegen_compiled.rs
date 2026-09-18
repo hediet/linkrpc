@@ -171,6 +171,7 @@ fn generated_constructors_build_valid_structs() {
     let cfg = ConfigureParams::new("widget".into());
     assert_eq!(cfg.id, "widget");
     assert_eq!(cfg.label, None);
+    assert_eq!(cfg.payload, None);
     let json = serde_json::to_value(&cfg).unwrap();
     assert_eq!(json, serde_json::json!({ "id": "widget" }));
 

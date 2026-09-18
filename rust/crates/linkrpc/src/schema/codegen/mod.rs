@@ -64,6 +64,14 @@ pub struct GenerateRustOptions {
     /// adapter. Disabled by default to preserve the output of existing
     /// client-only generation.
     pub generate_server: bool,
+
+    /// Give generated service trait methods default implementations.
+    ///
+    /// Request defaults return `METHOD_NOT_FOUND`; notification defaults are
+    /// no-ops. This lets providers implement only the supported subset of a
+    /// large interface while the server adapter still validates every
+    /// recognized notification payload before invoking the default.
+    pub default_server_methods: bool,
 }
 
 impl Default for GenerateRustOptions {
@@ -72,6 +80,7 @@ impl Default for GenerateRustOptions {
             linkrpc_path: "linkrpc".to_string(),
             client_name: None,
             generate_server: false,
+            default_server_methods: false,
         }
     }
 }
@@ -407,16 +416,35 @@ mod tests {
         assert!(generated.code.contains(
             "pub async fn changed(&self, params: String) -> Result<(), linkrpc::prelude::JsonRpcError>"
         ));
-        assert!(generated
-            .code
-            .contains("if let Err(__e) = self.0.changed(&ctx, __p).await"));
+        assert!(generated.code.contains("self.0.changed(&ctx, __p).await?;"));
         assert!(generated
             .code
             .contains("linkrpc notification `{}` handler error {}: {}"));
         assert!(generated
             .code
             .contains("linkrpc notification `{}` has invalid params: {}"));
+        assert!(generated.code.contains(
+            "pub async fn dispatch_notification(&self, method: &str, params: serde_json::Value) -> Result<bool, linkrpc::prelude::JsonRpcError>"
+        ));
+        assert!(generated
+            .code
+            .contains("self.dispatch_notification_with_ctx(member, params, ctx).await"));
         assert!(generated.code.contains("frozen-hash"));
+
+        let generated_with_defaults = generate_rust_interface(
+            &s,
+            &GenerateRustOptions {
+                generate_server: true,
+                default_server_methods: true,
+                ..GenerateRustOptions::default()
+            },
+        );
+        assert!(generated_with_defaults.code.contains(
+            "Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, \"echo\"))"
+        ));
+        assert!(generated_with_defaults.code.contains(
+            "async fn changed(&self, ctx: &linkrpc::prelude::CallCtx, params: String) -> Result<(), linkrpc::prelude::JsonRpcError> {\n        let _ = (ctx, params);\n        Ok(())"
+        ));
     }
 
     #[test]

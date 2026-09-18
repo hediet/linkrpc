@@ -1205,10 +1205,27 @@ fn write_server(
             .as_ref()
             .map(|ty| renderer.ty(ty, usize::MAX, true))
             .unwrap_or_else(|| "()".to_string());
-        w.line(&format!(
-                "async fn {}(&self, ctx: &{hub}::prelude::CallCtx, params: {params_ty}) -> Result<{result_ty}, {hub}::prelude::JsonRpcError>;",
-                method.rust_name
-            ));
+        let signature = format!(
+            "async fn {}(&self, ctx: &{hub}::prelude::CallCtx, params: {params_ty}) -> Result<{result_ty}, {hub}::prelude::JsonRpcError>",
+            method.rust_name
+        );
+        if options.default_server_methods {
+            w.line(&format!("{signature} {{"));
+            w.indent();
+            w.line("let _ = (ctx, params);");
+            if method.result.is_some() {
+                w.line(&format!(
+                    "Err({hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::METHOD_NOT_FOUND, {}))",
+                    quote_str(&method.wire_name)
+                ));
+            } else {
+                w.line("Ok(())");
+            }
+            w.dedent();
+            w.line("}");
+        } else {
+            w.line(&format!("{signature};"));
+        }
     }
     w.dedent();
     w.line("}");
@@ -1235,6 +1252,19 @@ fn write_server(
     w.line("interface()");
     w.dedent();
     w.line("}");
+    w.blank();
+    w.line("/// Dispatch an inbound notification without swallowing decode or handler errors.");
+    w.line(&format!(
+        "pub async fn dispatch_notification(&self, method: &str, params: serde_json::Value) -> Result<bool, {hub}::prelude::JsonRpcError> {{"
+    ));
+    w.indent();
+    w.line(&format!(
+        "self.dispatch_notification_with_ctx(method, params, {hub}::prelude::CallCtx::default()).await"
+    ));
+    w.dedent();
+    w.line("}");
+    w.blank();
+    write_fallible_notification_dispatch(w, methods, renderer, hub);
     w.dedent();
     w.line("}");
     w.blank();
@@ -1261,7 +1291,7 @@ fn write_server(
     w.indent();
     write_server_requests(w, methods, renderer, hub);
     w.blank();
-    write_server_notifications(w, methods, renderer, hub);
+    write_server_notifications(w, hub);
     w.dedent();
     w.line("}");
 }
@@ -1313,12 +1343,7 @@ fn write_server_requests(
     w.line("}");
 }
 
-fn write_server_notifications(
-    w: &mut CodeWriter,
-    methods: &[MethodModel],
-    renderer: &Renderer,
-    hub: &str,
-) {
+fn write_server_notifications(w: &mut CodeWriter, hub: &str) {
     w.line("async fn handle_notification(");
     w.indent();
     w.line("&self,");
@@ -1328,41 +1353,55 @@ fn write_server_notifications(
     w.dedent();
     w.line(") {");
     w.indent();
-    w.line("match member {");
+    w.line("if let Err(__e) = self.dispatch_notification_with_ctx(member, params, ctx).await {");
+    w.indent();
+    w.line(&format!(
+        "if __e.code == {hub}::prelude::error_codes::INVALID_PARAMS {{"
+    ));
+    w.indent();
+    w.line("eprintln!(\"linkrpc notification `{}` has invalid params: {}\", member, __e.message);");
+    w.dedent();
+    w.line("} else {");
+    w.indent();
+    w.line("eprintln!(\"linkrpc notification `{}` handler error {}: {}\", member, __e.code, __e.message);");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+}
+
+fn write_fallible_notification_dispatch(
+    w: &mut CodeWriter,
+    methods: &[MethodModel],
+    renderer: &Renderer,
+    hub: &str,
+) {
+    w.line("async fn dispatch_notification_with_ctx(");
+    w.indent();
+    w.line("&self,");
+    w.line("method: &str,");
+    w.line("params: serde_json::Value,");
+    w.line(&format!("ctx: {hub}::prelude::CallCtx,"));
+    w.dedent();
+    w.line(&format!(
+        ") -> Result<bool, {hub}::prelude::JsonRpcError> {{"
+    ));
+    w.indent();
+    w.line("match method {");
     w.indent();
     for method in methods.iter().filter(|m| m.result.is_none()) {
         let params_ty = renderer.ty(&method.params, usize::MAX, true);
         w.line(&format!("{} => {{", quote_str(&method.wire_name)));
         w.indent();
-        w.line(&format!(
-            "match serde_json::from_value::<{params_ty}>(params) {{"
-        ));
-        w.indent();
-        w.line("Ok(__p) => {");
-        w.indent();
-        w.line(&format!(
-            "if let Err(__e) = self.0.{}(&ctx, __p).await {{",
-            method.rust_name
-        ));
-        w.indent();
-        w.line(&format!(
-            "eprintln!(\"linkrpc notification `{{}}` handler error {{}}: {{}}\", member, __e.code, __e.message);"
-        ));
-        w.dedent();
-        w.line("}");
-        w.dedent();
-        w.line("}");
-        w.line("Err(__e) => {");
-        w.indent();
-        w.line("eprintln!(\"linkrpc notification `{}` has invalid params: {}\", member, __e);");
-        w.dedent();
-        w.line("}");
-        w.dedent();
-        w.line("}");
+        write_decode_params(w, &params_ty, hub);
+        w.line(&format!("self.0.{}(&ctx, __p).await?;", method.rust_name));
+        w.line("Ok(true)");
         w.dedent();
         w.line("}");
     }
-    w.line("_ => {}");
+    w.line("_ => Ok(false),");
     w.dedent();
     w.line("}");
     w.dedent();

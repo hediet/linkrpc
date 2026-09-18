@@ -20,11 +20,30 @@ fn generate() -> linkrpc::schema::codegen::GeneratedRust {
     generate_rust_interface(&schema, &GenerateRustOptions::default())
 }
 
+fn generate_server() -> linkrpc::schema::codegen::GeneratedRust {
+    let text = std::fs::read_to_string(dir().join("graph_interface.json")).unwrap();
+    let schema: LinkRpcInterfaceSchema = serde_json::from_str(&text).unwrap();
+    generate_rust_interface(
+        &schema,
+        &GenerateRustOptions {
+            generate_server: true,
+            default_server_methods: true,
+            ..GenerateRustOptions::default()
+        },
+    )
+}
+
 #[test]
 #[ignore = "regenerates the golden file on demand"]
 fn bless_golden() {
     let generated = generate();
     let target = dir().join("generated_graph.rs");
+    std::fs::write(&target, generated.code).unwrap();
+    eprintln!("wrote {}", target.display());
+    eprintln!("unsupported constructs: {:#?}", generated.unsupported);
+
+    let generated = generate_server();
+    let target = dir().join("generated_graph_server.rs");
     std::fs::write(&target, generated.code).unwrap();
     eprintln!("wrote {}", target.display());
     eprintln!("unsupported constructs: {:#?}", generated.unsupported);

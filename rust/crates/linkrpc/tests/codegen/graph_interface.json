@@ -50,7 +50,8 @@
         "type": "object",
         "properties": {
           "id": { "type": "string" },
-          "label": { "type": "string", "description": "Optional display label." }
+          "label": { "type": "string", "description": "Optional display label." },
+          "payload": true
         },
         "required": ["id"],
         "additionalProperties": false
