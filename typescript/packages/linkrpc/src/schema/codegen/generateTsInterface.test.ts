@@ -54,6 +54,53 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("renders JSON wire int64 and uint64 values as TypeScript numbers", async () => {
+        const schema = {
+            id: "test.json-integers",
+            hash: "",
+            methods: {
+                attach: {
+                    params: {
+                        type: "object",
+                        properties: {
+                            generation: { type: "integer", format: "uint64" },
+                            epoch: { type: "integer", format: "int64" },
+                        },
+                        required: ["generation", "epoch"],
+                        additionalProperties: false,
+                    },
+                    result: { type: "null" },
+                },
+            },
+        } as LinkRpcInterfaceSchema;
+        schema.hash = computeInterfaceHash(schema);
+
+        const source = generateTsInterface(schema, { preserveWireSchema: true });
+        expect(source).not.toContain("bigint");
+        expect(source).not.toContain("z.uint64()");
+        expect(source).not.toContain("z.int64()");
+        expect(source.match(/z\.int\(\)/g)).toHaveLength(2);
+
+        const generated = await _evalGenerated(source);
+        expect(generated.members.attach.paramsSchema.safeParse({
+            generation: 0,
+            epoch: -3,
+        }).success).toBe(true);
+        expect(generated.members.attach.paramsSchema.safeParse({
+            generation: 4,
+            epoch: 3,
+        }).success).toBe(true);
+        expect(generated.members.attach.paramsSchema.safeParse({
+            generation: -1,
+            epoch: 3,
+        }).success).toBe(false);
+        expect(generated.members.attach.paramsSchema.safeParse({
+            generation: 4n,
+            epoch: 3n,
+        }).success).toBe(false);
+        _expectTypeChecks(source);
+    });
+
     it("renders nullable primitive type arrays recursively and annotation-only schemas", async () => {
         const schema = {
             id: "test.schemars",

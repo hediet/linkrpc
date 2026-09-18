@@ -202,8 +202,7 @@ function _schemaType(
         case 'null': return 'null';
         case 'boolean': return 'boolean';
         case 'string': return 'string';
-        case 'integer':
-            return s['format'] === 'int64' || s['format'] === 'uint64' ? 'bigint' : 'number';
+        case 'integer': return 'number';
         case 'number': return 'number';
         default:
             throw new Error(`generateInterface: unsupported schema: ${JSON.stringify(schema)}`);
@@ -659,9 +658,14 @@ function _integerExpr(format: string | undefined): string {
         case 'uint32':
             return 'z.uint32()';
         case 'int64':
-            return 'z.int64()';
+            // LinkRPC values travel as JSON numbers. Zod's int64 validator
+            // accepts bigint, which cannot be JSON serialized and is
+            // incompatible with existing TypeScript clients.
+            return 'z.int()';
         case 'uint64':
-            return 'z.uint64()';
+            // Retain the unsigned constraint while staying in JSON's number
+            // domain instead of Zod's bigint-based uint64 representation.
+            return 'z.int().nonnegative()';
         case undefined:
             return 'z.int()';
         default:
