@@ -19,10 +19,8 @@ pub const SCHEMAS_ID: &str = "hubrpc.schemas";
 // Generated trait/client/server items for the three reflection interfaces. The typed `*Client`
 // proxies are re-exported (see `prelude`) so consumers can introspect an endpoint without hand-
 // rolling `call_member` calls; some items are unused inside this crate.
-#[allow(dead_code)]
+#[allow(dead_code, non_snake_case)]
 pub mod iface {
-    #![allow(non_snake_case)]
-
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
 

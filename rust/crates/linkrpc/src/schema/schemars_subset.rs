@@ -138,10 +138,10 @@ fn prepare_object(
         }
     }
 
-    if out.get("type").and_then(JsonValue::as_str) == Some("object") {
-        if !matches!(out.get("properties"), Some(JsonValue::Object(_))) {
-            out.insert("properties".to_string(), JsonValue::Object(JsonMap::new()));
-        }
+    if out.get("type").and_then(JsonValue::as_str) == Some("object")
+        && !matches!(out.get("properties"), Some(JsonValue::Object(_)))
+    {
+        out.insert("properties".to_string(), JsonValue::Object(JsonMap::new()));
     }
 
     Ok(JsonValue::Object(out))
