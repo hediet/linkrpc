@@ -12,6 +12,7 @@ on:
       - "rust/Cargo.lock"
       - "rust/crates/linkrpc/**"
       - "rust/crates/linkrpc-macros/**"
+      - "rust/crates/linkrpc-tokio/**"
       - ".github/workflows/package-artifacts.yml"
   pull_request:
     paths:
@@ -23,6 +24,7 @@ on:
       - "rust/Cargo.lock"
       - "rust/crates/linkrpc/**"
       - "rust/crates/linkrpc-macros/**"
+      - "rust/crates/linkrpc-tokio/**"
       - ".github/workflows/package-artifacts.yml"
   workflow_dispatch:
 
@@ -125,7 +127,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: artifacts/cargo
-          key: cargo-packages-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml', 'rust/Cargo.lock', 'rust/crates/linkrpc/Cargo.toml', 'rust/crates/linkrpc/README.md', 'rust/crates/linkrpc/src/**', 'rust/crates/linkrpc-macros/Cargo.toml', 'rust/crates/linkrpc-macros/src/**') }}
+          key: cargo-packages-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml', 'rust/Cargo.lock', 'rust/crates/linkrpc/Cargo.toml', 'rust/crates/linkrpc/README.md', 'rust/crates/linkrpc/src/**', 'rust/crates/linkrpc-macros/Cargo.toml', 'rust/crates/linkrpc-macros/src/**', 'rust/crates/linkrpc-tokio/Cargo.toml', 'rust/crates/linkrpc-tokio/src/**') }}
       - uses: dtolnay/rust-toolchain@stable
         if: steps.crate-cache.outputs.cache-hit != 'true'
       - name: Create crate archives
@@ -135,20 +137,25 @@ jobs:
           cargo package --locked --exclude-lockfile -p linkrpc-macros
           # The packaged macro cannot be resolved from crates.io before its first publication.
           cargo package --locked --exclude-lockfile --no-verify -p linkrpc
+          cargo package --locked --exclude-lockfile --no-verify -p linkrpc-tokio
 
-          mkdir -p ../artifacts/cargo/linkrpc-macros ../artifacts/cargo/linkrpc
+          mkdir -p ../artifacts/cargo/linkrpc-macros ../artifacts/cargo/linkrpc ../artifacts/cargo/linkrpc-tokio
           cp target/package/linkrpc-macros-*.crate ../artifacts/cargo/linkrpc-macros/
           cp target/package/linkrpc-[0-9]*.crate ../artifacts/cargo/linkrpc/
+          cp target/package/linkrpc-tokio-*.crate ../artifacts/cargo/linkrpc-tokio/
       - name: Identify crate archives
         id: crates
         run: |
           mapfile -t macros_crates < <(find artifacts/cargo/linkrpc-macros -maxdepth 1 -type f -name '*.crate')
           mapfile -t linkrpc_crates < <(find artifacts/cargo/linkrpc -maxdepth 1 -type f -name '*.crate')
+          mapfile -t tokio_crates < <(find artifacts/cargo/linkrpc-tokio -maxdepth 1 -type f -name '*.crate')
           test "${#macros_crates[@]}" -eq 1
           test "${#linkrpc_crates[@]}" -eq 1
+          test "${#tokio_crates[@]}" -eq 1
 
           echo "macros_artifact=cargo-crate-$(basename "${macros_crates[0]}")" >> "$GITHUB_OUTPUT"
           echo "linkrpc_artifact=cargo-crate-$(basename "${linkrpc_crates[0]}")" >> "$GITHUB_OUTPUT"
+          echo "tokio_artifact=cargo-crate-$(basename "${tokio_crates[0]}")" >> "$GITHUB_OUTPUT"
       - name: Upload linkrpc-macros crate
         uses: actions/upload-artifact@v4
         with:
@@ -160,4 +167,10 @@ jobs:
         with:
           name: ${{ steps.crates.outputs.linkrpc_artifact }}
           path: artifacts/cargo/linkrpc/*.crate
+          if-no-files-found: error
+      - name: Upload linkrpc-tokio crate
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.crates.outputs.tokio_artifact }}
+          path: artifacts/cargo/linkrpc-tokio/*.crate
           if-no-files-found: error
