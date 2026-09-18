@@ -698,9 +698,13 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                             channelOpts,
                         );
                         const result = call.result.then((raw) => {
+                            const validationValue = raw === null &&
+                                    isVoidResultSchema((member as RequestType).resultSchema)
+                                ? undefined
+                                : raw;
                             const checked = safeParse(
                                 (member as RequestType).resultSchema,
-                                raw === null ? undefined : raw,
+                                validationValue,
                             );
                             if (!checked.success) {
                                 throw new RpcError(
@@ -709,7 +713,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                                     { issues: checked.error.issues as unknown as JsonValue },
                                 );
                             }
-                            return raw;
+                            return validationValue;
                         });
 
                         return Object.assign(result, {
@@ -733,9 +737,13 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         // a foreign / older server that never validated its own
                         // output, so verify the declared `resultSchema` here too.
                         // Validate as a gate (return `raw` unchanged on success);
-                        // a wire `null` maps to `undefined` for the check, matching
-                        // the server's `undefined → null` void convention.
-                        const checked = safeParse(resultSchema, raw === null ? undefined : raw);
+                        // A wire `null` maps to `undefined` only for void results,
+                        // matching the server's `undefined → null` convention
+                        // without losing a legitimate nullable result.
+                        const validationValue = raw === null && isVoidResultSchema(resultSchema)
+                            ? undefined
+                            : raw;
+                        const checked = safeParse(resultSchema, validationValue);
                         if (!checked.success) {
                             throw new RpcError(
                                 `Invalid result for ${wireMethod}`,
@@ -743,7 +751,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                                 { issues: checked.error.issues as unknown as JsonValue },
                             );
                         }
-                        return raw;
+                        return validationValue;
                     };
                 }
             } else {

@@ -875,18 +875,45 @@ describe('LinkRpcConnection — bare bindings', () => {
         b.close();
     });
 
-    it('getBare preserves legitimate null and rejects streaming interfaces', async () => {
+    it('clients preserve legitimate null results and reject streaming bare interfaces', async () => {
         const nullable = defineInterface(
             { id: 'test.nullable' },
             { read: requestType(z.object({}), z.null()) },
         );
+        const nullableStreaming = defineInterface(
+            { id: 'test.nullable-streaming' },
+            {
+                read: requestType(z.object({}), z.null())
+                    .withStream({ server: z.object({}) }),
+            },
+        );
+        const voidResult = defineInterface(
+            { id: 'test.void' },
+            { read: requestType(z.object({})) },
+        );
+        const voidStreaming = defineInterface(
+            { id: 'test.void-streaming' },
+            {
+                read: requestType(z.object({}))
+                    .withStream({ server: z.object({}) }),
+            },
+        );
         const sender = {
             sendRequest: async () => null,
             sendNotification: async () => { },
-            sendRequestWithStream: () => { throw new Error('unused'); },
+            sendRequestWithStream: () => ({
+                result: Promise.resolve(null),
+                send: () => { },
+                cancel: () => { },
+                ping: async () => { },
+            }),
             close: () => { },
         };
         const connection = new LinkRpcConnection(sender);
+        await expect(connection.get(nullable).read({})).resolves.toBeNull();
+        await expect(connection.get(nullableStreaming).read({})).resolves.toBeNull();
+        await expect(connection.get(voidResult).read({})).resolves.toBeUndefined();
+        await expect(connection.get(voidStreaming).read({})).resolves.toBeUndefined();
         await expect(connection.getBare(nullable).read({})).resolves.toBeNull();
         await expect(connection.getBare(interfaceFromSchema(nullable.toSchema())).read({}))
             .resolves.toBeNull();
