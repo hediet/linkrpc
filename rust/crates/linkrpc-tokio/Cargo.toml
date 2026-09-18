@@ -8,7 +8,7 @@ description = "Tokio transports for LinkRPC over local sockets, NDJSON, and WebS
 publish = true
 
 [dependencies]
-linkrpc = { version = "0.1.0", path = "../linkrpc" }
+linkrpc = { version = "0.1.1", path = "../linkrpc" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
