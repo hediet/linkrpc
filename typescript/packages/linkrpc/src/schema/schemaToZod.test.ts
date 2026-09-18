@@ -4,6 +4,20 @@ import { componentSchemaRef } from "./assertSchemaReferences";
 import { createSchemaToZod, schemaToZod } from "./schemaToZod";
 
 describe("schemaToZod", () => {
+    it("supports nullable primitive type arrays and annotation-only schemas", () => {
+        const nullableString = schemaToZod(
+            { type: ["string", "null"] } as unknown as LinkRpcJsonSchema,
+        );
+        expect(nullableString.safeParse("value").success).toBe(true);
+        expect(nullableString.safeParse(null).success).toBe(true);
+        expect(nullableString.safeParse(1).success).toBe(false);
+
+        const arbitraryJson = schemaToZod(
+            { title: "Arbitrary JSON", description: "Any JSON value." } as LinkRpcJsonSchema,
+        );
+        expect(arbitraryJson.safeParse({ open: ["shape"] }).success).toBe(true);
+    });
+
     it("validates recursive structural components", () => {
         const components: Record<string, LinkRpcJsonSchema> = {
             Node: {

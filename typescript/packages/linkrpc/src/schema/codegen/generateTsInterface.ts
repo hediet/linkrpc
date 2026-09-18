@@ -95,7 +95,7 @@ export function generateTsInterface(
 
     if (preserveWireSchema) {
         w.writeLine(
-            `const wireSchema: LinkRpcInterfaceSchema = ${JSON.stringify(schema)};`,
+            `const wireSchema: LinkRpcInterfaceSchema = JSON.parse(${JSON.stringify(JSON.stringify(schema))});`,
         );
         w.writeLine();
     }
@@ -138,6 +138,15 @@ function _schemaType(
     if (schema === false) return 'never';
 
     const s = schema as unknown as Record<string, unknown>;
+    if (Array.isArray(s['type'])) {
+        return s['type']
+            .map((type) => _schemaType(
+                { ...s, type } as unknown as LinkRpcJsonSchema,
+                components,
+                payloads,
+            ))
+            .join(' | ') || 'never';
+    }
     if (typeof s['$ref'] === 'string') {
         const name = _parseRef(s['$ref']);
         const payload = payloads.get(name);
@@ -186,6 +195,8 @@ function _schemaType(
         const item = (s['items'] as LinkRpcJsonSchema | undefined) ?? true;
         return `Array<${_schemaType(item, components, payloads)}>`;
     }
+
+    if (_isAnnotationOnlySchema(s)) return 'unknown';
 
     switch (s['type']) {
         case 'null': return 'null';
@@ -354,6 +365,18 @@ function _writeSchema(
     }
 
     const s = schema as unknown as Record<string, unknown>;
+    if (Array.isArray(s['type'])) {
+        _writeUnion(
+            w,
+            'z.union',
+            s['type'].map((type) => ({ ...s, type }) as unknown as LinkRpcJsonSchema),
+            components,
+            preserveWireSchema,
+            currentComponent,
+        );
+        _writeMetaSuffix(w, _metaOf(s));
+        return;
+    }
 
     // $ref -> component variable
     if (typeof s['$ref'] === 'string') {
@@ -450,7 +473,20 @@ function _writeSchema(
         return;
     }
 
+    if (_isAnnotationOnlySchema(s)) {
+        _writeMetaWrapped(w, 'z.unknown()', _metaOf(s));
+        return;
+    }
+
     throw new Error(`generateInterface: unsupported schema: ${JSON.stringify(schema)}`);
+}
+
+function _isAnnotationOnlySchema(schema: Record<string, unknown>): boolean {
+    const structuralKeys = [
+        '$ref', 'const', 'enum', 'anyOf', 'oneOf', 'type',
+        'properties', 'items', 'prefixItems', 'additionalProperties',
+    ];
+    return !structuralKeys.some((key) => Object.hasOwn(schema, key));
 }
 
 function _writeObject(

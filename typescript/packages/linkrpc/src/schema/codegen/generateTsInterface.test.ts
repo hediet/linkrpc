@@ -54,6 +54,49 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("renders nullable primitive type arrays recursively and annotation-only schemas", async () => {
+        const schema = {
+            id: "test.schemars",
+            hash: "",
+            methods: {
+                inspect: {
+                    params: { $ref: "#/components/schemas/Node" },
+                    result: { title: "Arbitrary JSON", description: "Any JSON value." },
+                },
+            },
+            components: {
+                schemas: {
+                    Node: {
+                        type: "object",
+                        properties: {
+                            value: { type: ["string", "null"] },
+                            next: { $ref: "#/components/schemas/Node" },
+                        },
+                        required: ["value"],
+                        additionalProperties: false,
+                    },
+                },
+            },
+        } as unknown as LinkRpcInterfaceSchema;
+        schema.hash = computeInterfaceHash(schema);
+
+        const source = generateTsInterface(schema, { preserveWireSchema: true });
+        expect(source).toContain("value: string | null;");
+        expect(source).toContain("z.union([");
+        expect(source).toContain("z.string()");
+        expect(source).toContain("z.null()");
+        expect(source).toContain('z.unknown().meta({ title: "Arbitrary JSON", description: "Any JSON value." })');
+        expect(source).toContain("const wireSchema: LinkRpcInterfaceSchema = JSON.parse(");
+
+        const generated = await _evalGenerated(source);
+        expect(generated.schemaHash).toBe(schema.hash);
+        expect(generated.members.inspect.paramsSchema.safeParse({
+            value: null,
+            next: { value: "leaf" },
+        }).success).toBe(true);
+        _expectTypeChecks(source);
+    });
+
     it("round-trips defaultsInterface", async () => {
         await _roundTrip(defaultsInterface);
     });

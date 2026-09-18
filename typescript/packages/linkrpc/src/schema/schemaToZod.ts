@@ -31,6 +31,12 @@ export function createSchemaToZod(
     const compile = (schema: LinkRpcJsonSchema): z.ZodType<unknown> => {
         if (schema === true) return z.unknown();
         if (schema === false) return z.never();
+        const raw = schema as unknown as Record<string, unknown>;
+        if (Array.isArray(raw.type)) {
+            return union(raw.type.map((type) =>
+                compile({ ...raw, type } as unknown as LinkRpcJsonSchema)
+            ));
+        }
         let base: z.ZodType<unknown>;
         if ("$ref" in schema) {
             base = component(componentSchemaName(schema.$ref));
@@ -44,6 +50,8 @@ export function createSchemaToZod(
             // LinkRPC's normative structural semantics treat oneOf as a union;
             // exclusivity is only available through rich JSON Schema export.
             base = union(schema.oneOf.map(compile));
+        } else if (isAnnotationOnlySchema(raw)) {
+            base = z.unknown();
         } else {
             switch (schema.type) {
                 case "null":
@@ -101,6 +109,14 @@ export function createSchemaToZod(
             return compile(schema);
         },
     };
+}
+
+function isAnnotationOnlySchema(schema: Record<string, unknown>): boolean {
+    const structuralKeys = [
+        "$ref", "const", "enum", "anyOf", "oneOf", "type",
+        "properties", "items", "prefixItems", "additionalProperties",
+    ];
+    return !structuralKeys.some((key) => Object.hasOwn(schema, key));
 }
 
 export function schemaToZod(
