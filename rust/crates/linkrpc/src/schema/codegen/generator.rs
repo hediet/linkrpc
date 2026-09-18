@@ -336,10 +336,9 @@ impl<'a> Collector<'a> {
                 Some("float32") => "f32",
                 _ => "f64",
             }),
-            "null" => {
-                self.note("`null` type → serde_json::Value");
-                TypeRef::Json
-            }
+            // Serde represents Rust's unit value as JSON `null`, so this is a
+            // lossless scalar mapping rather than an untyped fallback.
+            "null" => TypeRef::Prim("()"),
             _ => return None,
         })
     }
@@ -1050,6 +1049,10 @@ pub(super) fn generate(
 
     w.blank();
     write_client(&mut w, schema, &methods, &renderer, options);
+    if options.generate_server {
+        w.blank();
+        write_server(&mut w, schema, &methods, &renderer, options);
+    }
 
     GeneratedRust {
         code: w.finish(),
@@ -1148,11 +1151,234 @@ fn write_client(
 
     for method in methods {
         w.blank();
-        write_client_method(w, method, renderer, hub);
+        write_client_method(w, method, renderer, hub, options.generate_server);
     }
 
     w.dedent();
     w.line("}");
+}
+
+fn write_server(
+    w: &mut CodeWriter,
+    schema: &LinkRpcInterfaceSchema,
+    methods: &[MethodModel],
+    renderer: &Renderer,
+    options: &GenerateRustOptions,
+) {
+    let hub = &options.linkrpc_path;
+    let base = options
+        .client_name
+        .as_deref()
+        .and_then(|name| name.strip_suffix("Client"))
+        .map(str::to_string)
+        .unwrap_or_else(|| to_pascal_case(&schema.id));
+    let service = format!("{base}Service");
+    let server = format!("{base}Server");
+    let frozen_schema =
+        serde_json::to_string(schema).expect("LinkRpcInterfaceSchema always serializes");
+
+    w.line("/// Build the exact interface schema supplied to the generator.");
+    w.line(&format!(
+        "pub fn interface() -> {hub}::prelude::InterfaceDefinition {{"
+    ));
+    w.indent();
+    w.line(&format!(
+            "let schema: {hub}::prelude::LinkRpcInterfaceSchema = serde_json::from_str({}).expect(\"generated interface schema is valid\");",
+            quote_str(&frozen_schema)
+        ));
+    w.line(&format!(
+        "{hub}::prelude::InterfaceDefinition::from_schema(schema)"
+    ));
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.doc(schema.description.as_deref());
+    w.line(&format!("#[{hub}::prelude::async_trait]"));
+    w.line(&format!("pub trait {service}: Send + Sync {{"));
+    w.indent();
+    for method in methods {
+        w.doc(method.doc.as_deref());
+        let params_ty = renderer.ty(&method.params, usize::MAX, true);
+        let result_ty = method
+            .result
+            .as_ref()
+            .map(|ty| renderer.ty(ty, usize::MAX, true))
+            .unwrap_or_else(|| "()".to_string());
+        w.line(&format!(
+                "async fn {}(&self, ctx: &{hub}::prelude::CallCtx, params: {params_ty}) -> Result<{result_ty}, {hub}::prelude::JsonRpcError>;",
+                method.rust_name
+            ));
+    }
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line("/// Server adapter wrapping a typed provider implementation.");
+    w.line(&format!(
+        "pub struct {server}<T: {service} + 'static>(pub std::sync::Arc<T>);"
+    ));
+    w.blank();
+    w.line(&format!("impl<T: {service} + 'static> {server}<T> {{"));
+    w.indent();
+    w.line("pub fn new(inner: std::sync::Arc<T>) -> Self {");
+    w.indent();
+    w.line("Self(inner)");
+    w.dedent();
+    w.line("}");
+    w.blank();
+    w.line("/// Build the exact interface schema supplied to the generator.");
+    w.line(&format!(
+        "pub fn interface() -> {hub}::prelude::InterfaceDefinition {{"
+    ));
+    w.indent();
+    w.line("interface()");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!(
+        "impl<T: {service} + 'static> {hub}::prelude::ServiceExport for {server}<T> {{"
+    ));
+    w.indent();
+    w.line(&format!(
+        "fn interface() -> {hub}::prelude::InterfaceDefinition {{"
+    ));
+    w.indent();
+    w.line("Self::interface()");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+    w.blank();
+
+    w.line(&format!("#[{hub}::prelude::async_trait]"));
+    w.line(&format!(
+        "impl<T: {service} + 'static> {hub}::prelude::InterfaceHandler for {server}<T> {{"
+    ));
+    w.indent();
+    write_server_requests(w, methods, renderer, hub);
+    w.blank();
+    write_server_notifications(w, methods, renderer, hub);
+    w.dedent();
+    w.line("}");
+}
+
+fn write_server_requests(
+    w: &mut CodeWriter,
+    methods: &[MethodModel],
+    renderer: &Renderer,
+    hub: &str,
+) {
+    w.line("async fn handle_request(");
+    w.indent();
+    w.line("&self,");
+    w.line("member: &str,");
+    w.line(&format!("params: {hub}::prelude::JsonValue,"));
+    w.line(&format!("ctx: {hub}::prelude::CallCtx,"));
+    w.dedent();
+    w.line(&format!(
+        ") -> Result<{hub}::prelude::JsonValue, {hub}::prelude::JsonRpcError> {{"
+    ));
+    w.indent();
+    w.line("match member {");
+    w.indent();
+    for method in methods.iter().filter(|m| m.result.is_some()) {
+        let params_ty = renderer.ty(&method.params, usize::MAX, true);
+        w.line(&format!("{} => {{", quote_str(&method.wire_name)));
+        w.indent();
+        write_decode_params(w, &params_ty, hub);
+        w.line(&format!(
+            "let __r = self.0.{}(&ctx, __p).await?;",
+            method.rust_name
+        ));
+        w.line("serde_json::to_value(__r).map_err(|e| {");
+        w.indent();
+        w.line(&format!(
+                "{hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string())"
+            ));
+        w.dedent();
+        w.line("})");
+        w.dedent();
+        w.line("}");
+    }
+    w.line(&format!(
+            "_ => Err({hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::METHOD_NOT_FOUND, member)),"
+        ));
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+}
+
+fn write_server_notifications(
+    w: &mut CodeWriter,
+    methods: &[MethodModel],
+    renderer: &Renderer,
+    hub: &str,
+) {
+    w.line("async fn handle_notification(");
+    w.indent();
+    w.line("&self,");
+    w.line("member: &str,");
+    w.line(&format!("params: {hub}::prelude::JsonValue,"));
+    w.line(&format!("ctx: {hub}::prelude::CallCtx,"));
+    w.dedent();
+    w.line(") {");
+    w.indent();
+    w.line("match member {");
+    w.indent();
+    for method in methods.iter().filter(|m| m.result.is_none()) {
+        let params_ty = renderer.ty(&method.params, usize::MAX, true);
+        w.line(&format!("{} => {{", quote_str(&method.wire_name)));
+        w.indent();
+        w.line(&format!(
+            "match serde_json::from_value::<{params_ty}>(params) {{"
+        ));
+        w.indent();
+        w.line("Ok(__p) => {");
+        w.indent();
+        w.line(&format!(
+            "if let Err(__e) = self.0.{}(&ctx, __p).await {{",
+            method.rust_name
+        ));
+        w.indent();
+        w.line(&format!(
+            "eprintln!(\"linkrpc notification `{{}}` handler error {{}}: {{}}\", member, __e.code, __e.message);"
+        ));
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.line("Err(__e) => {");
+        w.indent();
+        w.line("eprintln!(\"linkrpc notification `{}` has invalid params: {}\", member, __e);");
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+    }
+    w.line("_ => {}");
+    w.dedent();
+    w.line("}");
+    w.dedent();
+    w.line("}");
+}
+
+fn write_decode_params(w: &mut CodeWriter, params_ty: &str, hub: &str) {
+    w.line(&format!(
+        "let __p: {params_ty} = serde_json::from_value(params).map_err(|e| {{"
+    ));
+    w.indent();
+    w.line(&format!(
+        "{hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INVALID_PARAMS, e.to_string())"
+    ));
+    w.dedent();
+    w.line("})?;");
 }
 
 /// Read `x-linkrpc-codegen.kind` from a method's preserved extensions, if present.
@@ -1165,20 +1391,43 @@ fn codegen_kind(method: &MethodSchema) -> Option<&str> {
     method.extension("x-linkrpc-codegen")?.get("kind")?.as_str()
 }
 
-fn write_client_method(w: &mut CodeWriter, method: &MethodModel, renderer: &Renderer, hub: &str) {
+fn write_client_method(
+    w: &mut CodeWriter,
+    method: &MethodModel,
+    renderer: &Renderer,
+    hub: &str,
+    allow_server_notifications: bool,
+) {
     let params_ty = renderer.ty(&method.params, usize::MAX, true);
     let err = format!("{hub}::prelude::JsonRpcError");
     w.doc(method.doc.as_deref());
 
-    // Server→client events: emit the addressed wire name (so consumers can match
-    // inbound notifications) and the payload type, but NOT a client send method.
+    // Server→client events always expose the addressed wire name so consumers
+    // can match inbound notifications. Full client+server bindings additionally
+    // expose a typed sender; client-only output intentionally does not.
     if method.server_notification {
         w.line(
             "/// Server notification (server→client, `x-linkrpc-codegen.kind = \"serverNotification\"`).",
         );
-        w.line(&format!(
-            "/// No client send method is generated; decode inbound payloads as `{params_ty}`."
-        ));
+        if allow_server_notifications {
+            w.line(&format!(
+                "pub async fn {}(&self, params: {params_ty}) -> Result<(), {err}> {{",
+                method.rust_name
+            ));
+            w.indent();
+            write_encode_params(w, hub);
+            w.line(&format!(
+                "self.caller.notify(&self.method_name({}), __p).await",
+                quote_str(&method.wire_name)
+            ));
+            w.dedent();
+            w.line("}");
+            w.blank();
+        } else {
+            w.line(&format!(
+                "/// No client send method is generated; decode inbound payloads as `{params_ty}`."
+            ));
+        }
         w.line(&format!(
             "pub fn {}_event_name(&self) -> String {{",
             method.rust_name

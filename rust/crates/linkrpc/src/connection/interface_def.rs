@@ -96,6 +96,7 @@ pub struct InterfaceDefinition {
     info: InterfaceInfo,
     members: Vec<(String, Member)>,
     hash: OnceLock<String>,
+    frozen_schema: Option<LinkRpcInterfaceSchema>,
 }
 
 impl InterfaceDefinition {
@@ -104,6 +105,52 @@ impl InterfaceDefinition {
             info,
             members,
             hash: OnceLock::new(),
+            frozen_schema: None,
+        }
+    }
+
+    /// Build a runtime definition from an already-authored interface schema.
+    ///
+    /// Unlike the Rust-trait schema bridge, this preserves components,
+    /// extensions, errors, and recursive references verbatim. Generated server
+    /// adapters use it so registration publishes the exact schema they were
+    /// generated from.
+    pub fn from_schema(schema: LinkRpcInterfaceSchema) -> Self {
+        let info = InterfaceInfo {
+            id: schema.id.clone(),
+            description: schema.description.clone(),
+            comment: schema.comment.clone(),
+        };
+        let members = schema
+            .methods
+            .iter()
+            .map(|(name, method)| {
+                let docs = MemberDocs {
+                    description: method.description.clone(),
+                    comment: method.comment.clone(),
+                    annotations: method.annotations.clone(),
+                };
+                let member = match &method.result {
+                    Some(result) => Member::Request(Box::new(RequestMember {
+                        params_schema: method.params.clone(),
+                        result_schema: result.clone(),
+                        client_stream_schema: method.client_stream.clone(),
+                        server_stream_schema: method.server_stream.clone(),
+                        docs,
+                    })),
+                    None => Member::Notification(NotificationMember {
+                        params_schema: method.params.clone(),
+                        docs,
+                    }),
+                };
+                (name.clone(), member)
+            })
+            .collect();
+        InterfaceDefinition {
+            info,
+            members,
+            hash: OnceLock::new(),
+            frozen_schema: Some(schema),
         }
     }
 
@@ -126,8 +173,17 @@ impl InterfaceDefinition {
 
     /// Content hash of this interface (`id@hash` pairs with [`Self::id`]).
     pub fn schema_hash(&self) -> &str {
-        self.hash
-            .get_or_init(|| compute_interface_hash(&self.build_schema(String::new())))
+        self.hash.get_or_init(|| {
+            if let Some(schema) = &self.frozen_schema {
+                if !schema.hash.is_empty() {
+                    schema.hash.clone()
+                } else {
+                    compute_interface_hash(schema)
+                }
+            } else {
+                compute_interface_hash(&self.build_schema(String::new()))
+            }
+        })
     }
 
     /// `id@hash` addressing form.
@@ -138,6 +194,11 @@ impl InterfaceDefinition {
     /// Lower to a wire `LinkRpcInterfaceSchema`, with `hash` filled in.
     pub fn to_schema(&self) -> LinkRpcInterfaceSchema {
         let hash = self.schema_hash().to_string();
+        if let Some(schema) = &self.frozen_schema {
+            let mut schema = schema.clone();
+            schema.hash = hash;
+            return schema;
+        }
         self.build_schema(hash)
     }
 
@@ -181,4 +242,54 @@ fn to_method_schema(member: &Member) -> MethodSchema {
     }
 
     m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frozen_schema_is_preserved_and_empty_hash_is_computed_from_it() {
+        let schema: LinkRpcInterfaceSchema = serde_json::from_str(
+            r##"{
+                "id": "example.frozen",
+                "hash": "",
+                "methods": {
+                    "get": {
+                        "params": { "$ref": "#/components/schemas/Node" },
+                        "result": { "$ref": "#/components/schemas/Node" },
+                        "errors": [{ "code": 7, "message": "failed" }],
+                        "x-codegen": { "direction": "both" }
+                    }
+                },
+                "components": { "schemas": {
+                    "Node": {
+                        "type": "object",
+                        "properties": { "next": { "$ref": "#/components/schemas/Node" } }
+                    }
+                }},
+                "x-source": "fixture"
+            }"##,
+        )
+        .unwrap();
+        let expected_hash = compute_interface_hash(&schema);
+        let definition = InterfaceDefinition::from_schema(schema.clone());
+
+        assert_eq!(definition.schema_hash(), expected_hash);
+        let emitted = definition.to_schema();
+        assert_eq!(emitted.hash, expected_hash);
+        assert_eq!(emitted.components, schema.components);
+        assert_eq!(emitted.extensions, schema.extensions);
+        assert_eq!(emitted.methods["get"].errors, schema.methods["get"].errors);
+        assert_eq!(
+            emitted.methods["get"].extensions,
+            schema.methods["get"].extensions
+        );
+
+        let mut supplied = schema;
+        supplied.hash = "supplied-hash".to_string();
+        let definition = InterfaceDefinition::from_schema(supplied.clone());
+        assert_eq!(definition.schema_hash(), "supplied-hash");
+        assert_eq!(definition.to_schema(), supplied);
+    }
 }

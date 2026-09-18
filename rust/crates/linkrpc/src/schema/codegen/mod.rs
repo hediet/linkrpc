@@ -14,6 +14,9 @@
 //!   an [`RpcCall`](crate::client::RpcCall) transport abstraction, and decode
 //!   the result. The client can address linkrpc members (`id::member`) *or* bare
 //!   root-addressed method names (e.g. a CDP `Domain.method` channel).
+//! - optionally, a typed async provider trait and server adapter implementing
+//!   [`InterfaceHandler`](crate::connection::dispatch::InterfaceHandler) and
+//!   [`ServiceExport`](crate::connection::dispatch::ServiceExport).
 //!
 //! The generator is intentionally **generic**: it contains no CDP- or
 //! application-specific logic, and its output is deterministic (stable ordering,
@@ -56,6 +59,11 @@ pub struct GenerateRustOptions {
     /// `PascalCase` form of the interface id with a `Client` suffix
     /// (e.g. `com.acme.pizza` → `ComAcmePizzaClient`).
     pub client_name: Option<String>,
+
+    /// Emit a typed `<Base>Service` provider trait and `<Base>Server<T>`
+    /// adapter. Disabled by default to preserve the output of existing
+    /// client-only generation.
+    pub generate_server: bool,
 }
 
 impl Default for GenerateRustOptions {
@@ -63,6 +71,7 @@ impl Default for GenerateRustOptions {
         GenerateRustOptions {
             linkrpc_path: "linkrpc".to_string(),
             client_name: None,
+            generate_server: false,
         }
     }
 }
@@ -349,5 +358,100 @@ mod tests {
             "{}",
             g.code
         );
+    }
+
+    #[test]
+    fn server_generation_is_opt_in_and_uses_typed_provider_api() {
+        let s = schema(
+            r##"{
+                "id": "com.example.echo", "hash": "frozen-hash",
+                "methods": {
+                    "echo": {
+                        "params": { "type": "string" },
+                        "result": { "type": "string" }
+                    },
+                    "stop": { "params": true },
+                    "changed": {
+                        "params": { "type": "string" },
+                        "x-linkrpc-codegen": { "kind": "serverNotification" }
+                    }
+                }
+            }"##,
+        );
+        let client_only = generate_rust_interface(&s, &GenerateRustOptions::default());
+        assert!(!client_only.code.contains("ComExampleEchoService"));
+
+        let generated = generate_rust_interface(
+            &s,
+            &GenerateRustOptions {
+                generate_server: true,
+                ..GenerateRustOptions::default()
+            },
+        );
+        assert!(generated.code.contains("pub trait ComExampleEchoService"));
+        assert!(generated
+            .code
+            .contains("pub struct ComExampleEchoServer<T: ComExampleEchoService + 'static>"));
+        assert!(generated
+            .code
+            .contains("pub fn interface() -> linkrpc::prelude::InterfaceDefinition"));
+        assert!(generated.code.contains(
+            "async fn echo(&self, ctx: &linkrpc::prelude::CallCtx, params: String) -> Result<String, linkrpc::prelude::JsonRpcError>;"
+        ));
+        assert!(generated.code.contains(
+            "async fn stop(&self, ctx: &linkrpc::prelude::CallCtx, params: serde_json::Value) -> Result<(), linkrpc::prelude::JsonRpcError>;"
+        ));
+        assert!(generated.code.contains(
+            "async fn changed(&self, ctx: &linkrpc::prelude::CallCtx, params: String) -> Result<(), linkrpc::prelude::JsonRpcError>;"
+        ));
+        assert!(generated.code.contains(
+            "pub async fn changed(&self, params: String) -> Result<(), linkrpc::prelude::JsonRpcError>"
+        ));
+        assert!(generated
+            .code
+            .contains("if let Err(__e) = self.0.changed(&ctx, __p).await"));
+        assert!(generated
+            .code
+            .contains("linkrpc notification `{}` handler error {}: {}"));
+        assert!(generated
+            .code
+            .contains("linkrpc notification `{}` has invalid params: {}"));
+        assert!(generated.code.contains("frozen-hash"));
+    }
+
+    #[test]
+    fn null_schema_lowers_to_unit_without_fallback_diagnostic() {
+        let s = schema(
+            r##"{
+                "id": "example.null", "hash": "",
+                "methods": {
+                    "close": {
+                        "params": { "type": "null" },
+                        "result": { "type": "null" }
+                    }
+                },
+                "components": { "schemas": {
+                    "NullableText": {
+                        "anyOf": [
+                            { "type": "string" },
+                            { "type": "null" }
+                        ]
+                    }
+                }}
+            }"##,
+        );
+        let generated = generate_rust_interface(&s, &GenerateRustOptions::default());
+        assert!(
+            generated.unsupported.is_empty(),
+            "{:?}",
+            generated.unsupported
+        );
+        assert!(generated
+            .code
+            .contains("pub async fn close(&self, params: ()) -> Result<(),"));
+        assert!(generated.code.contains("Variant1(())"));
+        assert!(!generated.code.contains("`null` type"));
+        assert_eq!(serde_json::to_value(()).unwrap(), serde_json::Value::Null);
+        serde_json::from_value::<()>(serde_json::Value::Null).unwrap();
     }
 }
