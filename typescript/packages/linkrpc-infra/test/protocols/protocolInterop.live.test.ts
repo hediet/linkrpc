@@ -9,10 +9,13 @@ import {
 } from '@hediet/linkrpc';
 import { createCdpWebSocketTransport, type CdpWebSocketLike } from './cdp';
 import {
-    createProtocolInterfaceDefinition,
     importCdpProtocol,
     importLspProtocol,
 } from './contracts/index';
+import {
+    createGeneratedProtocolBareTarget,
+    createGeneratedProtocolInterfaceDefinition,
+} from './contracts/generated';
 import { createLspChildProcessTransport } from './lsp';
 import { startInspector, startLanguageServer } from './protocolInteropTestUtils';
 import type { CloseAwareMessageTransport } from '../../src/json-rpc/messageTransport';
@@ -47,12 +50,18 @@ describe('live external protocol interoperability', () => {
             };
             transport = createCdpWebSocketTransport(observedSocket);
             connection = protocolConnection(transport.root);
+            const runtimeBinding = selectMember(cdp, 'Runtime.evaluate', 'clientToServer');
+            const cdpRuntime = createGeneratedProtocolBareTarget(
+                runtimeBinding.definition.toSchema(),
+                runtimeBinding.prefix,
+            );
+            const runtime = connection.get(cdpRuntime);
             const consoleEvent = receiveNotification(connection, cdp, 'Runtime.consoleAPICalled');
-            await within(call(connection, cdp, 'Runtime.enable', {}), 'Runtime.enable');
-            const result = await within(call(connection, cdp, 'Runtime.evaluate', {
+            await within(Promise.resolve(runtime.enable({})), 'Runtime.enable');
+            const result = await within(Promise.resolve(runtime.evaluate({
                 expression: 'console.log("linkrpc-interop"); 6 * 7',
                 returnByValue: true,
-            }), 'Runtime.evaluate');
+            })), 'Runtime.evaluate');
             expect(result).toMatchObject({ result: { type: 'number', value: 42 } });
             expect(await within(consoleEvent, 'Runtime.consoleAPICalled')).toMatchObject({
                 type: 'log',
@@ -157,7 +166,7 @@ function selectMember(contract: Contract, wireMethod: string, direction: Directi
     }
     return {
         binding,
-        definition: createProtocolInterfaceDefinition(schema),
+        definition: createGeneratedProtocolInterfaceDefinition(schema),
         prefix: wireMethod.slice(0, wireMethod.length - binding.member.length),
     };
 }
@@ -169,7 +178,8 @@ async function call(
     params: unknown,
 ): Promise<unknown> {
     const { definition, binding, prefix } = selectMember(contract, wireMethod, 'clientToServer');
-    return connection.getBare(definition, { prefix })[binding.member](params);
+    const target = createGeneratedProtocolBareTarget(definition.toSchema(), prefix);
+    return connection.get(target)[binding.member](params);
 }
 
 function receiveNotification(

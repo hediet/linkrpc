@@ -45,10 +45,24 @@ these structural validators. Review importer diagnostics before treating an
 approximation as an exact protocol model.
 
 An endpoint can register several interfaces and bind each to an external prefix
-with `connection.bindBare(definition, { prefix })`. The corresponding client is
-`connection.getBare(definition, { prefix })`. For example, a CDP Runtime contract
-uses `Runtime.`, while an LSP text-document contract uses `textDocument/`. The
-empty prefix covers lifecycle methods such as `initialize`.
+with `connection.bindBare(definition, { prefix })`. Bundle client addressing
+once with the core `bareInterfaceTarget` helper:
+
+```ts
+const cdpRuntime = bareInterfaceTarget(cdpRuntimeInterface, { prefix: 'Runtime.' });
+const runtime = connection.get(cdpRuntime);
+```
+
+The immutable target contains the interface, bare-addressing mode, and prefix;
+it does not change the interface schema or hash. The existing
+`connection.getBare(definition, { prefix })` API remains available. A CDP
+Runtime contract uses `Runtime.`, while an LSP text-document contract uses
+`textDocument/`. The empty prefix covers lifecycle methods such as `initialize`.
+Protocol-specific targets stay in the POC; they are not package exports.
+Some LSP methods have nested suffixes, such as `semanticTokens/full`, which
+the importer flattens to local names containing `__`. Those methods need
+explicit wire-name mapping in addition to a prefix; the live tests cover
+prefix-compatible members, not universal LSP name routing.
 
 The longest matching binding wins. Duplicate prefixes are rejected, and an
 unknown member in the selected interface never falls through to another
@@ -78,7 +92,7 @@ Run the live integration tests from the TypeScript workspace:
 pnpm --filter @hediet/linkrpc-infra test:interop
 ```
 
-These tests use the imported contracts and their recursive validators against
+These tests execute the generated TypeScript interfaces and their validators against
 an unmodified Node inspector and the pinned `vscode-json-languageserver`.
 They exercise evaluation and CDP events, LSP initialization, document symbols,
 diagnostics, and graceful shutdown. The tests spawn only local processes and
@@ -86,6 +100,36 @@ clean them up; schema or server downloads are not performed during the tests.
 CI runs these tests through `pnpm check`. Core and infra tests are uncached:
 their conformance fixtures live outside the TypeScript workspace's cache root,
 and live interoperability must run even when package builds are cached.
+
+### Generated client/server cross-language checks
+
+```sh
+pnpm --filter @hediet/linkrpc-infra test:generated-interop
+```
+
+This requires a Rust toolchain in addition to Node. It regenerates all CDP/LSP
+interfaces from the pinned source documents, compiles all 74 TypeScript
+interfaces and Rust clients/provider traits/server adapters, and runs both
+TypeScript-client/Rust-server and Rust-client/TypeScript-server combinations.
+Rust generation uses `GenerateRustOptions { generate_server: true,
+..Default::default() }`, producing a typed `Service` trait and `Server` adapter
+alongside the client. The adapters retain the imported schema and hash rather
+than reconstructing them through the Rust trait macro.
+The cross-language cases use selected real CDP DOM and LSP text-document
+methods, including recursive results, notifications, application errors, and
+schema-hash reflection. They are not substitutes for implementing every
+protocol method.
+
+The Rust peer and its Cargo crate live under `test/protocols/rust`; generated
+Rust and build artifacts stay under the repository's `rust/target` directory.
+Code-generation approximation diagnostics are reported and snapshot-tested so
+new fallbacks require explicit review. Some LSP numeric enums and standalone
+constants still lower to `serde_json::Value`; successful compilation does not
+imply that every source constraint has an exact native Rust type. The
+cross-language transport is native JSON-RPC NDJSON over child-process stdio,
+with `DOM.` and `textDocument/` bindings, not CDP WebSocket or LSP
+Content-Length framing. The separate external-server smoke tests cover those
+external transports from TypeScript.
 
 ## Logging
 

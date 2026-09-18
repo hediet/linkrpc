@@ -18,6 +18,7 @@ import {
     importCdpProtocol,
     importLspProtocol,
 } from "./index";
+import { createGeneratedProtocolInterfaceDefinition } from "./generated";
 
 const corpus = (path: string): unknown =>
     JSON.parse(readFileSync(new URL(`../../../../../../conformance/protocols/${path}`, import.meta.url), "utf8"));
@@ -118,7 +119,132 @@ describe("pinned protocol contract import", () => {
                     preserveWireSchema: true,
                 }),
             ] as const);
-        const virtual = new Map(sources);
+        expectTypeChecks(new Map(sources));
+    }, 15_000);
+
+    it("exposes concrete generated client and server protocol types", () => {
+        const dom = cdp().interfaces["cdp.dom"]!;
+        const runtime = cdp().interfaces["cdp.runtime"]!;
+        const textDocument = lsp().interfaces["lsp.textdocument"]!;
+        const base = new URL(".", import.meta.url).pathname;
+        const virtual = new Map<string, string>([
+            [`${base}generated-cdp-usage.ts`, generateTsInterface(dom, {
+                exportName: "cdpDomProtocol",
+                linkRpcImport: "../../../../linkrpc/src/index",
+                preserveWireSchema: true,
+            })],
+            [`${base}generated-lsp-usage.ts`, generateTsInterface(textDocument, {
+                exportName: "lspTextDocumentProtocol",
+                linkRpcImport: "../../../../linkrpc/src/index",
+                preserveWireSchema: true,
+            })],
+            [`${base}generated-cdp-runtime.ts`, generateTsInterface(runtime, {
+                exportName: "cdpRuntimeInterface",
+                linkRpcImport: "../../../../linkrpc/src/index",
+                preserveWireSchema: true,
+                bareTarget: {
+                    exportName: "cdpRuntime",
+                    prefix: "Runtime.",
+                },
+            })],
+            [`${base}generated-usage.ts`, `
+                import { type InterfaceClient, type InterfaceHandlers, LinkRpcConnection } from "../../../../linkrpc/src/index";
+                import { cdpDomProtocol } from "./generated-cdp-usage";
+                import { cdpRuntime } from "./generated-cdp-runtime";
+                import { lspTextDocumentProtocol } from "./generated-lsp-usage";
+
+                declare const connection: LinkRpcConnection;
+                const evaluation = await connection.get(cdpRuntime).evaluate({
+                    expression: "6 * 7",
+                    returnByValue: true,
+                });
+                evaluation.result.type satisfies string;
+                // @ts-expect-error Runtime.evaluate requires an expression.
+                connection.get(cdpRuntime).evaluate({ returnByValue: true });
+                // @ts-expect-error bare targets cannot accept service routing options.
+                connection.get(cdpRuntime, { serviceId: "runtime" });
+
+                declare const cdpClient: InterfaceClient<typeof cdpDomProtocol>;
+                const document = await cdpClient.getDocument({ depth: 2, pierce: true });
+                const recursiveNode: typeof document.root = document.root.children![0]!;
+                recursiveNode.nodeName satisfies string;
+                // @ts-expect-error CDP depth is numeric.
+                cdpClient.getDocument({ depth: "two" });
+
+                declare const lspClient: InterfaceClient<typeof lspTextDocumentProtocol>;
+                const ranges = await lspClient.selectionRange({
+                    textDocument: { uri: "file:///sample.ts" },
+                    positions: [{ line: 0, character: 0 }],
+                });
+                const selectionRanges = ranges!;
+                const recursiveRange: typeof selectionRanges[number] =
+                    selectionRanges[0]!.parent!;
+                recursiveRange.range.start.line satisfies number;
+                // @ts-expect-error selectionRange requires positions.
+                lspClient.selectionRange({ textDocument: { uri: "file:///sample.ts" } });
+
+                const handlers: Pick<
+                    InterfaceHandlers<typeof lspTextDocumentProtocol>,
+                    "selectionRange"
+                > = {
+                    selectionRange: async () => [{
+                        range: {
+                            start: { line: 0, character: 0 },
+                            end: { line: 0, character: 1 },
+                        },
+                        parent: {
+                            range: {
+                                start: { line: 0, character: 0 },
+                                end: { line: 1, character: 0 },
+                            },
+                        },
+                    }],
+                };
+                handlers satisfies Pick<
+                    InterfaceHandlers<typeof lspTextDocumentProtocol>,
+                    "selectionRange"
+                >;
+                const invalidHandlers: Pick<
+                    InterfaceHandlers<typeof lspTextDocumentProtocol>,
+                    "selectionRange"
+                > = {
+                    // @ts-expect-error selectionRange handlers return SelectionRange[].
+                    selectionRange: async () => "invalid",
+                };
+                void invalidHandlers;
+            `],
+        ]);
+        expectTypeChecks(virtual);
+    }, 15_000);
+
+    it("executes generated definitions once per imported schema", () => {
+        const schema = cdp().interfaces["cdp.dom"]!;
+        const first = createGeneratedProtocolInterfaceDefinition(schema);
+        expect(createGeneratedProtocolInterfaceDefinition(schema)).toBe(first);
+        expect(first.schemaHash).toBe(schema.hash);
+        const getDocument = first.members.getDocument!;
+        if (getDocument.kind !== "request") throw new Error("getDocument must be a request");
+        expect(safeParse(getDocument.resultSchema, {
+            root: {
+                nodeId: 1,
+                backendNodeId: 1,
+                nodeType: 9,
+                nodeName: "#document",
+                localName: "",
+                nodeValue: "",
+                children: [{
+                    nodeId: 2,
+                    backendNodeId: 2,
+                    nodeType: 1,
+                    nodeName: "HTML",
+                    localName: "html",
+                    nodeValue: "",
+                }],
+            },
+        }).success).toBe(true);
+    });
+
+    function expectTypeChecks(virtual: Map<string, string>): void {
         const options: ts.CompilerOptions = {
             target: ts.ScriptTarget.ES2022,
             module: ts.ModuleKind.ESNext,
@@ -141,7 +267,7 @@ describe("pinned protocol contract import", () => {
         };
         const diagnostics = ts.getPreEmitDiagnostics(ts.createProgram([...virtual.keys()], options, host));
         expect(diagnostics.map(formatDiagnostic)).toEqual([]);
-    }, 15_000);
+    }
 
     it("creates runtime definitions with corpus-derived validators", () => {
         const cdpContracts = cdp();

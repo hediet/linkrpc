@@ -1,0 +1,106 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`generated CDP/LSP code across Rust and TypeScript > compiles all imported Rust clients, traits, and server adapters > documented Rust codegen fallbacks 1`] = `
+[
+  {
+    "id": "lsp.callhierarchy",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`SymbolKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolTag\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.codeaction",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`DiagnosticSeverity\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`DiagnosticTag\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.completionitem",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`CompletionItemKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`CompletionItemTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`InsertTextFormat\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`InsertTextMode\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.inlayhint",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`InlayHintKind\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.lifecycle",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`CompletionItemKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`CompletionItemTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`DiagnosticTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`InsertTextMode\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`PrepareSupportDefaultBehavior\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`TextDocumentSyncKind\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.notebookdocument",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`NotebookCellKind\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.textdocument",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`CodeActionTriggerKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`CompletionItemKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`CompletionItemTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`CompletionTriggerKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`DiagnosticSeverity\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`DiagnosticTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`DocumentHighlightKind\` → serde_json::Value alias",
+      "standalone \`const\` schema → serde_json::Value",
+      "heterogeneous \`enum\` in \`InlayHintKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`InlineCompletionTriggerKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`InsertTextFormat\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`InsertTextMode\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SignatureHelpTriggerKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`TextDocumentSaveReason\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.typehierarchy",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`SymbolKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolTag\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.window",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`MessageType\` → serde_json::Value alias",
+    ],
+  },
+  {
+    "id": "lsp.workspace",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`DiagnosticSeverity\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`DiagnosticTag\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`FileChangeType\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolTag\` → serde_json::Value alias",
+      "standalone \`const\` schema → serde_json::Value",
+    ],
+  },
+  {
+    "id": "lsp.workspacesymbol",
+    "unsupported": [
+      "heterogeneous \`enum\` in \`SymbolKind\` → serde_json::Value alias",
+      "heterogeneous \`enum\` in \`SymbolTag\` → serde_json::Value alias",
+    ],
+  },
+]
+`;

@@ -40,6 +40,7 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install dependencies
         working-directory: typescript
         run: pnpm install --frozen-lockfile
