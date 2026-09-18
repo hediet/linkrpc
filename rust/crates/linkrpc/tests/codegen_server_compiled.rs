@@ -158,6 +158,14 @@ async fn fallible_notification_dispatch_distinguishes_all_outcomes() {
         .await
         .unwrap());
 
+    assert!(server
+        .dispatch_notification(
+            "tree_changed",
+            serde_json::json!({ "value": "known-but-unhandled" }),
+        )
+        .await
+        .unwrap());
+
     let error = server
         .dispatch_notification("notify_changed", serde_json::json!({ "node": 42 }))
         .await

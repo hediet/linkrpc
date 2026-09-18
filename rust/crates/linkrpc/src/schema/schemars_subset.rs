@@ -107,6 +107,23 @@ fn prepare_object(
             "$schema" | "title" | "definitions" | "$defs" => continue,
             // Numeric representation hint zod never emits.
             "format" if is_numeric => continue,
+            // Property names are user data, not schema keywords. Descend into
+            // each property's schema without interpreting names such as
+            // `title` or `format` as annotations on this schema node.
+            "properties" => {
+                let prepared = match v {
+                    JsonValue::Object(properties) => {
+                        let mut prepared = JsonMap::new();
+                        for (name, schema) in properties {
+                            prepared.insert(name.clone(), prepare(schema, defs, active)?);
+                        }
+                        JsonValue::Object(prepared)
+                    }
+                    other => prepare(other, defs, active)?,
+                };
+                out.insert(k.clone(), prepared);
+                continue;
+            }
             _ => {}
         }
         out.insert(k.clone(), prepare(v, defs, active)?);
@@ -162,6 +179,35 @@ mod tests {
                 "type": "object",
                 "properties": { "n": { "type": "integer" } },
                 "required": ["n"],
+                "additionalProperties": false
+            })
+        );
+    }
+
+    #[test]
+    fn preserves_property_names_that_match_schema_annotations() {
+        let raw = json!({
+            "title": "TargetSnapshot",
+            "type": "object",
+            "properties": {
+                "title": { "type": "string" },
+                "format": { "type": "string" },
+                "definitions": { "type": "boolean" }
+            },
+            "required": ["title", "format", "definitions"]
+        });
+
+        let normalized = schemars_to_subset(&raw).unwrap();
+        assert_eq!(
+            normalized,
+            json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string" },
+                    "format": { "type": "string" },
+                    "definitions": { "type": "boolean" }
+                },
+                "required": ["definitions", "format", "title"],
                 "additionalProperties": false
             })
         );

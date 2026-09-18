@@ -1254,6 +1254,12 @@ fn write_server(
     w.line("}");
     w.blank();
     w.line("/// Dispatch an inbound notification without swallowing decode or handler errors.");
+    w.line("///");
+    w.line("/// Returns `true` when `method` is declared by the schema, including when its");
+    w.line("/// generated service method uses the default no-op implementation, and `false`");
+    w.line("/// for an unknown method. This reports schema recognition, not whether an");
+    w.line("/// application override consumed the notification; raw observers should run");
+    w.line("/// independently when they must retain every inbound notification.");
     w.line(&format!(
         "pub async fn dispatch_notification(&self, method: &str, params: serde_json::Value) -> Result<bool, {hub}::prelude::JsonRpcError> {{"
     ));

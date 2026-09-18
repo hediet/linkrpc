@@ -399,6 +399,12 @@ impl<T: ComExampleGraphService + 'static> ComExampleGraphServer<T> {
     }
 
     /// Dispatch an inbound notification without swallowing decode or handler errors.
+    ///
+    /// Returns `true` when `method` is declared by the schema, including when its
+    /// generated service method uses the default no-op implementation, and `false`
+    /// for an unknown method. This reports schema recognition, not whether an
+    /// application override consumed the notification; raw observers should run
+    /// independently when they must retain every inbound notification.
     pub async fn dispatch_notification(&self, method: &str, params: serde_json::Value) -> Result<bool, linkrpc::prelude::JsonRpcError> {
         self.dispatch_notification_with_ctx(method, params, linkrpc::prelude::CallCtx::default()).await
     }
