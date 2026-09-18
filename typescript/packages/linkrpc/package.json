@@ -26,6 +26,10 @@
             "@hediet/source": "./src/hub/common/index.ts",
             "default": "./dist/hub/common/index.js"
         },
+        "./inspection": {
+            "@hediet/source": "./src/inspection/index.ts",
+            "default": "./dist/inspection/index.js"
+        },
         "./node": {
             "@hediet/source": "./src/node.ts",
             "default": "./dist/node.js"
@@ -75,6 +79,7 @@
             ".": "./dist/index.js",
             "./hub/client": "./dist/hub/client/index.js",
             "./hub/common": "./dist/hub/common/index.js",
+            "./inspection": "./dist/inspection/index.js",
             "./node": "./dist/node.js",
             "./web": "./dist/web.js",
             "./package.json": "./package.json"

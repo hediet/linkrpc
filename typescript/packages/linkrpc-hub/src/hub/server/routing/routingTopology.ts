@@ -1,16 +1,16 @@
-import { randomUUID } from 'node:crypto';
-import { ErrorCode, RpcError, type IMessageTransport } from '@hediet/linkrpc';
+import type { IMessageTransport } from '@hediet/linkrpc';
 import type { JsonValue } from '@hediet/linkrpc';
 import {
-    nodeInterface,
     type NodeInfo,
     type ParticipantDescriptorSource,
-    type ServiceId,
     type TopologyGraph,
     type TopologyTransportInfo,
-} from '@hediet/linkrpc/hub/common';
+    type TopologyIdGenerator,
+} from '@hediet/linkrpc/inspection';
+import type { ServiceId } from '@hediet/linkrpc/hub/common';
 
-export const GET_NODE_ID_METHOD = `${nodeInterface.info.id}::getNodeId`;
+import { GET_NODE_ID_METHOD, PeerDiscovery } from './peerDiscovery';
+export { GET_NODE_ID_METHOD } from './peerDiscovery';
 
 export interface ManagedRoutingTopology {
     readonly node: TopologyGraph['nodes'][number];
@@ -38,6 +38,7 @@ interface Disposable {
 
 export interface RoutingTopologyOptions {
     readonly nodeId: string;
+    readonly generateTopologyId: TopologyIdGenerator;
     readonly debugName?: string;
     readonly descriptors?: readonly ParticipantDescriptorSource[];
     readonly peerIdentificationTimeoutMs?: number;
@@ -50,7 +51,6 @@ export interface RoutingTopologyOptions {
         link: IMessageTransport,
         method: string,
         params: JsonValue,
-        inspection: boolean,
         timeoutMs?: number,
     ) => Promise<JsonValue | undefined>;
     readonly onDidChange: () => void;
@@ -63,23 +63,29 @@ export interface RoutingTopologyOptions {
 export class RoutingTopology {
     private readonly _portIds = new WeakMap<IMessageTransport, string>();
     private readonly _handleLinks = new WeakMap<object, IMessageTransport>();
-    private readonly _peerInfo = new WeakMap<IMessageTransport, NodeInfo>();
-    private readonly _peerStates = new WeakMap<
-        IMessageTransport,
-        'identified' | 'pending' | 'unsupported' | 'error'
-    >();
-    private readonly _peerIdentifications = new WeakMap<IMessageTransport, Promise<NodeInfo>>();
+    private readonly _peers: PeerDiscovery;
     private readonly _inspectionServices = new WeakMap<IMessageTransport, Set<string>>();
     private readonly _managedRoutingTopologies =
         new WeakMap<IMessageTransport, ManagedRoutingTopology>();
     private readonly _managedTopologyFragments = new Set<ManagedTopologyFragment>();
 
-    constructor(private readonly _options: RoutingTopologyOptions) {}
+    constructor(private readonly _options: RoutingTopologyOptions) {
+        this._peers = new PeerDiscovery({
+            timeoutMs: _options.peerIdentificationTimeoutMs,
+            request: (link, timeoutMs) =>
+                _options.requestOnLink(link, GET_NODE_ID_METHOD, {}, timeoutMs),
+            onDidChange: _options.onDidChange,
+        });
+    }
+
+    public attachLink(link: IMessageTransport): void {
+        this._peers.attach(link);
+    }
 
     public portId(link: IMessageTransport): string {
         let id = this._portIds.get(link);
         if (id === undefined) {
-            id = randomUUID();
+            id = this._options.generateTopologyId('port');
             this._portIds.set(link, id);
         }
         return id;
@@ -90,7 +96,7 @@ export class RoutingTopology {
     }
 
     public identifyPeer(link: IMessageTransport): Promise<NodeInfo> {
-        return this._identifyPeer(link);
+        return this._peers.identify(link);
     }
 
     public registerManagedRoutingTopology(
@@ -210,7 +216,7 @@ export class RoutingTopology {
                     ...(managed.peerTransport !== undefined
                         ? { transport: managed.peerTransport }
                         : {}),
-                    peerState: this._peerStates.get(link) ?? 'pending',
+                    peerState: this._peers.status(link),
                 });
                 links.push(...(managed.adjacentLinks ?? []));
                 continue;
@@ -220,7 +226,7 @@ export class RoutingTopology {
                 from: { nodeId: this._options.nodeId, portId: this.portId(link) },
                 to: peer,
                 label: this._options.edgeId(link),
-                peerState: this._peerStates.get(link) ?? 'pending',
+                peerState: this._peers.status(link),
                 ...(transport !== undefined ? { transport } : {}),
             });
         }
@@ -264,7 +270,8 @@ export class RoutingTopology {
 
     public cleanupLink(link: IMessageTransport): void {
         this._inspectionServices.delete(link);
-        this._peerStates.delete(link);
+        this._peers.detach(link);
+        this._managedRoutingTopologies.delete(link);
     }
 
     private _attachedLink(attached: object, operation: string): IMessageTransport {
@@ -276,76 +283,12 @@ export class RoutingTopology {
     }
 
     private _topologyPeer(link: IMessageTransport): { nodeId: string; portId: string; } {
-        const identified = this._peerInfo.get(link);
+        const identified = this._peers.info(link);
         if (identified !== undefined) return identified;
         const localPortId = this.portId(link);
         return {
             nodeId: `${this._options.nodeId}:unidentified:${localPortId}`,
             portId: `unidentified:${localPortId}`,
         };
-    }
-
-    private _identifyPeer(link: IMessageTransport): Promise<NodeInfo> {
-        const cached = this._peerInfo.get(link);
-        if (cached !== undefined) return Promise.resolve(cached);
-        const active = this._peerIdentifications.get(link);
-        if (active !== undefined) return active;
-        if (!this._options.isAttached(link)) {
-            return Promise.reject(new Error('identifyPeer: link is detached'));
-        }
-
-        this._peerStates.set(link, 'pending');
-        const identification = this._options.requestOnLink(
-            link,
-            GET_NODE_ID_METHOD,
-            {},
-            true,
-            this._options.peerIdentificationTimeoutMs ?? 1000,
-        )
-            .then((raw) => {
-                if (
-                    raw === null
-                    || typeof raw !== 'object'
-                    || Array.isArray(raw)
-                    || typeof (raw as { nodeId?: unknown }).nodeId !== 'string'
-                    || (raw as { nodeId: string }).nodeId.length === 0
-                    || typeof (raw as { portId?: unknown }).portId !== 'string'
-                    || (raw as { portId: string }).portId.length === 0
-                ) {
-                    throw new Error(
-                        `identifyPeer: invalid result from ${GET_NODE_ID_METHOD}`,
-                    );
-                }
-                const info: NodeInfo = {
-                    nodeId: (raw as { nodeId: string }).nodeId,
-                    portId: (raw as { portId: string }).portId,
-                    ...(Array.isArray((raw as { descriptors?: unknown }).descriptors)
-                        ? { descriptors: (raw as { descriptors: NodeInfo['descriptors'] }).descriptors }
-                        : {}),
-                };
-                this._peerInfo.set(link, info);
-                this._peerStates.set(link, 'identified');
-                this._options.onDidChange();
-                return info;
-            })
-            .catch((error: unknown) => {
-                this._peerStates.set(
-                    link,
-                    error instanceof RpcError && error.code === ErrorCode.methodNotFound
-                        ? 'unsupported'
-                        : 'error',
-                );
-                this._options.onDidChange();
-                throw new Error(
-                    `identifyPeer: ${GET_NODE_ID_METHOD} failed: ${
-                        error instanceof Error ? error.message : String(error)
-                    }`,
-                );
-            })
-            .finally(() => {
-                this._peerIdentifications.delete(link);
-            });
-        this._peerIdentifications.set(link, identification);
-        return identification;
     }
 }

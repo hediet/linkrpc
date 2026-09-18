@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import {
     ErrorCode,
     type IMessageTransport,
@@ -18,9 +19,11 @@ import {
     type StreamSendParams,
 } from '@hediet/linkrpc';
 import { Hub } from './routingHub';
+import { GET_NODE_ID_METHOD } from './peerDiscovery';
 
 /** Drives one side of a link: sends requests/notifications, records inbound. */
 class Endpoint {
+    private readonly _nodeId = randomUUID();
     // Start high so the hub's independent id space (which starts at 1)
     // cannot coincidentally collide with ours.
     private _nextId = 1000;
@@ -51,6 +54,10 @@ class Endpoint {
     }
 
     private _onMessage(m: JsonRpcMessage): void {
+        if (isRequest(m) && m.method === GET_NODE_ID_METHOD) {
+            this.respond(m, { nodeId: this._nodeId, portId: 'port' });
+            return;
+        }
         if (isResponse(m)) {
             const p = m.id === null ? undefined : this._pending.get(String(m.id));
             if (p) {
@@ -112,11 +119,12 @@ describe('Hub routing', () => {
                 },
             });
             expect(hub.pendingRequests()).toHaveLength(0);
-            expect(transits.map(({ kind, disposition, error }) => ({
-                kind,
-                disposition,
-                errorCode: error?.code,
-            }))).toEqual([
+            expect(transits.filter((transit) => transit.method === 'calc::math::slow')
+                .map(({ kind, disposition, error }) => ({
+                    kind,
+                    disposition,
+                    errorCode: error?.code,
+                }))).toEqual([
                 { kind: 'request', disposition: 'forwarded', errorCode: undefined },
                 {
                     kind: 'response',
@@ -157,9 +165,9 @@ describe('Hub routing', () => {
         const hub = new Hub();
         const caller = attachEndpoint(hub);
 
-        const loopback = new TransportPair();
-        hub.setLoopback(loopback.a);
-        const loop = new Endpoint(loopback.b);
+        const loopback = hub.attachOut();
+        loopback.setAsLoopback();
+        const loop = new Endpoint(loopback.transport);
 
         // A prefix owner that should be ignored for root-addressed calls.
         const ownerPair = new TransportPair();
@@ -175,6 +183,166 @@ describe('Hub routing', () => {
 
         loop.respond(forwarded, { ok: true });
         expect(okResult(await respP)).toEqual({ ok: true });
+        loopback.dispose();
+    });
+
+    it('rejects a second root handler until the current owner detaches', async () => {
+        const hub = new Hub();
+        const caller = attachEndpoint(hub);
+        const first = hub.attachOut();
+        const second = hub.attachOut();
+        const loop = new Endpoint(second.transport);
+        first.setAsLoopback();
+        expect(() => second.setAsLoopback()).toThrow('already the hub-root handler');
+        const changed = vi.fn();
+        const unsubscribe = hub.onDidChangeRouting(changed);
+        first.setAsLoopback();
+        expect(changed).not.toHaveBeenCalled();
+        first.dispose();
+        expect(() => first.setAsLoopback()).toThrow('link is detached');
+        second.setAsLoopback();
+        first.dispose();
+
+        const response = caller.request('math::add', {});
+        const forwarded = loop.inbox[0] as JsonRpcRequest;
+        loop.respond(forwarded, { ok: true });
+        expect(okResult(await response)).toEqual({ ok: true });
+
+        second.dispose();
+        expect(() => second.setAsLoopback()).toThrow('link is detached');
+        expect(errOf(await caller.request('math::add', {})).code).toBe(ErrorCode.methodNotFound);
+        unsubscribe();
+    });
+
+    it.each([false, true])('rejects a conflicting root attachment atomically (already attached: %s)', (alreadyAttached) => {
+        const hub = new Hub();
+        const original = hub.attachOut({ exclusiveHubRootHandler: true });
+        const pair = new TransportPair();
+        const existing = alreadyAttached ? hub.attach(pair.a) : undefined;
+        const before = hub.getTopologyGraph('observer');
+        const setListener = vi.spyOn(pair.a, 'setListener');
+        const changed = vi.fn();
+        const unsubscribe = hub.onDidChangeRouting(changed);
+        try {
+            expect(() => hub.attach(pair.a, {
+                exclusiveHubRootHandler: true,
+                routePrefixes: ['new-route'],
+                edgeId: 'rejected',
+                transport: { type: 'test' },
+            })).toThrow('already the hub-root handler');
+            expect(setListener).not.toHaveBeenCalled();
+            expect(changed).not.toHaveBeenCalled();
+            expect(hub.claimedPrefixes()).toEqual([]);
+            expect(hub.getTopologyGraph('observer')).toEqual(before);
+        } finally {
+            unsubscribe();
+            existing?.dispose();
+            original.dispose();
+        }
+    });
+
+    it('rejects a conflicting attachOut and allows a new handler after explicit clearing', () => {
+        const hub = new Hub();
+        const original = hub.attachOut({ exclusiveHubRootHandler: true });
+        const before = hub.getTopologyGraph('observer');
+        expect(() => hub.attachOut({
+            exclusiveHubRootHandler: true,
+            routePrefixes: ['new-route'],
+        })).toThrow('already the hub-root handler');
+        expect(hub.getTopologyGraph('observer')).toEqual(before);
+        hub.setLoopback(undefined);
+        const replacement = hub.attachOut({ exclusiveHubRootHandler: true });
+        original.dispose();
+        expect(() => replacement.setAsLoopback()).not.toThrow();
+        replacement.dispose();
+    });
+
+    it('does not let a disposed handle change or detach a reattached transport', () => {
+        const hub = new Hub();
+        const pair = new TransportPair();
+        const old = hub.attach(pair.a);
+        old.dispose();
+        const current = hub.attach(pair.a);
+        expect(() => old.setAsLoopback()).toThrow('link is detached');
+        old.dispose();
+        expect(() => current.setAsLoopback()).not.toThrow();
+        current.dispose();
+    });
+
+    it('configures loopback and prefix routes before delivering buffered messages', async () => {
+        const hub = new Hub();
+        const pair = new TransportPair();
+        const endpoint = new Endpoint(pair.b);
+        const rootResponse = endpoint.request('math::add', {});
+        const prefixResponse = endpoint.request('calc::math::add', {});
+        const link = hub.attach(pair.a, { exclusiveHubRootHandler: true, routePrefixes: ['calc', 'other'] });
+        try {
+            expect(endpoint.inbox).toHaveLength(2);
+            const [root, prefixed] = endpoint.inbox as JsonRpcRequest[];
+            expect(root.method).toBe('math::add');
+            expect(prefixed.method).toBe('calc::math::add');
+            endpoint.respond(root, 'root');
+            endpoint.respond(prefixed, 'prefix');
+            expect(okResult(await rootResponse)).toBe('root');
+            expect(okResult(await prefixResponse)).toBe('prefix');
+            expect(hub.claimedPrefixes()).toEqual(['calc', 'other']);
+        } finally {
+            link.dispose();
+        }
+        expect(hub.claimedPrefixes()).toEqual([]);
+    });
+
+    it.each([
+        ['new', ''],
+        ['new', 'taken'],
+        ['new', 'new'],
+    ])('rejects initial routes %j without changing attachment or loopback state', async (...routePrefixes) => {
+        const hub = new Hub();
+        const original = hub.attachOut({ exclusiveHubRootHandler: true, routePrefixes: ['taken'] });
+        const endpoint = new Endpoint(original.transport);
+        const pair = new TransportPair();
+        const setListener = vi.spyOn(pair.a, 'setListener');
+        const changes = vi.fn();
+        const unsubscribe = hub.onDidChangeRouting(changes);
+        const before = hub.getTopologyGraph('observer');
+        try {
+            expect(() => hub.attach(pair.a, {
+                exclusiveHubRootHandler: true,
+                routePrefixes,
+                edgeId: 'rejected',
+            })).toThrow(/claimPrefix/);
+            expect(setListener).not.toHaveBeenCalled();
+            expect(changes).not.toHaveBeenCalled();
+            expect(hub.getTopologyGraph('observer')).toEqual(before);
+            expect(hub.claimedPrefixes()).toEqual(['taken']);
+            const response = endpoint.request('math::add', {});
+            endpoint.respond(endpoint.inbox[0] as JsonRpcRequest, 'original');
+            expect(okResult(await response)).toBe('original');
+        } finally {
+            unsubscribe();
+            original.dispose();
+        }
+    });
+
+    it('applies initial options to an already attached link without reinstalling its listener', () => {
+        const hub = new Hub();
+        const pair = new TransportPair();
+        const link = hub.attach(pair.a);
+        const setListener = vi.spyOn(pair.a, 'setListener');
+        const changes = vi.fn();
+        const unsubscribe = hub.onDidChangeRouting(changes);
+        try {
+            hub.attach(pair.a, { exclusiveHubRootHandler: true, routePrefixes: ['calc'] });
+            expect(setListener).not.toHaveBeenCalled();
+            expect(changes).toHaveBeenCalledOnce();
+            const graph = hub.getTopologyGraph('observer');
+            expect(() => hub.attach(pair.a, { routePrefixes: ['other', 'calc'] })).toThrow(/already claimed/);
+            expect(hub.getTopologyGraph('observer')).toEqual(graph);
+            expect(hub.claimedPrefixes()).toEqual(['calc']);
+        } finally {
+            unsubscribe();
+            link.dispose();
+        }
     });
 
     it('replies methodNotFound for root-addressed calls when there is no loopback', async () => {

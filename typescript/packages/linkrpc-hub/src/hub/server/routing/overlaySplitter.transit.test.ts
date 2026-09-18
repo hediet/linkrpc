@@ -5,7 +5,6 @@ import {
     type JsonRpcMessage,
     type JsonRpcRequest,
     type JsonRpcResponse,
-    setLocalMessageContext,
     TransportPair,
 } from '@hediet/linkrpc';
 import type { FlowSummary } from '../nodeTransit';
@@ -173,7 +172,7 @@ describe('OverlaySplitter transit chaining', () => {
         expect(local!.path).toEqual(['app', 'ov', 'root']);
     });
 
-    it('hides only trusted inspection lifecycles', async () => {
+    it('emits inspection calls like ordinary transits', async () => {
         const transits: Parameters<TransitAggregator['add']>[0][] = [];
         const uplinkPair = new TransportPair();
         const overlay = new RootOverlay({
@@ -195,18 +194,11 @@ describe('OverlaySplitter transit chaining', () => {
             method: 'hub::hubrpc.topology::getGraph',
             params: {},
         };
-        setLocalMessageContext(inspectionRequest, { inspection: true });
         void participant.transport.send(inspectionRequest);
         await waitFor(() => uplink.inbox.length === 1);
         uplink.respond(uplink.lastRequest(), { nodes: [], links: [], services: [] });
         await waitFor(() => participant.inbox.length === 1);
 
-        expect(transits).toEqual([]);
-
-        const fake = participant.request('hub::hubrpc.topology::getGraph', {});
-        await waitFor(() => uplink.inbox.length === 2);
-        uplink.respond(uplink.lastRequest(), { nodes: [], links: [], services: [] });
-        await fake;
         expect(transits.map((transit) => transit.kind)).toEqual(['request', 'response']);
         overlay.dispose();
     });

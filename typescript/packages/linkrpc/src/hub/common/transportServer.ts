@@ -1,5 +1,5 @@
 import type { IMessageTransport } from '../../index';
-import type { TopologyTransportInfo } from './inspection.interfaces';
+import type { TopologyTransportInfo } from '../../inspection/inspection.interfaces';
 
 /**
  * A link the hub can route, plus a close signal. {@link IMessageTransport}

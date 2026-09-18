@@ -1,7 +1,7 @@
 import { array, object, optional, string } from "zod/mini";
 import type { output as zInfer } from "zod/v4/core";
-import { defineInterface } from "../../connection/interfaceDefinition";
-import { requestType } from "../../schema/memberTypes";
+import { defineInterface } from "../connection/interfaceDefinition";
+import { requestType } from "../schema/memberTypes";
 import { zParticipantDescriptorSource } from "./inspection.interfaces";
 import type { ParticipantDescriptorSource } from "./inspection.interfaces";
 
@@ -19,6 +19,13 @@ const zNodeInfo = object({
 
 export type NodeInfo = zInfer<typeof zNodeInfo>;
 export type { ParticipantDescriptorSource };
+
+/**
+ * Generates unique topology-correlation labels, not security identities.
+ * Custom generators must avoid collisions across nodes and ports. Tests can
+ * supply an independent deterministic sequence for each participant.
+ */
+export type TopologyIdGenerator = (kind: 'node' | 'port') => string;
 
 /**
  * Minimal root service for aligning the independently observed topologies at

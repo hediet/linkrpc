@@ -1,19 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { z } from 'zod';
-import { nodeInterface } from '../hub/common/node.interfaces';
+import { nodeInterface } from '../inspection/node.interfaces';
 import {
     topologyInterface,
     trafficInterface,
     type TrafficEvent,
-} from '../hub/common/inspection.interfaces';
+} from '../inspection/inspection.interfaces';
 import { defaultsInterface, directoryInterface, schemasInterface } from '../hub/common/reflection.interfaces';
 import { defineInterface, interfaceFromSchema } from './interfaceDefinition';
 import { notificationType, requestType } from '../schema/memberTypes';
 import { traceMessageTransport, TransportPair } from '../transport/messageTransport';
 import type { IMessageTransport } from '../transport/messageTransport';
 import type { JsonRpcMessage } from '../protocol/jsonRpc';
-import { getLocalMessageContext } from '../transport/messageTransport';
 import { RpcError } from './channel';
 import { LinkRpcConnection } from './linkRpcConnection';
 import { JsonRpcChannel } from './jsonRpcChannel';
@@ -305,7 +304,34 @@ describe('LinkRpcConnection', () => {
         dispose();
     });
 
-    it('marks outbound inspection requests without requiring a local watcher', () => {
+    it('uses an injected topology generator and keeps IDs stable until registration disposal', async () => {
+        const pair = new TransportPair();
+        const client = LinkRpcConnection.fromTransport(pair.a);
+        let nextId = 0;
+        const server = LinkRpcConnection.fromTransport(pair.b, {
+            generateTopologyId: (kind) => `test-${kind}-${++nextId}`,
+        });
+        try {
+            const first = server.enableInspection();
+            expect(server.enableInspection()).toBe(first);
+            expect(nextId).toBe(2);
+            await expect(client.get(nodeInterface).getNodeId({})).resolves.toEqual({
+                nodeId: 'test-node-1',
+                portId: 'test-port-2',
+            });
+            first.dispose();
+            server.enableInspection();
+            await expect(client.get(nodeInterface).getNodeId({})).resolves.toEqual({
+                nodeId: 'test-node-3',
+                portId: 'test-port-4',
+            });
+        } finally {
+            client.close();
+            server.close();
+        }
+    });
+
+    it('keeps outbound inspection requests as plain JSON-RPC messages', () => {
         let sent: JsonRpcMessage | undefined;
         const transport: IMessageTransport = {
             send: (message) => {
@@ -318,15 +344,12 @@ describe('LinkRpcConnection', () => {
 
         void connection.service('hub').get(topologyInterface).getGraph({}).catch(() => undefined);
 
-        expect(sent).toBeDefined();
-        expect(getLocalMessageContext(sent!)?.inspection).toBe(true);
-        expect(JSON.stringify(sent)).not.toContain('context');
-        expect(getLocalMessageContext({
+        expect(sent).toEqual({
             jsonrpc: '2.0',
             id: 1,
             method: 'hub::hubrpc.topology::getGraph',
-            context: { inspection: true },
-        } as JsonRpcMessage)).toBeUndefined();
+            params: {},
+        });
         connection.close();
     });
 
@@ -420,7 +443,7 @@ describe('LinkRpcConnection', () => {
         dispose();
     });
 
-    it('lazily observes endpoint requests and responses without self-traffic', async () => {
+    it('observes endpoint requests and responses while excluding only self-traffic', async () => {
         const { client, server, dispose } = makePair();
         server.service('svc').register(greeter, {
             hello: ({ name }) => ({ greeting: `Hi ${name}` }),
@@ -453,25 +476,26 @@ describe('LinkRpcConnection', () => {
         await observed;
 
         const transits = events.filter((event) => event.type === 'transit');
-        expect(transits).toHaveLength(2);
-        expect(transits.map((transit) => transit.kind)).toEqual(['request', 'response']);
-        expect(transits[0]).toMatchObject({
+        expect(transits).toHaveLength(6);
+        const businessTransits = transits.filter((transit) =>
+            transit.method === 'other::test.greeter::hello'
+        );
+        expect(businessTransits.map((transit) => transit.kind)).toEqual(['request', 'response']);
+        expect(businessTransits[0]).toMatchObject({
             method: 'other::test.greeter::hello',
             disposition: 'consumed',
             in: expect.objectContaining({ requestId: expect.any(Number) }),
         });
-        expect(transits[1]).toMatchObject({
+        expect(businessTransits[1]).toMatchObject({
             method: 'other::test.greeter::hello',
             disposition: 'forwarded',
-            out: expect.objectContaining({ requestId: transits[0].in?.requestId }),
+            out: expect.objectContaining({ requestId: businessTransits[0].in?.requestId }),
         });
         expect(transits.every((transit) =>
-            !transit.method?.includes('hubrpc.topology')
-            && !transit.method?.includes('hubrpc.node')
-            && !transit.method?.includes('hubrpc.traffic'))).toBe(true);
+            !transit.method?.includes('hubrpc.traffic'))).toBe(true);
 
         await watch.cancel('test-complete');
-        await expect(watch).resolves.toMatchObject({ delivered: 2, dropped: 0 });
+        await expect(watch).resolves.toMatchObject({ delivered: 6, dropped: 0 });
         expect(server.trafficObserverCount).toBe(0);
         dispose();
     });
@@ -488,6 +512,7 @@ describe('LinkRpcConnection', () => {
         const event = new Promise<TrafficEvent>((resolve) => resolveFlow = resolve);
         const watch = client.service('svc').get(trafficInterface).watchWithPayloads({
             methodPrefix: 'svc::test.greeter::hello',
+            trafficIgnoreKey: 'payload-watch',
             maxPayloadBytes: 8,
         }, {
             onMessage: (value) => {
@@ -570,6 +595,7 @@ describe('LinkRpcConnection', () => {
         const overflow = new Promise<number>((resolve) => resolveOverflow = resolve);
         const watch = client.service('svc').get(trafficInterface).watch({
             methodPrefix: 'svc::test.greeter::shout',
+            trafficIgnoreKey: 'overflow-watch',
         }, {
             onMessage: (event) => {
                 if (event.type === 'overflow') resolveOverflow(event.dropped);

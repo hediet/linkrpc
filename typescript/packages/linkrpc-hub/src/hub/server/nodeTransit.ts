@@ -24,7 +24,7 @@ import type {
     RequestId,
 } from '@hediet/linkrpc';
 import type { IMessageTransport } from '@hediet/linkrpc';
-import type { TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+import type { TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 import { STREAM_METHOD } from '@hediet/linkrpc';
 
 /** What kind of message crossed the node. Cancel/ping/pong are stream controls. */
@@ -54,7 +54,7 @@ export interface TransitError {
  * originated here; `out` absent ⇒ it was consumed or dropped here.
  */
 export interface NodeTransit {
-    readonly ts: number;
+    readonly timeMs: number;
     readonly nodeId: string;
     readonly in?: TransitEndpoint;
     readonly out?: TransitEndpoint;
@@ -78,7 +78,7 @@ export type FlowStatus = 'completed' | 'failed' | 'pending' | 'dropped' | 'unrou
 
 /** One stream frame (`$stream::send`) attached to a flow, in arrival order. */
 export interface FlowStreamMessage {
-    readonly ts: number;
+    readonly timeMs: number;
     /** `toCaller` = callee→caller (progress); `toCallee` = caller→callee (input/cancel). */
     readonly dir: 'toCaller' | 'toCallee';
     /** Reserved control verb (`cancel`/`ping`/`pong`), if this is a control frame. */
@@ -194,7 +194,7 @@ export class TransitAggregator {
         if (transit.kind === 'stream') {
             const parent = this._findFlow(this._endpointKeys(transit));
             const fresh = parent !== undefined
-                && transit.ts - parent.firstTs <= this._streamRetainMs;
+                && transit.timeMs - parent.firstTs <= this._streamRetainMs;
             if (!fresh) {
                 this._emitStandaloneStream(transit, parent);
                 return;
@@ -220,13 +220,13 @@ export class TransitAggregator {
                 reportedPartial: false,
                 timer: undefined,
                 timerIsGiveUp: false,
-                firstTs: transit.ts,
+                firstTs: transit.timeMs,
             };
             this._flows.add(flow);
         }
 
         flow.transits.push(transit);
-        if (transit.ts < flow.firstTs) flow.firstTs = transit.ts;
+        if (transit.timeMs < flow.firstTs) flow.firstTs = transit.timeMs;
         for (const k of keys) {
             flow.endpoints.add(k);
             this._endpointToFlow.set(k, flow);
@@ -276,7 +276,7 @@ export class TransitAggregator {
         const method = parent?.transits.find(
             (t) => t.kind === 'request' || t.kind === 'notification',
         )?.method;
-        const startTs = parent?.firstTs ?? transit.ts;
+        const startTs = parent?.firstTs ?? transit.timeMs;
         this._options.onFlow({
             id: `flow${this._nextId++}`,
             kind: 'stream',
@@ -284,8 +284,8 @@ export class TransitAggregator {
             params: undefined,
             status: 'completed',
             startTs,
-            endTs: transit.ts,
-            durationMs: transit.ts - startTs,
+            endTs: transit.timeMs,
+            durationMs: transit.timeMs - startTs,
             path: this._buildStreamPath(transit),
             partial: false,
             stream: [msg],
@@ -373,7 +373,7 @@ export class TransitAggregator {
     }
 
     private _summarize(flow: Flow): FlowSummary {
-        const transits = [...flow.transits].sort((a, b) => a.ts - b.ts);
+        const transits = [...flow.transits].sort((a, b) => a.timeMs - b.timeMs);
         const head =
             transits.find((t) => t.kind === 'request') ??
             transits.find((t) => t.kind === 'notification') ??
@@ -393,7 +393,8 @@ export class TransitAggregator {
             status = 'pending';
         }
 
-        const endTs = response?.ts ?? (status === 'pending' ? undefined : transits[transits.length - 1]?.ts);
+        const endTs = response?.timeMs
+            ?? (status === 'pending' ? undefined : transits[transits.length - 1]?.timeMs);
         const startTs = flow.firstTs;
         const durationMs = (endTs ?? this._now()) - startTs;
 
@@ -453,7 +454,7 @@ export class TrafficFlowAggregator {
 
     public add(transit: TrafficTransitEvent): void {
         this._aggregator.add({
-            ts: transit.ts,
+            timeMs: transit.timeMs,
             nodeId: transit.nodeId,
             ...(transit.in !== undefined ? { in: toTransitEndpoint(transit.in) } : {}),
             ...(transit.out !== undefined ? { out: toTransitEndpoint(transit.out) } : {}),
@@ -573,7 +574,7 @@ function _streamMessagesOf(transits: readonly NodeTransit[]): FlowStreamMessage[
         const dir = p?.dir === 'toCallee' ? 'toCallee' : 'toCaller';
         const control = typeof p?.control?.type === 'string' ? p.control.type : undefined;
         out.push({
-            ts: t.ts,
+            timeMs: t.timeMs,
             dir,
             ...(control !== undefined ? { control } : {}),
             ...(p?.payload !== undefined ? { payload: p.payload } : {}),
@@ -741,7 +742,7 @@ function _wireTransit(
         requestId !== undefined ? { edgeId, requestId } : { edgeId };
 
     return {
-        ts: Date.now(),
+        timeMs: Date.now(),
         nodeId,
         disposition: 'forwarded',
         kind,

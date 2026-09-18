@@ -17,42 +17,6 @@ export type MessageWithContext<TCtx> = JsonRpcMessage & { context: TCtx; };
 
 export type MessageTransportWithContext<TCtx> = IMessageTransport<JsonRpcMessage, MessageWithContext<TCtx>>;
 
-export interface LocalMessageContext {
-    readonly inspection?: true;
-}
-
-const localMessageContextBrand = Symbol.for('@hediet/linkrpc.localMessageContext');
-
-/** Attach branded local context without adding it to serialized JSON-RPC. */
-export function setLocalMessageContext<TMessage extends JsonRpcMessage, TContext extends object>(
-    message: TMessage,
-    context: TContext,
-): TMessage & { context: TContext; } {
-    Object.defineProperties(message, {
-        context: {
-            configurable: true,
-            enumerable: false,
-            value: context,
-        },
-        [localMessageContextBrand]: {
-            configurable: true,
-            enumerable: false,
-            value: true,
-        },
-    });
-    return message as TMessage & { context: TContext; };
-}
-
-/** Read context attached locally by {@link setLocalMessageContext}. */
-export function getLocalMessageContext<TContext extends object = LocalMessageContext>(
-    message: JsonRpcMessage,
-): TContext | undefined {
-    const branded = message as JsonRpcMessage & { readonly context?: TContext; };
-    return (message as unknown as Record<PropertyKey, unknown>)[localMessageContextBrand] === true
-        ? branded.context
-        : undefined;
-}
-
 export type MessageTransportDirection = 'send' | 'receive';
 export type MessageTransportTrace = (
     direction: MessageTransportDirection,

@@ -5,7 +5,7 @@ import { BoundedTrafficSubscription } from './boundedTrafficSubscription';
 function transit(method: string, params?: TrafficTransitEvent['params']): TrafficTransitEvent {
     return {
         type: 'transit',
-        ts: 1,
+        timeMs: 1,
         nodeId: 'node',
         disposition: 'forwarded',
         kind: 'request',

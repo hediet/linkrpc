@@ -3,13 +3,19 @@ import type {
     TrafficTransitEvent,
     TrafficWatchResult,
 } from './inspection.interfaces';
-import type { JsonValue } from '../../protocol/jsonRpc';
+import type { JsonValue } from '../protocol/jsonRpc';
+import {
+    TrafficFlowFilter,
+} from './trafficFlowFilter';
+import type { TrafficRequestRef } from './trafficFlowFilter';
 
 const DEFAULT_QUEUE_LIMIT = 256;
 
 export interface TrafficSubscriptionOptions {
     readonly methodPrefix?: string;
     readonly maxPayloadBytes?: number;
+    readonly trafficIgnoreKey?: string;
+    readonly focusRequest?: TrafficRequestRef;
 }
 
 export interface TrafficSubscription {
@@ -29,6 +35,7 @@ export class BoundedTrafficSubscription implements TrafficSubscription {
     private _delivered = 0;
     private _dropped = 0;
     private readonly _resolveClosed: (result: TrafficWatchResult) => void;
+    private readonly _filter: TrafficFlowFilter;
     public readonly closed: Promise<TrafficWatchResult>;
 
     constructor(
@@ -40,10 +47,14 @@ export class BoundedTrafficSubscription implements TrafficSubscription {
         let resolve!: (result: TrafficWatchResult) => void;
         this.closed = new Promise<TrafficWatchResult>((r) => resolve = r);
         this._resolveClosed = resolve;
+        this._filter = new TrafficFlowFilter({
+            focus: _options.focusRequest,
+        });
     }
 
     public enqueue(transit: TrafficTransitEvent): void {
         if (!this._active) return;
+        if (!this._filter.shouldInclude(transit)) return;
         if (
             this._options.methodPrefix !== undefined
             && !transit.method?.startsWith(this._options.methodPrefix)

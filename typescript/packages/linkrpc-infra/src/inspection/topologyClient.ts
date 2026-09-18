@@ -1,9 +1,12 @@
-import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
-import { DEFAULT_RPC_TIMEOUT_MS, withRpcTimeout } from '../../connection/requestTimeout';
+import {
+    DEFAULT_RPC_TIMEOUT_MS,
+    type LinkRpcConnection,
+    withRpcTimeout,
+} from '@hediet/linkrpc';
 import {
     topologyInterface,
     type TopologyGraph,
-} from '../common/inspection.interfaces';
+} from '@hediet/linkrpc/inspection';
 
 export interface TopologyWatch {
     /** Resolves with the initial snapshot after its callback has run. */

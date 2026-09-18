@@ -1,10 +1,11 @@
-import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import type { LinkRpcConnection } from '@hediet/linkrpc';
 import {
     trafficInterface,
     type TrafficOverflowEvent,
     type TrafficTransitEvent,
     type TrafficWatchResult,
-} from '../common/inspection.interfaces';
+    type TrafficRequestRef,
+} from '@hediet/linkrpc/inspection';
 
 export interface TrafficCallbacks {
     onTransit(transit: TrafficTransitEvent): void;
@@ -19,6 +20,8 @@ export interface TrafficWatch {
 
 export interface TrafficWatchOptions {
     readonly methodPrefix?: string;
+    readonly trafficIgnoreKey?: string;
+    readonly focusRequest?: TrafficRequestRef;
 }
 
 export interface TrafficWatchWithPayloadsOptions extends TrafficWatchOptions {
@@ -38,7 +41,7 @@ export class TrafficClient<TInCtx = unknown, TOutCtx = unknown> {
     ): TrafficWatch {
         const call = this._connection.service(this.serviceId)
             .get(trafficInterface)
-            .watch(options, { onMessage: (event) => {
+            .watch(withTrafficIgnoreKey(options), { onMessage: (event) => {
                 dispatchTrafficEvent(event, callbacks);
             } });
         void call.catch((error) => reportTrafficError(callbacks, error));
@@ -47,6 +50,7 @@ export class TrafficClient<TInCtx = unknown, TOutCtx = unknown> {
             cancel: async (reason?: string) => {
                 try {
                     await call.cancel(reason);
+                    await call;
                 } finally {
                     call.dispose?.(reason);
                 }
@@ -60,7 +64,7 @@ export class TrafficClient<TInCtx = unknown, TOutCtx = unknown> {
     ): TrafficWatch {
         const call = this._connection.service(this.serviceId)
             .get(trafficInterface)
-            .watchWithPayloads(options, { onMessage: (event) => {
+            .watchWithPayloads(withTrafficIgnoreKey(options), { onMessage: (event) => {
                 dispatchTrafficEvent(event, callbacks);
             } });
         void call.catch((error) => reportTrafficError(callbacks, error));
@@ -69,12 +73,31 @@ export class TrafficClient<TInCtx = unknown, TOutCtx = unknown> {
             cancel: async (reason?: string) => {
                 try {
                     await call.cancel(reason);
+                    await call;
                 } finally {
                     call.dispose?.(reason);
                 }
             },
         };
     }
+}
+
+function withTrafficIgnoreKey<T extends TrafficWatchOptions>(
+    options: T,
+): T & { trafficIgnoreKey: string; } {
+    return {
+        ...options,
+        trafficIgnoreKey: options.trafficIgnoreKey ?? createTrafficIgnoreKey(),
+    };
+}
+
+function createTrafficIgnoreKey(): string {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+        return globalThis.crypto.randomUUID();
+    }
+    const bytes = new Uint8Array(16);
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function dispatchTrafficEvent(

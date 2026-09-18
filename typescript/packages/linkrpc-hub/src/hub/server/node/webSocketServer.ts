@@ -4,9 +4,9 @@ import type { JsonRpcMessage } from '@hediet/linkrpc';
 import { runInitializeHandshake } from '@hediet/linkrpc/node';
 import type {
     ITransportServer,
-    TopologyTransportInfo,
     Transport,
 } from '@hediet/linkrpc/hub/common';
+import type { TopologyTransportInfo } from '@hediet/linkrpc/inspection';
 
 /**
  * A {@link Transport} over a server-side `ws` WebSocket. One JSON-RPC message

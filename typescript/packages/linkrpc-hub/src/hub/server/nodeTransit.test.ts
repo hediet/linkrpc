@@ -9,7 +9,7 @@ import {
 } from './nodeTransit';
 import type { IMessageTransport } from '@hediet/linkrpc';
 import type { JsonRpcMessage } from '@hediet/linkrpc';
-import type { TrafficTransitEvent } from '@hediet/linkrpc/hub/common';
+import type { TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 
 /** Deterministic clock + timer wheel for driving the aggregator's debounce. */
 class FakeClock {
@@ -63,7 +63,7 @@ function makeAgg(clock: FakeClock, flushDelayMs = 50): { agg: TransitAggregator;
 }
 
 const req = (over: Partial<NodeTransit> = {}): NodeTransit => ({
-    ts: 0,
+    timeMs: 0,
     nodeId: 'hub',
     in: { edgeId: 'e1', requestId: 1000 },
     out: { edgeId: 'e2', requestId: 1 },
@@ -75,7 +75,7 @@ const req = (over: Partial<NodeTransit> = {}): NodeTransit => ({
 });
 
 const res = (over: Partial<NodeTransit> = {}): NodeTransit => ({
-    ts: 0,
+    timeMs: 0,
     nodeId: 'hub',
     in: { edgeId: 'e2', requestId: 1 },
     out: { edgeId: 'e1', requestId: 1000 },
@@ -87,7 +87,7 @@ const res = (over: Partial<NodeTransit> = {}): NodeTransit => ({
 });
 
 const strm = (over: Partial<NodeTransit> = {}): NodeTransit => ({
-    ts: 0,
+    timeMs: 0,
     nodeId: 'hub',
     in: { edgeId: 'e2', requestId: 1 },
     out: { edgeId: 'e1', requestId: 1000 },
@@ -102,7 +102,7 @@ const trafficTransit = (
     over: Partial<TrafficTransitEvent> & Pick<TrafficTransitEvent, 'kind' | 'nodeId'>,
 ): TrafficTransitEvent => ({
     type: 'transit',
-    ts: 0,
+    timeMs: 0,
     disposition: 'forwarded',
     method: 'calc::math::add',
     ...over,
@@ -113,8 +113,8 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(req({ ts: 0 }));
-        agg.add(res({ ts: 5 }));
+        agg.add(req({ timeMs: 0 }));
+        agg.add(res({ timeMs: 5 }));
         clock.advance(60);
 
         expect(flows).toHaveLength(1);
@@ -155,7 +155,7 @@ describe('TransitAggregator', () => {
                 out: { edgeId: 'target', portId: 'target', requestId: 1 },
             }));
             frontend.add(trafficTransit({
-                ts: 5,
+                timeMs: 5,
                 nodeId: 'hub',
                 kind: 'response',
                 result: 3,
@@ -185,15 +185,15 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(req({ ts: 0 }));
-        agg.add(strm({ ts: 2, params: { requestId: 1, dir: 'toCaller', payload: { chunk: 'a' } } }));
+        agg.add(req({ timeMs: 0 }));
+        agg.add(strm({ timeMs: 2, params: { requestId: 1, dir: 'toCaller', payload: { chunk: 'a' } } }));
         agg.add(strm({
-            ts: 4,
+            timeMs: 4,
             in: { edgeId: 'e1', requestId: 1000 },
             out: { edgeId: 'e2', requestId: 1 },
             params: { requestId: 1, dir: 'toCallee', control: { type: 'cancel' } },
         }));
-        agg.add(res({ ts: 6 }));
+        agg.add(res({ timeMs: 6 }));
         clock.advance(60);
 
         expect(flows).toHaveLength(1);
@@ -202,16 +202,16 @@ describe('TransitAggregator', () => {
         // Stream transits don't pollute the request/response path.
         expect(s.path).toEqual(['e1', 'hub', 'e2']);
         expect(s.stream).toHaveLength(2);
-        expect(s.stream![0]).toMatchObject({ ts: 2, dir: 'toCaller', payload: { chunk: 'a' } });
-        expect(s.stream![1]).toMatchObject({ ts: 4, dir: 'toCallee', control: 'cancel' });
+        expect(s.stream![0]).toMatchObject({ timeMs: 2, dir: 'toCaller', payload: { chunk: 'a' } });
+        expect(s.stream![1]).toMatchObject({ timeMs: 4, dir: 'toCallee', control: 'cancel' });
     });
 
     it('omits stream when none were captured (gate off)', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(req({ ts: 0 }));
-        agg.add(res({ ts: 5 }));
+        agg.add(req({ timeMs: 0 }));
+        agg.add(res({ timeMs: 5 }));
         clock.advance(60);
 
         expect(flows[0].stream).toBeUndefined();
@@ -221,10 +221,10 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock); // streamRetainMs defaults to 1000
 
-        agg.add(req({ ts: 0 }));
-        agg.add(strm({ ts: 500, params: { requestId: 1, dir: 'toCaller', payload: { chunk: 'early' } } }));
+        agg.add(req({ timeMs: 0 }));
+        agg.add(strm({ timeMs: 500, params: { requestId: 1, dir: 'toCaller', payload: { chunk: 'early' } } }));
         // Past the 1s window: emitted immediately as its own summary, not buffered.
-        agg.add(strm({ ts: 1500, params: { requestId: 1, dir: 'toCaller', payload: { chunk: 'late' } } }));
+        agg.add(strm({ timeMs: 1500, params: { requestId: 1, dir: 'toCaller', payload: { chunk: 'late' } } }));
 
         const standalone = flows.filter((f) => f.kind === 'stream');
         expect(standalone).toHaveLength(1);
@@ -233,7 +233,7 @@ describe('TransitAggregator', () => {
         expect(standalone[0].durationMs).toBe(1500); // offset from request start
         expect(standalone[0].path).toEqual(['e2', 'hub', 'e1']);
 
-        agg.add(res({ ts: 1600 }));
+        agg.add(res({ timeMs: 1600 }));
         clock.advance(60);
 
         const settled = flows.find((f) => f.kind !== 'stream');
@@ -247,7 +247,7 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(strm({ ts: 100 }));
+        agg.add(strm({ timeMs: 100 }));
 
         expect(flows).toHaveLength(1);
         expect(flows[0].kind).toBe('stream');
@@ -259,14 +259,14 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(req({ ts: 0 }));
+        agg.add(req({ timeMs: 0 }));
         clock.advance(60); // quiet period elapses with no response
 
         expect(flows).toHaveLength(1);
         expect(flows[0].status).toBe('pending');
         expect(flows[0].partial).toBe(true);
 
-        agg.add(res({ ts: 200 }));
+        agg.add(res({ timeMs: 200 }));
         clock.advance(60);
 
         expect(flows).toHaveLength(2);
@@ -279,8 +279,8 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(req({ ts: 0 }));
-        agg.add(res({ ts: 5, result: undefined, error: { code: -32000, message: 'boom' } }));
+        agg.add(req({ timeMs: 0 }));
+        agg.add(res({ timeMs: 5, result: undefined, error: { code: -32000, message: 'boom' } }));
         clock.advance(60);
 
         expect(flows).toHaveLength(1);
@@ -292,7 +292,7 @@ describe('TransitAggregator', () => {
         const clock = new FakeClock();
         const { agg, flows } = makeAgg(clock);
 
-        agg.add(req({ ts: 0, out: undefined, disposition: 'unroutable' }));
+        agg.add(req({ timeMs: 0, out: undefined, disposition: 'unroutable' }));
         clock.advance(60);
 
         expect(flows).toHaveLength(1);
@@ -305,7 +305,7 @@ describe('TransitAggregator', () => {
 
         // Same logical event seen at two nodes; they share the edge `mid`.
         agg.add({
-            ts: 0,
+            timeMs: 0,
             nodeId: 'split',
             in: { edgeId: 'p' },
             out: { edgeId: 'mid' },
@@ -315,7 +315,7 @@ describe('TransitAggregator', () => {
             params: { file: 'a.ts' },
         });
         agg.add({
-            ts: 1,
+            timeMs: 1,
             nodeId: 'hub',
             in: { edgeId: 'mid' },
             out: { edgeId: 'target' },
@@ -338,7 +338,7 @@ describe('TransitAggregator', () => {
         const { agg, flows } = makeAgg(clock);
 
         const base = {
-            ts: 0,
+            timeMs: 0,
             nodeId: 'hub',
             in: { edgeId: 'e1' },
             out: { edgeId: 'e2' },
@@ -358,10 +358,10 @@ describe('TransitAggregator', () => {
         const { agg, flows } = makeAgg(clock);
 
         // node A forwards onto edge `mid` as id 5; node B forwards onto e2 as 9.
-        agg.add(req({ ts: 0, nodeId: 'A', in: { edgeId: 'e1', requestId: 1000 }, out: { edgeId: 'mid', requestId: 5 } }));
-        agg.add(req({ ts: 1, nodeId: 'B', in: { edgeId: 'mid', requestId: 5 }, out: { edgeId: 'e2', requestId: 9 } }));
-        agg.add(res({ ts: 8, nodeId: 'B', in: { edgeId: 'e2', requestId: 9 }, out: { edgeId: 'mid', requestId: 5 } }));
-        agg.add(res({ ts: 9, nodeId: 'A', in: { edgeId: 'mid', requestId: 5 }, out: { edgeId: 'e1', requestId: 1000 } }));
+        agg.add(req({ timeMs: 0, nodeId: 'A', in: { edgeId: 'e1', requestId: 1000 }, out: { edgeId: 'mid', requestId: 5 } }));
+        agg.add(req({ timeMs: 1, nodeId: 'B', in: { edgeId: 'mid', requestId: 5 }, out: { edgeId: 'e2', requestId: 9 } }));
+        agg.add(res({ timeMs: 8, nodeId: 'B', in: { edgeId: 'e2', requestId: 9 }, out: { edgeId: 'mid', requestId: 5 } }));
+        agg.add(res({ timeMs: 9, nodeId: 'A', in: { edgeId: 'mid', requestId: 5 }, out: { edgeId: 'e1', requestId: 1000 } }));
         clock.advance(60);
 
         expect(flows).toHaveLength(1);
@@ -380,8 +380,8 @@ describe('TransitAggregator', () => {
             labelOf: (id) => (id === 'e1' ? 'csv-viewer' : id === 'e2' ? 'github' : undefined),
         });
 
-        agg.add(req({ ts: 0 }));
-        agg.add(res({ ts: 2 }));
+        agg.add(req({ timeMs: 0 }));
+        agg.add(res({ timeMs: 2 }));
         clock.advance(60);
 
         expect(flows[0].path).toEqual(['csv-viewer', 'hub', 'github']);
@@ -399,7 +399,7 @@ describe('TransitAggregator', () => {
             clearTimer: clock.clearTimer,
         });
 
-        agg.add(req({ ts: 0 }));
+        agg.add(req({ timeMs: 0 }));
         clock.advance(60); // partial reported
         expect(flows).toHaveLength(1);
 
@@ -496,8 +496,8 @@ describe('formatFlowSummary', () => {
             path: ['app', 'hub', 'script'],
             partial: false,
             stream: [
-                { ts: 2, dir: 'toCaller', payload: { type: 'stdout', data: 'hello\n' } },
-                { ts: 4, dir: 'toCallee', control: 'cancel' },
+                { timeMs: 2, dir: 'toCaller', payload: { type: 'stdout', data: 'hello\n' } },
+                { timeMs: 4, dir: 'toCallee', control: 'cancel' },
             ],
         });
         const rows = line.split('\n');
@@ -521,7 +521,7 @@ describe('formatFlowSummary', () => {
             durationMs: 1500,
             path: ['app', 'hub', 'script'],
             partial: false,
-            stream: [{ ts: 1500, dir: 'toCaller', payload: { type: 'stdout', data: 'hi' } }],
+            stream: [{ timeMs: 1500, dir: 'toCaller', payload: { type: 'stdout', data: 'hi' } }],
         });
         expect(line).not.toContain('\n');
         expect(line).toContain('scriptRunner::runCode');

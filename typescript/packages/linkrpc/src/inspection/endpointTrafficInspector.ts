@@ -8,21 +8,26 @@ import {
 import {
     STREAM_METHOD,
     type StreamSendParams,
-} from './streaming';
+} from '../connection/streaming';
 import type {
     TrafficEvent,
     TrafficTransitEvent,
-} from '../hub/common/inspection.interfaces';
+} from './inspection.interfaces';
 import {
     BoundedTrafficSubscription,
     type TrafficSubscription,
     type TrafficSubscriptionOptions,
-} from '../hub/common/boundedTrafficSubscription';
-import type { WireMessageDirection, WireMessageObserver } from './channel';
+} from './boundedTrafficSubscription';
+import { TrafficWatchFlowTracker } from './trafficFlowFilter';
+import type { WireMessageDirection, WireMessageObserver } from '../connection/channel';
 
 interface RequestCorrelation {
     readonly method: string;
+    readonly timeMs: number;
 }
+
+const REQUEST_CORRELATION_RETENTION_MS = 30 * 60_000;
+const MAX_REQUEST_CORRELATIONS = 4096;
 
 export interface EndpointTrafficWatchOptions extends TrafficSubscriptionOptions {}
 
@@ -37,6 +42,7 @@ export class EndpointTrafficInspector {
     private readonly _observers = new Set<(transit: TrafficTransitEvent) => void>();
     private readonly _outboundRequests = new Map<string, RequestCorrelation>();
     private readonly _inboundRequests = new Map<string, RequestCorrelation>();
+    private readonly _trafficWatches = new TrafficWatchFlowTracker();
 
     public readonly observe: WireMessageObserver = (direction, message) => {
         this._onMessage(direction, message);
@@ -48,6 +54,10 @@ export class EndpointTrafficInspector {
         private readonly _setActive: (active: boolean) => void,
     ) { }
 
+    public start(): void {
+        this._setActive(true);
+    }
+
     public get observerCount(): number {
         return this._subscribers.size + this._observers.size;
     }
@@ -56,17 +66,21 @@ export class EndpointTrafficInspector {
         options: EndpointTrafficWatchOptions,
         send: (event: TrafficEvent) => Promise<void>,
     ): EndpointTrafficSubscription {
+        if (
+            options.trafficIgnoreKey !== undefined
+            && !this._trafficWatches.claim(options.trafficIgnoreKey)
+        ) {
+            throw new Error('Traffic watch request was not observed before subscription');
+        }
         const subscriber = new BoundedTrafficSubscription(options, send, () => {
             this._subscribers.delete(subscriber);
-            this._deactivateIfUnused();
+            this._clearCorrelationsIfUnused();
         });
-        this._activateIfUnused();
         this._subscribers.add(subscriber);
         return subscriber;
     }
 
     public observeTransits(observer: (transit: TrafficTransitEvent) => void): EndpointTrafficObservation {
-        this._activateIfUnused();
         this._observers.add(observer);
         let disposed = false;
         return {
@@ -74,7 +88,7 @@ export class EndpointTrafficInspector {
                 if (disposed) return;
                 disposed = true;
                 this._observers.delete(observer);
-                this._deactivateIfUnused();
+                this._clearCorrelationsIfUnused();
             },
         };
     }
@@ -85,6 +99,7 @@ export class EndpointTrafficInspector {
         this._observers.clear();
         this._outboundRequests.clear();
         this._inboundRequests.clear();
+        this._trafficWatches.clear();
         this._setActive(false);
     }
 
@@ -92,14 +107,14 @@ export class EndpointTrafficInspector {
         direction: WireMessageDirection,
         message: JsonRpcMessage,
     ): void {
-        if (this._subscribers.size === 0 && this._observers.size === 0) return;
-
         const now = Date.now();
+        this._pruneRequestCorrelations(now);
+        const publiclyObserved = this._subscribers.size !== 0 || this._observers.size !== 0;
         let transit: TrafficTransitEvent;
         const endpoint = this._endpoint('id' in message ? message.id ?? undefined : undefined);
         const base = {
             type: 'transit' as const,
-            ts: now,
+            timeMs: now,
             nodeId: this._nodeId,
             ...(direction === 'inbound' ? { in: endpoint } : { out: endpoint }),
             disposition: direction === 'inbound' ? 'consumed' as const : 'forwarded' as const,
@@ -107,8 +122,14 @@ export class EndpointTrafficInspector {
         if (isRequest(message)) {
             const correlation: RequestCorrelation = {
                 method: message.method,
+                timeMs: now,
             };
-            this._requestMap(direction).set(String(message.id), correlation);
+            if (publiclyObserved) {
+                const map = this._requestMap(direction);
+                const key = requestKey(message.id);
+                map.delete(key);
+                map.set(key, correlation);
+            }
             transit = {
                 ...base,
                 kind: 'request',
@@ -119,7 +140,7 @@ export class EndpointTrafficInspector {
             const responseMap = direction === 'inbound'
                 ? this._outboundRequests
                 : this._inboundRequests;
-            const key = String(message.id);
+            const key = requestKey(message.id);
             const correlation = responseMap.get(key);
             responseMap.delete(key);
             transit = {
@@ -148,6 +169,12 @@ export class EndpointTrafficInspector {
             };
         }
 
+        function requestKey(requestId: RequestId | null): string {
+            return JSON.stringify([typeof requestId, requestId]);
+        }
+
+        if (this._trafficWatches.accept(transit)) return;
+        if (!publiclyObserved) return;
         for (const observer of [...this._observers]) {
             try {
                 observer(transit);
@@ -174,16 +201,36 @@ export class EndpointTrafficInspector {
         } as const;
     }
 
-    private _activateIfUnused(): void {
-        if (this._subscribers.size === 0 && this._observers.size === 0) {
-            this._setActive(true);
-        }
-    }
-
-    private _deactivateIfUnused(): void {
+    private _clearCorrelationsIfUnused(): void {
         if (this._subscribers.size !== 0 || this._observers.size !== 0) return;
         this._outboundRequests.clear();
         this._inboundRequests.clear();
-        this._setActive(false);
     }
+
+    private _pruneRequestCorrelations(timeMs: number): void {
+        this._pruneRequestMap(this._outboundRequests, timeMs);
+        this._pruneRequestMap(this._inboundRequests, timeMs);
+    }
+
+    private _pruneRequestMap(
+        map: Map<string, RequestCorrelation>,
+        timeMs: number,
+    ): void {
+        while (map.size !== 0) {
+            const first = map.entries().next().value as
+                | [string, RequestCorrelation]
+                | undefined;
+            if (
+                first === undefined
+                || (
+                    map.size <= MAX_REQUEST_CORRELATIONS
+                    && timeMs - first[1].timeMs <= REQUEST_CORRELATION_RETENTION_MS
+                )
+            ) {
+                return;
+            }
+            map.delete(first[0]);
+        }
+    }
+
 }

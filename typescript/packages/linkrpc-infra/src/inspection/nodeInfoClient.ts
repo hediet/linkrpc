@@ -1,5 +1,5 @@
-import type { LinkRpcConnection } from '../../connection/linkRpcConnection';
-import { nodeInterface, type NodeInfo } from '../common/node.interfaces';
+import type { LinkRpcConnection } from '@hediet/linkrpc';
+import { nodeInterface, type NodeInfo } from '@hediet/linkrpc/inspection';
 
 /** Typed convenience client for root and service-scoped node identity. */
 export class NodeInfoClient<TInCtx = unknown, TOutCtx = unknown> {

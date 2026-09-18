@@ -6,7 +6,7 @@ import {
     LinkRpcConnection,
     TransportPair,
 } from '@hediet/linkrpc';
-import { nodeInterface, type TopologyTransportInfo } from '@hediet/linkrpc/hub/common';
+import { nodeInterface, type TopologyTransportInfo } from '@hediet/linkrpc/inspection';
 import { randomUUID } from 'node:crypto';
 import { OverlaySplitter, type OverlaySplitterInspection } from './overlaySplitter';
 import type { ManagedRoutingTopology } from './routingTopology';

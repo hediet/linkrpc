@@ -14,6 +14,10 @@
             "@hediet/source": "./src/index.ts",
             "default": "./dist/index.js"
         },
+        "./inspection": {
+            "@hediet/source": "./src/inspection/index.ts",
+            "default": "./dist/inspection/index.js"
+        },
         "./json-document": {
             "@hediet/source": "./src/json-document/index.ts",
             "default": "./dist/json-document/index.js"
@@ -55,6 +59,7 @@
     "publishConfig": {
         "exports": {
             ".": "./dist/index.js",
+            "./inspection": "./dist/inspection/index.js",
             "./json-document": "./dist/json-document/index.js",
             "./json-rpc": "./dist/json-rpc/index.js",
             "./logging": "./dist/logging/index.js",

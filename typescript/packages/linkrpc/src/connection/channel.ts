@@ -5,10 +5,7 @@ export class Channel<TInCtx = undefined, TOutCtx = undefined> {
     constructor(
         public readonly sender: IRequestSender<TOutCtx>,
         private readonly _setHandler: (h: IRequestHandler<TInCtx> | undefined) => void,
-        private readonly _setWireObserver?: (
-            observer: WireMessageObserver | undefined,
-            isInspectionMethod: ((method: string) => boolean) | undefined,
-        ) => void,
+        private readonly _setWireObserver?: (observer: WireMessageObserver | undefined) => void,
     ) { }
 
     /** Bind the inbound request/notification handler. May be called before or after construction of {@link LinkRpcConnection}. */
@@ -21,11 +18,8 @@ export class Channel<TInCtx = undefined, TOutCtx = undefined> {
      * Intended for {@link LinkRpcConnection}; ordinary consumers should use the
      * public `hubrpc.traffic` service instead.
      */
-    public setWireMessageObserver(
-        observer: WireMessageObserver | undefined,
-        isInspectionMethod?: (method: string) => boolean,
-    ): void {
-        this._setWireObserver?.(observer, isInspectionMethod);
+    public setWireMessageObserver(observer: WireMessageObserver | undefined): void {
+        this._setWireObserver?.(observer);
     }
 
     /**
@@ -110,8 +104,6 @@ export interface IncomingStream {
      * automatic keepalive ping.
      */
     ping(): Promise<void>;
-    /** @internal Mark this request as trusted inspection lifecycle traffic. */
-    markInspectionLifecycle(): void;
 }
 
 export type Result =
@@ -190,23 +182,10 @@ export interface SendOpts<TOutCtx = undefined> {
     readonly ctx?: TOutCtx;
     /** Interface schema hash for this call (interface-level metadata). */
     readonly interfaceHash?: string;
-    readonly [_inspectionCallMarker]?: true;
 }
 
 export interface StreamSendOpts<TOutCtx = undefined> extends SendOpts<TOutCtx> {
     readonly onStreamMessage?: (payload: JsonValue) => void;
-}
-
-const _inspectionCallMarker: unique symbol = Symbol('linkrpc.inspectionCall');
-
-/** Mark a locally-created typed inspection call without putting a flag on the wire. */
-export function markInspectionCall<T extends SendOpts<unknown>>(opts: T): T {
-    Object.defineProperty(opts, _inspectionCallMarker, { value: true });
-    return opts;
-}
-
-export function isInspectionCall(opts: SendOpts<unknown> | undefined): boolean {
-    return opts?.[_inspectionCallMarker] === true;
 }
 
 /**

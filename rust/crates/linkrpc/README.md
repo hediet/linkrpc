@@ -3,6 +3,18 @@
 Typed, multiplexed RPC over a single bidirectional connection — a Rust implementation of the
 [LinkRPC protocol](../../../spec).
 
+## Installation
+
+Add the published package to your project:
+
+```toml
+[dependencies]
+linkrpc = "0.1.0"
+```
+
+The `linkrpc-macros` dependency is included automatically; its procedural macros
+are re-exported by `linkrpc`.
+
 linkrpc is a **specialization of [JSON-RPC 2.0](https://www.jsonrpc.org/specification)**: every
 message on the wire is a valid JSON-RPC message, and linkrpc adds just enough on top to make many
 strongly-typed services share one connection — an addressing grammar, content-hashed interface

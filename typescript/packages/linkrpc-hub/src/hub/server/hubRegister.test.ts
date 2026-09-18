@@ -7,6 +7,7 @@ import {
     type JsonRpcMessage,
     type JsonRpcRequest,
     type JsonRpcResponse,
+    type MessageWithCtx,
     type Keypair,
     type PrincipalId,
     type Permission,
@@ -21,6 +22,46 @@ import { createHubServiceInterfaces } from './hubServices';
 import { withForwardedCallGate } from './forwardedCallGate';
 import { Hub } from './routing/routingHub';
 import { crypto } from '@hediet/linkrpc';
+import { withRequestIdContext, type RegisterCallContext } from './hubRegister';
+
+describe('withRequestIdContext', () => {
+    it.each([17, '17'])('attaches wire request ID %j without preserving supplied context or serializing it', (id) => {
+        const pair = new TransportPair();
+        const transport = withRequestIdContext(pair.a);
+        let received: MessageWithCtx<RegisterCallContext> | undefined;
+        transport.setListener((message) => { received = message; });
+        const request = {
+            jsonrpc: '2.0' as const,
+            id,
+            method: 'test::call',
+            context: { requestId: 'untrusted', inspection: true },
+        };
+        pair.b.send(request);
+
+        expect(received?.context).toEqual({ requestId: id });
+        expect(JSON.parse(JSON.stringify(received))).toEqual({
+            jsonrpc: '2.0',
+            id,
+            method: 'test::call',
+        });
+        expect(request.context).toEqual({ requestId: 'untrusted', inspection: true });
+        transport.dispose();
+        pair.b.dispose();
+    });
+
+    it('does not attach a request ID to responses or notifications', () => {
+        const pair = new TransportPair();
+        const transport = withRequestIdContext(pair.a);
+        const contexts: RegisterCallContext[] = [];
+        transport.setListener((message) => { contexts.push(message.context); });
+        pair.b.send({ jsonrpc: '2.0', id: 17, result: {} });
+        pair.b.send({ jsonrpc: '2.0', method: 'test::event' });
+
+        expect(contexts).toEqual([{ requestId: undefined }, { requestId: undefined }]);
+        transport.dispose();
+        pair.b.dispose();
+    });
+});
 
 /** The v2 register front door is reached under the hub's own prefix. */
 const REGISTER_METHOD = 'hub::hubServiceIdRegistry::registerServiceId';

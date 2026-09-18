@@ -7,9 +7,9 @@ import { connectNdjson } from '@hediet/linkrpc/node';
 import type { IMessageTransport, JsonRpcMessage } from '@hediet/linkrpc';
 import type {
     ITransportServer,
-    TopologyTransportInfo,
     Transport,
 } from '@hediet/linkrpc/hub/common';
+import type { TopologyTransportInfo } from '@hediet/linkrpc/inspection';
 
 /**
  * A {@link Transport} over a Node socket that still exposes the underlying

@@ -1,10 +1,13 @@
-import { BoundedTrafficSubscription } from '@hediet/linkrpc/hub/common';
+import {
+    BoundedTrafficSubscription,
+    TrafficWatchFlowTracker,
+} from '@hediet/linkrpc/inspection';
 import type {
     TrafficEvent,
     TrafficSubscription,
     TrafficSubscriptionOptions,
     TrafficTransitEvent,
-} from '@hediet/linkrpc/hub/common';
+} from '@hediet/linkrpc/inspection';
 import type { NodeTransit, TransitEndpoint } from './nodeTransit';
 import type { Hub, IDisposable } from './routing/routingHub';
 
@@ -25,9 +28,14 @@ interface RegisteredTrafficSource {
 export class HubInspector implements IDisposable {
     private readonly _subscribers = new Set<BoundedTrafficSubscription>();
     private readonly _trafficSources = new Set<RegisteredTrafficSource>();
-    private _observation: IDisposable | undefined;
+    private readonly _trafficWatches = new TrafficWatchFlowTracker();
+    private readonly _observation: IDisposable;
 
-    constructor(private readonly _hub: Hub) { }
+    constructor(private readonly _hub: Hub) {
+        this._observation = this._hub.observeTransits((transit) => {
+            this._onTransit(transit);
+        });
+    }
 
     public get observerCount(): number {
         return this._subscribers.size;
@@ -37,13 +45,17 @@ export class HubInspector implements IDisposable {
         options: HubTrafficWatchOptions,
         send: (event: TrafficEvent) => Promise<void>,
     ): HubTrafficSubscription {
+        if (
+            options.trafficIgnoreKey !== undefined
+            && !this._trafficWatches.claim(options.trafficIgnoreKey)
+        ) {
+            throw new Error('Traffic watch request was not observed before subscription');
+        }
         const subscriber = new BoundedTrafficSubscription(options, send, () => {
             this._subscribers.delete(subscriber);
-            if (this._subscribers.size === 0) this._stopObserving();
+            if (this._subscribers.size === 0) this._stopTrafficSources();
         });
-        if (this._subscribers.size === 0) {
-            this._startObserving();
-        }
+        if (this._subscribers.size === 0) this._startTrafficSources();
         this._subscribers.add(subscriber);
         return subscriber;
     }
@@ -51,7 +63,9 @@ export class HubInspector implements IDisposable {
     public dispose(): void {
         for (const subscriber of [...this._subscribers]) subscriber.dispose();
         this._subscribers.clear();
-        this._stopObserving();
+        this._observation.dispose();
+        this._trafficWatches.clear();
+        this._stopTrafficSources();
         this._trafficSources.clear();
     }
 
@@ -72,10 +86,7 @@ export class HubInspector implements IDisposable {
         };
     }
 
-    private _startObserving(): void {
-        this._observation = this._hub.observeTransits((transit) => {
-            this._onTransit(transit);
-        });
+    private _startTrafficSources(): void {
         for (const source of this._trafficSources) this._startTrafficSource(source);
     }
 
@@ -83,9 +94,7 @@ export class HubInspector implements IDisposable {
         source.observation ??= source.source.observe((transit) => this._emitTransit(transit));
     }
 
-    private _stopObserving(): void {
-        this._observation?.dispose();
-        this._observation = undefined;
+    private _stopTrafficSources(): void {
         for (const source of this._trafficSources) {
             source.observation?.dispose();
             source.observation = undefined;
@@ -93,10 +102,9 @@ export class HubInspector implements IDisposable {
     }
 
     private _onTransit(transit: NodeTransit): void {
-        if (this._subscribers.size === 0) return;
-        this._emitTransit({
+        const event: TrafficTransitEvent = {
             type: 'transit',
-            ts: transit.ts,
+            timeMs: transit.timeMs,
             nodeId: transit.nodeId,
             ...(transit.in !== undefined ? { in: normalizeEndpoint(transit.in) } : {}),
             ...(transit.out !== undefined ? { out: normalizeEndpoint(transit.out) } : {}),
@@ -106,7 +114,9 @@ export class HubInspector implements IDisposable {
             params: transit.params,
             result: transit.result,
             error: transit.error,
-        });
+        };
+        if (this._trafficWatches.accept(event)) return;
+        if (this._subscribers.size !== 0) this._emitTransit(event);
     }
 
     private _emitTransit(transit: TrafficTransitEvent): void {

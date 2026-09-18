@@ -4,8 +4,8 @@ import type {
     SourcedTopologyLink,
     SourcedTopologyNode,
     TopologyNetworkSnapshot,
-} from "@hediet/linkrpc/hub/client";
-import { TopologyNetworkClient } from "@hediet/linkrpc/hub/client";
+} from "@hediet/linkrpc-infra/inspection";
+import { TopologyNetworkClient } from "@hediet/linkrpc-infra/inspection";
 import type { CliChannel } from "@hediet/linkrpc-client";
 import { formatJson } from "../output";
 import { createDisplayForest, type DisplayForestNode } from "./displayForest";

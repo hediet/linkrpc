@@ -34,48 +34,6 @@ export type {
     HubAccessResult,
 } from './hubAccess';
 export { findCoveringCapabilities } from './hubAccess';
-export { nodeInterface } from './node.interfaces';
-export type { NodeInfo, ParticipantDescriptorSource } from './node.interfaces';
-export {
-    topologyInterface,
-    trafficInterface,
-    zParticipantDescriptor,
-    zParticipantDescriptorSource,
-    zRouteClaim,
-    zTopologyGraph,
-    zTopologyLink,
-    zTopologyLinkEndpoint,
-    zTopologyNode,
-    zTopologyPort,
-    zTopologyTransportEndpoint,
-    zTopologyTransportInfo,
-    zTrafficEvent,
-    zTrafficOverflowEvent,
-    zTrafficTransitEndpoint,
-    zTrafficTransitEvent,
-    zTrafficWatchResult,
-} from './inspection.interfaces';
-export type {
-    ParticipantDescriptor,
-    RouteClaim,
-    TopologyGraph,
-    TopologyLink,
-    TopologyLinkEndpoint,
-    TopologyNode,
-    TopologyPort,
-    TopologyTransportEndpoint,
-    TopologyTransportInfo,
-    TrafficEvent,
-    TrafficOverflowEvent,
-    TrafficTransitEndpoint,
-    TrafficTransitEvent,
-    TrafficWatchResult,
-} from './inspection.interfaces';
-export { BoundedTrafficSubscription } from './boundedTrafficSubscription';
-export type {
-    TrafficSubscription,
-    TrafficSubscriptionOptions,
-} from './boundedTrafficSubscription';
 export {
     registerGrantedServiceId,
 } from './baseCapabilities';

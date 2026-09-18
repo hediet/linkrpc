@@ -9,7 +9,7 @@ import {
     type ServiceIdPattern,
 } from '../hub/common/reflection.interfaces';
 import { serviceIdMatchesScopes } from '../hub/common/directoryWalk';
-import { nodeInterface, type NodeInfo } from '../hub/common/node.interfaces';
+import { nodeInterface, type NodeInfo, type TopologyIdGenerator } from '../inspection/node.interfaces';
 import {
     topologyInterface,
     trafficInterface,
@@ -18,7 +18,7 @@ import {
     type TrafficEvent,
     type TrafficTransitEvent,
     type TrafficWatchResult,
-} from '../hub/common/inspection.interfaces';
+} from '../inspection/inspection.interfaces';
 import type {
     InterfaceClient,
     InterfaceDefinition,
@@ -36,14 +36,13 @@ import {
     type IRequestSender, type Result,
     RpcError,
     type StreamSendOpts,
-    markInspectionCall,
 } from './channel';
 import { JsonRpcChannel } from './jsonRpcChannel';
 import { bytesToBase64Url } from '../crypto/cryptoProvider';
 import {
     EndpointTrafficInspector,
     type EndpointTrafficWatchOptions,
-} from './endpointTrafficInspector';
+} from '../inspection/endpointTrafficInspector';
 import {
     isBareInterfaceTarget,
     validateBarePrefix,
@@ -51,6 +50,8 @@ import {
 } from './bareInterfaceTarget';
 
 export interface LinkRpcConnectionOptions {
+    /** Topology node/port ID generator. Defaults to cryptographic randomness. */
+    readonly generateTopologyId?: TopologyIdGenerator;
     /**
      * Validate parameters passed through typed interface clients before sending
      * them. Enabled by default. Disable only when interoperating with a peer
@@ -118,6 +119,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private readonly _validateOutboundParams: boolean;
     /** Bare-method bindings, keyed by their exact wire prefix. */
     private readonly _bareBindings = new Map<string, BareBinding>();
+    private readonly _generateTopologyId: TopologyIdGenerator;
+    private _preset: Preset | undefined;
 
     /**
      * Construct from a {@link Channel} (binds the inbound handler and uses
@@ -130,6 +133,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         options: LinkRpcConnectionOptions = {},
     ) {
         this._validateOutboundParams = options.validateOutboundParams !== false;
+        this._generateTopologyId = options.generateTopologyId ?? createInspectionId;
         if ('sender' in channel) {
             this._wireChannel = channel;
             this.channel = channel.sender;
@@ -575,8 +579,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         if (this._inspection !== undefined) return this._inspection;
 
         const info: NodeInfo = {
-            nodeId: createInspectionId('node'),
-            portId: createInspectionId('port'),
+            nodeId: this._generateTopologyId('node'),
+            portId: this._generateTopologyId('port'),
             ...(descriptors !== undefined ? { descriptors: [...descriptors] } : {}),
         };
         const registration = this._register(nodeInterface, {
@@ -588,10 +592,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             info.portId,
             (active) => this._wireChannel?.setWireMessageObserver(
                 active ? trafficInspector.observe : undefined,
-                active ? (method) => this._isInspectionMethod(method) : undefined,
             ),
         );
         this._trafficInspector = trafficInspector;
+        trafficInspector.start();
 
         let disposed = false;
         const result: InspectionRegistration = {
@@ -647,7 +651,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         const { serviceId, ...ctxRest } = opts;
         const baseCtx = ctxRest as unknown as TOutCtx;
         const interfaceHash = iface.schemaHash;
-        const inspectionCall = isInspectionInterface(iface);
         const proxy: Record<string, (p: any) => any> = {};
         for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
             const wireMethod = serviceId ?
@@ -689,7 +692,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         const channelOpts: StreamSendOpts<TOutCtx> = onStreamMessage !== undefined ?
                             { ctx: baseCtx, interfaceHash, onStreamMessage } :
                             { ctx: baseCtx, interfaceHash };
-                        if (inspectionCall) markInspectionCall(channelOpts);
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const call = this.channel.sendRequestWithStream(
                             wireMethod,
@@ -722,7 +724,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                     const resultSchema = (member as RequestType).resultSchema;
                     proxy[name] = async (params: unknown) => {
                         const sendOpts = { ctx: baseCtx, interfaceHash };
-                        if (inspectionCall) markInspectionCall(sendOpts);
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const raw = await this.channel.sendRequest(
                             wireMethod,
@@ -749,7 +750,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             } else {
                 proxy[name] = async (params: unknown) => {
                     const sendOpts = { ctx: baseCtx, interfaceHash };
-                    if (inspectionCall) markInspectionCall(sendOpts);
                     this._validateOutboundParamsFor(member, wireMethod, params);
                     void this.channel.sendNotification(
                         wireMethod,
@@ -854,9 +854,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         const stream = this._buildStreamApi(call.stream, call.signal, member);
         try {
             const pendingResult = handler(parsedParams.data, call.context, stream);
-            if (isInspectionInterface(entry.iface)) {
-                call.stream.markInspectionLifecycle();
-            }
             const result = await pendingResult;
             // Result data validation: a handler must return what its declared
             // `resultSchema` promises. Symmetric with the inbound `paramsSchema`
@@ -999,12 +996,26 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 },
             }, opts, true));
             registrations.push(this._register(trafficInterface, {
-                watch: ({ methodPrefix }, _ctx, stream) =>
-                    this._watchTraffic(trafficInspector, { methodPrefix }, stream),
-                watchWithPayloads: ({ methodPrefix, maxPayloadBytes }, _ctx, stream) =>
+                watch: ({ methodPrefix, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
                     this._watchTraffic(
                         trafficInspector,
-                        { methodPrefix, maxPayloadBytes },
+                        { methodPrefix, trafficIgnoreKey, focusRequest },
+                        stream,
+                    ),
+                watchWithPayloads: ({
+                    methodPrefix,
+                    maxPayloadBytes,
+                    trafficIgnoreKey,
+                    focusRequest,
+                }, _ctx, stream) =>
+                    this._watchTraffic(
+                        trafficInspector,
+                        {
+                            methodPrefix,
+                            maxPayloadBytes,
+                            trafficIgnoreKey,
+                            focusRequest,
+                        },
                         stream,
                     ),
             }, opts, true));
@@ -1025,11 +1036,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private _hasBusinessServiceRegistration(serviceId: string): boolean {
         return Array.from(this._registry.values()).some((entry) =>
             entry.serviceId === serviceId && !entry.internalInspection);
-    }
-
-    private _isInspectionMethod(method: string): boolean {
-        const parsed = this._parseRouted(method);
-        return parsed.ok && isInspectionInterface(parsed.entry.iface);
     }
 
     private _endpointGraph(serviceId: string, info: NodeInfo): TopologyGraph {

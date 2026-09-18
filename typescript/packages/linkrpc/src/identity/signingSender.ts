@@ -6,8 +6,6 @@ import { Principal } from './principal';
 import type { JsonValue } from '../protocol/jsonRpc';
 import {
     Channel,
-    isInspectionCall,
-    markInspectionCall,
     type IRequestSender,
     type RawStreamingCall,
     type SendOpts,
@@ -240,8 +238,7 @@ export class SigningSender<TInCtx = unknown> implements IRequestSender<SigningCa
 
     public async sendRequest(method: string, params: JsonValue | undefined, opts?: SendOpts<SigningCallCtx>): Promise<JsonValue> {
         const out: PreparedOutboundCall = await this._prepareOutbound(method, params, opts);
-        const innerOpts = inspectionOpts(opts);
-        return this._inner.sendRequest(out.method, out.params, innerOpts);
+        return this._inner.sendRequest(out.method, out.params);
     }
 
     public async sendNotification(
@@ -250,7 +247,7 @@ export class SigningSender<TInCtx = unknown> implements IRequestSender<SigningCa
         opts?: SendOpts<SigningCallCtx>,
     ): Promise<void> {
         const out: PreparedOutboundCall = await this._prepareOutbound(method, params, opts);
-        await this._inner.sendNotification(out.method, out.params, inspectionOpts(opts));
+        await this._inner.sendNotification(out.method, out.params);
     }
 
     public sendRequestWithStream(
@@ -429,12 +426,6 @@ export class SigningSender<TInCtx = unknown> implements IRequestSender<SigningCa
             signed.wireParams;
         return { method: intent.method, params: outboundParams as unknown as JsonValue };
     }
-}
-
-function inspectionOpts(
-    opts: SendOpts<SigningCallCtx> | undefined,
-): SendOpts<unknown> | undefined {
-    return isInspectionCall(opts) ? markInspectionCall({}) : undefined;
 }
 
 function _randomNonceBytes(): Uint8Array {

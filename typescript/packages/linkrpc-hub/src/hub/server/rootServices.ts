@@ -105,7 +105,7 @@ export function registerHubServices(
             if (!verdict.ok) {
                 throw new RpcError(`claim denied: ${verdict.reason}`, ErrorCode.invalidRequest);
             }
-            upstream.claimPrefix(serviceId);
+            upstream.addPrefixRoute(serviceId);
             return {};
         },
     });

@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { LinkRpcConnection } from '../../connection/linkRpcConnection';
-import { defineInterface } from '../../connection/interfaceDefinition';
-import { requestType } from '../../schema/memberTypes';
-import { TransportPair } from '../../transport/messageTransport';
-import { topologyInterface } from '../common/inspection.interfaces';
-import { mergeTopologyGraphs, NetworkInspectionClient } from './networkInspectionClient';
-import { NodeInfoClient } from './nodeInfoClient';
-import { TopologyClient } from './topologyClient';
-import { TopologyNetworkClient } from './topologyNetworkClient';
-import { TrafficClient } from './trafficClient';
+import { LinkRpcConnection, defineInterface, requestType, TransportPair } from '@hediet/linkrpc';
+import { topologyInterface, type TopologyGraph } from '@hediet/linkrpc/inspection';
+import {
+    NetworkInspectionClient,
+    mergeTopologyGraphs,
+    NodeInfoClient,
+    TopologyClient,
+    TopologyNetworkClient,
+    TrafficClient,
+} from './index';
 
 const pingInterface = defineInterface(
     { id: 'test.client-ping' },

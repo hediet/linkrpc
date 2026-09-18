@@ -2,6 +2,23 @@
 
 Reusable infrastructure protocols and adapters built on LinkRPC.
 
+## Inspection
+
+The `@hediet/linkrpc-infra/inspection` entry point provides node identity,
+topology, and traffic clients, graph merging, and multi-service query/watch
+orchestration. `TopologyNetworkClient` can discover topology providers through
+the directory; `NetworkInspectionClient` combines explicitly selected sources
+and their traffic watches.
+
+The wire contracts and endpoint-side filtering/buffering stay in
+`@hediet/linkrpc/inspection`. A `LinkRpcConnection` can still enable inspection
+without depending on this package. The low-level channel only exposes raw
+inbound/outbound message observation.
+
+Inspection clients previously exported by `@hediet/linkrpc/hub/client` are now
+exported here. Inspection contracts and subscription helpers previously in
+`@hediet/linkrpc/hub/common` are now in `@hediet/linkrpc/inspection`.
+
 ## JSON documents
 
 The `@hediet/linkrpc-infra/json-document` entry point provides revisioned

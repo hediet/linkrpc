@@ -70,7 +70,6 @@ describe('configured participants', () => {
                 return {
                     claimPrefix: () => { },
                     setDefaultRoute: () => { },
-                    identifyPeer: () => new Promise(() => { }),
                     request: () => new Promise(() => { }),
                     dispose: disposeAttachment,
                 };

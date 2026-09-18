@@ -29,13 +29,7 @@ import {
     type SendOpts,
     type StreamSendOpts,
     type WireMessageObserver,
-    isInspectionCall,
 } from './channel';
-import {
-    getLocalMessageContext,
-    type LocalMessageContext,
-    setLocalMessageContext,
-} from '../transport/messageTransport';
 
 /**
  * How often a streaming-enabled call emits a `toCallee` keepalive ping so a
@@ -75,7 +69,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         const channel = new Channel<TInCtx, unknown>(
             jrc,
             (h) => jrc.setRequestHandler(h),
-            (observer, classifier) => jrc.setWireMessageObserver(observer, classifier),
+            (observer) => jrc.setWireMessageObserver(observer),
         );
         return { channel, close: () => jrc.close() };
     }
@@ -109,9 +103,6 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
 
     private _handler: IRequestHandler<TInCtx> | undefined;
     private _wireObserver: WireMessageObserver | undefined;
-    private _isInspectionMethod: ((method: string) => boolean) | undefined;
-    private readonly _outboundInspectionRequests = new Set<string>();
-    private readonly _inboundInspectionRequests = new Set<string>();
     private _closeError: Error | undefined;
 
     public setRequestHandler(handler: IRequestHandler<TInCtx> | undefined): void {
@@ -120,14 +111,8 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
 
     public setWireMessageObserver(
         observer: WireMessageObserver | undefined,
-        isInspectionMethod: ((method: string) => boolean) | undefined,
     ): void {
         this._wireObserver = observer;
-        this._isInspectionMethod = observer === undefined ? undefined : isInspectionMethod;
-        if (observer === undefined) {
-            this._outboundInspectionRequests.clear();
-            this._inboundInspectionRequests.clear();
-        }
     }
 
     private constructor(private readonly _transport: ChannelTransport<TInCtx>) {
@@ -398,11 +383,6 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
                 else this._streamListeners.delete(key);
             },
             ping: pinger.ping,
-            markInspectionLifecycle: () => {
-                if (this._wireObserver !== undefined) {
-                    this._inboundInspectionRequests.add(key);
-                }
-            },
         };
         // A `toCallee` cancel control trips the handler's AbortSignal;
         // ping/pong are liveness only and handled by the pinger.
@@ -488,63 +468,20 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     private _observeInbound(message: JsonRpcMessage): void {
         const observer = this._wireObserver;
         if (observer === undefined) return;
-
-        let inspection = false;
-        if (isRequest(message)) {
-            inspection = this._isInspectionMethod?.(message.method) === true;
-            if (inspection) this._inboundInspectionRequests.add(String(message.id));
-        } else if (isResponse(message)) {
-            if (message.id !== null) {
-                const key = String(message.id);
-                inspection = this._outboundInspectionRequests.delete(key);
-            }
-        } else if (message.method === STREAM_METHOD) {
-            inspection = this._isInspectionStream(message);
-        } else {
-            inspection = this._isInspectionMethod?.(message.method) === true;
-        }
-
-        if (!inspection) observer('inbound', message);
+        observer('inbound', message);
     }
 
     private _observeOutbound(
         message: JsonRpcMessage,
         opts?: SendOpts<unknown>,
     ): void {
-        if (isRequest(message) && isInspectionCall(opts)) {
-            setLocalMessageContext(message, {
-                ...getLocalMessageContext(message),
-                inspection: true,
-            } satisfies LocalMessageContext);
-        }
         const observer = this._wireObserver;
         if (observer === undefined) return;
-
-        let inspection = false;
-        if (isRequest(message)) {
-            inspection = isInspectionCall(opts);
-            if (inspection) {
-                this._outboundInspectionRequests.add(String(message.id));
-            }
-        } else if (isResponse(message)) {
-            if (message.id !== null) {
-                const key = String(message.id);
-                inspection = this._inboundInspectionRequests.delete(key);
-            }
-        } else if (message.method === STREAM_METHOD) {
-            inspection = this._isInspectionStream(message);
-        } else {
-            inspection = isInspectionCall(opts);
-        }
-
-        if (!inspection) observer('outbound', message);
+        observer('outbound', message);
     }
 
     private _observeSendFailure(requestId: RequestId, error: unknown): void {
-        if (this._wireObserver === undefined) {
-            this._outboundInspectionRequests.delete(String(requestId));
-            return;
-        }
+        if (this._wireObserver === undefined) return;
         this._observeInbound({
             jsonrpc: '2.0',
             id: requestId,
@@ -555,13 +492,6 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         });
     }
 
-    private _isInspectionStream(message: JsonRpcNotification): boolean {
-        const params = message.params as StreamSendParams | undefined;
-        if (params?.requestId === undefined) return false;
-        const key = String(params.requestId);
-        return this._outboundInspectionRequests.has(key)
-            || this._inboundInspectionRequests.has(key);
-    }
 }
 
 /** Stub stream handle for notifications, which carry no request id. */
@@ -569,7 +499,6 @@ const _NOOP_STREAM: IncomingStream = {
     send: () => Promise.resolve(),
     onMessage: () => { },
     ping: () => Promise.resolve(),
-    markInspectionLifecycle: () => { },
 };
 
 /** A signal that never aborts — handed to notification handlers. */

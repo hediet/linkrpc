@@ -6,7 +6,7 @@ import {
     type JsonRpcRequest,
     TransportPair,
 } from '@hediet/linkrpc';
-import { nodeInterface } from '@hediet/linkrpc/hub/common';
+import { nodeInterface } from '@hediet/linkrpc/inspection';
 import { Hub } from './routingHub';
 
 describe('Hub topology', () => {
@@ -19,13 +19,48 @@ describe('Hub topology', () => {
         expect(new Hub({ nodeId: 'fixed', debugName: 'friendly' }).nodeId).toBe('fixed');
     });
 
+    it('uses the injected topology generator for node and stable per-link port IDs', () => {
+        let nextId = 0;
+        const hub = new Hub({ generateTopologyId: (kind) => `test-${kind}-${++nextId}` });
+        const pair = new TransportPair();
+        const link = hub.attach(pair.a);
+        const repeated = hub.attach(pair.a);
+        const other = hub.attachOut();
+        try {
+            expect(hub.nodeId).toBe('test-node-1');
+            expect(link.portId).toBe('test-port-2');
+            expect(repeated.portId).toBe(link.portId);
+            expect(other.portId).toBe('test-port-3');
+            expect(hub.getTopologyGraph('observer').links.map((edge) => edge.from)).toEqual([
+                { nodeId: 'test-node-1', portId: 'test-port-2' },
+                { nodeId: 'test-node-1', portId: 'test-port-3' },
+            ]);
+            expect(nextId).toBe(3);
+        } finally {
+            link.dispose();
+            other.dispose();
+        }
+    });
+
+    it('preserves an explicit node ID without consuming a generated ID', () => {
+        let nextId = 0;
+        const hub = new Hub({
+            nodeId: 'fixed',
+            generateTopologyId: (kind) => `test-${kind}-${++nextId}`,
+        });
+        const link = hub.attachOut();
+        expect(hub.nodeId).toBe('fixed');
+        expect(link.portId).toBe('test-port-1');
+        link.dispose();
+    });
+
     it('keeps a stable topology port while the friendly edge label changes', () => {
         const hub = new Hub({ nodeId: 'hub-a' });
         const pair = new TransportPair();
         const attached = hub.attach(pair.a);
         const portId = attached.portId;
 
-        attached.claimPrefix('calc');
+        attached.addPrefixRoute('calc');
         const graph = hub.getTopologyGraph('observer');
 
         expect(attached.portId).toBe(portId);
@@ -108,7 +143,7 @@ describe('Hub topology', () => {
         const hub = new Hub({ nodeId: 'hub-a' });
         const pair = new TransportPair();
         const link = hub.attach(pair.a);
-        link.claimPrefix('calc');
+        link.addPrefixRoute('calc');
 
         const left = hub.getTopologyGraph('left');
         const right = hub.getTopologyGraph('right');
@@ -129,7 +164,7 @@ describe('Hub topology', () => {
         const hub = new Hub({ nodeId: 'hub-a' });
         const pair = new TransportPair();
         const attached = hub.attach(pair.a, { edgeId: 'webEditor1~uplink' });
-        attached.claimPrefix('web-app');
+        attached.addPrefixRoute('web-app');
         const registration = hub.registerManagedRoutingTopology(attached, {
             node: {
                 nodeId: 'webEditor1~overlay',
@@ -406,12 +441,12 @@ describe('Hub topology', () => {
         const first = new Hub();
         const second = new Hub();
         let changes = 0;
-        first.onDidChangeRouting(() => changes++);
+        first.onDidChangeTopology(() => changes++);
         const pair = new TransportPair();
         const link = first.attach(pair.a);
         second.attach(pair.b);
         await link.identifyPeer();
-        link.claimPrefix('svc');
+        link.addPrefixRoute('svc');
         link.releasePrefix('svc');
         first.setUplink(pair.a);
         first.setLoopback(pair.a);
