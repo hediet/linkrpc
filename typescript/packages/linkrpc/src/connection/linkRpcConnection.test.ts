@@ -928,6 +928,64 @@ describe('LinkRpcConnection — bare bindings', () => {
         expect(() => connection.getBare(streaming)).toThrow(/streaming method/);
     });
 
+    it('round-trips optional, nullable, and nullish results through every client path', async () => {
+        const ordinary = defineInterface(
+            { id: 'test.result-normalization' },
+            {
+                optional: requestType(z.object({}), z.string().optional()),
+                defaulted: requestType(z.object({}), z.string().default('fallback')),
+                nullable: requestType(z.object({}), z.string().nullable()),
+                nullish: requestType(z.object({}), z.string().nullish()),
+            },
+        );
+        const streaming = defineInterface(
+            { id: 'test.streaming-result-normalization' },
+            {
+                optional: requestType(z.object({}), z.string().optional())
+                    .withStream({ server: z.object({}) }),
+                defaulted: requestType(z.object({}), z.string().default('fallback'))
+                    .withStream({ server: z.object({}) }),
+                nullable: requestType(z.object({}), z.string().nullable())
+                    .withStream({ server: z.object({}) }),
+                nullish: requestType(z.object({}), z.string().nullish())
+                    .withStream({ server: z.object({}) }),
+            },
+        );
+        const { client, server, dispose } = makePair();
+        server.register(ordinary, {
+            optional: () => undefined,
+            defaulted: () => undefined as never,
+            nullable: () => null,
+            nullish: () => null,
+        });
+        server.bindBare(ordinary, { prefix: 'bare/' });
+        server.register(streaming, {
+            optional: () => undefined,
+            defaulted: () => undefined as never,
+            nullable: () => null,
+            nullish: () => null,
+        });
+
+        const qualified = client.get(ordinary);
+        await expect(qualified.optional({})).resolves.toBeUndefined();
+        await expect(qualified.defaulted({})).resolves.toBeUndefined();
+        await expect(qualified.nullable({})).resolves.toBeNull();
+        await expect(qualified.nullish({})).resolves.toBeNull();
+
+        const qualifiedStreaming = client.get(streaming);
+        await expect(qualifiedStreaming.optional({})).resolves.toBeUndefined();
+        await expect(qualifiedStreaming.defaulted({})).resolves.toBeUndefined();
+        await expect(qualifiedStreaming.nullable({})).resolves.toBeNull();
+        await expect(qualifiedStreaming.nullish({})).resolves.toBeNull();
+
+        const bare = client.getBare(ordinary, { prefix: 'bare/' });
+        await expect(bare.optional({})).resolves.toBeUndefined();
+        await expect(bare.defaulted({})).resolves.toBeUndefined();
+        await expect(bare.nullable({})).resolves.toBeNull();
+        await expect(bare.nullish({})).resolves.toBeNull();
+        dispose();
+    });
+
     it('getBare omits LinkRPC metadata for requests and notifications', async () => {
         const sent: Array<{ method: string; opts: unknown; }> = [];
         const sender = {

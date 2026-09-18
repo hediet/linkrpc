@@ -25,7 +25,7 @@ import type {
     InterfaceHandlers,
     StreamApi,
 } from './interfaceDefinition';
-import { type MemberType, NotificationType, RequestType } from '../schema/memberTypes';
+import { type MemberType, NotificationType, RequestType, type Schema } from '../schema/memberTypes';
 import { safeParse } from 'zod/v4/core';
 import type { IMessageTransport } from '../transport/messageTransport';
 import {
@@ -698,10 +698,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                             channelOpts,
                         );
                         const result = call.result.then((raw) => {
-                            const validationValue = raw === null &&
-                                    isVoidResultSchema((member as RequestType).resultSchema)
-                                ? undefined
-                                : raw;
+                            const validationValue = normalizeWireResult(
+                                (member as RequestType).resultSchema,
+                                raw,
+                            );
                             const checked = safeParse(
                                 (member as RequestType).resultSchema,
                                 validationValue,
@@ -737,12 +737,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         // a foreign / older server that never validated its own
                         // output, so verify the declared `resultSchema` here too.
                         // Validate as a gate (return `raw` unchanged on success);
-                        // A wire `null` maps to `undefined` only for void results,
-                        // matching the server's `undefined → null` convention
-                        // without losing a legitimate nullable result.
-                        const validationValue = raw === null && isVoidResultSchema(resultSchema)
-                            ? undefined
-                            : raw;
+                        // Preserve a legitimate null. Otherwise map the
+                        // server's undefined → null wire convention back to
+                        // undefined whenever the result schema accepts it.
+                        const validationValue = normalizeWireResult(resultSchema, raw);
                         const checked = safeParse(resultSchema, validationValue);
                         if (!checked.success) {
                             throw new RpcError(
@@ -783,9 +781,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         wireMethod,
                         params as JsonValue | undefined,
                     );
-                    const validationValue = raw === null && isVoidResultSchema(member.resultSchema)
-                        ? undefined
-                        : raw;
+                    const validationValue = normalizeWireResult(member.resultSchema, raw);
                     const checked = safeParse(member.resultSchema, validationValue);
                     if (!checked.success) {
                         throw new RpcError(
@@ -1204,9 +1200,11 @@ interface BareBinding {
     readonly entry: RegisteredInterface;
 }
 
-function isVoidResultSchema(schema: { _zod?: { def?: { type?: string; }; }; }): boolean {
-    const type = schema._zod?.def?.type;
-    return type === 'void' || type === 'undefined';
+function normalizeWireResult(schema: Schema, raw: JsonValue): JsonValue | undefined {
+    if (raw !== null) return raw;
+    if (safeParse(schema, null).success) return null;
+    if (safeParse(schema, undefined).success) return undefined;
+    return null;
 }
 
 
