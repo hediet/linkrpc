@@ -12,7 +12,7 @@ import { defineInterface, interfaceFromSchema } from './interfaceDefinition';
 import { notificationType, requestType } from '../schema/memberTypes';
 import { traceMessageTransport, TransportPair } from '../transport/messageTransport';
 import type { IMessageTransport } from '../transport/messageTransport';
-import type { JsonRpcMessage } from '../protocol/jsonRpc';
+import type { JsonRpcMessage, JsonValue } from '../protocol/jsonRpc';
 import { RpcError } from './channel';
 import { LinkRpcConnection } from './linkRpcConnection';
 import { JsonRpcChannel } from './jsonRpcChannel';
@@ -151,6 +151,67 @@ describe('LinkRpcConnection', () => {
             data: { issues: [expect.objectContaining({ path: ['msg'] })] },
         });
         dispose();
+    });
+
+    it.each(['native', 'bare', 'streaming'] as const)(
+        '%s clients validate foreign results without stripping extra keys',
+        async (kind) => {
+            const read = requestType(z.object({}), z.object({ value: z.string() }));
+            const iface = defineInterface(
+                { id: 'test.result-validation' },
+                { read: kind === 'streaming' ? read.withStream({ server: z.string() }) : read },
+            );
+            let result: JsonValue = { value: 'ok', extra: true };
+            const connection = new LinkRpcConnection({
+                sendRequest: async () => result,
+                sendNotification: async () => { },
+                sendRequestWithStream: () => ({
+                    result: Promise.resolve(result),
+                    send: () => { },
+                    cancel: () => { },
+                    ping: async () => { },
+                }),
+                close: () => { },
+            });
+            const client = kind === 'bare'
+                ? connection.getBare(iface, { prefix: 'foreign/' })
+                : connection.get(iface);
+            await expect(client.read({})).resolves.toBe(result);
+
+            result = { value: 42 };
+            await expect(client.read({})).rejects.toMatchObject({
+                code: -32603,
+                message: `Invalid result for ${kind === 'bare' ? 'foreign/' : 'test.result-validation::'}read`,
+                data: { issues: [expect.objectContaining({ path: ['value'] })] },
+            });
+            result = null;
+            await expect(client.read({})).rejects.toMatchObject({ code: -32603 });
+        },
+    );
+
+    it('validates handler results without stripping extra keys', async () => {
+        const pair = new TransportPair();
+        const client = JsonRpcChannel.create(pair.a).sender;
+        const server = LinkRpcConnection.fromTransport(pair.b);
+        let result = { greeting: 'ok', extra: true };
+        server.register(greeter, {
+            hello: () => result,
+            shout: () => { },
+        });
+        try {
+            await expect(client.sendRequest('test.greeter::hello', { name: 'x' }))
+                .resolves.toEqual(result);
+            result = { greeting: 42, extra: true } as never;
+            await expect(client.sendRequest('test.greeter::hello', { name: 'x' }))
+                .rejects.toMatchObject({
+                    code: -32603,
+                    message: 'Invalid result for test.greeter::hello',
+                    data: { issues: [expect.objectContaining({ path: ['greeting'] })] },
+                });
+        } finally {
+            client.close();
+            server.close();
+        }
     });
 
     it('rejects with -32601 when interface is unregistered', async () => {
@@ -1002,7 +1063,9 @@ describe('LinkRpcConnection — bare bindings', () => {
         const connection = new LinkRpcConnection(sender);
         const client = connection.getBare(language, { prefix: 'cdp.' });
         await expect(client.hover({ value: 'x' })).resolves.toBe('ok');
-        client.changed({ value: 'x' });
+        expect(client.changed({ value: 'x' })).toBeUndefined();
+        expect(() => client.changed({ value: 42 as never }))
+            .toThrow('Invalid params for cdp.changed');
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(sent).toEqual([
             { method: 'cdp.hover', opts: undefined },

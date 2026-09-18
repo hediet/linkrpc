@@ -20,6 +20,9 @@ import {
 } from "./index";
 import { createGeneratedProtocolInterfaceDefinition } from "./generated";
 
+// Full protocol compilations also contend with parallel package builds in CI.
+const TYPECHECK_TIMEOUT_MS = 30_000;
+
 const corpus = (path: string): unknown =>
     JSON.parse(readFileSync(new URL(`../../../../../../conformance/protocols/${path}`, import.meta.url), "utf8"));
 
@@ -120,7 +123,7 @@ describe("pinned protocol contract import", () => {
                 }),
             ] as const);
         expectTypeChecks(new Map(sources));
-    }, 15_000);
+    }, TYPECHECK_TIMEOUT_MS);
 
     it("exposes concrete generated client and server protocol types", () => {
         const dom = cdp().interfaces["cdp.dom"]!;
@@ -215,7 +218,7 @@ describe("pinned protocol contract import", () => {
             `],
         ]);
         expectTypeChecks(virtual);
-    }, 15_000);
+    }, TYPECHECK_TIMEOUT_MS);
 
     it("executes generated definitions once per imported schema", () => {
         const schema = cdp().interfaces["cdp.dom"]!;

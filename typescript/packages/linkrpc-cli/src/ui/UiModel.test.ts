@@ -59,6 +59,15 @@ async function waitFor<T>(sample: () => T | undefined, timeoutMs = 2000): Promis
     throw new Error("waitFor: timed out");
 }
 
+function streamingCall(result: Promise<JsonValue>): RawStreamingCall {
+    return {
+        result,
+        send: () => { },
+        cancel: () => { },
+        ping: async () => { },
+    };
+}
+
 describe("UiModel", () => {
     it("starts with no resolved services (loading state)", () => {
         const { model, dispose } = makeModel();
@@ -120,9 +129,7 @@ describe("UiModel", () => {
                 throw new Error(`Unexpected request: ${method}`);
             },
             sendNotification: async () => { },
-            sendRequestWithStream: () => {
-                throw new Error("Unexpected streaming request");
-            },
+            sendRequestWithStream: (method, params) => streamingCall(channel.sendRequest(method, params)),
             close: () => { },
         };
         const model = new UiModel(channel);
@@ -161,9 +168,7 @@ describe("UiModel", () => {
                 throw new Error(`Unexpected request: ${method}`);
             },
             sendNotification: async () => { },
-            sendRequestWithStream: () => {
-                throw new Error("Unexpected streaming request");
-            },
+            sendRequestWithStream: (method, params) => streamingCall(channel.sendRequest(method, params)),
             close: () => { },
         };
         const model = new UiModel(channel);
@@ -215,14 +220,12 @@ describe("UiModel", () => {
                 throw new Error(`Unexpected request: ${method}`);
             },
             sendNotification: async () => { },
-            sendRequestWithStream: (method): RawStreamingCall => {
+            sendRequestWithStream: (method, params): RawStreamingCall => {
+                if (method === "hubrpc.directory::list") {
+                    return streamingCall(channel.sendRequest(method, params));
+                }
                 sentMethods.push(method);
-                return {
-                    result: Promise.resolve({ greeting: "Hi, default!" } satisfies JsonValue),
-                    send: () => { },
-                    cancel: () => { },
-                    ping: async () => { },
-                };
+                return streamingCall(Promise.resolve({ greeting: "Hi, default!" }));
             },
             close: () => { },
         };

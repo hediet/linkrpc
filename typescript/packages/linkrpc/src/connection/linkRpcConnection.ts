@@ -190,7 +190,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 throw new Error(`getBare: streaming method "${name}" is not supported on foreign wires.`);
             }
         }
-        return this._buildBareClient(iface, prefix) as InterfaceClient<TDef>;
+        return this._buildClient(iface, {}, prefix) as InterfaceClient<TDef>;
     }
 
     /** Get a service-scoped handle; all interfaces obtained from it route via `serviceId` (form 3). */
@@ -646,15 +646,16 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private _buildClient(
         iface: InterfaceDefinition<any>,
         opts: GetOptions<TOutCtx>,
+        barePrefix?: string,
     ): Record<string, (params: any) => any> {
         const { serviceId, ...ctxRest } = opts;
-        const baseCtx = ctxRest as unknown as TOutCtx;
-        const interfaceHash = iface.schemaHash;
+        const sendOpts = barePrefix === undefined
+            ? { ctx: ctxRest as unknown as TOutCtx, interfaceHash: iface.schemaHash }
+            : undefined;
+        const prefix = barePrefix ?? (serviceId ? `${serviceId}::${iface.info.id}::` : `${iface.info.id}::`);
         const proxy: Record<string, (p: any) => any> = {};
         for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
-            const wireMethod = serviceId ?
-                `${serviceId}::${iface.info.id}::${name}` :
-                `${iface.info.id}::${name}`;
+            const wireMethod = `${prefix}${name}`;
 
             if (member.kind === 'request') {
                 const hasStream = member.clientStreamSchema !== undefined ||
@@ -688,33 +689,17 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                             } :
                             undefined;
 
-                        const channelOpts: StreamSendOpts<TOutCtx> = onStreamMessage !== undefined ?
-                            { ctx: baseCtx, interfaceHash, onStreamMessage } :
-                            { ctx: baseCtx, interfaceHash };
+                        const channelOpts: StreamSendOpts<TOutCtx> | undefined = onStreamMessage !== undefined ?
+                            { ...sendOpts, onStreamMessage } :
+                            sendOpts;
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const call = this.channel.sendRequestWithStream(
                             wireMethod,
                             params as JsonValue | undefined,
                             channelOpts,
                         );
-                        const result = call.result.then((raw) => {
-                            const validationValue = normalizeWireResult(
-                                (member as RequestType).resultSchema,
-                                raw,
-                            );
-                            const checked = safeParse(
-                                (member as RequestType).resultSchema,
-                                validationValue,
-                            );
-                            if (!checked.success) {
-                                throw new RpcError(
-                                    `Invalid result for ${wireMethod}`,
-                                    ErrorCode.internalError,
-                                    { issues: checked.error.issues as unknown as JsonValue },
-                                );
-                            }
-                            return validationValue;
-                        });
+                        const result = call.result.then((raw) =>
+                            validateWireResult(member.resultSchema, raw, wireMethod));
 
                         return Object.assign(result, {
                             send: async (payload: unknown) => call.send(payload as JsonValue),
@@ -724,37 +709,18 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         });
                     };
                 } else {
-                    const resultSchema = (member as RequestType).resultSchema;
                     proxy[name] = async (params: unknown) => {
-                        const sendOpts = { ctx: baseCtx, interfaceHash };
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const raw = await this.channel.sendRequest(
                             wireMethod,
                             params as JsonValue | undefined,
                             sendOpts,
                         );
-                        // Client-side result data validation: the peer might be
-                        // a foreign / older server that never validated its own
-                        // output, so verify the declared `resultSchema` here too.
-                        // Validate as a gate (return `raw` unchanged on success);
-                        // Preserve a legitimate null. Otherwise map the
-                        // server's undefined → null wire convention back to
-                        // undefined whenever the result schema accepts it.
-                        const validationValue = normalizeWireResult(resultSchema, raw);
-                        const checked = safeParse(resultSchema, validationValue);
-                        if (!checked.success) {
-                            throw new RpcError(
-                                `Invalid result for ${wireMethod}`,
-                                ErrorCode.internalError,
-                                { issues: checked.error.issues as unknown as JsonValue },
-                            );
-                        }
-                        return validationValue;
+                        return validateWireResult(member.resultSchema, raw, wireMethod);
                     };
                 }
             } else {
-                proxy[name] = async (params: unknown) => {
-                    const sendOpts = { ctx: baseCtx, interfaceHash };
+                const notify = (params: unknown) => {
                     this._validateOutboundParamsFor(member, wireMethod, params);
                     void this.channel.sendNotification(
                         wireMethod,
@@ -762,44 +728,9 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         sendOpts,
                     );
                 };
-            }
-        }
-        return proxy;
-    }
-
-    private _buildBareClient(
-        iface: InterfaceDefinition<any>,
-        prefix: string,
-    ): Record<string, (params: any) => any> {
-        const proxy: Record<string, (params: any) => any> = {};
-        for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
-            const wireMethod = `${prefix}${name}`;
-            if (member instanceof RequestType) {
-                proxy[name] = async (params: unknown) => {
-                    this._validateOutboundParamsFor(member, wireMethod, params);
-                    const raw = await this.channel.sendRequest(
-                        wireMethod,
-                        params as JsonValue | undefined,
-                    );
-                    const validationValue = normalizeWireResult(member.resultSchema, raw);
-                    const checked = safeParse(member.resultSchema, validationValue);
-                    if (!checked.success) {
-                        throw new RpcError(
-                            `Invalid result for ${wireMethod}`,
-                            ErrorCode.internalError,
-                            { issues: checked.error.issues as unknown as JsonValue },
-                        );
-                    }
-                    return validationValue;
-                };
-            } else {
-                proxy[name] = (params: unknown) => {
-                    this._validateOutboundParamsFor(member, wireMethod, params);
-                    void this.channel.sendNotification(
-                        wireMethod,
-                        params as JsonValue | undefined,
-                    );
-                };
+                // Preserve native notifications' async rejection and bare
+                // notifications' synchronous validation errors.
+                proxy[name] = barePrefix === undefined ? async (params: unknown) => notify(params) : notify;
             }
         }
         return proxy;
@@ -811,12 +742,11 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         params: unknown,
     ): void {
         if (!this._validateOutboundParams) return;
-        const checked = safeParse(member.paramsSchema, params);
-        if (checked.success) return;
-        throw new RpcError(
+        validateValue(
+            member.paramsSchema,
+            params,
             `Invalid params for ${wireMethod}`,
             ErrorCode.invalidParams,
-            { issues: checked.error.issues as unknown as JsonValue },
         );
     }
 
@@ -858,24 +788,12 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         try {
             const pendingResult = handler(parsedParams.data, call.context, stream);
             const result = await pendingResult;
-            // Result data validation: a handler must return what its declared
-            // `resultSchema` promises. Symmetric with the inbound `paramsSchema`
-            // check above (and the stream-payload checks) — without it, result
-            // schemas are compile-time only and a buggy handler ships malformed
-            // data that blows up deep in the caller. On a mismatch we fail the
-            // call with `internalError` (the fault is the callee's, not the
-            // caller's). Conformant results are sent unchanged (we validate as a
-            // gate, not to strip), so extra keys behave exactly as before.
-            const checked = safeParse((member as RequestType).resultSchema, result);
-            if (!checked.success) {
-                return {
-                    error: {
-                        code: ErrorCode.internalError,
-                        message: `Invalid result for ${call.method}`,
-                        data: { issues: checked.error.issues as unknown as JsonValue },
-                    },
-                };
-            }
+            validateValue(
+                member.resultSchema,
+                result,
+                `Invalid result for ${call.method}`,
+                ErrorCode.internalError,
+            );
             return { result: result === undefined ? null : (result as JsonValue) };
         } catch (e) {
             if (e instanceof RpcError) {
@@ -1200,6 +1118,25 @@ interface BareBinding {
     readonly entry: RegisteredInterface;
 }
 
+function validateWireResult(schema: Schema, raw: JsonValue, wireMethod: string): JsonValue | undefined {
+    const value = normalizeWireResult(schema, raw);
+    validateValue(schema, value, `Invalid result for ${wireMethod}`, ErrorCode.internalError);
+    return value;
+}
+
+/** Validate at both ends without stripping extra keys or applying schema transforms. */
+function validateValue(schema: Schema, value: unknown, message: string, code: number): void {
+    const checked = safeParse(schema, value);
+    if (!checked.success) {
+        throw new RpcError(
+            message,
+            code,
+            { issues: checked.error.issues as unknown as JsonValue },
+        );
+    }
+}
+
+/** Undo the server's undefined → null convention only when the schema rejects null. */
 function normalizeWireResult(schema: Schema, raw: JsonValue): JsonValue | undefined {
     if (raw !== null) return raw;
     if (safeParse(schema, null).success) return null;

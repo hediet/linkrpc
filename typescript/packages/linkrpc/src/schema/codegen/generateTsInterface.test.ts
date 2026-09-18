@@ -14,6 +14,9 @@ import {
 import { streamInterface } from "../../connection/streaming";
 import { generateTsInterface } from "./generateTsInterface";
 
+// Compiler integration tests load the transitive package graph while CI builds run in parallel.
+const TYPECHECK_TIMEOUT_MS = 30_000;
+
 /**
  * Evaluate a generated source file in-process and return the
  * `InterfaceDefinition` it exports. The generated file is rewritten so
@@ -99,7 +102,7 @@ describe("generateInterface", () => {
             epoch: 3n,
         }).success).toBe(false);
         _expectTypeChecks(source);
-    });
+    }, TYPECHECK_TIMEOUT_MS);
 
     it("renders nullable primitive type arrays recursively and annotation-only schemas", async () => {
         const schema = {
@@ -142,7 +145,7 @@ describe("generateInterface", () => {
             next: { value: "leaf" },
         }).success).toBe(true);
         _expectTypeChecks(source);
-    });
+    }, TYPECHECK_TIMEOUT_MS);
 
     it("round-trips defaultsInterface", async () => {
         await _roundTrip(defaultsInterface);
@@ -334,7 +337,7 @@ connection.service("runtime").get(cdpRuntime);
         expect(() => generateTsInterface(runtime.toSchema(), {
             bareTarget: { exportName: "invalid", prefix: "bad::prefix" },
         })).toThrow(/bareInterfaceTarget: prefix/);
-    });
+    }, TYPECHECK_TIMEOUT_MS);
 
     it("preserves untagged oneOf and self-recursive components when requested", async () => {
         const schema: LinkRpcInterfaceSchema = {
@@ -529,7 +532,7 @@ const invalidInferredValue: number = inferred.children[0]!.value;
 // @ts-expect-error tuple rest values must satisfy one of the union branches
 const invalidRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, false] };
 `);
-    });
+    }, TYPECHECK_TIMEOUT_MS);
 
     it("allocates distinct safe names for colliding recursive components", () => {
         const recursiveObject = (ref: string): LinkRpcJsonSchema => ({
@@ -572,7 +575,7 @@ const invalidRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, false] }
         expect(source).toContain("const A_BSchema:");
         expect(source).toContain("const A_BSchema_2:");
         _expectTypeChecks(source);
-    });
+    }, TYPECHECK_TIMEOUT_MS);
 });
 
 function _expectTypeChecks(source: string): void {

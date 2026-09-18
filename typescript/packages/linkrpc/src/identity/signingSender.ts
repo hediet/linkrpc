@@ -287,7 +287,7 @@ export class SigningSender<TInCtx = unknown> implements IRequestSender<SigningCa
                 for (const p of queuedSends) void inner.send(p);
             }
             queuedSends = undefined;
-        }, (err) => rejectResult(err instanceof Error ? err : new Error(String(err))));
+        }).catch((err) => rejectResult(err instanceof Error ? err : new Error(String(err))));
         return {
             result,
             cancel: (reason) => {
