@@ -120,7 +120,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     /** Bare-method bindings, keyed by their exact wire prefix. */
     private readonly _bareBindings = new Map<string, BareBinding>();
     private readonly _generateTopologyId: TopologyIdGenerator;
-    private _preset: Preset | undefined;
 
     /**
      * Construct from a {@link Channel} (binds the inbound handler and uses
