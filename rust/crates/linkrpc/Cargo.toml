@@ -13,6 +13,8 @@ serde_json.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+futures-timer = "3"
+jsonschema = { version = "0.18", default-features = false }
 sha2.workspace = true
 schemars.workspace = true
 url.workspace = true

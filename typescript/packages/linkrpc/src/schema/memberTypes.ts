@@ -75,13 +75,15 @@ export class RequestType<
      * Return a copy of this request type with stream payload schemas
      * attached. Pass `undefined` for either direction to leave it
      * closed.
+     * `NoInfer` keeps a contextual MemberMap's `any` stream slots from
+     * widening undeclared directions; only the supplied schemas infer payloads.
      */
     public withStream<TClient = TClientStream, TServer = TServerStream>(
         opts: {
             client?: Schema<TClient>;
             server?: Schema<TServer>;
         },
-    ): RequestType<TParams, TResult, TError, TClient, TServer> {
+    ): RequestType<TParams, TResult, TError, NoInfer<TClient>, NoInfer<TServer>> {
         return new RequestType<TParams, TResult, TError, TClient, TServer>(
             this.paramsSchema,
             this.resultSchema,

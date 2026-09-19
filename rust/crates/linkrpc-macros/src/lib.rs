@@ -11,9 +11,9 @@
 //! - a **`<trait_snake>::interface()`** builder (+ `ID`) producing the runtime
 //!   [`InterfaceDefinition`] whose content hash is the interface identity.
 //!
-//! This first slice supports request methods (`-> Result<T, E>` or `-> T`) and `#[notification]`
-//! methods (`-> ()`); streaming attributes are rejected for now. Doc comments are normative
-//! (hashed); `#[annotations(dangerous, read_only, ...)]` attach member annotations.
+//! Request methods may declare `#[outgoing_stream(T)]` (client→server) and
+//! `#[incoming_stream(T)]` (server→client). Doc comments are normative (hashed);
+//! `#[annotations(dangerous, read_only, ...)]` attach member annotations.
 //!
 //! Generated code references `::linkrpc`, `::serde`, `::serde_json`, `::schemars`, and
 //! `::async_trait` by absolute path, so the consuming crate must depend on those.
@@ -67,6 +67,10 @@ struct MethodModel {
     passthrough_ty: Option<Type>,
     /// The success/result type for a request (None for notifications).
     result_ty: Option<Type>,
+    /// Client→server payload type from `#[outgoing_stream(T)]`.
+    outgoing_stream_ty: Option<Type>,
+    /// Server→client payload type from `#[incoming_stream(T)]`.
+    incoming_stream_ty: Option<Type>,
     /// Doc-comment text (normative).
     doc: Option<String>,
     /// `#[annotations(...)]` flag idents.
@@ -106,11 +110,20 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
     let trait_methods = methods.iter().map(|m| {
         let name = &m.name;
         let args = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
+        let receiver = m
+            .outgoing_stream_ty
+            .as_ref()
+            .map(|ty| quote!(_: ::linkrpc::prelude::StreamReceiver<#ty>));
+        let sender = m
+            .incoming_stream_ty
+            .as_ref()
+            .map(|ty| quote!(_: ::linkrpc::prelude::StreamSender<#ty>));
+        let stream_args = [receiver, sender].into_iter().flatten();
         let output = &m.raw_output;
         let doc = m.doc.as_ref().map(|d| quote!(#[doc = #d]));
         quote! {
             #doc
-            async fn #name(&self, ctx: &#ctx_ty, #(#args),*) #output;
+            async fn #name(&self, ctx: &#ctx_ty, #(#args,)* #(#stream_args),*) #output;
         }
     });
     let rewritten_trait = quote! {
@@ -138,7 +151,7 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
             /// The interface id (the `id` half of `id@hash`).
             pub const ID: &str = #id;
 
-            fn subset<T: ::schemars::JsonSchema>() -> ::linkrpc::prelude::JsonValue {
+            pub(super) fn subset<T: ::schemars::JsonSchema>() -> ::linkrpc::prelude::JsonValue {
                 ::linkrpc::schema::schemars_to_subset(
                     &::serde_json::to_value(::schemars::schema_for!(T)).expect("schema serializes"),
                 )
@@ -168,13 +181,37 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
         } else {
             m.params.iter().map(|(id, _)| quote!(__p.#id)).collect()
         };
+        let receiver = m.outgoing_stream_ty.as_ref().map(|ty| {
+            quote! {
+                let __stream_receiver = ctx.stream_receiver::<#ty>(
+                    #module_ident::subset::<#ty>()
+                )?;
+            }
+        });
+        let sender = m.incoming_stream_ty.as_ref().map(|ty| {
+            quote! {
+                let __stream_sender = ctx.stream_sender::<#ty>()?;
+            }
+        });
+        let stream_args = [
+            m.outgoing_stream_ty
+                .as_ref()
+                .map(|_| quote!(__stream_receiver)),
+            m.incoming_stream_ty
+                .as_ref()
+                .map(|_| quote!(__stream_sender)),
+        ]
+        .into_iter()
+        .flatten();
         quote! {
             #wire => {
                 let __p: #params_ty = ::serde_json::from_value(params).map_err(|e| {
                     ::linkrpc::prelude::JsonRpcError::new(
                         ::linkrpc::prelude::error_codes::INVALID_PARAMS, e.to_string())
                 })?;
-                let __r = self.0.#name(&ctx, #(#call_args),*).await
+                #receiver
+                #sender
+                let __r = self.0.#name(&ctx, #(#call_args,)* #(#stream_args),*).await
                     .map_err(::core::convert::Into::into)?;
                 ::serde_json::to_value(__r).map_err(|e| {
                     ::linkrpc::prelude::JsonRpcError::new(
@@ -305,16 +342,15 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
             "interface methods must be `async fn`",
         ));
     }
-    for attr in &f.attrs {
-        if attr.path().is_ident("incoming_stream") || attr.path().is_ident("outgoing_stream") {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "streaming methods are not supported yet",
-            ));
-        }
-    }
-
     let is_notification = f.attrs.iter().any(|a| a.path().is_ident("notification"));
+    let incoming_stream_ty = parse_stream_attr(&f.attrs, "incoming_stream")?;
+    let outgoing_stream_ty = parse_stream_attr(&f.attrs, "outgoing_stream")?;
+    if is_notification && (incoming_stream_ty.is_some() || outgoing_stream_ty.is_some()) {
+        return Err(syn::Error::new_spanned(
+            &f.sig,
+            "streaming is only supported on request methods, not #[notification] methods",
+        ));
+    }
     let doc = extract_doc(&f.attrs);
     let annotations = extract_annotations(&f.attrs)?;
 
@@ -362,10 +398,28 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         params,
         passthrough_ty,
         result_ty,
+        outgoing_stream_ty,
+        incoming_stream_ty,
         doc,
         annotations,
         raw_output: rewritten_output(&sig.output, is_notification),
     })
+}
+
+fn parse_stream_attr(attrs: &[syn::Attribute], name: &str) -> syn::Result<Option<Type>> {
+    let mut found = None;
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident(name)) {
+        if found.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                format!("duplicate #[{name}(T)] attribute"),
+            ));
+        }
+        found = Some(attr.parse_args::<Type>().map_err(|_| {
+            syn::Error::new_spanned(attr, format!("expected #[{name}(StreamItemType)]"))
+        })?);
+    }
+    Ok(found)
 }
 
 /// Extract `(result_ty, error_ty)` from the return type.
@@ -477,13 +531,21 @@ fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
         }
     } else {
         let result_ty = m.result_ty.as_ref().expect("request has result type");
+        let client_stream_schema = match &m.outgoing_stream_ty {
+            Some(ty) => quote!(::core::option::Option::Some(subset::<#ty>())),
+            None => quote!(::core::option::Option::None),
+        };
+        let server_stream_schema = match &m.incoming_stream_ty {
+            Some(ty) => quote!(::core::option::Option::Some(subset::<#ty>())),
+            None => quote!(::core::option::Option::None),
+        };
         quote! {
             (#wire.to_string(), ::linkrpc::prelude::Member::Request(::std::boxed::Box::new(
                 ::linkrpc::prelude::RequestMember {
                     params_schema: subset::<#params_ty>(),
                     result_schema: subset::<#result_ty>(),
-                    client_stream_schema: ::core::option::Option::None,
-                    server_stream_schema: ::core::option::Option::None,
+                    client_stream_schema: #client_stream_schema,
+                    server_stream_schema: #server_stream_schema,
                     docs: #docs,
                 })))
         }
@@ -555,6 +617,49 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
         }
     } else {
         let result_ty = m.result_ty.as_ref().expect("request has result type");
+        if m.outgoing_stream_ty.is_some() || m.incoming_stream_ty.is_some() {
+            let client_ty = m
+                .outgoing_stream_ty
+                .as_ref()
+                .map(|ty| quote!(#ty))
+                .unwrap_or_else(|| quote!(::linkrpc::prelude::NoStream));
+            let server_ty = m
+                .incoming_stream_ty
+                .as_ref()
+                .map(|ty| quote!(#ty))
+                .unwrap_or_else(|| quote!(::linkrpc::prelude::NoStream));
+            let client_schema = m
+                .outgoing_stream_ty
+                .as_ref()
+                .map(|ty| quote!(::core::option::Option::Some(#module::subset::<#ty>())))
+                .unwrap_or_else(|| quote!(::core::option::Option::None));
+            let server_schema = m
+                .incoming_stream_ty
+                .as_ref()
+                .map(|ty| quote!(::core::option::Option::Some(#module::subset::<#ty>())))
+                .unwrap_or_else(|| quote!(::core::option::Option::None));
+            return quote! {
+                #doc
+                pub async fn #name(&self, #(#args),*)
+                    -> ::core::result::Result<
+                        ::linkrpc::prelude::StreamingCall<#result_ty, #client_ty, #server_ty>,
+                        ::linkrpc::prelude::JsonRpcError>
+                {
+                    #build_params
+                    let __method = match self.service_id.as_deref() {
+                        ::core::option::Option::Some(__service) =>
+                            ::std::format!("{}::{}::{}", __service, #module::ID, #wire),
+                        ::core::option::Option::None =>
+                            ::std::format!("{}::{}", #module::ID, #wire),
+                    };
+                    let __call = ::linkrpc::prelude::RpcCall::call_stream(
+                        &self.conn, &__method, __params).await?;
+                    ::core::result::Result::Ok(
+                        __call.typed::<#result_ty, #client_ty, #server_ty>(
+                            #client_schema, #server_schema))
+                }
+            };
+        }
         quote! {
             #doc
             pub async fn #name(&self, #(#args),*)
@@ -629,4 +734,74 @@ fn to_snake_case(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn parses_duplex_stream_directions() {
+        let method: TraitItemFn = parse_quote! {
+            #[outgoing_stream(Command)]
+            #[incoming_stream(Event)]
+            async fn exchange(value: u32) -> Result<String, Error>;
+        };
+        let model = parse_method(&method).unwrap();
+        assert_eq!(
+            model
+                .outgoing_stream_ty
+                .unwrap()
+                .to_token_stream()
+                .to_string(),
+            "Command"
+        );
+        assert_eq!(
+            model
+                .incoming_stream_ty
+                .unwrap()
+                .to_token_stream()
+                .to_string(),
+            "Event"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_duplicate_stream_attributes() {
+        let malformed: TraitItemFn = parse_quote! {
+            #[incoming_stream]
+            async fn watch() -> String;
+        };
+        assert!(parse_method(&malformed)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("expected #[incoming_stream(StreamItemType)]"));
+
+        let duplicate: TraitItemFn = parse_quote! {
+            #[outgoing_stream(String)]
+            #[outgoing_stream(u32)]
+            async fn upload() -> String;
+        };
+        assert!(parse_method(&duplicate)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("duplicate #[outgoing_stream(T)]"));
+    }
+
+    #[test]
+    fn rejects_streaming_notifications() {
+        let method: TraitItemFn = parse_quote! {
+            #[notification]
+            #[incoming_stream(String)]
+            async fn invalid();
+        };
+        assert!(parse_method(&method)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("not #[notification]"));
+    }
 }

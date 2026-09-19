@@ -27,6 +27,8 @@ enum TypeRef {
     /// `serde_json::Value` — the escape hatch for `any`/unknown and anything
     /// outside the representable subset.
     Json,
+    /// An explicitly declared `false` stream schema.
+    NoStream,
 }
 
 impl TypeRef {
@@ -36,7 +38,7 @@ impl TypeRef {
             TypeRef::Named(n) => out.push(n.clone()),
             TypeRef::Vec(inner) | TypeRef::Map(inner) => inner.collect_named(out),
             TypeRef::Tuple(items) => items.iter().for_each(|t| t.collect_named(out)),
-            TypeRef::Prim(_) | TypeRef::Json => {}
+            TypeRef::Prim(_) | TypeRef::Json | TypeRef::NoStream => {}
         }
     }
 }
@@ -96,6 +98,10 @@ struct MethodModel {
     doc: Option<String>,
     params: TypeRef,
     result: Option<TypeRef>,
+    client_stream: Option<TypeRef>,
+    server_stream: Option<TypeRef>,
+    client_stream_schema: Option<String>,
+    server_stream_schema: Option<String>,
     /// True when tagged `x-linkrpc-codegen.kind = "serverNotification"`: a
     /// server→client event. No client *send* method is generated for these.
     server_notification: bool,
@@ -209,14 +215,64 @@ impl<'a> Collector<'a> {
                 .as_ref()
                 .map(|r| self.type_ref(r, &format!("{base}Result")))
         };
+        if result.is_none() && (method.client_stream.is_some() || method.server_stream.is_some()) {
+            self.note(format!(
+                "method `{wire}` declares streams but has no result; streams on notifications are invalid"
+            ));
+        }
+        let client_stream = method
+            .client_stream
+            .as_ref()
+            .map(|schema| self.stream_type_ref(schema, &format!("{base}ClientStream")));
+        let server_stream = method
+            .server_stream
+            .as_ref()
+            .map(|schema| self.stream_type_ref(schema, &format!("{base}ServerStream")));
         MethodModel {
             wire_name: wire.to_string(),
             rust_name: to_snake_case(wire),
             doc: method.description.clone(),
             params,
             result,
+            client_stream,
+            server_stream,
+            client_stream_schema: method
+                .client_stream
+                .as_ref()
+                .map(|schema| self.serialized_stream_schema(schema)),
+            server_stream_schema: method
+                .server_stream
+                .as_ref()
+                .map(|schema| self.serialized_stream_schema(schema)),
             server_notification,
         }
+    }
+
+    fn stream_type_ref(&mut self, schema: &JsonValue, name_hint: &str) -> TypeRef {
+        if schema == &JsonValue::Bool(false) {
+            TypeRef::NoStream
+        } else {
+            self.type_ref(schema, name_hint)
+        }
+    }
+
+    /// Make component references resolvable when the runtime compiles this
+    /// method-level schema as a standalone validation document.
+    fn serialized_stream_schema(&self, schema: &JsonValue) -> String {
+        let mut root = serde_json::Map::new();
+        root.insert("allOf".into(), JsonValue::Array(vec![schema.clone()]));
+        let schemas = self
+            .components
+            .iter()
+            .map(|(name, schema)| (name.clone(), (*schema).clone()))
+            .collect::<serde_json::Map<_, _>>();
+        if !schemas.is_empty() {
+            root.insert(
+                "components".into(),
+                serde_json::json!({ "schemas": schemas }),
+            );
+        }
+        serde_json::to_string(&JsonValue::Object(root)).expect("JSON schema serializes")
     }
 
     /// Return a [`TypeRef`] for `schema`, synthesizing a named type (registered
@@ -756,6 +812,7 @@ impl TarjanState<'_> {
 
 struct Renderer<'a> {
     scc: &'a HashMap<String, usize>,
+    hub: &'a str,
 }
 
 impl Renderer<'_> {
@@ -785,6 +842,7 @@ impl Renderer<'_> {
             }
             TypeRef::Prim(p) => p.to_string(),
             TypeRef::Json => "serde_json::Value".to_string(),
+            TypeRef::NoStream => format!("{}::prelude::NoStream", self.hub),
         }
     }
 
@@ -1037,7 +1095,10 @@ pub(super) fn generate(
     let methods = collector.run(schema);
 
     let scc = compute_sccs(&collector.defs);
-    let renderer = Renderer { scc: &scc };
+    let renderer = Renderer {
+        scc: &scc,
+        hub: &options.linkrpc_path,
+    };
 
     let mut w = CodeWriter::new();
     write_header(&mut w, schema, &collector.unsupported, options);
@@ -1077,6 +1138,12 @@ fn write_header(
         for note in unsupported {
             w.line(&format!("//   - {note}"));
         }
+    }
+    if unsupported
+        .iter()
+        .any(|note| note.contains("streams on notifications are invalid"))
+    {
+        w.line("compile_error!(\"linkrpc methods with streams must declare a result\");");
     }
     w.line("#![allow(dead_code, clippy::all, non_camel_case_types)]");
     // Keep the byte-exact, deterministic output stable under a downstream
@@ -1205,14 +1272,38 @@ fn write_server(
             .as_ref()
             .map(|ty| renderer.ty(ty, usize::MAX, true))
             .unwrap_or_else(|| "()".to_string());
+        let mut args = vec![
+            format!("ctx: &{hub}::prelude::CallCtx"),
+            format!("params: {params_ty}"),
+        ];
+        if let Some(ty) = &method.client_stream {
+            args.push(format!(
+                "stream_receiver: {hub}::prelude::StreamReceiver<{}>",
+                renderer.ty(ty, usize::MAX, true)
+            ));
+        }
+        if let Some(ty) = &method.server_stream {
+            args.push(format!(
+                "stream_sender: {hub}::prelude::StreamSender<{}>",
+                renderer.ty(ty, usize::MAX, true)
+            ));
+        }
         let signature = format!(
-            "async fn {}(&self, ctx: &{hub}::prelude::CallCtx, params: {params_ty}) -> Result<{result_ty}, {hub}::prelude::JsonRpcError>",
-            method.rust_name
+            "async fn {}(&self, {}) -> Result<{result_ty}, {hub}::prelude::JsonRpcError>",
+            method.rust_name,
+            args.join(", ")
         );
         if options.default_server_methods {
             w.line(&format!("{signature} {{"));
             w.indent();
-            w.line("let _ = (ctx, params);");
+            let mut unused = vec!["ctx", "params"];
+            if method.client_stream.is_some() {
+                unused.push("stream_receiver");
+            }
+            if method.server_stream.is_some() {
+                unused.push("stream_sender");
+            }
+            w.line(&format!("let _ = ({});", unused.join(", ")));
             if method.result.is_some() {
                 w.line(&format!(
                     "Err({hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::METHOD_NOT_FOUND, {}))",
@@ -1326,9 +1417,31 @@ fn write_server_requests(
         w.line(&format!("{} => {{", quote_str(&method.wire_name)));
         w.indent();
         write_decode_params(w, &params_ty, hub);
+        if method.client_stream.is_some() {
+            w.line(&format!(
+                "let __stream_receiver = ctx.stream_receiver({})?;",
+                json_schema_expr(
+                    method
+                        .client_stream_schema
+                        .as_deref()
+                        .expect("client stream schema")
+                )
+            ));
+        }
+        if method.server_stream.is_some() {
+            w.line("let __stream_sender = ctx.stream_sender()?;");
+        }
+        let mut args = vec!["&ctx", "__p"];
+        if method.client_stream.is_some() {
+            args.push("__stream_receiver");
+        }
+        if method.server_stream.is_some() {
+            args.push("__stream_sender");
+        }
         w.line(&format!(
-            "let __r = self.0.{}(&ctx, __p).await?;",
-            method.rust_name
+            "let __r = self.0.{}({}).await?;",
+            method.rust_name,
+            args.join(", ")
         ));
         w.line("serde_json::to_value(__r).map_err(|e| {");
         w.indent();
@@ -1490,6 +1603,44 @@ fn write_client_method(
     match &method.result {
         Some(result) => {
             let result_ty = renderer.ty(result, usize::MAX, true);
+            if method.client_stream.is_some() || method.server_stream.is_some() {
+                let client_ty = method
+                    .client_stream
+                    .as_ref()
+                    .map(|ty| renderer.ty(ty, usize::MAX, true))
+                    .unwrap_or_else(|| format!("{hub}::prelude::NoStream"));
+                let server_ty = method
+                    .server_stream
+                    .as_ref()
+                    .map(|ty| renderer.ty(ty, usize::MAX, true))
+                    .unwrap_or_else(|| format!("{hub}::prelude::NoStream"));
+                w.line(&format!(
+                    "pub async fn {}(&self, params: {params_ty}) -> Result<{hub}::prelude::StreamingCall<{result_ty}, {client_ty}, {server_ty}>, {err}> {{",
+                    method.rust_name
+                ));
+                w.indent();
+                write_encode_params(w, hub);
+                w.line(&format!(
+                    "let __call = self.caller.call_stream(&self.method_name({}), __p).await?;",
+                    quote_str(&method.wire_name)
+                ));
+                let client_schema = method
+                    .client_stream_schema
+                    .as_deref()
+                    .map(|schema| format!("Some({})", json_schema_expr(schema)))
+                    .unwrap_or_else(|| "None".to_string());
+                let server_schema = method
+                    .server_stream_schema
+                    .as_deref()
+                    .map(|schema| format!("Some({})", json_schema_expr(schema)))
+                    .unwrap_or_else(|| "None".to_string());
+                w.line(&format!(
+                    "Ok(__call.typed::<{result_ty}, {client_ty}, {server_ty}>({client_schema}, {server_schema}))"
+                ));
+                w.dedent();
+                w.line("}");
+                return;
+            }
             w.line(&format!(
                 "pub async fn {}(&self, params: {params_ty}) -> Result<{result_ty}, {err}> {{",
                 method.rust_name
@@ -1510,6 +1661,7 @@ fn write_client_method(
             w.dedent();
             w.line("}");
         }
+
         None => {
             w.line(&format!(
                 "pub async fn {}(&self, params: {params_ty}) -> Result<(), {err}> {{",
@@ -1525,6 +1677,13 @@ fn write_client_method(
             w.line("}");
         }
     }
+}
+
+fn json_schema_expr(schema: &str) -> String {
+    format!(
+        "serde_json::from_str({}).expect(\"generated stream schema is valid\")",
+        quote_str(schema)
+    )
 }
 
 fn write_encode_params(w: &mut CodeWriter, hub: &str) {

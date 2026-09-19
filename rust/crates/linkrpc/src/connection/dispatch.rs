@@ -5,8 +5,11 @@
 //! typed Rust values and encodes results back to JSON; hand-written handlers implement it directly.
 
 use async_trait::async_trait;
+use std::sync::{Arc, Weak};
 
+use crate::connection::channel::ChannelInner;
 use crate::connection::interface_def::InterfaceDefinition;
+use crate::connection::streaming::{StreamReceiver, StreamSender, StreamState};
 use crate::protocol::json_value::JsonValue;
 use crate::protocol::jsonrpc::{JsonRpcError, RequestId};
 
@@ -14,19 +17,109 @@ use crate::protocol::jsonrpc::{JsonRpcError, RequestId};
 ///
 /// Carries the wire request id (for requests) and is the seam where attested caller identity and
 /// a cancellation token will be attached in later milestones (see `docs/examples.md` §4).
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct CallCtx {
     request_id: Option<RequestId>,
+    stream: Option<CallStreamContext>,
+}
+
+#[derive(Clone)]
+struct CallStreamContext {
+    state: Arc<StreamState>,
+    channel: Weak<ChannelInner>,
 }
 
 impl CallCtx {
     pub fn new(request_id: Option<RequestId>) -> Self {
-        CallCtx { request_id }
+        CallCtx {
+            request_id,
+            stream: None,
+        }
+    }
+
+    pub(super) fn with_stream(
+        request_id: Option<RequestId>,
+        state: Arc<StreamState>,
+        channel: Weak<ChannelInner>,
+    ) -> Self {
+        Self {
+            request_id,
+            stream: Some(CallStreamContext { state, channel }),
+        }
+    }
+
+    pub(crate) fn configure_streams(
+        &self,
+        client_schema: Option<JsonValue>,
+        server_schema: Option<JsonValue>,
+    ) {
+        if let Some(stream) = &self.stream {
+            stream.state.set_incoming_schema(client_schema);
+            stream.state.set_outgoing_schema(server_schema);
+        }
     }
 
     /// The wire request id, if this call is a request (notifications have none).
     pub fn request_id(&self) -> Option<&RequestId> {
         self.request_id.as_ref()
+    }
+
+    pub fn stream_receiver<T>(&self, schema: JsonValue) -> Result<StreamReceiver<T>, JsonRpcError> {
+        let stream = self.stream.as_ref().ok_or_else(|| {
+            JsonRpcError::new(
+                crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
+                "streaming is unavailable for this call",
+            )
+        })?;
+        stream.state.register_receiver(schema)?;
+        Ok(StreamReceiver::new(stream.state.clone()))
+    }
+
+    pub fn stream_sender<T>(&self) -> Result<StreamSender<T>, JsonRpcError> {
+        let stream = self.stream.as_ref().ok_or_else(|| {
+            JsonRpcError::new(
+                crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
+                "streaming is unavailable for this call",
+            )
+        })?;
+        // Obtaining the typed sender is the declaration seam for hand-written handlers.
+        stream
+            .state
+            .set_outgoing_schema(Some(JsonValue::Bool(true)));
+        Ok(StreamSender::new(
+            stream.state.clone(),
+            stream.channel.clone(),
+            "toCaller",
+        ))
+    }
+
+    pub async fn cancelled(&self) -> Option<String> {
+        match &self.stream {
+            Some(stream) => stream.state.cancelled().await,
+            None => None,
+        }
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.stream
+            .as_ref()
+            .is_some_and(|stream| stream.state.is_cancelled())
+    }
+
+    pub async fn ping(&self) -> Result<(), JsonRpcError> {
+        let stream = self.stream.as_ref().ok_or_else(|| {
+            JsonRpcError::new(
+                crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
+                "streaming is unavailable for this call",
+            )
+        })?;
+        let channel = stream.channel.upgrade().ok_or_else(|| {
+            JsonRpcError::new(
+                crate::protocol::jsonrpc::error_codes::PEER_DISCONNECTED,
+                "channel closed",
+            )
+        })?;
+        channel.ping_state(&stream.state, "toCaller").await
     }
 }
 

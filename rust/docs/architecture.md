@@ -204,7 +204,7 @@ enum RequestId { Num(i64), Str(String) }
 ### Channel
 The correlation engine sitting directly on a transport. It **owns response correlation itself**
 (matches outbound requests to inbound responses by `id`), routes inbound
-**requests/notifications** to a bound handler, and (in the streaming phase) routes `$stream::send`
+**requests/notifications** to a bound handler, and routes `$stream::send`
 frames to the owning in-flight call. The channel is symmetric — it serves *and* calls over the
 same transport — and is **generic over per-call context** in both directions:
 

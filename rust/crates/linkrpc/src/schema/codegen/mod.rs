@@ -186,6 +186,79 @@ mod tests {
     }
 
     #[test]
+    fn streaming_methods_generate_typed_duplex_bindings() {
+        let s = schema(
+            r##"{
+                "id": "com.example.streams", "hash": "",
+                "methods": {
+                    "exchange": {
+                        "params": { "type": "object", "additionalProperties": false },
+                        "result": { "type": "integer" },
+                        "clientStream": { "$ref": "#/components/schemas/Command" },
+                        "serverStream": false
+                    }
+                },
+                "components": { "schemas": {
+                    "Command": {
+                        "type": "object",
+                        "properties": {
+                            "next": { "$ref": "#/components/schemas/Command" }
+                        },
+                        "additionalProperties": false
+                    }
+                }}
+            }"##,
+        );
+        let g = generate_rust_interface(
+            &s,
+            &GenerateRustOptions {
+                generate_server: true,
+                ..GenerateRustOptions::default()
+            },
+        );
+        assert!(g.unsupported.is_empty(), "{:?}", g.unsupported);
+        assert!(g
+            .code
+            .contains("StreamingCall<i64, Command, linkrpc::prelude::NoStream>"));
+        assert!(g
+            .code
+            .contains("stream_receiver: linkrpc::prelude::StreamReceiver<Command>"));
+        assert!(g
+            .code
+            .contains("stream_sender: linkrpc::prelude::StreamSender<linkrpc::prelude::NoStream>"));
+        assert!(g
+            .code
+            .contains(r#"serde_json::from_str("{\"allOf\":[false],\"components\":{\"schemas\":"#));
+        assert!(g.code.contains(
+            r##"serde_json::from_str("{\"allOf\":[{\"$ref\":\"#/components/schemas/Command\"}],\"components\":{\"schemas\":"##
+        ));
+        assert!(g.code.contains("Option<Box<Command>>"));
+    }
+
+    #[test]
+    fn rejects_streams_on_notifications() {
+        let s = schema(
+            r#"{
+                "id": "com.example.bad", "hash": "",
+                "methods": {
+                    "bad": {
+                        "params": true,
+                        "clientStream": { "type": "string" }
+                    }
+                }
+            }"#,
+        );
+        let g = generate_rust_interface(&s, &GenerateRustOptions::default());
+        assert!(g
+            .unsupported
+            .iter()
+            .any(|note| note.contains("streams on notifications are invalid")));
+        assert!(g
+            .code
+            .contains("compile_error!(\"linkrpc methods with streams must declare a result\")"));
+    }
+
+    #[test]
     fn tagged_union_and_string_enum() {
         let s = schema(
             r##"{

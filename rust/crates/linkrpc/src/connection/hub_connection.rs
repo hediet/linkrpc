@@ -414,9 +414,32 @@ impl RequestHandler for ConnectionDispatch {
         method: String,
         params: JsonValue,
     ) -> Result<JsonValue, JsonRpcError> {
+        self.handle_request_with_context(method, params, CallCtx::default())
+            .await
+    }
+
+    async fn handle_request_with_context(
+        &self,
+        method: String,
+        params: JsonValue,
+        ctx: CallCtx,
+    ) -> Result<JsonValue, JsonRpcError> {
         let routed = self.inner.route(&method)?;
         match routed.entry.iface.member(&routed.member) {
-            Some(Member::Request(_)) => {}
+            Some(Member::Request(request)) => {
+                let components = routed.entry.iface.to_schema().components;
+                let materialize = |schema: &JsonValue| match &components {
+                    Some(components) => json!({
+                        "allOf": [schema],
+                        "components": components,
+                    }),
+                    None => schema.clone(),
+                };
+                ctx.configure_streams(
+                    request.client_stream_schema.as_ref().map(materialize),
+                    request.server_stream_schema.clone(),
+                );
+            }
             // Request semantics used on a notification-only method, or unknown member.
             Some(Member::Notification(_)) | None => {
                 return Err(not_found("unknown-method", &method))
@@ -425,11 +448,21 @@ impl RequestHandler for ConnectionDispatch {
         routed
             .entry
             .handler
-            .handle_request(&routed.member, params, CallCtx::default())
+            .handle_request(&routed.member, params, ctx)
             .await
     }
 
     async fn handle_notification(&self, method: String, params: JsonValue) {
+        self.handle_notification_with_context(method, params, CallCtx::default())
+            .await;
+    }
+
+    async fn handle_notification_with_context(
+        &self,
+        method: String,
+        params: JsonValue,
+        ctx: CallCtx,
+    ) {
         let Ok(routed) = self.inner.route(&method) else {
             return;
         };
@@ -442,7 +475,7 @@ impl RequestHandler for ConnectionDispatch {
         routed
             .entry
             .handler
-            .handle_notification(&routed.member, params, CallCtx::default())
+            .handle_notification(&routed.member, params, ctx)
             .await;
     }
 }

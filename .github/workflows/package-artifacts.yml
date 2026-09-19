@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - "typescript/**"
+      - "interop/**"
+      - "rust/crates/linkrpc-examples/**"
       - "conformance/protocols/**"
       - "conformance/vectors/bare_bindings.json"
       - "conformance/vectors/reflection_defaults.json"
@@ -17,6 +19,8 @@ on:
   pull_request:
     paths:
       - "typescript/**"
+      - "interop/**"
+      - "rust/crates/linkrpc-examples/**"
       - "conformance/protocols/**"
       - "conformance/vectors/bare_bindings.json"
       - "conformance/vectors/reflection_defaults.json"
@@ -56,6 +60,13 @@ jobs:
       - name: Build and test packages
         working-directory: typescript
         run: pnpm check
+      - name: Check Rust-exported streaming contract
+        run: node interop/generate-streaming.mjs --check
+      - name: Test typed Rust and TypeScript streaming in both directions
+        working-directory: typescript
+        env:
+          LINKRPC_STREAMING_INTEROP: "1"
+        run: pnpm --filter @hediet/linkrpc test src/connection/streamingInterop.test.ts
       - name: Create npm tarballs
         id: package
         working-directory: typescript
