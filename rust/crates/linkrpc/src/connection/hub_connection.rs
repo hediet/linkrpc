@@ -293,6 +293,15 @@ impl LinkRpcConnection {
         self.channel.call(method, params).await
     }
 
+    /// Invoke a request while retaining transport-vs-remote error origin.
+    pub async fn call_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<JsonValue, crate::client::RpcCallError> {
+        self.channel.call_detailed(method, params).await
+    }
+
     /// Send a notification by raw wire name.
     pub async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
         self.channel.notify(method, params).await
@@ -307,6 +316,18 @@ impl LinkRpcConnection {
         params: JsonValue,
     ) -> Result<JsonValue, JsonRpcError> {
         self.call(&wire_method(service_id, interface_id, member), params)
+            .await
+    }
+
+    /// Invoke a request member while retaining transport-vs-remote error origin.
+    pub async fn call_member_detailed(
+        &self,
+        service_id: Option<&str>,
+        interface_id: &str,
+        member: &str,
+        params: JsonValue,
+    ) -> Result<JsonValue, crate::client::RpcCallError> {
+        self.call_detailed(&wire_method(service_id, interface_id, member), params)
             .await
     }
 

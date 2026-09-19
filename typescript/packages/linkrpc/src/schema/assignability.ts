@@ -31,6 +31,11 @@ export interface Components {
     schemas?: Record<string, LinkRpcJsonSchema>;
 }
 
+/** Match one JSON value against the structural LinkRPC subset without transforming it. */
+export function matchesJsonSchema(value: JsonValue, schema: LinkRpcJsonSchema, components: Components = {}): boolean {
+    return _matches(value, schema, components, new Set());
+}
+
 function _check(sub: LinkRpcJsonSchema, sup: LinkRpcJsonSchema, c: Components, seen: Set<string>): boolean {
     // top / bottom shortcuts
     if (sup === true) return true;
@@ -229,8 +234,9 @@ function _matches(
     if (sup === true) return true;
     if (sup === false) return false;
     if (_isRef(sup)) {
+        if (seen.has(sup.$ref)) return false;
         const r = _resolveRef(sup, c);
-        return r ? _matches(v, r, c, seen) : false;
+        return r ? _matches(v, r, c, new Set(seen).add(sup.$ref)) : false;
     }
     if (_isUnion(sup)) return _branches(sup).some((b) => _matches(v, b, c, seen));
     if (_isConst(sup)) return _jsonEq(v, sup.const);
@@ -243,10 +249,10 @@ function _matches(
         case "number": return typeof v === "number";
         case "integer": return typeof v === "number" && Number.isInteger(v);
         case "string": return typeof v === "string";
-        case "array": return Array.isArray(v) && _matchesArray(v, sup as ArrayLike, c, seen);
+        case "array": return Array.isArray(v) && _matchesArray(v, sup as ArrayLike, c);
         case "object":
             return v !== null && typeof v === "object" && !Array.isArray(v)
-                && _matchesObject(v as Record<string, JsonValue>, sup as ObjectSchema, c, seen);
+                && _matchesObject(v as Record<string, JsonValue>, sup as ObjectSchema, c);
         default: return false;
     }
 }
@@ -255,7 +261,6 @@ function _matchesArray(
     v: JsonValue[],
     sup: ArrayLike,
     c: Components,
-    seen: Set<string>,
 ): boolean {
     const prefix = (sup as TupleSchema).prefixItems ?? [];
     const rest = _restOf(sup);
@@ -265,7 +270,7 @@ function _matchesArray(
     for (let i = 0; i < v.length; i++) {
         const s = prefix[i] ?? (rest === false ? false : rest);
         if (s === false) return false;
-        if (!_matches(v[i], s, c, seen)) return false;
+        if (!_matches(v[i], s, c, new Set())) return false;
     }
     return true;
 }
@@ -274,15 +279,14 @@ function _matchesObject(
     v: Record<string, JsonValue>,
     sup: ObjectSchema,
     c: Components,
-    seen: Set<string>,
 ): boolean {
     for (const k of sup.required ?? []) {
-        if (!(k in v)) return false;
+        if (!Object.hasOwn(v, k)) return false;
     }
     for (const [k, val] of Object.entries(v)) {
-        const s = sup.properties[k] ?? sup.additionalProperties;
+        const s = Object.hasOwn(sup.properties, k) ? sup.properties[k] : sup.additionalProperties;
         if (s === false) return false;
-        if (!_matches(val, s, c, seen)) return false;
+        if (!_matches(val, s, c, new Set())) return false;
     }
     return true;
 }

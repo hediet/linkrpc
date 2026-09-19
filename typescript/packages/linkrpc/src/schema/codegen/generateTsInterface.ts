@@ -49,6 +49,7 @@ export function generateTsInterface(
     schema: LinkRpcInterfaceSchema,
     options: GenerateInterfaceOptions = {},
 ): string {
+    _validateErrors(schema.methods);
     const linkRpcImport = options.linkRpcImport ?? '@hediet/linkrpc';
     const exportName = options.exportName ?? _deriveExportName(schema.id);
     const preserveWireSchema = options.preserveWireSchema ?? false;
@@ -58,9 +59,12 @@ export function generateTsInterface(
 
     const w = new CodeWriter();
     const bareTargetImport = options.bareTarget === undefined ? '' : 'bareInterfaceTarget, ';
+    const errorImport = Object.values(schema.methods).some((method) => (method.errors?.length ?? 0) > 0)
+        ? 'applicationError, '
+        : '';
     const definitionImport = preserveWireSchema ?
-        `${bareTargetImport}InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema` :
-        `${bareTargetImport}defineInterface, notificationType, requestType`;
+        `${errorImport}${bareTargetImport}InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema` :
+        `${errorImport}${bareTargetImport}defineInterface, notificationType, requestType`;
     w.writeLine(`import { ${definitionImport} } from "${linkRpcImport}";`);
     w.writeLine(`import { z } from "zod";`);
     w.writeLine();
@@ -287,6 +291,21 @@ function _writeMethod(
     w.dedent();
     w.append(')');
 
+    if ((method.errors?.length ?? 0) > 0) {
+        w.append('.withErrors([').newline();
+        w.indent();
+        for (const error of method.errors!) {
+            w.append(`applicationError(${error.code}, ${JSON.stringify(error.message)}`);
+            if (error.data !== undefined) {
+                w.append(', ');
+                _writeSchema(w, error.data, components, preserveWireSchema);
+            }
+            w.append('),').newline();
+        }
+        w.dedent();
+        w.append('] as const)');
+    }
+
     // Streams attach through `withStream({ client?, server? })`.
     if (method.clientStream !== undefined || method.serverStream !== undefined) {
         w.append('.withStream({').newline();
@@ -296,6 +315,7 @@ function _writeMethod(
             _writeSchema(w, method.clientStream, components, preserveWireSchema);
             w.append(',').newline();
         }
+
         if (method.serverStream !== undefined) {
             w.append('server: ');
             _writeSchema(w, method.serverStream, components, preserveWireSchema);
@@ -303,6 +323,30 @@ function _writeMethod(
         }
         w.dedent();
         w.append('})');
+    }
+}
+
+function _validateErrors(methods: Record<string, MethodSchema>): void {
+    for (const [name, method] of Object.entries(methods)) {
+        if (method.result === undefined && method.errors !== undefined) {
+            throw new Error(`generateInterface: notification "${name}" cannot declare errors`);
+        }
+        const seen = new Set<number>();
+        for (const error of method.errors ?? []) {
+            if (typeof error.message !== 'string') {
+                throw new Error(`generateInterface: error message on "${name}" is not a string`);
+            }
+            if (!Number.isInteger(error.code) || error.code < -2147483648 || error.code > 2147483647) {
+                throw new Error(`generateInterface: error code ${error.code} on "${name}" is not a signed i32`);
+            }
+            if ((error.code >= -32768 && error.code <= -32000) || error.code === -32800) {
+                throw new Error(`generateInterface: error code ${error.code} on "${name}" is reserved`);
+            }
+            if (seen.has(error.code)) {
+                throw new Error(`generateInterface: duplicate error code ${error.code} on "${name}"`);
+            }
+            seen.add(error.code);
+        }
     }
 }
 

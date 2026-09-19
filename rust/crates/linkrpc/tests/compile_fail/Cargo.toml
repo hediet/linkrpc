@@ -1,0 +1,29 @@
+[package]
+name = "linkrpc-typed-errors-compile-fail"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+linkrpc = { path = "../.." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "0.8"
+
+[[bin]]
+name = "reserved"
+path = "reserved.rs"
+
+[[bin]]
+name = "duplicate"
+path = "duplicate.rs"
+
+[[bin]]
+name = "cancelled"
+path = "cancelled.rs"
+
+[[bin]]
+name = "wrong_payload"
+path = "wrong_payload.rs"

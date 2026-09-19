@@ -48,6 +48,47 @@ From that one trait you get:
 | `PizzaService` (rewritten) | the trait your provider implements (`&self`, `&CallCtx`-first) |
 | `PizzaServiceServer` | an `InterfaceHandler` adapter — register it and serve |
 | `PizzaServiceClient` | a typed caller proxy with plain `async fn` methods |
+
+## Typed application errors
+
+Application errors are opt-in per method; existing
+`Result<T, JsonRpcError>` methods are unchanged.
+
+```rust
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct MissingData { resource: String }
+
+#[derive(linkrpc::ApplicationError)]
+enum LookupError {
+    #[rpc_error(code = 1001, message = "Missing")]
+    Missing(MissingData),
+    #[rpc_error(code = -7, message = "Offline")]
+    Offline,
+}
+
+#[link_rpc_interface(id = "example.lookup")]
+trait Lookup {
+    #[errors(LookupError)]
+    async fn lookup(resource: String) -> Result<String, CallError<LookupError>>;
+}
+```
+
+The server trait may return either `LookupError` directly or
+`CallError<LookupError>` when it also needs to forward a raw remote error. The client returns
+`Result<String, CallError<LookupError>>`. `CallError::Application` is produced
+only when code, message, data presence, and schema all match. Otherwise
+`CallError::Remote` retains the original `JsonRpcError`.
+`CallError::Local` reports local serialization/decoding failures, while
+`CallError::Transport` reports connection failures without inferring their
+origin from a peer-controlled error code.
+
+Codes are signed 32-bit integers. The reserved `-32768..=-32000` range and
+LinkRPC cancellation code `-32800`,
+duplicate codes within a method, and errors on notifications are rejected.
+Unit variants require absent `data`; payload variants require present,
+schema-valid `data` (including `null` when its schema permits it).
+Schema-driven generation emits stable variants such as `Code1001` and
+`CodeMinus7`.
 | `pizza_service::interface()` / `::ID` | the interface descriptor and its content hash |
 
 ## Why content-hashed interfaces?

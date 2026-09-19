@@ -3,7 +3,7 @@ import { z } from "zod";
 import ts from "typescript";
 import { computeInterfaceHash } from "../hash";
 import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
-import { notificationType, requestType } from "../memberTypes";
+import { applicationError, notificationType, requestType } from "../memberTypes";
 import type { LinkRpcInterfaceSchema } from "../linkRpcInterfaceSchema";
 import type { LinkRpcJsonSchema } from "../linkRpcJsonSchema";
 import {
@@ -42,9 +42,10 @@ async function _evalGenerated(source: string): Promise<{
 
     const fn = new Function(
         "z", "defineInterface", "InterfaceDefinition", "requestType", "notificationType",
+        "applicationError",
         `${body}`,
     );
-    return fn(z, defineInterface, InterfaceDefinition, requestType, notificationType);
+    return fn(z, defineInterface, InterfaceDefinition, requestType, notificationType, applicationError);
 }
 
 async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash: string }): Promise<void> {
@@ -57,6 +58,87 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("emits typed error descriptors and preserves recursive referenced data", async () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.generated-errors",
+            hash: "",
+            methods: {
+                read: {
+                    params: { type: "object", properties: {}, additionalProperties: false },
+                    result: { type: "string" },
+                    errors: [
+                        { code: 404, message: "Not found" },
+                        {
+                            code: 409,
+                            message: "Conflict",
+                            data: { $ref: "#/components/schemas/Conflict" },
+                        },
+                    ],
+                },
+            },
+            components: {
+                schemas: {
+                    Conflict: {
+                        type: "object",
+                        properties: {
+                            reason: { type: "string" },
+                            parent: { $ref: "#/components/schemas/Conflict" },
+                        },
+                        required: ["reason"],
+                        additionalProperties: false,
+                    },
+                },
+            },
+        };
+        schema.hash = computeInterfaceHash(schema);
+
+        const source = generateTsInterface(schema, { preserveWireSchema: true });
+        expect(source).toContain('applicationError(404, "Not found")');
+        expect(source).toContain('applicationError(409, "Conflict", ConflictSchema)');
+        expect(source).toContain("] as const)");
+        const regenerated = await _evalGenerated(source);
+        expect(regenerated.schemaHash).toBe(schema.hash);
+        expect(regenerated.toSchema()).toEqual(schema);
+        _expectTypeChecks(source);
+    }, TYPECHECK_TIMEOUT_MS);
+
+    it("rejects errors on notifications and invalid codes", () => {
+        const base: LinkRpcInterfaceSchema = {
+            id: "test.invalid-errors",
+            hash: "",
+            methods: { notify: { params: true } },
+        };
+        expect(() => generateTsInterface({
+            ...base,
+            methods: {
+                notify: {
+                    params: true,
+                    errors: [{ code: 1, message: "impossible" }],
+                },
+            },
+        })).toThrow(/notification/);
+        expect(() => generateTsInterface({
+            ...base,
+            methods: {
+                request: {
+                    params: true,
+                    result: true,
+                    errors: [{ code: -32600, message: "reserved" }],
+                },
+            },
+        })).toThrow(/reserved/);
+        expect(() => generateTsInterface({
+            ...base,
+            methods: {
+                request: {
+                    params: true,
+                    result: true,
+                    errors: [{ code: -32800, message: "cancelled" }],
+                },
+            },
+        })).toThrow(/reserved/);
+    });
+
     it("renders JSON wire int64 and uint64 values as TypeScript numbers", async () => {
         const schema = {
             id: "test.json-integers",

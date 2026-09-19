@@ -1,0 +1,55 @@
+{
+  "id": "dev.linkrpc.ts-errors",
+  "hash": "",
+  "methods": {
+    "check": {
+      "params": {
+        "type": "object",
+        "properties": { "mode": { "type": "string" } },
+        "required": ["mode"],
+        "additionalProperties": false
+      },
+      "result": { "type": "string" },
+      "errors": [
+        {
+          "code": 2001,
+          "message": "Missing",
+          "data": { "$ref": "#/components/schemas/MissingData" }
+        },
+        { "code": 2002, "message": "Busy" },
+        {
+          "code": 2003,
+          "message": "Nullable",
+          "data": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+        },
+        {
+          "code": 2004,
+          "message": "Recursive",
+          "data": { "$ref": "#/components/schemas/RecursiveData" }
+        }
+      ]
+    }
+  },
+  "components": {
+    "schemas": {
+      "MissingData": {
+        "type": "object",
+        "properties": { "resource": { "type": "string" } },
+        "required": ["resource"],
+        "additionalProperties": false
+      },
+      "RecursiveData": {
+        "type": "object",
+        "properties": {
+          "label": { "type": "string" },
+          "children": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/RecursiveData" }
+          }
+        },
+        "required": ["label", "children"],
+        "additionalProperties": false
+      }
+    }
+  }
+}

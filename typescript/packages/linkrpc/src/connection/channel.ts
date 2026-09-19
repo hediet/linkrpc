@@ -206,12 +206,20 @@ export type MessageWithCtx<TInCtx> = [TInCtx] extends [undefined] ? JsonRpcMessa
     JsonRpcMessage & { context: TInCtx; };
 
 export class RpcError extends Error {
+    public readonly data?: JsonValue;
+    public readonly hasData: boolean;
+
     constructor(
         message: string,
         public readonly code: number,
-        public readonly data?: JsonValue,
+        data?: JsonValue,
+        /** Whether this error was decoded from a peer response. */
+        public readonly origin: 'local' | 'remote' = 'local',
+        hasData = data !== undefined,
     ) {
         super(message);
         this.name = 'RpcError';
+        this.hasData = hasData;
+        if (hasData) this.data = data;
     }
 }

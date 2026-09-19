@@ -2,12 +2,17 @@ import { any as zAny, void as zVoid } from 'zod/mini';
 import type { RequestId } from '../protocol/jsonRpc';
 import { computeInterfaceHash } from '../schema/hash';
 import {
+    type ApplicationErrorDescriptorBase,
+    type DeclaredApplicationErrorOf,
+    type PublicApplicationErrorOf,
+    applicationError,
     type MemberType,
     NotificationType,
     RequestType,
     type Schema,
     zodToSvcJsonSchema,
 } from '../schema/memberTypes';
+import { schemaToZod } from '../schema/schemaToZod';
 import type { MethodSchema, LinkRpcInterfaceSchema } from '../schema/linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
 
@@ -128,6 +133,33 @@ export interface StreamingCall<TResult, TClient> extends Promise<TResult> {
     ping(): Promise<void>;
 }
 
+export interface RemoteRpcError {
+    readonly kind: 'remote';
+    readonly code: number;
+    readonly message: string;
+    readonly data?: import('../protocol/jsonValue').JsonValue;
+}
+
+export interface LocalRpcError {
+    readonly kind: 'local';
+    readonly cause: unknown;
+}
+
+export type CheckedCallResult<TResult, TApplicationError = never> =
+    | { readonly ok: true; readonly value: TResult; }
+    | {
+        readonly ok: false;
+        readonly error: TApplicationError | RemoteRpcError | LocalRpcError;
+    };
+
+export interface CheckedCall<TResult, TApplicationError = never> extends Promise<TResult> {
+    /**
+     * Settle without throwing. Only an exact code/message/data-schema match is
+     * promoted to a typed application error.
+     */
+    result(): Promise<CheckedCallResult<TResult, TApplicationError>>;
+}
+
 /**
  * `true` iff at least one stream direction is declared (either client or
  * server stream schema present). Used by {@link InterfaceClient} to pick
@@ -136,6 +168,10 @@ export interface StreamingCall<TResult, TClient> extends Promise<TResult> {
  */
 type _HasStream<TClient, TServer> = [TClient] extends [never] ? ([TServer] extends [never] ? false : true) :
     true;
+
+type ClientCall<TResult, TApplicationError> = [TApplicationError] extends [never]
+    ? Promise<TResult>
+    : CheckedCall<TResult, TApplicationError>;
 
 /**
  * Compile-time TypeScript shape of an interface — useful for typed
@@ -150,9 +186,10 @@ type _HasStream<TClient, TServer> = [TClient] extends [never] ? ([TServer] exten
  *   // => { bar(p: {...}): Promise<string>; foo(p: {...}): void; }
  */
 type InterfaceClientMember<TMember> =
-    TMember extends RequestType<infer P, infer R, any, infer TC, infer TS> ? (
-        _HasStream<TC, TS> extends true ? (params: P, opts?: StreamCallOptions<TS>) => StreamingCall<R, TC> :
-        (params: P) => Promise<R>
+    TMember extends RequestType<infer P, infer R, infer E, infer TC, infer TS, any, any> ? (
+        _HasStream<TC, TS> extends true ? (params: P, opts?: StreamCallOptions<TS>) =>
+            StreamingCall<R, TC> & ClientCall<R, PublicApplicationErrorOf<E>> :
+        (params: P) => ClientCall<R, PublicApplicationErrorOf<E>>
     ) :
     TMember extends NotificationType<infer P> ? (params: P) => void :
     never;
@@ -174,8 +211,10 @@ export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
  * is expected, so existing handlers compile unchanged.
  */
 type InterfaceHandler<TMember, TCtx> =
-    TMember extends RequestType<infer P, infer R, any, infer TC, infer TS> ?
-    (params: P, ctx: TCtx, stream: StreamApi<TC, TS>) => R | Promise<R> :
+    TMember extends RequestType<infer P, infer R, infer E, infer TC, infer TS, any, any> ?
+    (params: P, ctx: TCtx, stream: StreamApi<TC, TS>) =>
+        R | DeclaredApplicationErrorOf<E> |
+        Promise<R | DeclaredApplicationErrorOf<E>> :
     TMember extends NotificationType<infer P> ? (params: P, ctx: TCtx) => void | Promise<void> :
     never;
 
@@ -218,6 +257,7 @@ export class InterfaceDefinition<TMembers extends MemberMap> {
         public readonly members: TMembers,
         opts: InterfaceDefinitionOpts = {},
     ) {
+        validateInterfaceErrors(opts.frozenSchema);
         interfaceDefinitionState.set(this, {
             frozenSchema: opts.frozenSchema,
             schemaCache: undefined,
@@ -312,6 +352,23 @@ function toMethodSchema(
                 components,
             );
         }
+        if (member.applicationErrors.length > 0) {
+            m.errors = member.applicationErrors.map((error: ApplicationErrorDescriptorBase) => {
+                const result: NonNullable<MethodSchema['errors']>[number] = {
+                    code: error.code,
+                    message: error.message,
+                };
+                if (error.dataSchema !== undefined) {
+                    result.data = convertMemberSchema(
+                        name,
+                        `error=${error.code}`,
+                        error.dataSchema,
+                        components,
+                    );
+                }
+                return result;
+            });
+        }
         if (docs.description !== undefined) m.description = docs.description;
         if (docs.comment !== undefined) m.comment = docs.comment;
         if (docs.annotations !== undefined) m.annotations = docs.annotations;
@@ -325,6 +382,31 @@ function toMethodSchema(
     if (docs.comment !== undefined) m.comment = docs.comment;
     if (docs.annotations !== undefined) m.annotations = docs.annotations;
     return m;
+}
+
+function validateInterfaceErrors(schema: LinkRpcInterfaceSchema | undefined): void {
+    if (schema === undefined) return;
+    for (const [methodName, method] of Object.entries(schema.methods)) {
+        if (method.result === undefined && method.errors !== undefined) {
+            throw new Error(`Notification "${methodName}" cannot declare application errors.`);
+        }
+        const seen = new Set<number>();
+        for (const error of method.errors ?? []) {
+            if (typeof error.message !== 'string') {
+                throw new Error(`Application error message on "${methodName}" must be a string.`);
+            }
+            if (!Number.isInteger(error.code) || error.code < -2147483648 || error.code > 2147483647) {
+                throw new Error(`Application error code ${error.code} on "${methodName}" must be a signed 32-bit integer.`);
+            }
+            if ((error.code >= -32768 && error.code <= -32000) || error.code === -32800) {
+                throw new Error(`Application error code ${error.code} on "${methodName}" is reserved by JSON-RPC or LinkRPC.`);
+            }
+            if (seen.has(error.code)) {
+                throw new Error(`Duplicate application error code ${error.code} on "${methodName}".`);
+            }
+            seen.add(error.code);
+        }
+    }
 }
 
 function convertMemberSchema(
@@ -373,7 +455,9 @@ export function defineInterface<TMembers extends MemberMap>(
  * consumers see the real wire contract. Member-level params / results /
  * streams use `z.any()` because no zod source is available — call-site
  * validation is therefore a no-op and the caller is responsible for
- * shape-checking inputs and outputs.
+ * shape-checking inputs and outputs. Declared application-error payloads
+ * are materialized and validated because recognizing a typed error must
+ * never rely on its code alone.
  *
  * Methods with no `result` descriptor become notifications; methods with
  * `clientStream` / `serverStream` get pass-through stream payload
@@ -386,7 +470,12 @@ export function interfaceFromSchema(schema: LinkRpcInterfaceSchema): InterfaceDe
             members[name] = new NotificationType(zAny());
             continue;
         }
-        const base = new RequestType<unknown, unknown, void>(zAny(), zAny(), zVoid());
+        const base = new RequestType<unknown, unknown, void>(zAny(), zAny(), zVoid())
+            .withErrors((method.errors ?? []).map((error) => error.data === undefined
+                ? applicationError(error.code, error.message)
+                : applicationError(error.code, error.message, schemaToZod(
+                    error.data, schema.components?.schemas,
+                ))));
         members[name] = method.clientStream !== undefined || method.serverStream !== undefined ?
             base.withStream({
                 client: method.clientStream !== undefined ? zAny() : undefined,

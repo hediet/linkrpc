@@ -132,6 +132,65 @@ g.shout({ msg: 'boom' });                               // fire-and-forget notif
 Pass the wrong shape and TypeScript stops you at compile time; if a bad value reaches the wire
 anyway, the provider rejects it with a JSON-RPC `-32602 invalidParams`.
 
+## Typed application errors
+
+Checked application errors are opt-in and remain ordinary JSON-RPC errors on the wire. Declare
+stable code/message pairs (and, optionally, a data schema), then attach them to a request:
+
+```ts
+import { applicationError } from '@hediet/linkrpc';
+
+const notFound = applicationError(404, 'Not found');
+const conflict = applicationError(409, 'Conflict', z.object({ currentVersion: z.number() }));
+
+const documents = defineInterface({ id: 'acme.documents' }, {
+    read: requestType(z.object({ id: z.string() }), z.string())
+        .withErrors([notFound, conflict] as const),
+});
+
+connection.register(documents, {
+    read: ({ id }) => id === 'missing' ? notFound.create() : load(id),
+});
+```
+
+Calls are still real promises: `await client.read(...)` succeeds or rejects exactly as before.
+For explicit handling, methods declaring application errors also expose `result()`:
+
+```ts
+const client = connection.get(documents);
+const outcome = await client.read({ id }).result();
+if (!outcome.ok) {
+    if (outcome.error.kind === 'application') {
+        if (outcome.error.code === 409) {
+            console.log(outcome.error.data.currentVersion); // statically typed
+        } else {
+            console.log('Document not found'); // code 404, no data
+        }
+    } else if (outcome.error.kind === 'remote') {
+        console.error(outcome.error.code, outcome.error.message); // undeclared/malformed peer error
+    } else {
+        console.error(outcome.error.cause); // local validation or transport failure
+    }
+}
+```
+
+Promotion to `kind: 'application'` requires an exact code and message match. A descriptor without a
+data schema requires `data` to be absent; one with a schema requires valid data (including explicit
+`null` only when the schema allows it). Unknown or malformed peer errors remain generic remote
+errors. The legacy third `requestType` error-schema argument is still accepted for source
+compatibility, but does not opt a method into checked errors.
+
+Codes must be unique within the method, fit a signed 32-bit integer, and avoid
+`-32768..-32000` and LinkRPC's `-32800` cancellation code. Created errors are branded locally
+so an ordinary success object with similar fields is never mistaken for an error. Payloads
+must be JSON values matching the declared wire schema; encoding does not silently strip
+properties, insert defaults, or turn missing data into `null`.
+
+Interface JSON includes these declarations and their referenced data schemas in the hash.
+CLI-generated definitions expose the same typed constructors through
+`definition.members.method.errors[index].create(...)`. See the
+[Rust/TypeScript interoperability proof](../../../interop/README.md) for both authoring directions.
+
 ## Reflection — discoverability built in
 
 A connection is self-describing. Call `enableReflection()` and it exposes three standard interfaces

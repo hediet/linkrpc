@@ -39,8 +39,23 @@ impl RequestId {
 pub struct JsonRpcError {
     pub code: i64,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        deserialize_with = "deserialize_present_data"
+    )]
     pub data: Option<JsonValue>,
+}
+
+/// `Option<T>`'s normal serde representation maps both a missing field and an
+/// explicit JSON `null` to `None`. JSON-RPC application errors need to retain
+/// that distinction: this function runs only when the field is present and
+/// therefore wraps even `null` in `Some`.
+fn deserialize_present_data<'de, D>(deserializer: D) -> Result<Option<JsonValue>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    JsonValue::deserialize(deserializer).map(Some)
 }
 
 impl JsonRpcError {
@@ -221,6 +236,47 @@ mod tests {
         let msg: JsonRpcMessage = serde_json::from_value(v.clone()).unwrap();
         let back = serde_json::to_value(&msg).unwrap();
         assert_eq!(back, v);
+    }
+
+    #[test]
+    fn error_data_distinguishes_missing_from_explicit_null() {
+        let missing: JsonRpcError =
+            serde_json::from_value(serde_json::json!({ "code": 1001, "message": "Missing" }))
+                .unwrap();
+        assert_eq!(missing.data, None);
+        assert_eq!(
+            serde_json::to_value(missing).unwrap(),
+            serde_json::json!({ "code": 1001, "message": "Missing" })
+        );
+
+        let explicit_null: JsonRpcError = serde_json::from_value(
+            serde_json::json!({ "code": 1003, "message": "Nullable", "data": null }),
+        )
+        .unwrap();
+        assert_eq!(explicit_null.data, Some(JsonValue::Null));
+        assert_eq!(
+            serde_json::to_value(explicit_null).unwrap(),
+            serde_json::json!({ "code": 1003, "message": "Nullable", "data": null })
+        );
+    }
+
+    #[test]
+    fn response_round_trip_preserves_explicit_null_error_data() {
+        let wire = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": { "code": 1003, "message": "Nullable", "data": null }
+        });
+        let message: JsonRpcMessage = serde_json::from_value(wire.clone()).unwrap();
+        let JsonRpcMessage::Response(JsonRpcResponse {
+            payload: ResponsePayload::Error(error),
+            ..
+        }) = &message
+        else {
+            panic!("expected error response");
+        };
+        assert_eq!(error.data, Some(JsonValue::Null));
+        assert_eq!(serde_json::to_value(message).unwrap(), wire);
     }
 
     #[test]

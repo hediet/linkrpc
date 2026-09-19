@@ -49,6 +49,8 @@ fn pizza_interface() -> InterfaceDefinition {
         result_schema: subset_of::<OrderConfirmation>(),
         client_stream_schema: None,
         server_stream_schema: None,
+        errors: None,
+        error_components: None,
         docs: MemberDocs {
             description: Some("Place a new pizza order. Charges money.".to_string()),
             ..Default::default()

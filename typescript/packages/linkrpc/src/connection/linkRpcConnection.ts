@@ -20,12 +20,25 @@ import {
     type TrafficWatchResult,
 } from '../inspection/inspection.interfaces';
 import type {
+    CheckedCall,
+    CheckedCallResult,
     InterfaceClient,
     InterfaceDefinition,
     InterfaceHandlers,
     StreamApi,
 } from './interfaceDefinition';
-import { type MemberType, NotificationType, RequestType, type Schema } from '../schema/memberTypes';
+import {
+    type ApplicationErrorDescriptorBase,
+    type ApplicationErrorValue,
+    isApplicationErrorValue,
+    type MemberType,
+    NotificationType,
+    RequestType,
+    type Schema,
+    zodToSvcJsonSchema,
+} from '../schema/memberTypes';
+import { matchesJsonSchema } from '../schema/assignability';
+import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
 import { safeParse } from 'zod/v4/core';
 import type { IMessageTransport } from '../transport/messageTransport';
 import {
@@ -700,8 +713,9 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         );
                         const result = call.result.then((raw) =>
                             validateWireResult(member.resultSchema, raw, wireMethod));
+                        const checked = addCheckedResult(result, member);
 
-                        return Object.assign(result, {
+                        return Object.assign(checked, {
                             send: async (payload: unknown) => call.send(payload as JsonValue),
                             cancel: async (reason?: string) => call.cancel(reason),
                             dispose: (reason?: string) => call.dispose?.(reason),
@@ -709,7 +723,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         });
                     };
                 } else {
-                    proxy[name] = async (params: unknown) => {
+                    proxy[name] = (params: unknown) => {
+                        const result = (async () => {
                         this._validateOutboundParamsFor(member, wireMethod, params);
                         const raw = await this.channel.sendRequest(
                             wireMethod,
@@ -717,6 +732,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                             sendOpts,
                         );
                         return validateWireResult(member.resultSchema, raw, wireMethod);
+                        })();
+                        return addCheckedResult(result, member);
                     };
                 }
             } else {
@@ -788,6 +805,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         try {
             const pendingResult = handler(parsedParams.data, call.context, stream);
             const result = await pendingResult;
+            const encodedError = encodeApplicationError(member, result);
+            if (encodedError !== undefined) return { error: encodedError };
             validateValue(
                 member.resultSchema,
                 result,
@@ -813,7 +832,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private _buildStreamApi(
         callStream: IncomingStream,
         signal: AbortSignal,
-        member: RequestType<unknown, unknown, unknown, unknown, unknown>,
+        member: RequestType<unknown, unknown, unknown, unknown, unknown, any, any>,
     ): StreamApi<unknown, unknown> {
         return {
             send: (payload: unknown) => {
@@ -1116,6 +1135,162 @@ function directoryWatcherMatchesEntry(
 interface BareBinding {
     readonly prefix: string;
     readonly entry: RegisteredInterface;
+}
+
+type DecodedApplicationError = ApplicationErrorValue | ApplicationErrorValue<number, string, JsonValue>;
+
+function addCheckedResult<TResult>(
+    promise: Promise<TResult>,
+    member: RequestType<any, any, any, any, any, any, any>,
+): CheckedCall<TResult, DecodedApplicationError> {
+    return Object.assign(promise, {
+        result: async (): Promise<CheckedCallResult<TResult, DecodedApplicationError>> => {
+            try {
+                return { ok: true, value: await promise };
+            } catch (cause) {
+                return {
+                    ok: false,
+                    error: decodeCheckedError(cause, member.applicationErrors),
+                };
+            }
+        },
+    });
+}
+
+function decodeCheckedError(
+    cause: unknown,
+    descriptors: readonly ApplicationErrorDescriptorBase[],
+): DecodedApplicationError | import('./interfaceDefinition').RemoteRpcError |
+    import('./interfaceDefinition').LocalRpcError {
+    if (!(cause instanceof RpcError) || cause.origin !== 'remote') {
+        return { kind: 'local', cause };
+    }
+
+    const descriptor = descriptors.find(
+        (candidate) => candidate.code === cause.code && candidate.message === cause.message,
+    );
+    if (descriptor !== undefined) {
+        if (descriptor.dataSchema === undefined && !cause.hasData) {
+            return { kind: 'application', code: descriptor.code, message: descriptor.message };
+        }
+        if (descriptor.dataSchema !== undefined && cause.hasData
+            && matchesApplicationData(descriptor.dataSchema, cause.data)) {
+            const parsed = safeParse(descriptor.dataSchema, cause.data);
+            if (parsed.success) {
+                return {
+                    kind: 'application',
+                    code: descriptor.code,
+                    message: descriptor.message,
+                    data: cause.data,
+                };
+            }
+        }
+    }
+
+    return {
+        kind: 'remote',
+        code: cause.code,
+        message: cause.message,
+        ...(cause.hasData ? { data: cause.data } : {}),
+    };
+}
+
+function encodeApplicationError(
+    member: RequestType<any, any, any, any, any, any, any>,
+    value: unknown,
+): { code: number; message: string; data?: JsonValue; } | undefined {
+    if (!isApplicationErrorValue(value)) return undefined;
+    const candidate = value as {
+        code?: unknown;
+        message?: unknown;
+        data?: unknown;
+    };
+    const descriptor = member.applicationErrors.find(
+        (error: ApplicationErrorDescriptorBase) =>
+            error.code === candidate.code && error.message === candidate.message,
+    );
+    if (descriptor === undefined) {
+        throw new RpcError(
+            `Undeclared application error ${String(candidate.code)}`,
+            ErrorCode.internalError,
+        );
+    }
+
+    const hasData = Object.hasOwn(candidate, 'data');
+    if (descriptor.dataSchema === undefined) {
+        if (hasData) {
+            throw new RpcError(
+                `Application error ${descriptor.code} must not contain data`,
+                ErrorCode.internalError,
+            );
+        }
+        return { code: descriptor.code, message: descriptor.message };
+    }
+    if (!hasData) {
+        throw new RpcError(
+            `Application error ${descriptor.code} requires data`,
+            ErrorCode.internalError,
+        );
+    }
+    if (!matchesApplicationData(descriptor.dataSchema, candidate.data)) {
+        throw new RpcError(
+            `Invalid data for application error ${descriptor.code}`,
+            ErrorCode.internalError,
+            { issues: [{ message: 'Data must be JSON matching the declared wire schema' }] },
+        );
+    }
+    const parsed = safeParse(descriptor.dataSchema, candidate.data);
+    if (!parsed.success) {
+        throw new RpcError(
+            `Invalid data for application error ${descriptor.code}`,
+            ErrorCode.internalError,
+            { issues: parsed.error.issues as unknown as JsonValue },
+        );
+    }
+    return {
+        code: descriptor.code,
+        message: descriptor.message,
+        data: candidate.data,
+    };
+}
+
+/** Reject values JSON serialization would silently omit, coerce, or replace via toJSON. */
+function isWireJsonValue(value: unknown, ancestors = new Set<object>()): value is JsonValue {
+    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+    if (typeof value === 'number') return Number.isFinite(value);
+    if (typeof value !== 'object' || ancestors.has(value)) return false;
+    if (!Array.isArray(value)
+        && Object.getPrototypeOf(value) !== Object.prototype
+        && Object.getPrototypeOf(value) !== null) return false;
+    ancestors.add(value);
+    const children = Array.isArray(value) ? value.values() : Object.values(value);
+    for (const child of children) {
+        if (!isWireJsonValue(child, ancestors)) return false;
+    }
+    ancestors.delete(value);
+    return true;
+}
+
+const applicationDataSchemas = new WeakMap<Schema, {
+    schema: LinkRpcJsonSchema;
+    components: Record<string, LinkRpcJsonSchema>;
+}>();
+
+function matchesApplicationData(schema: Schema, value: unknown): value is JsonValue {
+    if (!isWireJsonValue(value)) return false;
+    let wire = applicationDataSchemas.get(schema);
+    if (wire === undefined) {
+        const components: Record<string, LinkRpcJsonSchema> = {};
+        wire = {
+            schema: zodToSvcJsonSchema(schema, {
+                methodName: 'applicationError', schemaPosition: 'data', components,
+            }),
+            components,
+        };
+        applicationDataSchemas.set(schema, wire);
+    }
+    // Preserve the wire value instead of Zod's possibly stripped/defaulted parse output.
+    return matchesJsonSchema(value, wire.schema, { schemas: wire.components });
 }
 
 function validateWireResult(schema: Schema, raw: JsonValue, wireMethod: string): JsonValue | undefined {

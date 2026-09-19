@@ -9,14 +9,19 @@
 // used *within* this crate (e.g. the built-in reflection interfaces).
 extern crate self as linkrpc;
 
+pub mod application_error;
 pub mod client;
 pub mod connection;
 pub mod protocol;
 pub mod schema;
 pub mod transport;
 
+pub use application_error::{ApplicationError, CallError};
 pub mod prelude {
-    pub use crate::client::RpcCall;
+    pub use crate::application_error::{
+        scope_error_contract, validate_json_schema, ApplicationError, CallError,
+    };
+    pub use crate::client::{RpcCall, RpcCallError};
     pub use crate::connection::channel::{Channel, RequestHandler};
     pub use crate::connection::dispatch::{CallCtx, InterfaceHandler, ServiceExport};
     pub use crate::connection::endpoint::{
@@ -51,7 +56,7 @@ pub mod prelude {
     pub use crate::schema::{
         compute_interface_hash, compute_interface_hash_value, generate_rust_interface,
         normalize_json_schema, Components, ErrorSchema, GenerateRustOptions, GeneratedRust,
-        LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
+        InterfaceSchemaError, LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
     };
     pub use crate::transport::memory::transport_pair;
     pub use crate::transport::message::{MessageTransport, TransportError};
@@ -62,5 +67,7 @@ pub mod prelude {
 
     /// Derive a linkrpc interface (trait + server adapter + client + `interface()`) from a bare
     /// trait spec. See `docs/examples.md`.
-    pub use linkrpc_macros::link_rpc_interface;
+    pub use linkrpc_macros::{link_rpc_interface, ApplicationError};
 }
+
+pub use linkrpc_macros::ApplicationError;

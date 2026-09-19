@@ -7,7 +7,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::protocol::json_value::JsonValue;
-use crate::schema::interface_schema::{LinkRpcInterfaceSchema, MethodSchema};
+use crate::schema::interface_schema::{
+    component_ref_name, ErrorSchema, LinkRpcInterfaceSchema, MethodSchema,
+};
 
 use super::code_writer::CodeWriter;
 use super::ident::{strip_raw, to_pascal_case, to_snake_case};
@@ -19,6 +21,7 @@ enum TypeRef {
     /// A generated named type (struct/enum/alias).
     Named(String),
     Vec(Box<TypeRef>),
+    Option(Box<TypeRef>),
     /// `HashMap<String, V>`.
     Map(Box<TypeRef>),
     Tuple(Vec<TypeRef>),
@@ -34,7 +37,9 @@ impl TypeRef {
     fn collect_named(&self, out: &mut Vec<String>) {
         match self {
             TypeRef::Named(n) => out.push(n.clone()),
-            TypeRef::Vec(inner) | TypeRef::Map(inner) => inner.collect_named(out),
+            TypeRef::Vec(inner) | TypeRef::Option(inner) | TypeRef::Map(inner) => {
+                inner.collect_named(out)
+            }
             TypeRef::Tuple(items) => items.iter().for_each(|t| t.collect_named(out)),
             TypeRef::Prim(_) | TypeRef::Json => {}
         }
@@ -99,6 +104,15 @@ struct MethodModel {
     /// True when tagged `x-linkrpc-codegen.kind = "serverNotification"`: a
     /// server→client event. No client *send* method is generated for these.
     server_notification: bool,
+    error_name: Option<String>,
+    errors: Vec<ErrorModel>,
+}
+
+struct ErrorModel {
+    code: i32,
+    message: String,
+    data: Option<TypeRef>,
+    schema: Option<JsonValue>,
 }
 
 // ─────────────────────────────────────────────────────────── collection
@@ -114,6 +128,7 @@ struct Collector<'a> {
     /// Set of def names already produced, to avoid re-emitting a synthetic type.
     def_names: HashSet<String>,
     unsupported: Vec<String>,
+    invalid: Vec<String>,
 }
 
 impl<'a> Collector<'a> {
@@ -140,6 +155,7 @@ impl<'a> Collector<'a> {
             defs: Vec::new(),
             def_names: HashSet::new(),
             unsupported: Vec::new(),
+            invalid: Vec::new(),
         }
     }
 
@@ -158,9 +174,8 @@ impl<'a> Collector<'a> {
 
     /// Resolve a `#/components/schemas/<name>` ref to its Rust type name.
     fn resolve_ref(&mut self, reference: &str) -> Option<String> {
-        let prefix = "#/components/schemas/";
-        let name = reference.strip_prefix(prefix)?;
-        match self.component_names.get(name) {
+        let name = component_ref_name(reference)?;
+        match self.component_names.get(&name) {
             Some(rust) => Some(rust.clone()),
             None => {
                 self.note(format!("dangling $ref \"{reference}\" → serde_json::Value"));
@@ -209,6 +224,37 @@ impl<'a> Collector<'a> {
                 .as_ref()
                 .map(|r| self.type_ref(r, &format!("{base}Result")))
         };
+        let mut errors = Vec::new();
+        let mut codes = HashSet::new();
+        for error in method.errors.as_deref().unwrap_or_default() {
+            if method.result.is_none() {
+                self.invalid
+                    .push(format!("notification `{wire}` must not declare errors"));
+                break;
+            }
+            if (-32768..=-32000).contains(&error.code) || error.code == -32800 {
+                self.invalid.push(format!(
+                    "method `{wire}` error code {} is protocol-reserved",
+                    error.code
+                ));
+            }
+            if !codes.insert(error.code) {
+                self.invalid.push(format!(
+                    "method `{wire}` has duplicate error code {}",
+                    error.code
+                ));
+            }
+            let data = error.data.as_ref().map(|schema| {
+                self.error_type_ref(schema, &format!("{base}Error{}Data", code_name(error.code)))
+            });
+            errors.push(ErrorModel {
+                code: error.code,
+                message: error.message.clone(),
+                data,
+                schema: error.data.clone(),
+            });
+        }
+        let error_name = (!errors.is_empty()).then(|| format!("{base}Error"));
         MethodModel {
             wire_name: wire.to_string(),
             rust_name: to_snake_case(wire),
@@ -216,7 +262,28 @@ impl<'a> Collector<'a> {
             params,
             result,
             server_notification,
+            error_name,
+            errors,
         }
+    }
+
+    /// Lower an application-error payload, including its nullable shorthand.
+    ///
+    /// Nullable-to-`Option` is intentionally error-only: ordinary generated
+    /// params, results, and components keep their established union API.
+    fn error_type_ref(&mut self, schema: &JsonValue, name_hint: &str) -> TypeRef {
+        if let Some(branches) = schema.get("anyOf").and_then(JsonValue::as_array) {
+            let non_null: Vec<&JsonValue> = branches
+                .iter()
+                .filter(|branch| branch.get("type").and_then(JsonValue::as_str) != Some("null"))
+                .collect();
+            if non_null.len() == 1 && non_null.len() + 1 == branches.len() {
+                return TypeRef::Option(Box::new(
+                    self.type_ref(non_null[0], &format!("{name_hint}Value")),
+                ));
+            }
+        }
+        self.type_ref(schema, name_hint)
     }
 
     /// Return a [`TypeRef`] for `schema`, synthesizing a named type (registered
@@ -772,6 +839,7 @@ impl Renderer<'_> {
                 }
             }
             TypeRef::Vec(inner) => format!("Vec<{}>", self.ty(inner, owner_scc, false)),
+            TypeRef::Option(inner) => format!("Option<{}>", self.ty(inner, owner_scc, true)),
             TypeRef::Map(inner) => {
                 format!(
                     "std::collections::HashMap<String, {}>",
@@ -1029,6 +1097,14 @@ fn quote_str(s: &str) -> String {
 
 // ─────────────────────────────────────────────────────────────── entry point
 
+fn code_name(code: i32) -> String {
+    if code < 0 {
+        format!("Minus{}", code.unsigned_abs())
+    } else {
+        code.to_string()
+    }
+}
+
 pub(super) fn generate(
     schema: &LinkRpcInterfaceSchema,
     options: &GenerateRustOptions,
@@ -1041,10 +1117,20 @@ pub(super) fn generate(
 
     let mut w = CodeWriter::new();
     write_header(&mut w, schema, &collector.unsupported, options);
+    for invalid in &collector.invalid {
+        w.line(&format!("compile_error!({});", quote_str(invalid)));
+    }
 
     for def in &collector.defs {
         w.blank();
         renderer.write_def(&mut w, def);
+    }
+
+    for method in &methods {
+        if method.error_name.is_some() {
+            w.blank();
+            write_error_enum(&mut w, method, schema, &renderer, options);
+        }
     }
 
     w.blank();
@@ -1052,6 +1138,197 @@ pub(super) fn generate(
     if options.generate_server {
         w.blank();
         write_server(&mut w, schema, &methods, &renderer, options);
+    }
+
+    fn write_error_enum(
+        w: &mut CodeWriter,
+        method: &MethodModel,
+        schema: &LinkRpcInterfaceSchema,
+        renderer: &Renderer,
+        options: &GenerateRustOptions,
+    ) {
+        let hub = &options.linkrpc_path;
+        let name = method.error_name.as_ref().expect("checked");
+        w.line("#[derive(Clone, Debug)]");
+        w.line(&format!("pub enum {name} {{"));
+        w.indent();
+        for error in &method.errors {
+            let variant = format!("Code{}", code_name(error.code));
+            if let Some(data) = &error.data {
+                w.line(&format!(
+                    "{variant}({}),",
+                    renderer.ty(data, usize::MAX, true)
+                ));
+            } else {
+                w.line(&format!("{variant},"));
+            }
+        }
+        w.dedent();
+        w.line("}");
+        w.blank();
+        w.line(&format!("impl std::fmt::Display for {name} {{"));
+        w.indent();
+        w.line("fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {");
+        w.indent();
+        w.line("match self {");
+        w.indent();
+        for error in &method.errors {
+            let variant = format!("Code{}", code_name(error.code));
+            let pattern = if error.data.is_some() {
+                format!("Self::{variant}(..)")
+            } else {
+                format!("Self::{variant}")
+            };
+            w.line(&format!(
+                "{pattern} => f.write_str({}),",
+                quote_str(&error.message)
+            ));
+        }
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.blank();
+        w.line(&format!(
+            "impl {hub}::prelude::ApplicationError for {name} {{"
+        ));
+        w.indent();
+        w.line(&format!(
+            "fn into_rpc_error(self) -> {hub}::prelude::JsonRpcError {{"
+        ));
+        w.indent();
+        w.line("match self {");
+        w.indent();
+        let components_json =
+            serde_json::to_string(&schema.components).expect("components always serialize");
+        for error in &method.errors {
+            let variant = format!("Code{}", code_name(error.code));
+            if let Some(error_schema) = &error.schema {
+                let schema_json = serde_json::to_string(error_schema).expect("schema serializes");
+                w.line(&format!("Self::{variant}(__data) => {{"));
+                w.indent();
+                w.line("let __data = match serde_json::to_value(__data) {");
+                w.indent();
+                w.line("Ok(__data) => __data,");
+                w.line(&format!(
+                    "Err(__error) => return {hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, __error.to_string()),"
+                ));
+                w.dedent();
+                w.line("};");
+                w.line(&format!(
+                    "let __schema: serde_json::Value = serde_json::from_str({}).expect(\"generated error schema is valid\");",
+                    quote_str(&schema_json)
+                ));
+                w.line(&format!(
+                    "let __components: Option<{hub}::prelude::Components> = serde_json::from_str({}).expect(\"generated components are valid\");",
+                    quote_str(&components_json)
+                ));
+                w.line(&format!(
+                    "if !{hub}::prelude::validate_json_schema(&__data, &__schema, __components.as_ref()) {{"
+                ));
+                w.indent();
+                w.line(&format!(
+                    "return {hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, \"application error payload does not match its declared schema\");"
+                ));
+                w.dedent();
+                w.line("}");
+                w.line(&format!(
+                    "let mut __error = {hub}::prelude::JsonRpcError::new({}, {});",
+                    error.code,
+                    quote_str(&error.message)
+                ));
+                w.line("__error.data = Some(__data);");
+                w.line("__error");
+                w.dedent();
+                w.line("}");
+            } else {
+                w.line(&format!(
+                    "Self::{variant} => {hub}::prelude::JsonRpcError::new({}, {}),",
+                    error.code,
+                    quote_str(&error.message)
+                ));
+            }
+        }
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.blank();
+        w.line(&format!(
+            "fn try_from_rpc_error(__error: {hub}::prelude::JsonRpcError) -> Result<Self, {hub}::prelude::JsonRpcError> {{"
+        ));
+        w.indent();
+        w.line("match __error.code {");
+        w.indent();
+        for error in &method.errors {
+            let variant = format!("Code{}", code_name(error.code));
+            if let (Some(data), Some(error_schema)) = (&error.data, &error.schema) {
+                let ty = renderer.ty(data, usize::MAX, true);
+                let schema_json = serde_json::to_string(error_schema).expect("schema serializes");
+                w.line(&format!(
+                    "{} if __error.message == {} => {{",
+                    error.code,
+                    quote_str(&error.message)
+                ));
+                w.indent();
+                w.line("let Some(__data) = __error.data.as_ref() else { return Err(__error); };");
+                w.line(&format!(
+                    "let __schema: serde_json::Value = serde_json::from_str({}).expect(\"generated error schema is valid\");",
+                    quote_str(&schema_json)
+                ));
+                w.line(&format!(
+                    "let __components: Option<{hub}::prelude::Components> = serde_json::from_str({}).expect(\"generated components are valid\");",
+                    quote_str(&components_json)
+                ));
+                w.line(&format!(
+                    "if !{hub}::prelude::validate_json_schema(__data, &__schema, __components.as_ref()) {{ return Err(__error); }}"
+                ));
+                w.line(&format!(
+                    "match serde_json::from_value::<{ty}>(__data.clone()) {{ Ok(__data) => Ok(Self::{variant}(__data)), Err(_) => Err(__error) }}"
+                ));
+                w.dedent();
+                w.line("}");
+            } else {
+                w.line(&format!(
+                    "{} if __error.message == {} && __error.data.is_none() => Ok(Self::{variant}),",
+                    error.code,
+                    quote_str(&error.message)
+                ));
+            }
+        }
+        w.line("_ => Err(__error),");
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
+        w.blank();
+        w.line(&format!(
+            "fn error_schemas() -> Vec<{hub}::prelude::ErrorSchema> {{"
+        ));
+        w.indent();
+        w.line(&format!(
+            "serde_json::from_str({}).expect(\"generated error schemas are valid\")",
+            quote_str(
+                &serde_json::to_string(
+                    &method
+                        .errors
+                        .iter()
+                        .map(|error| ErrorSchema {
+                            code: error.code,
+                            message: error.message.clone(),
+                            data: error.schema.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                )
+                .expect("errors serialize")
+            )
+        ));
+        w.dedent();
+        w.line("}");
+        w.dedent();
+        w.line("}");
     }
 
     GeneratedRust {
@@ -1205,11 +1482,16 @@ fn write_server(
             .as_ref()
             .map(|ty| renderer.ty(ty, usize::MAX, true))
             .unwrap_or_else(|| "()".to_string());
+        let error_ty = method
+            .error_name
+            .as_ref()
+            .map(|error| format!("{hub}::prelude::CallError<{error}>"))
+            .unwrap_or_else(|| format!("{hub}::prelude::JsonRpcError"));
         let signature = format!(
-            "async fn {}(&self, ctx: &{hub}::prelude::CallCtx, params: {params_ty}) -> Result<{result_ty}, {hub}::prelude::JsonRpcError>",
+            "async fn {}(&self, ctx: &{hub}::prelude::CallCtx, params: {params_ty}) -> Result<{result_ty}, {error_ty}>",
             method.rust_name
         );
-        if options.default_server_methods {
+        if options.default_server_methods && method.error_name.is_none() {
             w.line(&format!("{signature} {{"));
             w.indent();
             w.line("let _ = (ctx, params);");
@@ -1326,10 +1608,17 @@ fn write_server_requests(
         w.line(&format!("{} => {{", quote_str(&method.wire_name)));
         w.indent();
         write_decode_params(w, &params_ty, hub);
-        w.line(&format!(
-            "let __r = self.0.{}(&ctx, __p).await?;",
-            method.rust_name
-        ));
+        if method.error_name.is_some() {
+            w.line(&format!(
+                "let __r = self.0.{}(&ctx, __p).await.map_err({hub}::prelude::CallError::into_rpc_error)?;",
+                method.rust_name
+            ));
+        } else {
+            w.line(&format!(
+                "let __r = self.0.{}(&ctx, __p).await?;",
+                method.rust_name
+            ));
+        }
         w.line("serde_json::to_value(__r).map_err(|e| {");
         w.indent();
         w.line(&format!(
@@ -1395,6 +1684,7 @@ fn write_fallible_notification_dispatch(
         ") -> Result<bool, {hub}::prelude::JsonRpcError> {{"
     ));
     w.indent();
+    w.line("let _ = (&params, &ctx);");
     w.line("match method {");
     w.indent();
     for method in methods.iter().filter(|m| m.result.is_none()) {
@@ -1444,7 +1734,11 @@ fn write_client_method(
     allow_server_notifications: bool,
 ) {
     let params_ty = renderer.ty(&method.params, usize::MAX, true);
-    let err = format!("{hub}::prelude::JsonRpcError");
+    let err = method
+        .error_name
+        .as_ref()
+        .map(|error| format!("{hub}::prelude::CallError<{error}>"))
+        .unwrap_or_else(|| format!("{hub}::prelude::JsonRpcError"));
     w.doc(method.doc.as_deref());
 
     // Server→client events always expose the addressed wire name so consumers
@@ -1460,7 +1754,7 @@ fn write_client_method(
                 method.rust_name
             ));
             w.indent();
-            write_encode_params(w, hub);
+            write_encode_params(w, hub, false);
             w.line(&format!(
                 "self.caller.notify(&self.method_name({}), __p).await",
                 quote_str(&method.wire_name)
@@ -1495,16 +1789,29 @@ fn write_client_method(
                 method.rust_name
             ));
             w.indent();
-            write_encode_params(w, hub);
-            w.line(&format!(
-                "let __v = self.caller.call(&self.method_name({}), __p).await?;",
-                quote_str(&method.wire_name)
-            ));
+            write_encode_params(w, hub, method.error_name.is_some());
+            if let Some(error) = &method.error_name {
+                w.line(&format!(
+                    "let __v = self.caller.call_detailed(&self.method_name({}), __p).await.map_err({hub}::prelude::CallError::<{error}>::from_call_error)?;",
+                    quote_str(&method.wire_name)
+                ));
+            } else {
+                w.line(&format!(
+                    "let __v = self.caller.call(&self.method_name({}), __p).await?;",
+                    quote_str(&method.wire_name)
+                ));
+            }
             w.line("serde_json::from_value(__v).map_err(|e| {");
             w.indent();
-            w.line(&format!(
-                "{err}::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string())"
-            ));
+            if method.error_name.is_some() {
+                w.line(&format!(
+                    "{hub}::prelude::CallError::Local({hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string()))"
+                ));
+            } else {
+                w.line(&format!(
+                    "{err}::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string())"
+                ));
+            }
             w.dedent();
             w.line("})");
             w.dedent();
@@ -1516,7 +1823,7 @@ fn write_client_method(
                 method.rust_name
             ));
             w.indent();
-            write_encode_params(w, hub);
+            write_encode_params(w, hub, false);
             w.line(&format!(
                 "self.caller.notify(&self.method_name({}), __p).await",
                 quote_str(&method.wire_name)
@@ -1527,12 +1834,18 @@ fn write_client_method(
     }
 }
 
-fn write_encode_params(w: &mut CodeWriter, hub: &str) {
+fn write_encode_params(w: &mut CodeWriter, hub: &str, typed_error: bool) {
     w.line("let __p = serde_json::to_value(&params).map_err(|e| {");
     w.indent();
-    w.line(&format!(
-        "{hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string())"
-    ));
+    if typed_error {
+        w.line(&format!(
+            "{hub}::prelude::CallError::Local({hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string()))"
+        ));
+    } else {
+        w.line(&format!(
+            "{hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::INTERNAL_ERROR, e.to_string())"
+        ));
+    }
     w.dedent();
     w.line("})?;");
 }

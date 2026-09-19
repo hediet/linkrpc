@@ -415,6 +415,7 @@ impl<T: ComExampleGraphService + 'static> ComExampleGraphServer<T> {
         params: serde_json::Value,
         ctx: linkrpc::prelude::CallCtx,
     ) -> Result<bool, linkrpc::prelude::JsonRpcError> {
+        let _ = (&params, &ctx);
         match method {
             "notify_changed" => {
                 let __p: NotifyChangedParams = serde_json::from_value(params).map_err(|e| {

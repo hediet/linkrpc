@@ -1,0 +1,33 @@
+[package]
+name = "linkrpc-typed-errors-interop"
+version = "0.0.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[workspace]
+
+[[bin]]
+name = "authored-errors"
+path = "src/authored.rs"
+
+[[bin]]
+name = "generated-errors"
+path = "src/generated.rs"
+required-features = ["generated"]
+
+[features]
+generated = []
+
+[dependencies]
+async-trait = "0.1"
+linkrpc = { path = "../../../../../../rust/crates/linkrpc" }
+linkrpc-tokio = { path = "../../../../../../rust/crates/linkrpc-tokio" }
+schemars = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "io-std", "time", "sync"] }
+
+[build-dependencies]
+linkrpc = { path = "../../../../../../rust/crates/linkrpc" }
+serde_json = "1"

@@ -330,7 +330,13 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
             this._streamListeners.delete(key);
             if ('error' in m) {
                 const e = m.error;
-                const err = new RpcError(e.message, e.code, e.data);
+                const err = new RpcError(
+                    e.message,
+                    e.code,
+                    e.data,
+                    'remote',
+                    Object.hasOwn(e, 'data'),
+                );
                 pending.reject(err);
             } else {
                 pending.resolve(m.result);

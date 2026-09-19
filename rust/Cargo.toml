@@ -6,6 +6,7 @@ members = [
     "crates/linkrpc-tokio",
     "crates/linkrpc-examples",
 ]
+exclude = ["crates/linkrpc/tests/compile_fail"]
 
 [workspace.package]
 version = "0.1.1"

@@ -57,6 +57,36 @@ Each key of `methods` MUST conform to the `member` production in chapter 01 §2.
 
 **Normative vs. non-normative schema fields.** `description` and `annotations` are part of the interface's identity (§4): changing them is a contract change. `comment`, `summary`, and `deprecated` are not part of identity. In addition, any field whose key begins with `x-` is a **specification extension** (§4.1): it is carried in the document but is non-normative and never affects identity.
 
+### 2.1 Declared application errors
+
+Only request members MAY declare `errors`. Each application error code MUST be a signed
+32-bit integer, unique within its method, and outside the reserved JSON-RPC range
+`-32768` through `-32000` (inclusive) and the LinkRPC cancellation code `-32800`.
+The declaration's `message` is the exact wire
+message, not a formatting template. Variable diagnostics belong in `data`.
+
+Omitting an error's `data` schema means that its wire error MUST omit `data`. When a
+`data` schema is present, the wire error MUST include `data` and its value MUST match
+that schema. In particular, absent data and JSON `null` are distinct: a nullable
+schema permits an explicit `null`, not an omitted field. Data schemas can use the
+same local component references and guarded recursion as other schema positions.
+
+A consumer MUST recognize a declared application error only after matching its code,
+exact message, data presence, and data schema. An unknown code, mismatched message,
+or malformed payload MUST NOT be coerced into a declared variant. Consumers MUST
+retain such errors as generic remote errors, including the original wire payload.
+Protocol errors and local transport failures are not declared application errors.
+Typed application-error producers MUST validate their error before encoding it;
+invalid application values are local implementation failures, not valid instances
+of the declared error.
+
+The declarations, including their codes, messages, and normalized data schemas, are
+normative and participate in the interface hash. Declaration order is preserved.
+Clients MUST still support undeclared remote errors: the list is not a closed set of
+all possible failures of a call. In languages without checked exceptions, typed
+application failures SHOULD be exposed through an explicit discriminated result API
+rather than an assertion about the type of an arbitrary caught exception.
+
 ## 3. The JSON Schema subset
 
 `JsonSchema` is a deliberately restricted subset of JSON Schema chosen to support language-independent structural *assignability* checks — does every value matching schema `X` also match schema `Y`? A `JsonSchema` is one of:

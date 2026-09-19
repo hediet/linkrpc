@@ -19,7 +19,138 @@ export type Schema<O = unknown> = $ZodType<O>;
  *  - emit a JSON schema for reflection,
  *  - propagate TS types up to the interface definition.
  */
-export type MemberType = RequestType<any, any, any, any, any> | NotificationType<any>;
+export type MemberType = RequestType<any, any, any, any, any, any, any> | NotificationType<any>;
+
+const applicationErrorBrand: unique symbol = Symbol('linkrpc.applicationError');
+
+export type ApplicationErrorValue<
+    TCode extends number = number,
+    TMessage extends string = string,
+    TData = never,
+> = {
+    readonly kind: 'application';
+    readonly code: TCode;
+    readonly message: TMessage;
+} & ([TData] extends [never] ? { readonly data?: never; } : { readonly data: TData; });
+
+export type CreatedApplicationErrorValue<
+    TCode extends number = number,
+    TMessage extends string = string,
+    TData = never,
+> = ApplicationErrorValue<TCode, TMessage, TData> & {
+    readonly [applicationErrorBrand]: true;
+};
+
+export interface ApplicationErrorDescriptor<
+    TCode extends number = number,
+    TMessage extends string = string,
+    TData = never,
+> {
+    readonly code: TCode;
+    readonly message: TMessage;
+    readonly dataSchema?: Schema<TData>;
+    readonly create: [TData] extends [never]
+        ? () => CreatedApplicationErrorValue<TCode, TMessage, TData>
+        : (data: TData) => CreatedApplicationErrorValue<TCode, TMessage, TData>;
+}
+
+export interface ApplicationErrorDescriptorBase {
+    readonly code: number;
+    readonly message: string;
+    readonly dataSchema?: Schema<any>;
+    readonly create: (...args: any[]) => {
+        readonly kind: 'application';
+        readonly code: number;
+        readonly message: string;
+        readonly data?: unknown;
+        readonly [applicationErrorBrand]: true;
+    };
+}
+
+export type ApplicationErrorOf<T> =
+    T extends ApplicationErrorDescriptor<infer C, infer M, infer D>
+        ? CreatedApplicationErrorValue<C, M, D>
+        : never;
+
+// Legacy schemas can infer `any`; they must neither declare checked errors nor erase result types.
+export type PublicApplicationErrorOf<T> =
+    0 extends (1 & T) ? never :
+    T extends CreatedApplicationErrorValue<infer C, infer M, infer D>
+        ? ApplicationErrorValue<C, M, D>
+        : never;
+
+export type DeclaredApplicationErrorOf<T> = 0 extends (1 & T)
+    ? never
+    : Extract<T, ReturnType<ApplicationErrorDescriptorBase['create']>>;
+
+export type ApplicationErrorsOf<T extends readonly ApplicationErrorDescriptorBase[]> =
+    ApplicationErrorOf<T[number]>;
+
+/** Declare one checked application error for use with {@link RequestType.withErrors}. */
+export function applicationError<const TCode extends number, const TMessage extends string>(
+    code: TCode,
+    message: TMessage,
+): ApplicationErrorDescriptor<TCode, TMessage, never>;
+export function applicationError<const TCode extends number, const TMessage extends string, TData>(
+    code: TCode,
+    message: TMessage,
+    data: Schema<TData>,
+): ApplicationErrorDescriptor<TCode, TMessage, TData>;
+export function applicationError(
+    code: number,
+    message: string,
+    dataSchema?: Schema<any>,
+): ApplicationErrorDescriptorBase {
+    assertApplicationErrorCode(code);
+    if (typeof message !== 'string') throw new Error('Application error message must be a string.');
+    const create = dataSchema === undefined
+        ? function (this: void): CreatedApplicationErrorValue<number, string, never> {
+            if (arguments.length !== 0) {
+                throw new Error(`Application error ${code} does not accept data.`);
+            }
+            return Object.freeze({
+                kind: 'application' as const,
+                code,
+                message,
+                [applicationErrorBrand]: true as const,
+            });
+        }
+        : function (this: void, data: unknown): CreatedApplicationErrorValue<number, string, unknown> {
+            if (arguments.length !== 1) {
+                throw new Error(`Application error ${code} requires exactly one data value.`);
+            }
+            return Object.freeze({
+                kind: 'application' as const,
+                code,
+                message,
+                [applicationErrorBrand]: true as const,
+                data,
+            });
+        };
+    return Object.freeze({
+        code,
+        message,
+        ...(dataSchema === undefined ? {} : { dataSchema }),
+        create,
+    }) as ApplicationErrorDescriptorBase;
+}
+
+/** Runtime nominal check for values produced by an application-error descriptor. */
+export function isApplicationErrorValue(
+    value: unknown,
+): value is ReturnType<ApplicationErrorDescriptorBase['create']> {
+    return typeof value === 'object' && value !== null
+        && (value as { [applicationErrorBrand]?: unknown; })[applicationErrorBrand] === true;
+}
+
+function assertApplicationErrorCode(code: number): void {
+    if (!Number.isInteger(code) || code < -2147483648 || code > 2147483647) {
+        throw new Error(`Application error code ${code} must be a signed 32-bit integer.`);
+    }
+    if ((code >= -32768 && code <= -32000) || code === -32800) {
+        throw new Error(`Application error code ${code} is reserved by JSON-RPC or LinkRPC.`);
+    }
+}
 
 /**
  * Optional documentation for a method member.
@@ -42,13 +173,15 @@ export class RequestType<
     TError = void,
     TClientStream = never,
     TServerStream = never,
+    TErrors extends readonly ApplicationErrorDescriptorBase[] = readonly ApplicationErrorDescriptorBase[],
+    TLegacyError = TError,
 > {
     public readonly kind = 'request' as const;
 
     constructor(
         public readonly paramsSchema: Schema<TParams>,
         public readonly resultSchema: Schema<TResult>,
-        public readonly errorSchema: Schema<TError>,
+        public readonly errorSchema: Schema<TLegacyError>,
         public readonly docs: MemberDocs = {},
         /**
          * Schema for stream messages the **client** may emit on an
@@ -62,7 +195,26 @@ export class RequestType<
          * `undefined` means the server may not stream on this method.
          */
         public readonly serverStreamSchema?: Schema<TServerStream>,
-    ) { }
+        /** Checked application errors explicitly declared with `.withErrors()`. */
+        public readonly applicationErrors: TErrors = [] as unknown as TErrors,
+    ) {
+        const seen = new Set<number>();
+        for (const error of applicationErrors) {
+            assertApplicationErrorCode(error.code);
+            if (typeof error.message !== 'string') {
+                throw new Error('Application error message must be a string.');
+            }
+            if (seen.has(error.code)) {
+                throw new Error(`Duplicate application error code ${error.code}.`);
+            }
+            seen.add(error.code);
+        }
+        this.applicationErrors = Object.freeze([...applicationErrors]) as unknown as TErrors;
+        this.errors = this.applicationErrors;
+    }
+
+    /** Declared checked errors, retained as a tuple for generated-contract consumers. */
+    public readonly errors: TErrors;
 
     /** Phantom field — typed-only, do not access at runtime. */
     declare readonly _params: TParams;
@@ -81,14 +233,34 @@ export class RequestType<
             client?: Schema<TClient>;
             server?: Schema<TServer>;
         },
-    ): RequestType<TParams, TResult, TError, TClient, TServer> {
-        return new RequestType<TParams, TResult, TError, TClient, TServer>(
+    ): RequestType<TParams, TResult, TError, TClient, TServer, TErrors, TLegacyError> {
+        return new RequestType<TParams, TResult, TError, TClient, TServer, TErrors, TLegacyError>(
             this.paramsSchema,
             this.resultSchema,
             this.errorSchema,
             this.docs,
             opts.client,
             opts.server,
+            this.applicationErrors,
+        );
+    }
+
+    /**
+     * Return a copy with an explicit, typed set of checked application errors.
+     * The legacy third `requestType` schema remains accepted for compatibility,
+     * but does not opt a method into checked errors.
+     */
+    public withErrors<const TErrors extends readonly ApplicationErrorDescriptorBase[]>(
+        errors: TErrors,
+    ): RequestType<TParams, TResult, ApplicationErrorsOf<TErrors>, TClientStream, TServerStream, TErrors, TLegacyError> {
+        return new RequestType<TParams, TResult, ApplicationErrorsOf<TErrors>, TClientStream, TServerStream, TErrors, TLegacyError>(
+            this.paramsSchema,
+            this.resultSchema,
+            this.errorSchema,
+            this.docs,
+            this.clientStreamSchema,
+            this.serverStreamSchema,
+            errors,
         );
     }
 }

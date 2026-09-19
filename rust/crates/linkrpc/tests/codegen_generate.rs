@@ -238,3 +238,100 @@ fn struct_ctor_skipped_on_field_name_collision() {
         g.code
     );
 }
+
+#[test]
+fn typed_error_output_matches_fixture() {
+    let text = std::fs::read_to_string(codegen_dir().join("typed_errors_interface.json")).unwrap();
+    let schema: LinkRpcInterfaceSchema = serde_json::from_str(&text).unwrap();
+    let generated = generate_rust_interface(
+        &schema,
+        &GenerateRustOptions {
+            generate_server: true,
+            ..GenerateRustOptions::default()
+        },
+    );
+    let golden = std::fs::read_to_string(codegen_dir().join("generated_typed_errors.rs")).unwrap();
+    assert_eq!(
+        generated.code.replace("\r\n", "\n"),
+        golden.replace("\r\n", "\n")
+    );
+}
+
+#[test]
+fn invalid_error_contracts_are_rejected() {
+    for (method, expected) in [
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":7,"message":"a"},{"code":7,"message":"b"}]}"#,
+            "duplicate error code 7",
+        ),
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":-32600,"message":"reserved"}]}"#,
+            "error code -32600 is protocol-reserved",
+        ),
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":-32800,"message":"cancelled"}]}"#,
+            "error code -32800 is protocol-reserved",
+        ),
+        (
+            r#""bad":{"params":true,"errors":[{"code":7,"message":"notification"}]}"#,
+            "notification `bad` must not declare errors",
+        ),
+    ] {
+        let schema = schema(&format!(
+            r#"{{"id":"invalid","hash":"","methods":{{{method}}}}}"#
+        ));
+        let error = schema.validate().unwrap_err().to_string();
+        assert!(error.contains(expected), "{error:?}");
+        let generated = generate_rust_interface(&schema, &GenerateRustOptions::default());
+        assert!(generated.code.contains("compile_error!"));
+    }
+}
+
+#[test]
+fn nullable_option_lowering_is_scoped_to_error_payloads() {
+    let schema = schema(
+        r#"{
+            "id": "legacy.nullable", "hash": "",
+            "methods": {
+                "get": {
+                    "params": true,
+                    "result": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+                }
+            }
+        }"#,
+    );
+    let code = generate_rust_interface(&schema, &GenerateRustOptions::default()).code;
+    assert!(
+        code.contains("pub enum GetResult"),
+        "ordinary nullable result must retain historical union lowering:\n{code}"
+    );
+    assert!(
+        !code.contains("Result<Option<String>,"),
+        "error-only nullable lowering must not alter ordinary result APIs:\n{code}"
+    );
+}
+
+#[test]
+fn generated_error_encoder_is_fallible_and_schema_validating() {
+    let schema = schema(
+        r#"{
+            "id": "errors.outgoing", "hash": "",
+            "methods": {
+                "check": {
+                    "params": true,
+                    "result": true,
+                    "errors": [{
+                        "code": 9001,
+                        "message": "Number",
+                        "data": { "type": "number" }
+                    }]
+                }
+            }
+        }"#,
+    );
+    let code = generate_rust_interface(&schema, &GenerateRustOptions::default()).code;
+    assert!(code.contains("match serde_json::to_value(__data)"));
+    assert!(code.contains("validate_json_schema(&__data"));
+    assert!(code.contains("error_codes::INTERNAL_ERROR"));
+    assert!(!code.contains("to_value(__data).expect"));
+}

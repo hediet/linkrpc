@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isAssignable } from "./assignability";
+import { isAssignable, matchesJsonSchema } from "./assignability";
 import type { LinkRpcJsonSchema } from "./linkRpcJsonSchema";
 
 describe("isAssignable — primitives & top/bottom", () => {
@@ -38,6 +38,31 @@ describe("isAssignable — strings + format", () => {
 });
 
 describe("isAssignable — const & enum", () => {
+    it("matches recursive JSON values and terminates on unguarded references", () => {
+        const reference = { $ref: "#/components/schemas/Node" };
+        const components = { schemas: { Node: {
+            type: "object",
+            properties: { children: { type: "array", items: reference } },
+            required: ["children"],
+            additionalProperties: false,
+        } } } satisfies import("./assignability").Components;
+        expect(matchesJsonSchema({ children: [{ children: [] }] }, reference, components)).toBe(true);
+        expect(matchesJsonSchema({ children: [{ extra: true }] }, reference, components)).toBe(false);
+        expect(matchesJsonSchema(null, reference, { schemas: { Node: reference } })).toBe(false);
+    });
+    it("matches object values using own JSON properties, not prototypes", () => {
+        expect(isAssignable({ const: {} }, {
+            type: "object",
+            properties: { constructor: true },
+            required: ["constructor"],
+            additionalProperties: false,
+        })).toBe(false);
+        expect(isAssignable({ const: { toString: "value" } }, {
+            type: "object",
+            properties: {},
+            additionalProperties: true,
+        })).toBe(true);
+    });
     it("const <: enum containing it", () => {
         expect(isAssignable({ const: "a" }, { enum: ["a", "b"] })).toBe(true);
     });

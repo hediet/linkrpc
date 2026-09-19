@@ -1,21 +1,14 @@
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { once } from 'node:events';
+import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
-    JsonRpcChannel,
-    LinkRpcConnection,
     RpcError,
-    traceMessageTransport,
-    type JsonRpcMessage,
 } from '@hediet/linkrpc';
 import { defaultsInterface } from '../../../linkrpc/src/hub/common/reflection.interfaces';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { adaptJsonRpcTransport } from '../../src/json-rpc/messageTransport';
-import { createNdjsonJsonRpcTransport } from '../../src/json-rpc/stdio';
+import { startRustPeer, within } from './rustPeer';
 import { createGeneratedProtocolInterfaceDefinition } from './contracts/generated';
 import {
     cdpDocument,
@@ -208,48 +201,7 @@ describe('generated CDP/LSP code across Rust and TypeScript', () => {
 });
 
 async function startPeer(mode: 'client' | 'server', protocol: InteropProtocol) {
-    const child: ChildProcessWithoutNullStreams = spawn(binary, [mode, protocol], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    let stderr = '';
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => { stderr = (stderr + chunk).slice(-65_536); });
-    await once(child, 'spawn');
-    const exited = once(child, 'exit');
-    const input = new PassThrough();
-    const transport = adaptJsonRpcTransport(createNdjsonJsonRpcTransport({
-        input, output: child.stdin,
-    }));
-    const frames: { direction: string; message: JsonRpcMessage }[] = [];
-    const lifecycle = JsonRpcChannel.createWithClose(traceMessageTransport(
-        transport,
-        (direction, message) => frames.push({ direction, message }),
-    ));
-    transport.onClose(() => lifecycle.close());
-    const connection = new LinkRpcConnection(lifecycle.channel);
-    return {
-        connection,
-        frames,
-        exited,
-        stderr: () => stderr,
-        start(): void {
-            child.stdout.pipe(input);
-        },
-        async stop(): Promise<void> {
-            connection.close();
-            transport.dispose();
-            child.stdout.unpipe(input);
-            input.destroy();
-            if (child.exitCode !== null || child.signalCode !== null) return;
-            child.stdin.end();
-            const kill = setTimeout(() => child.kill('SIGKILL'), 2_000);
-            try {
-                await exited;
-            } finally {
-                clearTimeout(kill);
-            }
-        },
-    };
+    return startRustPeer(binary, [mode, protocol]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -260,18 +212,4 @@ function deferred<T>() {
     let resolve!: (value: T) => void;
     const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise; });
     return { promise, resolve };
-}
-
-async function within<T>(promise: Promise<T>, operation: string): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-        return await Promise.race([
-            promise,
-            new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(() => reject(new Error(`${operation} timed out`)), 10_000);
-            }),
-        ]);
-    } finally {
-        clearTimeout(timer);
-    }
 }

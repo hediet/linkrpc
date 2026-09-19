@@ -13,12 +13,13 @@ use futures::channel::oneshot;
 use futures::stream::{FuturesUnordered, StreamExt};
 use futures::FutureExt;
 
+use crate::client::RpcCallError;
 use crate::protocol::json_value::JsonValue;
 use crate::protocol::jsonrpc::{
     error_codes, JsonRpcError, JsonRpcMessage, JsonRpcNotification, JsonRpcRequest,
     JsonRpcResponse, RequestId, ResponsePayload,
 };
-use crate::transport::message::MessageTransport;
+use crate::transport::message::{MessageTransport, TransportError};
 
 /// Handles inbound requests and notifications arriving on a [`Channel`].
 #[async_trait]
@@ -51,7 +52,7 @@ impl RequestHandler for RejectingHandler {
     }
 }
 
-type PendingMap = Mutex<HashMap<RequestId, oneshot::Sender<Result<JsonValue, JsonRpcError>>>>;
+type PendingMap = Mutex<HashMap<RequestId, oneshot::Sender<Result<JsonValue, RpcCallError>>>>;
 type DispatchFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 struct ChannelInner {
@@ -81,6 +82,23 @@ impl Channel {
 
     /// Issue a request and await its response.
     pub async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {
+        self.call_detailed(method, params)
+            .await
+            .map_err(|error| match error {
+                RpcCallError::Remote(error) => error,
+                RpcCallError::Local(error) => error,
+                RpcCallError::Transport(error) => {
+                    JsonRpcError::new(error_codes::PEER_DISCONNECTED, error.to_string())
+                }
+            })
+    }
+
+    /// Issue a request while preserving whether failure came from the peer or transport.
+    pub async fn call_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<JsonValue, RpcCallError> {
         let id = RequestId::Number(self.inner.next_id.fetch_add(1, Ordering::SeqCst));
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().unwrap().insert(id.clone(), tx);
@@ -90,20 +108,17 @@ impl Channel {
             method: method.to_string(),
             params: Some(params),
         });
-        if self.inner.transport.send(request).await.is_err() {
+        if let Err(error) = self.inner.transport.send(request).await {
             self.inner.pending.lock().unwrap().remove(&id);
-            return Err(JsonRpcError::new(
+            return Err(RpcCallError::Local(JsonRpcError::new(
                 error_codes::INTERNAL_ERROR,
-                "transport closed before request was sent",
-            ));
+                error.to_string(),
+            )));
         }
 
         match rx.await {
             Ok(result) => result,
-            Err(_) => Err(JsonRpcError::new(
-                error_codes::PEER_DISCONNECTED,
-                "channel closed before response arrived",
-            )),
+            Err(_) => Err(RpcCallError::Transport(TransportError::Closed)),
         }
     }
 
@@ -181,7 +196,7 @@ impl Channel {
         if let Some(sender) = sender {
             let result = match resp.payload {
                 ResponsePayload::Result(v) => Ok(v),
-                ResponsePayload::Error(e) => Err(e),
+                ResponsePayload::Error(e) => Err(RpcCallError::Remote(e)),
             };
             let _ = sender.send(result);
         }
@@ -204,10 +219,7 @@ impl Channel {
     fn fail_all_pending(&self) {
         let mut pending = self.inner.pending.lock().unwrap();
         for (_, sender) in pending.drain() {
-            let _ = sender.send(Err(JsonRpcError::new(
-                error_codes::PEER_DISCONNECTED,
-                "channel closed",
-            )));
+            let _ = sender.send(Err(RpcCallError::Transport(TransportError::Closed)));
         }
     }
 }
@@ -231,10 +243,20 @@ mod tests {
             if method != "add" {
                 return Err(JsonRpcError::new(error_codes::METHOD_NOT_FOUND, method));
             }
+
             let a = params["a"].as_i64().unwrap_or(0);
             let b = params["b"].as_i64().unwrap_or(0);
             Ok(json!(a + b))
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_call_preserves_send_failure_internal_error() {
+        let (transport, peer) = transport_pair();
+        drop(peer);
+        let channel = Channel::new(Box::new(transport), Box::new(RejectingHandler));
+        let error = channel.call("closed", json!({})).await.unwrap_err();
+        assert_eq!(error.code, error_codes::INTERNAL_ERROR);
     }
 
     #[tokio::test]

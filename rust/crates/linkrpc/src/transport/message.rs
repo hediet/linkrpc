@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use crate::protocol::jsonrpc::JsonRpcMessage;
 
 /// Errors a transport can surface while sending.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TransportError {
     #[error("transport is closed")]
     Closed,

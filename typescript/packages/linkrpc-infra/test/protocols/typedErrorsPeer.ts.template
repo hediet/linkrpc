@@ -1,0 +1,134 @@
+import assert from 'node:assert/strict';
+import { applicationError, RpcError, type InterfaceClient, type InterfaceHandlers } from '@hediet/linkrpc';
+import { contract } from './contract';
+import { startRustPeer, within } from '../../rustPeer';
+
+const [mode, binary, hash] = process.argv.slice(2);
+assert.equal(contract.schemaHash, hash);
+assert.ok(binary);
+
+const genericModes = [
+    'unknown', 'protocol', 'spoof-transport', 'wrong-message', 'wrong-data', 'missing-data',
+    'extra-data', 'missing-nullable', 'extra-property', 'bad-recursion',
+] as const;
+
+function wireError(mode: string): RpcError {
+    switch (mode) {
+        case 'unknown': return new RpcError('Unknown', 9001, { kept: true });
+        case 'protocol': return new RpcError('Protocol failure', -32602);
+        case 'spoof-transport': return new RpcError('Connection closed', -32402);
+        case 'wrong-message': return new RpcError('Wrong message', __MISSING__, { resource: 'file' });
+        case 'wrong-data': return new RpcError('Missing', __MISSING__, { resource: 42 });
+        case 'missing-data': return new RpcError('Missing', __MISSING__);
+        case 'extra-data': return new RpcError('Busy', __BUSY__, null);
+        case 'missing-nullable': return new RpcError('Nullable', __NULLABLE__);
+        case 'extra-property': return new RpcError('Missing', __MISSING__, { resource: 'file', extra: true });
+        case 'bad-recursion': return new RpcError('Recursive', __RECURSIVE__, {
+            label: 'root', children: [{ label: 42, children: [] }],
+        });
+        default: throw new Error(`Unexpected fixture mode: ${mode}`);
+    }
+}
+
+function checkStaticTypes(client: InterfaceClient<typeof contract>): void {
+    // @ts-expect-error generated params require a string mode
+    client.check({ mode: 123 });
+    // @ts-expect-error generated application data requires a string resource
+    contract.members.check.errors[0].create({ resource: 123 });
+    // @ts-expect-error a data-less error does not accept data
+    contract.members.check.errors[1].create({});
+    const wrongErrorHandler: InterfaceHandlers<typeof contract> = {
+        // @ts-expect-error an undeclared application error cannot be returned by a typed handler
+        check: () => applicationError(9001, 'Undeclared').create(),
+    };
+    void wrongErrorHandler;
+    const wrongHandler: InterfaceHandlers<typeof contract> = {
+        // @ts-expect-error generated success return type is string, not number
+        check: () => 42,
+    };
+    void wrongHandler;
+}
+void checkStaticTypes;
+
+const peer = await startRustPeer(binary, [mode === 'client' ? 'server' : 'client']);
+const client = peer.connection.get(contract);
+try {
+    if (mode === 'client') {
+        peer.start();
+        assert.equal(await within(client.check({ mode: 'success' }), 'success'), 'ok');
+        assert.deepEqual(await client.check({ mode: 'success' }).result(), { ok: true, value: 'ok' });
+        const missing = await client.check({ mode: 'missing' }).result();
+        assert.equal(missing.ok, false);
+        if (missing.ok) throw new Error('expected Missing');
+        assert.equal(missing.error.kind, 'application');
+        if (missing.error.kind !== 'application') throw new Error('expected application error');
+        assert.equal(missing.error.code, __MISSING__);
+        if (missing.error.code !== __MISSING__) throw new Error('expected Missing code');
+        const resource: string = missing.error.data.resource;
+        assert.equal(resource, 'file');
+        // @ts-expect-error a narrowed Missing payload has no unexpected property
+        void missing.error.data.unexpected;
+
+        for (const [mode, code, data] of [
+            ['busy', __BUSY__, undefined],
+            ['nullable', __NULLABLE__, null],
+            ['recursive', __RECURSIVE__, { label: 'root', children: [{ label: 'leaf', children: [] }] }],
+            ['numeric', __NUMERIC__, 42.5],
+        ] as const) {
+            const result = await client.check({ mode }).result();
+            if (result.ok || result.error.kind !== 'application') throw new Error(`expected ${mode}`);
+            assert.equal(result.error.code, code);
+            assert.deepEqual(result.error.data, data);
+        }
+        for (const mode of genericModes) {
+            const result = await client.check({ mode }).result();
+            if (result.ok || result.error.kind !== 'remote') throw new Error(`${mode}: expected generic remote`);
+            const expected = wireError(mode);
+            assert.equal(result.error.code, expected.code);
+            assert.equal(result.error.message, expected.message);
+            assert.deepEqual(result.error.data, expected.data);
+        }
+        const invalidEncoding = await client.check({ mode: 'invalid-encoding' }).result();
+        if (invalidEncoding.ok || invalidEncoding.error.kind !== 'remote') {
+            throw new Error('invalid producer data must fail explicitly');
+        }
+        assert.equal(invalidEncoding.error.code, -32603);
+        await assert.rejects(client.check({ mode: 'missing' }), { code: __MISSING__, message: 'Missing' });
+        await peer.stop();
+        const disconnected = await client.check({ mode: 'success' }).result();
+        if (disconnected.ok) throw new Error('closed connection must fail');
+        assert.equal(disconnected.error.kind, 'local');
+    } else {
+        const called: string[] = [];
+        peer.connection.register(contract, {
+            check: ({ mode }) => {
+                called.push(mode);
+                switch (mode) {
+                    case 'success': return 'ok';
+                    case 'missing': return contract.members.check.errors[0].create({ resource: 'file' });
+                    case 'busy': return contract.members.check.errors[1].create();
+                    case 'nullable': return contract.members.check.errors[2].create(null);
+                    case 'recursive': return contract.members.check.errors[3].create({
+                        label: 'root', children: [{ label: 'leaf', children: [] }],
+                    });
+                    case 'numeric': return contract.members.check.errors[4].create(42.5);
+                    case 'invalid-encoding': return contract.members.check.errors[4].create(NaN);
+                    case 'disconnect':
+                        peer.disconnect();
+                        return new Promise<never>(() => {});
+                    default: throw wireError(mode);
+                }
+            },
+        });
+        peer.start();
+        const [code, signal] = await within(peer.exited, 'Rust typed client');
+        assert.deepEqual({ code, signal }, { code: 0, signal: null }, peer.stderr());
+        assert.deepEqual(called, [
+            'success', 'missing', 'busy', 'nullable', 'recursive', 'numeric',
+            ...genericModes, 'invalid-encoding', 'disconnect',
+        ]);
+    }
+    console.log('typed errors verified');
+} finally {
+    await peer.stop();
+}

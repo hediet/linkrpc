@@ -125,7 +125,7 @@ export interface MemberAnnotations {
 }
 
 export interface ErrorSchema {
-    /** JSON-RPC error code. -32768..-32000 are reserved. */
+    /** JSON-RPC error code. -32768..-32000 and LinkRPC cancellation code -32800 are reserved. */
     code: number;
     message: string;
     /** Optional schema describing the shape of `error.data`. */

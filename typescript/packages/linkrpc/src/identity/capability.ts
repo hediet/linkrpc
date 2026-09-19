@@ -355,10 +355,10 @@ export type ParamMatchers<T> = T extends Record<string, unknown>
     : never;
 
 type RequestMemberName<TMembers extends MemberMap> = {
-    [K in keyof TMembers]: TMembers[K] extends RequestType<any, any, any, any, any> ? K : never;
+    [K in keyof TMembers]: TMembers[K] extends RequestType<any, any, any, any, any, any, any> ? K : never;
 }[keyof TMembers] & string;
 
-type RequestParams<TMember> = TMember extends RequestType<infer TParams, any, any, any, any>
+type RequestParams<TMember> = TMember extends RequestType<infer TParams, any, any, any, any, any, any>
     ? TParams
     : never;
 

@@ -14,6 +14,8 @@ fn interface(id: &str, requests: &[&str], notifications: &[&str]) -> Arc<Interfa
                 result_schema: json!({}),
                 client_stream_schema: None,
                 server_stream_schema: None,
+                errors: None,
+                error_components: None,
                 docs: MemberDocs::default(),
             })),
         ));

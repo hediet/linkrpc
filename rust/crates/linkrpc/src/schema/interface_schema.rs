@@ -27,6 +27,30 @@ use std::collections::BTreeMap;
 /// `Record<string, MethodSchema>`.
 pub type MethodMap = BTreeMap<String, MethodSchema>;
 
+/// Resolve a local component reference and RFC 6901-decode its path segment.
+pub fn component_ref_name(reference: &str) -> Option<String> {
+    let encoded = reference.strip_prefix("#/components/schemas/")?;
+    let mut decoded = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            decoded.push(ch);
+            continue;
+        }
+        match chars.next()? {
+            '0' => decoded.push('~'),
+            '1' => decoded.push('/'),
+            _ => return None,
+        }
+    }
+    Some(decoded)
+}
+
+pub(crate) fn component_ref(name: &str) -> String {
+    let encoded = name.replace('~', "~0").replace('/', "~1");
+    format!("#/components/schemas/{encoded}")
+}
+
 /// A single interface contract. Serializes to the exact JSON shape the
 /// interface hash is computed over.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -82,7 +106,41 @@ impl LinkRpcInterfaceSchema {
     pub fn extension(&self, key: &str) -> Option<&JsonValue> {
         self.extensions.get(key)
     }
+
+    /// Validate cross-field rules which cannot be expressed by serde's data model.
+    pub fn validate(&self) -> Result<(), InterfaceSchemaError> {
+        for (method_name, method) in &self.methods {
+            let Some(errors) = &method.errors else {
+                continue;
+            };
+            if method.result.is_none() {
+                return Err(InterfaceSchemaError(format!(
+                    "notification `{method_name}` must not declare errors"
+                )));
+            }
+            let mut codes = std::collections::BTreeSet::new();
+            for error in errors {
+                if (-32768..=-32000).contains(&error.code) || error.code == -32800 {
+                    return Err(InterfaceSchemaError(format!(
+                        "method `{method_name}` error code {} is protocol-reserved",
+                        error.code
+                    )));
+                }
+                if !codes.insert(error.code) {
+                    return Err(InterfaceSchemaError(format!(
+                        "method `{method_name}` has duplicate error code {}",
+                        error.code
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct InterfaceSchemaError(pub String);
 
 /// Reusable schema definitions bag, referenced via `#/components/schemas/<name>`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -206,8 +264,8 @@ pub struct MemberAnnotations {
 /// An application-level error declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrorSchema {
-    /// JSON-RPC error code. -32768..-32000 are reserved.
-    pub code: i64,
+    /// JSON-RPC error code. -32768..-32000 and LinkRPC -32800 are reserved.
+    pub code: i32,
     pub message: String,
     /// Optional schema describing the shape of `error.data`.
     #[serde(skip_serializing_if = "Option::is_none", default)]

@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 use crate::protocol::json_value::JsonValue;
 use crate::schema::hash::compute_interface_hash;
 use crate::schema::interface_schema::{
-    LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
+    ErrorSchema, LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
 };
 
 /// Identity + human docs for an interface.
@@ -54,6 +54,8 @@ pub struct RequestMember {
     pub result_schema: JsonValue,
     pub client_stream_schema: Option<JsonValue>,
     pub server_stream_schema: Option<JsonValue>,
+    pub errors: Option<Vec<ErrorSchema>>,
+    pub error_components: Option<crate::schema::Components>,
     pub docs: MemberDocs,
 }
 
@@ -116,6 +118,9 @@ impl InterfaceDefinition {
     /// adapters use it so registration publishes the exact schema they were
     /// generated from.
     pub fn from_schema(schema: LinkRpcInterfaceSchema) -> Self {
+        schema
+            .validate()
+            .expect("invalid interface error declarations");
         let info = InterfaceInfo {
             id: schema.id.clone(),
             description: schema.description.clone(),
@@ -136,6 +141,8 @@ impl InterfaceDefinition {
                         result_schema: result.clone(),
                         client_stream_schema: method.client_stream.clone(),
                         server_stream_schema: method.server_stream.clone(),
+                        errors: method.errors.clone(),
+                        error_components: None,
                         docs,
                     })),
                     None => Member::Notification(NotificationMember {
@@ -207,15 +214,40 @@ impl InterfaceDefinition {
         for (name, member) in &self.members {
             methods.insert(name.clone(), to_method_schema(member));
         }
-        LinkRpcInterfaceSchema {
+        let mut components = std::collections::BTreeMap::new();
+        for (_, member) in &self.members {
+            if let Member::Request(request) = member {
+                if let Some(schemas) = request
+                    .error_components
+                    .as_ref()
+                    .and_then(|components| components.schemas.as_ref())
+                {
+                    for (name, schema) in schemas {
+                        match components.insert(name.clone(), schema.clone()) {
+                            Some(previous) if previous != *schema => {
+                                panic!("conflicting application error schema component `{name}`")
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        let schema = LinkRpcInterfaceSchema {
             id: self.info.id.clone(),
             hash,
             description: self.info.description.clone(),
             comment: self.info.comment.clone(),
             methods,
-            components: None,
+            components: (!components.is_empty()).then_some(crate::schema::Components {
+                schemas: Some(components),
+            }),
             extensions: Default::default(),
-        }
+        };
+        schema
+            .validate()
+            .expect("invalid interface error declarations");
+        schema
     }
 }
 
@@ -239,6 +271,7 @@ fn to_method_schema(member: &Member) -> MethodSchema {
         m.result = Some(req.result_schema.clone());
         m.client_stream = req.client_stream_schema.clone();
         m.server_stream = req.server_stream_schema.clone();
+        m.errors = req.errors.clone();
     }
 
     m

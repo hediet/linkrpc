@@ -21,8 +21,9 @@
 //! side, and therefore the same interface hash.
 
 use crate::protocol::json_value::{JsonMap, JsonValue};
+use crate::schema::interface_schema::component_ref;
 use crate::schema::normalize::{normalize_json_schema, NormalizeError};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const REF_PREFIXES: &[&str] = &["#/definitions/", "#/$defs/"];
 
@@ -33,6 +34,101 @@ pub fn schemars_to_subset(root: &JsonValue) -> Result<JsonValue, SchemarsSubsetE
     let mut active = BTreeSet::new();
     let prepared = prepare(root, &defs, &mut active)?;
     Ok(normalize_json_schema(&prepared)?)
+}
+
+/// Convert schemars output while preserving definitions as LinkRPC components.
+///
+/// Unlike [`schemars_to_subset`], this supports recursive schemas by rewriting
+/// local schemars references to `#/components/schemas/*`.
+pub fn schemars_to_subset_with_components(
+    root: &JsonValue,
+) -> Result<(JsonValue, BTreeMap<String, JsonValue>), SchemarsSubsetError> {
+    let defs = collect_defs(root);
+    let root_value = prepare_hoisted(root)?;
+    let root_schema = normalize_json_schema(&root_value)?;
+
+    let mut components = BTreeMap::new();
+    for (name, schema) in defs {
+        components.insert(name, normalize_json_schema(&prepare_hoisted(&schema)?)?);
+    }
+    Ok((root_schema, components))
+}
+
+fn prepare_hoisted(value: &JsonValue) -> Result<JsonValue, SchemarsSubsetError> {
+    match value {
+        JsonValue::Bool(_) => Ok(value.clone()),
+        JsonValue::Object(object) => {
+            if let Some(JsonValue::String(reference)) = object.get("$ref") {
+                if let Some(name) = ref_target(reference) {
+                    let mut out = JsonMap::new();
+                    out.insert("$ref".into(), JsonValue::String(component_ref(&name)));
+                    return Ok(JsonValue::Object(out));
+                }
+                return Err(SchemarsSubsetError::UnresolvedRef(reference.clone()));
+            }
+
+            let is_numeric = matches!(
+                object.get("type").and_then(JsonValue::as_str),
+                Some("number") | Some("integer")
+            );
+            let mut out = JsonMap::new();
+            for (key, child) in object {
+                match key.as_str() {
+                    "$schema" | "title" | "definitions" | "$defs" => continue,
+                    "format" if is_numeric => continue,
+                    "properties" => {
+                        let mut properties_out = JsonMap::new();
+                        if let JsonValue::Object(properties) = child {
+                            for (name, property) in properties {
+                                properties_out.insert(name.clone(), prepare_hoisted(property)?);
+                            }
+                        }
+                        out.insert(key.clone(), JsonValue::Object(properties_out));
+                    }
+                    "items" | "additionalProperties" => {
+                        out.insert(key.clone(), prepare_hoisted(child)?);
+                    }
+                    "prefixItems" | "anyOf" | "oneOf" => {
+                        let values = child
+                            .as_array()
+                            .map(|children| {
+                                children
+                                    .iter()
+                                    .map(prepare_hoisted)
+                                    .collect::<Result<Vec<_>, _>>()
+                            })
+                            .transpose()?
+                            .unwrap_or_default();
+                        out.insert(key.clone(), JsonValue::Array(values));
+                    }
+                    // `const` and `enum` contain JSON data, not schemas.
+                    _ => {
+                        out.insert(key.clone(), child.clone());
+                    }
+                }
+            }
+            if let Some(JsonValue::Array(items)) = out.get("enum") {
+                if items.len() == 1 {
+                    let only = items[0].clone();
+                    out.remove("enum");
+                    out.insert("const".into(), only);
+                }
+            }
+            if out.get("type").and_then(JsonValue::as_str) == Some("object")
+                && !matches!(out.get("properties"), Some(JsonValue::Object(_)))
+            {
+                out.insert("properties".into(), JsonValue::Object(JsonMap::new()));
+            }
+            Ok(JsonValue::Object(out))
+        }
+        _ => Err(SchemarsSubsetError::Normalize(match value {
+            JsonValue::Null => NormalizeError::ExpectedObject("null"),
+            JsonValue::Array(_) => NormalizeError::ExpectedObject("array"),
+            JsonValue::Number(_) => NormalizeError::ExpectedObject("number"),
+            JsonValue::String(_) => NormalizeError::ExpectedObject("string"),
+            _ => unreachable!(),
+        })),
+    }
 }
 
 fn collect_defs(root: &JsonValue) -> JsonMap<String, JsonValue> {
@@ -49,11 +145,25 @@ fn collect_defs(root: &JsonValue) -> JsonMap<String, JsonValue> {
     defs
 }
 
-fn ref_target(s: &str) -> Option<&str> {
-    REF_PREFIXES
+fn ref_target(s: &str) -> Option<String> {
+    let encoded = REF_PREFIXES
         .iter()
         .find_map(|p| s.strip_prefix(p))
-        .filter(|name| !name.is_empty())
+        .filter(|name| !name.is_empty())?;
+    let mut decoded = String::with_capacity(encoded.len());
+    let mut chars = encoded.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            decoded.push(ch);
+            continue;
+        }
+        match chars.next()? {
+            '0' => decoded.push('~'),
+            '1' => decoded.push('/'),
+            _ => return None,
+        }
+    }
+    Some(decoded)
 }
 
 fn prepare(
@@ -84,14 +194,14 @@ fn prepare_object(
         let Some(name) = ref_target(r) else {
             return Err(SchemarsSubsetError::UnresolvedRef(r.clone()));
         };
-        let Some(target) = defs.get(name) else {
+        let Some(target) = defs.get(&name) else {
             return Err(SchemarsSubsetError::UnresolvedRef(r.clone()));
         };
-        if !active.insert(name.to_string()) {
-            return Err(SchemarsSubsetError::RecursiveRef(name.to_string()));
+        if !active.insert(name.clone()) {
+            return Err(SchemarsSubsetError::RecursiveRef(name));
         }
         let inlined = prepare(target, defs, active)?;
-        active.remove(name);
+        active.remove(&name);
         return Ok(inlined);
     }
 
@@ -182,6 +292,41 @@ mod tests {
                 "additionalProperties": false
             })
         );
+    }
+
+    #[test]
+    fn hoisted_bridge_preserves_normalization_and_literal_ref_data() {
+        let raw = json!({
+            "title": "Root",
+            "type": "object",
+            "properties": {
+                "child": { "$ref": "#/definitions/a~1b" },
+                "literal": {
+                    "enum": [{ "$ref": "#/definitions/not-a-schema" }]
+                },
+                "count": { "type": "integer", "format": "uint32" }
+            },
+            "required": ["child", "literal", "count"],
+            "definitions": {
+                "a/b": {
+                    "title": "Child",
+                    "type": "string",
+                    "enum": ["only"]
+                }
+            }
+        });
+        let (schema, components) = schemars_to_subset_with_components(&raw).unwrap();
+        assert_eq!(
+            schema["properties"]["child"]["$ref"],
+            "#/components/schemas/a~1b"
+        );
+        assert_eq!(
+            schema["properties"]["literal"]["const"],
+            json!({ "$ref": "#/definitions/not-a-schema" })
+        );
+        assert!(schema["properties"]["count"].get("format").is_none());
+        assert_eq!(components["a/b"]["const"], "only");
+        assert!(components["a/b"].get("title").is_none());
     }
 
     #[test]
