@@ -1,7 +1,7 @@
 # linkrpc Rust examples
 
 The `#[link_rpc_interface]` macro turns a bare async trait into a server trait, server adapter,
-typed client, and interface schema. Streaming directions are named from the caller's perspective:
+typed client, and interface schema. Streaming directions describe the method's input and output:
 
 | Attribute | Wire direction | Provider argument | Client handle |
 |---|---|---|---|
