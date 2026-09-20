@@ -124,35 +124,22 @@ fn components_emit_in_sorted_order() {
 #[test]
 fn server_notification_emits_no_client_send_method() {
     let code = generate().code;
-    // The event surfaces as an addressed-name accessor...
-    assert!(
-        code.contains("pub fn tree_changed_event_name(&self) -> String"),
-        "server notification should expose its addressed wire name"
-    );
-    assert!(
-        code.contains("self.method_name(\"tree_changed\")"),
-        "event name should be prefix-addressed"
-    );
-    // ...but NOT as a client send method (that would be a client→server call).
-    assert!(
-        !code.contains("pub async fn tree_changed"),
-        "no client send method should be generated for a server notification"
-    );
-    assert!(
-        !code.contains("self.caller.notify(&self.method_name(\"tree_changed\")"),
-        "server notification must not be sent by the client"
-    );
-    // A genuine client request/notification is still generated normally.
-    assert!(code.contains("pub async fn get_tree"));
-    assert!(code.contains("pub async fn notify_changed"));
+    assert!(code.contains("generate_server = false"));
+    assert!(code.contains("#[name(\"tree_changed\")]\n    #[server_notification]"));
+    assert!(code.contains("async fn get_tree(#[params]"));
+    assert!(code.contains("#[name(\"notify_changed\")]\n    #[notification]"));
 }
 
 #[test]
-fn extensions_do_not_leak_into_generated_code() {
-    // `x-*` keys are codegen-visible but their values must not appear as data.
+fn extensions_are_preserved_in_the_embedded_contract() {
     let code = generate().code;
-    assert!(!code.contains("x-safety"));
-    assert!(!code.contains("identity-neutral codegen hint"));
+    let embedded = code
+        .lines()
+        .find(|line| line.trim_start().starts_with("schema_json = "))
+        .unwrap();
+    assert!(embedded.contains("x-safety"));
+    assert!(embedded.contains("identity-neutral codegen hint"));
+    assert_eq!(code.matches("x-safety").count(), 1);
 }
 
 #[test]
@@ -312,7 +299,7 @@ fn nullable_option_lowering_is_scoped_to_error_payloads() {
 }
 
 #[test]
-fn generated_error_encoder_is_fallible_and_schema_validating() {
+fn generated_errors_reuse_the_schema_preserving_derive() {
     let schema = schema(
         r#"{
             "id": "errors.outgoing", "hash": "",
@@ -330,8 +317,9 @@ fn generated_error_encoder_is_fallible_and_schema_validating() {
         }"#,
     );
     let code = generate_rust_interface(&schema, &GenerateRustOptions::default()).code;
-    assert!(code.contains("match serde_json::to_value(__data)"));
-    assert!(code.contains("validate_json_schema(&__data"));
-    assert!(code.contains("error_codes::INTERNAL_ERROR"));
-    assert!(!code.contains("to_value(__data).expect"));
+    assert!(code.contains("#[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]"));
+    assert!(code.contains("#[rpc_error(schema = __linkrpc_interface::schema, method = \"check\""));
+    assert!(code.contains("#[rpc_error(code = 9001, message = \"Number\")]"));
+    assert!(!code.contains("fn into_rpc_error"));
+    assert!(!code.contains("fn try_from_rpc_error"));
 }

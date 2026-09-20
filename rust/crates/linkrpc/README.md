@@ -137,6 +137,60 @@ declared Zod interface has the same identity. For TypeScript CLI generation, use
 `linkrpc codegen --preserve-wire-schema` to retain the exported contract exactly.
 The JSON-to-Rust generator also consumes these existing component references.
 
+### Imported JSON uses the same trait macro
+
+`generate_rust_interface` emits data types and a bare trait annotated with
+`#[link_rpc_interface(schema_json = "...")]`, not a second client/server
+implementation. The JSON includes the original hash, components, descriptions,
+and extensions. This mode uses that contract directly rather than deriving a
+new Schemars schema from the generated Rust types:
+
+```rust
+use linkrpc::prelude::*;
+
+#[link_rpc_interface(schema_json = r#"{
+    "id": "example.echo",
+    "hash": "",
+    "methods": {
+        "echoValue": {
+            "params": { "type": "string" },
+            "result": { "type": "string" }
+        }
+    }
+}"#)]
+trait Echo {
+    #[name("echoValue")]
+    async fn echo_value(#[params] value: String) -> Result<String, JsonRpcError>;
+}
+```
+
+The macro infers the id from JSON. A supplied hash is preserved; an empty hash
+is computed from the imported contract. It checks that the trait covers every
+wire method with matching request/notification and stream directions.
+Imported data types need Serde, but not `JsonSchema`. Stream validation retains
+the JSON's constraints and component references, including explicit `false`.
+
+Both authored and imported traits now use generic `RpcCall` clients (defaulting
+to `LinkRpcConnection`). `new`, `root`, `with_service`, and `with_prefix` select
+addressing without changing wire method names. Notifications may return either
+`()`, as before, or `Result<(), JsonRpcError>`; `Server::dispatch_notification`
+exposes decode and handler failures. Default trait method bodies are preserved.
+
+Generated application-error enums use the same `ApplicationError` derive with
+`#[rpc_error(schema = __linkrpc_interface::schema, method = "...", display)]`.
+The referenced function exposes the one embedded contract: codecs validate its
+original error payload schemas, not approximations inferred from Rust types.
+Unknown or malformed remote errors remain generic, and invalid outgoing payloads
+become internal errors.
+
+The generator retains its existing public client/server/type names and
+`generate_server`, `default_server_methods`, and `linkrpc_path` options. Its macro
+options `client`, `server`, `module`, `runtime`, and `generate_server` carry those
+choices; `#[server_notification]` retains event-only client generation.
+Regenerated Rust bindings require a LinkRPC release with the `schema_json` macro
+mode; the macros are included and re-exported by the `linkrpc` crate.
+Source goldens change, but the shared JSON, hashes, and public call signatures do not.
+
 The standalone `schema::schemars_to_subset` function retains its inline behavior for
 callers that need the original Zod-compatible representation; it still rejects recursion.
 Runtime message shapes and the generated trait client/server APIs are unchanged.

@@ -10,13 +10,19 @@
 //!   recursive `$ref`s handled via `Box` where a cycle would otherwise be
 //!   infinitely sized,
 //! - `struct`/`enum` types for inline method params/results,
-//! - a typed async **client** whose methods encode params, issue the call over
+//! - a bare trait annotated with `#[link_rpc_interface(schema_json = "...")]`,
+//!   preserving the imported JSON and hash rather than re-deriving its schemas,
+//! - through that shared macro, a typed async **client** whose methods encode params, issue the call over
 //!   an [`RpcCall`](crate::client::RpcCall) transport abstraction, and decode
 //!   the result. The client can address linkrpc members (`id::member`) *or* bare
 //!   root-addressed method names (e.g. a CDP `Domain.method` channel).
 //! - optionally, a typed async provider trait and server adapter implementing
 //!   [`InterfaceHandler`](crate::connection::dispatch::InterfaceHandler) and
 //!   [`ServiceExport`](crate::connection::dispatch::ServiceExport).
+//!
+//! Application-error enums also reuse the `ApplicationError` derive, referencing
+//! the embedded contract for payload validation. The macros are re-exported by
+//! `linkrpc`; generated payload types need Serde, not Schemars.
 //!
 //! The generator is intentionally **generic**: it contains no CDP- or
 //! application-specific logic, and its output is deterministic (stable ordering,
@@ -217,21 +223,15 @@ mod tests {
             },
         );
         assert!(g.unsupported.is_empty(), "{:?}", g.unsupported);
+        assert!(g.code.contains("#[linkrpc::prelude::link_rpc_interface("));
+        assert!(g.code.contains("#[input_stream(Command)]"));
         assert!(g
             .code
-            .contains("StreamingCall<i64, Command, linkrpc::prelude::NoStream>"));
+            .contains("#[output_stream(linkrpc::prelude::NoStream)]"));
+        assert!(g.code.contains(r#"\"serverStream\":false"#));
         assert!(g
             .code
-            .contains("stream_receiver: linkrpc::prelude::StreamReceiver<Command>"));
-        assert!(g
-            .code
-            .contains("stream_sender: linkrpc::prelude::StreamSender<linkrpc::prelude::NoStream>"));
-        assert!(g
-            .code
-            .contains(r#"serde_json::from_str("{\"allOf\":[false],\"components\":{\"schemas\":"#));
-        assert!(g.code.contains(
-            r##"serde_json::from_str("{\"allOf\":[{\"$ref\":\"#/components/schemas/Command\"}],\"components\":{\"schemas\":"##
-        ));
+            .contains(r##"\"clientStream\":{\"$ref\":\"#/components/schemas/Command\"}"##));
         assert!(g.code.contains("Option<Box<Command>>"));
     }
 
@@ -461,7 +461,7 @@ mod tests {
             }"##,
         );
         let client_only = generate_rust_interface(&s, &GenerateRustOptions::default());
-        assert!(!client_only.code.contains("ComExampleEchoService"));
+        assert!(client_only.code.contains("generate_server = false"));
 
         let generated = generate_rust_interface(
             &s,
@@ -471,37 +471,23 @@ mod tests {
             },
         );
         assert!(generated.code.contains("pub trait ComExampleEchoService"));
+        assert!(generated.code.contains("generate_server = true"));
+        assert!(generated.code.contains("server = \"ComExampleEchoServer\""));
         assert!(generated
             .code
-            .contains("pub struct ComExampleEchoServer<T: ComExampleEchoService + 'static>"));
-        assert!(generated
-            .code
-            .contains("pub fn interface() -> linkrpc::prelude::InterfaceDefinition"));
+            .contains("pub use __linkrpc_interface::interface;"));
         assert!(generated.code.contains(
-            "async fn echo(&self, ctx: &linkrpc::prelude::CallCtx, params: String) -> Result<String, linkrpc::prelude::JsonRpcError>;"
+            "async fn echo(#[params] params: String) -> Result<String, linkrpc::prelude::JsonRpcError>;"
         ));
         assert!(generated.code.contains(
-            "async fn stop(&self, ctx: &linkrpc::prelude::CallCtx, params: serde_json::Value) -> Result<(), linkrpc::prelude::JsonRpcError>;"
+            "async fn stop(#[params] params: serde_json::Value) -> Result<(), linkrpc::prelude::JsonRpcError>;"
         ));
         assert!(generated.code.contains(
-            "async fn changed(&self, ctx: &linkrpc::prelude::CallCtx, params: String) -> Result<(), linkrpc::prelude::JsonRpcError>;"
+            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::JsonRpcError>;"
         ));
-        assert!(generated.code.contains(
-            "pub async fn changed(&self, params: String) -> Result<(), linkrpc::prelude::JsonRpcError>"
-        ));
-        assert!(generated.code.contains("self.0.changed(&ctx, __p).await?;"));
-        assert!(generated
-            .code
-            .contains("linkrpc notification `{}` handler error {}: {}"));
-        assert!(generated
-            .code
-            .contains("linkrpc notification `{}` has invalid params: {}"));
-        assert!(generated.code.contains(
-            "pub async fn dispatch_notification(&self, method: &str, params: serde_json::Value) -> Result<bool, linkrpc::prelude::JsonRpcError>"
-        ));
-        assert!(generated
-            .code
-            .contains("self.dispatch_notification_with_ctx(member, params, ctx).await"));
+        assert!(generated.code.contains("#[server_notification]"));
+        assert!(!generated.code.contains("impl<C"));
+        assert!(!generated.code.contains("impl<T"));
         assert!(generated.code.contains("frozen-hash"));
 
         let generated_with_defaults = generate_rust_interface(
@@ -516,7 +502,7 @@ mod tests {
             "Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, \"echo\"))"
         ));
         assert!(generated_with_defaults.code.contains(
-            "async fn changed(&self, ctx: &linkrpc::prelude::CallCtx, params: String) -> Result<(), linkrpc::prelude::JsonRpcError> {\n        let _ = (ctx, params);\n        Ok(())"
+            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::JsonRpcError> {\n        let _ = (ctx, params);\n        Ok(())"
         ));
     }
 
@@ -549,7 +535,7 @@ mod tests {
         );
         assert!(generated
             .code
-            .contains("pub async fn close(&self, params: ()) -> Result<(),"));
+            .contains("async fn close(#[params] params: ()) -> Result<(),"));
         assert!(generated.code.contains("Variant1(())"));
         assert!(!generated.code.contains("`null` type"));
         assert_eq!(serde_json::to_value(()).unwrap(), serde_json::Value::Null);

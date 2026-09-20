@@ -47,4 +47,39 @@ fn bless_golden() {
     std::fs::write(&target, generated.code).unwrap();
     eprintln!("wrote {}", target.display());
     eprintln!("unsupported constructs: {:#?}", generated.unsupported);
+
+    for (input, output, runtime) in [
+        (
+            "typed_errors_interface.json",
+            "generated_typed_errors.rs",
+            "linkrpc",
+        ),
+        (
+            "streaming_interface.json",
+            "generated_streaming.rs",
+            "linkrpc",
+        ),
+        (
+            "typed_errors_interface.json",
+            "generated_renamed_runtime.rs",
+            "crate::renamed_runtime",
+        ),
+    ] {
+        let schema =
+            serde_json::from_str(&std::fs::read_to_string(dir().join(input)).unwrap()).unwrap();
+        let generated = generate_rust_interface(
+            &schema,
+            &GenerateRustOptions {
+                generate_server: true,
+                linkrpc_path: runtime.to_string(),
+                ..Default::default()
+            },
+        );
+        assert!(
+            generated.unsupported.is_empty(),
+            "{:?}",
+            generated.unsupported
+        );
+        std::fs::write(dir().join(output), generated.code).unwrap();
+    }
 }

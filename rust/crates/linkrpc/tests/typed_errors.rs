@@ -480,5 +480,8 @@ fn generated_errors_are_typed_and_validate_against_components() {
     assert!(generated.contains("Code1001(Problem)"));
     assert!(generated.contains("CodeMinus7"));
     assert!(generated.contains("CallError<FetchError>"));
-    assert!(generated.contains("validate_json_schema"));
+    assert!(generated.contains("#[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]"));
+    assert!(
+        generated.contains("#[rpc_error(schema = __linkrpc_interface::schema, method = \"fetch\"")
+    );
 }

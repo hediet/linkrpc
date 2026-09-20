@@ -7,7 +7,7 @@
 //!   provider implements,
 //! - a **`<Trait>Server<T>`** adapter implementing [`InterfaceHandler`] (decodes params → calls the
 //!   impl → encodes the result),
-//! - a typed **`<Trait>Client`** proxy driving a `LinkRpcConnection`,
+//! - a typed **`<Trait>Client<C = LinkRpcConnection>`** proxy driving `RpcCall`,
 //! - a **`<trait_snake>::interface()`** builder (+ `ID`) producing the runtime
 //!   [`InterfaceDefinition`] whose content hash is the interface identity.
 //!
@@ -15,8 +15,13 @@
 //! `#[output_stream(T)]` (provider→caller). Doc comments are normative (hashed);
 //! `#[annotations(dangerous, read_only, ...)]` attach member annotations.
 //!
-//! Generated code references `::linkrpc`, `::serde`, `::serde_json`, `::schemars`, and
-//! `::async_trait` by absolute path, so the consuming crate must depend on those.
+//! `schema_json = "..."` imports a frozen interface contract (including its hash)
+//! instead of deriving schemas. Imported methods use `#[params]` and may rename
+//! their wire member with `#[name("...")]`. `client`, `server`, `module`, `runtime`,
+//! and `generate_server` configure names and client-only generation.
+//!
+//! Generated code references `::linkrpc`, `::serde`, and `::serde_json`.
+//! Rust-authored schema derivation additionally requires `::schemars`.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -45,6 +50,37 @@ fn code_name_for_scope(code: i32) -> String {
 }
 
 fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
+    let mut schema = None::<syn::Path>;
+    let mut method = None::<LitStr>;
+    let mut runtime = syn::parse_quote!(::linkrpc);
+    let mut display = false;
+    for attr in input
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("rpc_error"))
+    {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("schema") && schema.is_none() {
+                schema = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("method") && method.is_none() {
+                method = Some(meta.value()?.parse()?);
+            } else if meta.path.is_ident("runtime") {
+                runtime = meta.value()?.parse::<LitStr>()?.parse()?;
+            } else if meta.path.is_ident("display") {
+                display = true;
+            } else {
+                return Err(meta.error("expected schema, method, runtime, or display"));
+            }
+            Ok(())
+        })?;
+    }
+    if schema.is_some() != method.is_some() {
+        return Err(syn::Error::new_spanned(
+            &input.ident,
+            "schema and method must be specified together",
+        ));
+    }
+    let imported = schema.zip(method);
     let enum_ident = input.ident;
     let Data::Enum(data) = input.data else {
         return Err(syn::Error::new_spanned(
@@ -113,8 +149,18 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
     let into_arms = variants.iter().map(|(variant, code, message, payload)| {
         if let Some(ty) = payload {
             let scope = format!("Code{}", code_name_for_scope(*code));
-            quote! {
-                Self::#variant(__data) => {
+            let schema_setup = if imported.is_some() {
+                quote! {
+                    let ::core::option::Option::Some(__schema) = Self::error_schemas().into_iter()
+                        .find(|error| error.code == #code && error.message == #message)
+                        .and_then(|error| error.data) else {
+                            return ::linkrpc::prelude::JsonRpcError::new(
+                                ::linkrpc::prelude::error_codes::INTERNAL_ERROR,
+                                "application error variant does not match its imported contract");
+                        };
+                    let __components = Self::error_components();
+                }
+            } else { quote! {
                     let __raw_schema = match ::serde_json::to_value(::schemars::schema_for!(#ty)) {
                         ::core::result::Result::Ok(__schema) => __schema,
                         ::core::result::Result::Err(__error) => return ::linkrpc::prelude::JsonRpcError::new(
@@ -138,6 +184,10 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                         #scope, &mut __errors, &mut __components);
                     __schema = __errors.pop().expect("one error schema").data
                         .expect("payload schema");
+            }};
+            quote! {
+                Self::#variant(__data) => {
+                    #schema_setup
                     let __value = match ::serde_json::to_value(__data) {
                         ::core::result::Result::Ok(__value) => __value,
                         ::core::result::Result::Err(__error) => return ::linkrpc::prelude::JsonRpcError::new(
@@ -156,23 +206,45 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                 }
             }
         } else {
-            quote!(Self::#variant => ::linkrpc::prelude::JsonRpcError::new(#code as i64, #message))
+            let validate = imported.as_ref().map(|_| quote! {
+                if !Self::error_schemas().iter().any(|error|
+                    error.code == #code && error.message == #message && error.data.is_none())
+                {
+                    return ::linkrpc::prelude::JsonRpcError::new(
+                        ::linkrpc::prelude::error_codes::INTERNAL_ERROR,
+                        "application error variant does not match its imported contract");
+                }
+            });
+            quote!(Self::#variant => {
+                #validate
+                ::linkrpc::prelude::JsonRpcError::new(#code as i64, #message)
+            })
         }
     });
     let from_arms = variants.iter().map(|(variant, code, message, payload)| {
         if let Some(ty) = payload {
+            let schema_setup = if imported.is_some() {
+                quote! {
+                    let __schema = Self::error_schemas().into_iter()
+                        .find(|error| error.code == #code && error.message == #message)
+                        .and_then(|error| error.data).expect("declared error payload");
+                    let __components = Self::error_components();
+                }
+            } else { quote! {
+                let (__schema, __schemas) = ::linkrpc::schema::schemars_to_subset_with_components(
+                    &::serde_json::to_value(::schemars::schema_for!(#ty))
+                        .expect("schema serializes"),
+                ).expect("application error payload is in the linkrpc schema subset");
+                let __components = ::linkrpc::prelude::Components {
+                    schemas: ::core::option::Option::Some(__schemas),
+                };
+            }};
             quote! {
                 __code if __code == (#code as i64) && __error.message == #message => {
                     let ::core::option::Option::Some(__data) = __error.data.as_ref() else {
                         return ::core::result::Result::Err(__error);
                     };
-                    let (__schema, __schemas) = ::linkrpc::schema::schemars_to_subset_with_components(
-                        &::serde_json::to_value(::schemars::schema_for!(#ty))
-                            .expect("schema serializes"),
-                    ).expect("application error payload is in the linkrpc schema subset");
-                    let __components = ::linkrpc::prelude::Components {
-                        schemas: ::core::option::Option::Some(__schemas),
-                    };
+                    #schema_setup
                     if !::linkrpc::prelude::validate_json_schema(
                         __data, &__schema, ::core::option::Option::Some(&__components)
                     ) {
@@ -254,34 +326,78 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
     });
 
-    Ok(quote! {
-        impl ::linkrpc::prelude::ApplicationError for #enum_ident {
-            fn into_rpc_error(self) -> ::linkrpc::prelude::JsonRpcError {
-                match self { #(#into_arms),* }
+    let schemas_body = if let Some((schema, method)) = &imported {
+        quote! {
+            #schema().methods.get(#method).expect("declared error method")
+                .errors.clone().expect("declared application errors")
+        }
+    } else {
+        quote!(::std::vec![#(#schemas),*])
+    };
+    let components_body = if let Some((schema, _)) = &imported {
+        quote!(#schema().components.clone().unwrap_or(::linkrpc::prelude::Components { schemas: None }))
+    } else {
+        quote! {
+            let mut __all = ::std::collections::BTreeMap::new();
+            #(#error_components)*
+            ::linkrpc::prelude::Components {
+                schemas: (!__all.is_empty()).then_some(__all),
             }
-
-            fn try_from_rpc_error(
-                __error: ::linkrpc::prelude::JsonRpcError,
-            ) -> ::core::result::Result<Self, ::linkrpc::prelude::JsonRpcError> {
-                match __error.code {
-                    #(#from_arms,)*
-                    _ => ::core::result::Result::Err(__error),
-                }
-            }
-
-            fn error_schemas() -> ::std::vec::Vec<::linkrpc::prelude::ErrorSchema> {
-                ::std::vec![#(#schemas),*]
-            }
-
-            fn error_components() -> ::linkrpc::prelude::Components {
-                let mut __all = ::std::collections::BTreeMap::new();
-                #(#error_components)*
-                ::linkrpc::prelude::Components {
-                    schemas: (!__all.is_empty()).then_some(__all),
+        }
+    };
+    let display_impl = display.then(|| {
+        let arms = variants.iter().map(|(variant, _, message, payload)| {
+            let fields = payload.as_ref().map(|_| quote!((..)));
+            quote!(Self::#variant #fields => f.write_str(#message),)
+        });
+        quote! {
+            impl ::std::fmt::Display for #enum_ident {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    match self { #(#arms)* }
                 }
             }
         }
-    })
+    });
+    let validate_imported = imported.as_ref().map(|_| {
+        quote! {
+            if !Self::error_schemas().iter().any(|declaration|
+                i64::from(declaration.code) == __error.code
+                    && declaration.message == __error.message
+                    && declaration.data.is_some() == __error.data.is_some())
+            {
+                return ::core::result::Result::Err(__error);
+            }
+        }
+    });
+    with_runtime(
+        quote! {
+            #display_impl
+            impl ::linkrpc::prelude::ApplicationError for #enum_ident {
+                fn into_rpc_error(self) -> ::linkrpc::prelude::JsonRpcError {
+                    match self { #(#into_arms),* }
+                }
+
+                fn try_from_rpc_error(
+                    __error: ::linkrpc::prelude::JsonRpcError,
+                ) -> ::core::result::Result<Self, ::linkrpc::prelude::JsonRpcError> {
+                    #validate_imported
+                    match __error.code {
+                        #(#from_arms,)*
+                        _ => ::core::result::Result::Err(__error),
+                    }
+                }
+
+                fn error_schemas() -> ::std::vec::Vec<::linkrpc::prelude::ErrorSchema> {
+                    #schemas_body
+                }
+
+                fn error_components() -> ::linkrpc::prelude::Components {
+                    #components_body
+                }
+            }
+        },
+        &runtime,
+    )
 }
 
 /// See crate docs.
@@ -301,6 +417,12 @@ pub fn link_rpc_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
 struct InterfaceOptions {
     id: String,
     inline_schemas: bool,
+    schema_json: Option<LitStr>,
+    client: Option<Ident>,
+    server: Option<Ident>,
+    module: Option<Ident>,
+    generate_server: bool,
+    runtime: syn::Path,
 }
 
 fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
@@ -310,6 +432,12 @@ fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
     )?;
     let mut id = None;
     let mut inline_schemas = None;
+    let mut schema_json = None;
+    let mut client = None;
+    let mut server = None;
+    let mut module = None;
+    let mut generate_server = None;
+    let mut runtime = None;
     for arg in args {
         match arg {
             Meta::NameValue(nv) if nv.path.is_ident("id") && id.is_none() => {
@@ -329,18 +457,98 @@ fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
                     }
                 });
             }
+            Meta::NameValue(nv) if nv.path.is_ident("schema_json") && schema_json.is_none() => {
+                schema_json = Some(syn::parse2::<LitStr>(nv.value.to_token_stream())?);
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("client") && client.is_none() => {
+                let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
+                client = Some(lit.parse::<Ident>()?);
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("server") && server.is_none() => {
+                let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
+                server = Some(lit.parse::<Ident>()?);
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("module") && module.is_none() => {
+                let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
+                module = Some(lit.parse::<Ident>()?);
+            }
+            Meta::NameValue(nv)
+                if nv.path.is_ident("generate_server") && generate_server.is_none() =>
+            {
+                generate_server =
+                    Some(syn::parse2::<syn::LitBool>(nv.value.to_token_stream())?.value);
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("runtime") && runtime.is_none() => {
+                let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
+                runtime = Some(lit.parse::<syn::Path>()?);
+            }
             other => {
                 return Err(syn::Error::new_spanned(
                     other,
-                    "expected unique `id = \"...\"` and optional `schema = \"inline\"` arguments",
+                    "unknown or duplicate link_rpc_interface option",
                 ))
             }
         }
     }
+    if let Some(json) = &schema_json {
+        if inline_schemas.is_some() {
+            return Err(syn::Error::new_spanned(
+                json,
+                "`schema` and `schema_json` are mutually exclusive",
+            ));
+        }
+        let schema = parse_schema_json(json)?;
+        let schema_id = schema
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                syn::Error::new_spanned(json, "schema_json must contain an interface id")
+            })?;
+        if id.as_deref().is_some_and(|id| id != schema_id) {
+            return Err(syn::Error::new_spanned(
+                json,
+                "interface id does not match schema_json",
+            ));
+        }
+        id = Some(schema_id.to_string());
+    }
     Ok(InterfaceOptions {
         id: id.ok_or_else(|| syn::Error::new(Span::call_site(), "missing interface id"))?,
         inline_schemas: inline_schemas.unwrap_or(false),
+        schema_json,
+        client,
+        server,
+        module,
+        generate_server: generate_server.unwrap_or(true),
+        runtime: runtime.unwrap_or_else(|| syn::parse_quote!(::linkrpc)),
     })
+}
+
+fn parse_schema_json(json: &LitStr) -> syn::Result<serde_json::Value> {
+    serde_json::from_str(&json.value())
+        .map_err(|error| syn::Error::new_spanned(json, format!("invalid schema_json: {error}")))
+}
+
+fn with_runtime(tokens: TokenStream2, runtime: &syn::Path) -> syn::Result<TokenStream2> {
+    struct RuntimePath<'a>(&'a syn::Path);
+    impl syn::visit_mut::VisitMut for RuntimePath<'_> {
+        fn visit_path_mut(&mut self, path: &mut syn::Path) {
+            syn::visit_mut::visit_path_mut(self, path);
+            if path.leading_colon.is_some()
+                && path
+                    .segments
+                    .first()
+                    .is_some_and(|segment| segment.ident == "linkrpc")
+            {
+                let rest = path.segments.iter().skip(1).cloned().collect::<Vec<_>>();
+                *path = self.0.clone();
+                path.segments.extend(rest);
+            }
+        }
+    }
+    let mut file = syn::parse2::<syn::File>(tokens)?;
+    syn::visit_mut::VisitMut::visit_file_mut(&mut RuntimePath(runtime), &mut file);
+    Ok(file.into_token_stream())
 }
 
 struct MethodModel {
@@ -368,6 +576,9 @@ struct MethodModel {
     annotations: Vec<Ident>,
     /// The original return type token stream (for the rewritten trait signature).
     raw_output: ReturnType,
+    fallible_notification: bool,
+    server_notification: bool,
+    default_body: Option<syn::Block>,
 }
 
 fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream2> {
@@ -395,6 +606,57 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
             }
         }
     }
+    if let Some(json) = &options.schema_json {
+        let schema = parse_schema_json(json)?;
+        let declared = schema
+            .get("methods")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| syn::Error::new_spanned(json, "schema_json must contain methods"))?;
+        let mut names = std::collections::BTreeSet::new();
+        for method in &methods {
+            if !names.insert(&method.wire_name) {
+                return Err(syn::Error::new_spanned(
+                    &method.name,
+                    "duplicate wire method name",
+                ));
+            }
+            let wire = declared.get(&method.wire_name).ok_or_else(|| {
+                syn::Error::new_spanned(&method.name, "method is absent from schema_json")
+            })?;
+            let notification = wire.get("result").is_none() || method.server_notification;
+            if method.is_notification != notification
+                || method.input_stream_ty.is_some() != wire.get("clientStream").is_some()
+                || method.output_stream_ty.is_some() != wire.get("serverStream").is_some()
+            {
+                return Err(syn::Error::new_spanned(
+                    &method.name,
+                    "method kind or streams do not match schema_json",
+                ));
+            }
+            let has_errors = wire
+                .get("errors")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|errors| !errors.is_empty());
+            if method.error_ty.is_some() != has_errors {
+                return Err(syn::Error::new_spanned(
+                    &method.name,
+                    "Result error type does not match schema_json application errors",
+                ));
+            }
+            if method.passthrough_ty.is_none() {
+                return Err(syn::Error::new_spanned(
+                    &method.name,
+                    "schema_json methods require a #[params] parameter",
+                ));
+            }
+        }
+        if names.len() != declared.len() {
+            return Err(syn::Error::new_spanned(
+                json,
+                "trait must declare every schema_json method",
+            ));
+        }
+    }
 
     let ctx_ty = quote!(::linkrpc::prelude::CallCtx);
 
@@ -405,21 +667,26 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         let receiver = m
             .input_stream_ty
             .as_ref()
-            .map(|ty| quote!(_: ::linkrpc::prelude::StreamReceiver<#ty>));
+            .map(|ty| quote!(stream_receiver: ::linkrpc::prelude::StreamReceiver<#ty>));
         let sender = m
             .output_stream_ty
             .as_ref()
-            .map(|ty| quote!(_: ::linkrpc::prelude::StreamSender<#ty>));
+            .map(|ty| quote!(stream_sender: ::linkrpc::prelude::StreamSender<#ty>));
         let stream_args = [receiver, sender].into_iter().flatten();
         let output = &m.raw_output;
         let doc = m.doc.as_ref().map(|d| quote!(#[doc = #d]));
+        let body = m
+            .default_body
+            .as_ref()
+            .map(|body| quote!(#body))
+            .unwrap_or_else(|| quote!(;));
         quote! {
             #doc
-            async fn #name(&self, ctx: &#ctx_ty, #(#args,)* #(#stream_args),*) #output;
+            async fn #name(&self, ctx: &#ctx_ty, #(#args,)* #(#stream_args),*) #output #body
         }
     });
     let rewritten_trait = quote! {
-        #[::async_trait::async_trait]
+        #[::linkrpc::prelude::async_trait]
         #vis trait #trait_ident: ::core::marker::Send + ::core::marker::Sync {
             #(#trait_methods)*
         }
@@ -429,7 +696,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
     let param_structs = methods.iter().map(|m| param_struct(&trait_ident, m));
 
     // ── interface() builder module ────────────────────────────────────────────
-    let module_ident = format_ident!("{}", to_snake_case(&trait_ident.to_string()));
+    let module_ident = options
+        .module
+        .clone()
+        .unwrap_or_else(|| format_ident!("{}", to_snake_case(&trait_ident.to_string())));
     let member_exprs = methods
         .iter()
         .map(|m| member_expr(&trait_ident, m, options.inline_schemas));
@@ -485,49 +755,87 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
             }
         }
     });
-    let interface_mod = quote! {
-        #vis mod #module_ident {
-            #[allow(unused_imports)]
-            use super::*;
+    let interface_mod = if let Some(json) = &options.schema_json {
+        quote! {
+            #vis mod #module_ident {
+                pub const ID: &str = #id;
+                pub const SCHEMA_JSON: &str = #json;
 
-            /// The interface id (the `id` half of `id@hash`).
-            pub const ID: &str = #id;
-            #inline_schema
+                pub fn schema() -> &'static ::linkrpc::prelude::LinkRpcInterfaceSchema {
+                    static SCHEMA: ::std::sync::OnceLock<::linkrpc::prelude::LinkRpcInterfaceSchema> =
+                        ::std::sync::OnceLock::new();
+                    SCHEMA.get_or_init(|| ::serde_json::from_str(SCHEMA_JSON)
+                        .expect("invalid imported interface schema"))
+                }
 
-            pub(super) fn validation_schema<T: ::schemars::JsonSchema>()
-                -> ::linkrpc::prelude::JsonValue
-            {
-                let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
-                #(#validation_schema_registrations)*
-                __schemas.initialize().expect("linkrpc schema roots initialize");
-                let __root = __schemas.root_schema::<T>()
-                    .expect("registered stream schema is in the linkrpc schema subset");
-                match __schemas.components().expect("stream schema components are valid") {
-                    ::core::option::Option::Some(__components) => ::serde_json::json!({
-                        "allOf": [__root],
-                        "components": __components,
-                    }),
-                    ::core::option::Option::None => __root,
+                pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
+                    ::linkrpc::prelude::InterfaceDefinition::from_schema(schema().clone())
+                }
+
+                pub(super) fn stream_schema(member: &str, input: bool)
+                    -> ::linkrpc::prelude::JsonValue
+                {
+                    let schema = schema();
+                    let method = schema.methods.get(member).expect("declared method");
+                    let root = if input { method.client_stream.as_ref() } else { method.server_stream.as_ref() }
+                        .expect("declared stream");
+                    let mut document = ::serde_json::json!({ "allOf": [root] });
+                    if let ::core::option::Option::Some(components) = &schema.components {
+                        document["components"] = ::serde_json::to_value(components)
+                            .expect("interface components serialize");
+                    }
+                    document
                 }
             }
+        }
+    } else {
+        quote! {
+            #vis mod #module_ident {
+                #[allow(unused_imports)]
+                use super::*;
 
-            /// Build the runtime interface definition (its content hash is the identity).
-            pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
-                let mut info = ::linkrpc::prelude::InterfaceInfo::new(ID);
-                #iface_desc
-                #schema_setup
-                let members: ::std::vec::Vec<(::std::string::String, ::linkrpc::prelude::Member)> = ::std::vec![
-                    #(#member_exprs),*
-                ];
-                let components = #components;
-                ::linkrpc::prelude::InterfaceDefinition::new_with_components(
-                    info, members, components)
+                /// The interface id (the `id` half of `id@hash`).
+                pub const ID: &str = #id;
+                #inline_schema
+
+                pub(super) fn validation_schema<T: ::schemars::JsonSchema>()
+                    -> ::linkrpc::prelude::JsonValue
+                {
+                    let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
+                    #(#validation_schema_registrations)*
+                    __schemas.initialize().expect("linkrpc schema roots initialize");
+                    let __root = __schemas.root_schema::<T>()
+                        .expect("registered stream schema is in the linkrpc schema subset");
+                    match __schemas.components().expect("stream schema components are valid") {
+                        ::core::option::Option::Some(__components) => ::serde_json::json!({
+                            "allOf": [__root],
+                            "components": __components,
+                        }),
+                        ::core::option::Option::None => __root,
+                    }
+                }
+
+                /// Build the runtime interface definition (its content hash is the identity).
+                pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
+                    let mut info = ::linkrpc::prelude::InterfaceInfo::new(ID);
+                    #iface_desc
+                    #schema_setup
+                    let members: ::std::vec::Vec<(::std::string::String, ::linkrpc::prelude::Member)> = ::std::vec![
+                        #(#member_exprs),*
+                    ];
+                    let components = #components;
+                    ::linkrpc::prelude::InterfaceDefinition::new_with_components(
+                        info, members, components)
+                }
             }
         }
     };
 
     // ── server adapter ────────────────────────────────────────────────────────
-    let server_ident = format_ident!("{}Server", trait_ident);
+    let server_ident = options
+        .server
+        .clone()
+        .unwrap_or_else(|| format_ident!("{}Server", trait_ident));
     let request_arms = methods.iter().filter(|m| !m.is_notification).map(|m| {
         let wire = &m.wire_name;
         let params_ty = params_ty(&trait_ident, m);
@@ -545,10 +853,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
             quote!(.map_err(::core::convert::Into::into)?)
         };
         let receiver = m.input_stream_ty.as_ref().map(|ty| {
+            let schema =
+                stream_schema_expr(&module_ident, m, ty, true, options.schema_json.is_some());
             quote! {
-                let __stream_receiver = ctx.stream_receiver::<#ty>(
-                    #module_ident::validation_schema::<#ty>()
-                )?;
+                let __stream_receiver = ctx.stream_receiver::<#ty>(#schema)?;
             }
         });
         let sender = m.output_stream_ty.as_ref().map(|ty| {
@@ -590,13 +898,14 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         } else {
             m.params.iter().map(|(id, _)| quote!(__p.#id)).collect()
         };
+        let check_result = m.fallible_notification.then(|| quote!(?));
         quote! {
             #wire => {
-                if let ::core::result::Result::Ok(__p) =
-                    ::serde_json::from_value::<#params_ty>(params)
-                {
-                    self.0.#name(&ctx, #(#call_args),*).await;
-                }
+                let __p: #params_ty = ::serde_json::from_value(params).map_err(|e|
+                    ::linkrpc::prelude::JsonRpcError::new(
+                        ::linkrpc::prelude::error_codes::INVALID_PARAMS, e.to_string()))?;
+                self.0.#name(&ctx, #(#call_args),*).await #check_result;
+                ::core::result::Result::Ok(true)
             }
         }
     });
@@ -607,6 +916,30 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         impl<T> #server_ident<T> {
             pub fn new(inner: ::std::sync::Arc<T>) -> Self {
                 #server_ident(inner)
+            }
+
+            pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
+                #module_ident::interface()
+            }
+        }
+
+        impl<T: #trait_ident + 'static> #server_ident<T> {
+            pub async fn dispatch_notification(
+                &self, member: &str, params: ::linkrpc::prelude::JsonValue,
+            ) -> ::core::result::Result<bool, ::linkrpc::prelude::JsonRpcError> {
+                self.dispatch_notification_with_ctx(
+                    member, params, ::linkrpc::prelude::CallCtx::default()).await
+            }
+
+            async fn dispatch_notification_with_ctx(
+                &self, member: &str, params: ::linkrpc::prelude::JsonValue,
+                ctx: ::linkrpc::prelude::CallCtx,
+            ) -> ::core::result::Result<bool, ::linkrpc::prelude::JsonRpcError> {
+                let _ = (&params, &ctx);
+                match member {
+                    #(#notification_arms)*
+                    _ => ::core::result::Result::Ok(false),
+                }
             }
         }
 
@@ -619,7 +952,7 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
             }
         }
 
-        #[::async_trait::async_trait]
+        #[::linkrpc::prelude::async_trait]
         impl<T> ::linkrpc::prelude::InterfaceHandler for #server_ident<T>
         where
             T: #trait_ident + 'static,
@@ -630,6 +963,7 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                 params: ::linkrpc::prelude::JsonValue,
                 ctx: ::linkrpc::prelude::CallCtx,
             ) -> ::core::result::Result<::linkrpc::prelude::JsonValue, ::linkrpc::prelude::JsonRpcError> {
+                let _ = (&params, &ctx);
                 match member {
                     #(#request_arms)*
                     _ => ::core::result::Result::Err(::linkrpc::prelude::JsonRpcError::new(
@@ -643,56 +977,74 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                 params: ::linkrpc::prelude::JsonValue,
                 ctx: ::linkrpc::prelude::CallCtx,
             ) {
-                let _ = &ctx;
-                match member {
-                    #(#notification_arms)*
-                    _ => {}
+                if let ::core::result::Result::Err(error) =
+                    self.dispatch_notification_with_ctx(member, params, ctx).await
+                {
+                    ::std::eprintln!("linkrpc notification `{}` failed ({}): {}", member, error.code, error.message);
                 }
             }
         }
     };
 
     // ── client proxy ──────────────────────────────────────────────────────────
-    let client_ident = format_ident!("{}Client", trait_ident);
+    let client_ident = options
+        .client
+        .clone()
+        .unwrap_or_else(|| format_ident!("{}Client", trait_ident));
     let client_methods = methods
         .iter()
-        .map(|m| client_method(&trait_ident, &module_ident, m));
+        .map(|m| client_method(&trait_ident, &module_ident, m, &options));
     let client = quote! {
         /// Typed client proxy over a `LinkRpcConnection`.
         #[derive(::core::clone::Clone)]
-        #vis struct #client_ident {
-            conn: ::linkrpc::prelude::LinkRpcConnection,
-            service_id: ::core::option::Option<::std::string::String>,
+        #vis struct #client_ident<C = ::linkrpc::prelude::LinkRpcConnection> {
+            conn: C,
+            prefix: ::std::string::String,
         }
 
-        impl #client_ident {
+        impl<C: ::linkrpc::prelude::RpcCall> #client_ident<C> {
+            pub const INTERFACE_ID: &'static str = #module_ident::ID;
             /// Address the root service on `conn`.
-            pub fn new(conn: ::linkrpc::prelude::LinkRpcConnection) -> Self {
-                #client_ident { conn, service_id: ::core::option::Option::None }
+            pub fn new(conn: C) -> Self {
+                Self::with_prefix(conn, ::std::format!("{}::", Self::INTERFACE_ID))
             }
 
             /// Address a specific service id on `conn`.
             pub fn with_service(
-                conn: ::linkrpc::prelude::LinkRpcConnection,
+                conn: C,
                 service_id: impl ::core::convert::Into<::std::string::String>,
             ) -> Self {
-                #client_ident {
-                    conn,
-                    service_id: ::core::option::Option::Some(service_id.into()),
-                }
+                Self::with_prefix(conn, ::std::format!("{}::{}::", service_id.into(), Self::INTERFACE_ID))
+            }
+
+            pub fn root(conn: C) -> Self {
+                Self::with_prefix(conn, "")
+            }
+
+            pub fn with_prefix(conn: C, prefix: impl ::core::convert::Into<::std::string::String>) -> Self {
+                Self { conn, prefix: prefix.into() }
+            }
+
+            fn method_name(&self, member: &str) -> ::std::string::String {
+                ::std::format!("{}{}", self.prefix, member)
             }
 
             #(#client_methods)*
         }
     };
 
-    Ok(quote! {
-        #rewritten_trait
-        #(#param_structs)*
-        #interface_mod
-        #server
-        #client
-    })
+    let server = options
+        .generate_server
+        .then(|| quote!(#rewritten_trait #server));
+    with_runtime(
+        quote! {
+            #(#param_structs)*
+            #interface_mod
+            #server
+            #client
+        },
+        &options.runtime,
+    )
 }
 
 fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
@@ -703,7 +1055,25 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
             "interface methods must be `async fn`",
         ));
     }
-    let is_notification = f.attrs.iter().any(|a| a.path().is_ident("notification"));
+    let server_notification = f
+        .attrs
+        .iter()
+        .any(|a| a.path().is_ident("server_notification"));
+    let is_notification =
+        server_notification || f.attrs.iter().any(|a| a.path().is_ident("notification"));
+    let mut wire_name = None;
+    for attr in f.attrs.iter().filter(|attr| attr.path().is_ident("name")) {
+        if wire_name.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "duplicate #[name(...)] attribute",
+            ));
+        }
+        wire_name = Some(attr.parse_args::<LitStr>()?.value());
+    }
+    let fallible_notification = is_notification
+        && matches!(&sig.output,
+        ReturnType::Type(_, ty) if result_args(ty).is_some());
     let input_stream_ty = parse_stream_attr(&f.attrs, "input_stream")?;
     let output_stream_ty = parse_stream_attr(&f.attrs, "output_stream")?;
     if is_notification && (input_stream_ty.is_some() || output_stream_ty.is_some()) {
@@ -768,7 +1138,8 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
 
     Ok(MethodModel {
         name: sig.ident.clone(),
-        wire_name: sig.ident.to_string(),
+        wire_name: wire_name
+            .unwrap_or_else(|| sig.ident.to_string().trim_start_matches("r#").to_string()),
         is_notification,
         params,
         passthrough_ty,
@@ -780,6 +1151,9 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         doc,
         annotations,
         raw_output: rewritten_output(&sig.output, is_notification),
+        fallible_notification,
+        server_notification,
+        default_body: f.default.clone(),
     })
 }
 
@@ -806,6 +1180,14 @@ fn parse_output(
 ) -> syn::Result<(Option<Type>, Option<Type>)> {
     if is_notification {
         if let ReturnType::Type(_, ty) = output {
+            if let Some((ok, Some(err))) = result_args(ty) {
+                if is_unit(&ok)
+                    && matches!(err, Type::Path(path)
+                    if path.path.segments.last().is_some_and(|segment| segment.ident == "JsonRpcError"))
+                {
+                    return Ok((None, None));
+                }
+            }
             if !is_unit(ty) {
                 return Err(syn::Error::new_spanned(
                     ty,
@@ -832,7 +1214,7 @@ fn parse_output(
 
 /// The signature output used in the rewritten trait (unchanged for requests; `()` for notifications).
 fn rewritten_output(output: &ReturnType, is_notification: bool) -> ReturnType {
-    if is_notification {
+    if is_notification && matches!(output, ReturnType::Default) {
         ReturnType::Default
     } else {
         output.clone()
@@ -1030,11 +1412,42 @@ fn member_docs(m: &MethodModel) -> TokenStream2 {
     }
 }
 
-fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenStream2 {
+fn stream_schema_expr(
+    module: &Ident,
+    method: &MethodModel,
+    ty: &Type,
+    input: bool,
+    imported: bool,
+) -> TokenStream2 {
+    if imported {
+        let wire = &method.wire_name;
+        quote!(#module::stream_schema(#wire, #input))
+    } else {
+        quote!(#module::validation_schema::<#ty>())
+    }
+}
+
+fn client_method(
+    trait_ident: &Ident,
+    module: &Ident,
+    m: &MethodModel,
+    options: &InterfaceOptions,
+) -> TokenStream2 {
     let name = &m.name;
     let wire = &m.wire_name;
     let args = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
     let doc = m.doc.as_ref().map(|d| quote!(#[doc = #d]));
+    let event_name = m.server_notification.then(|| {
+        let name = format_ident!("{}_event_name", name.to_string().trim_start_matches("r#"));
+        quote! {
+            pub fn #name(&self) -> ::std::string::String {
+                self.method_name(#wire)
+            }
+        }
+    });
+    if m.server_notification && !options.generate_server {
+        return quote!(#event_name);
+    }
 
     let serialization_error = if m.error_ty.is_some() {
         quote! {
@@ -1068,13 +1481,14 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
 
     if m.is_notification {
         quote! {
+            #event_name
             #doc
             pub async fn #name(&self, #(#args),*)
                 -> ::core::result::Result<(), ::linkrpc::prelude::JsonRpcError>
             {
                 #build_params
-                self.conn.notify_member(
-                    self.service_id.as_deref(), #module::ID, #wire, __params).await
+                ::linkrpc::prelude::RpcCall::notify(
+                    &self.conn, &self.method_name(#wire), __params).await
             }
         }
     } else {
@@ -1098,12 +1512,20 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
             let client_schema = m
                 .input_stream_ty
                 .as_ref()
-                .map(|ty| quote!(::core::option::Option::Some(#module::validation_schema::<#ty>())))
+                .map(|ty| {
+                    let schema =
+                        stream_schema_expr(module, m, ty, true, options.schema_json.is_some());
+                    quote!(::core::option::Option::Some(#schema))
+                })
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
             let server_schema = m
                 .output_stream_ty
                 .as_ref()
-                .map(|ty| quote!(::core::option::Option::Some(#module::validation_schema::<#ty>())))
+                .map(|ty| {
+                    let schema =
+                        stream_schema_expr(module, m, ty, false, options.schema_json.is_some());
+                    quote!(::core::option::Option::Some(#schema))
+                })
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
             let (streaming_ty, start_call, typed_call) = match error_ty {
                 Some(error_ty) => (
@@ -1137,12 +1559,7 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
                     -> ::core::result::Result<#streaming_ty, #return_ty>
                 {
                     #build_params
-                    let __method = match self.service_id.as_deref() {
-                        ::core::option::Option::Some(__service) =>
-                            ::std::format!("{}::{}::{}", __service, #module::ID, #wire),
-                        ::core::option::Option::None =>
-                            ::std::format!("{}::{}", #module::ID, #wire),
-                    };
+                    let __method = self.method_name(#wire);
                     let __call = #start_call;
                     ::core::result::Result::Ok(#typed_call)
                 }
@@ -1150,8 +1567,8 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
         }
         let call = match error_ty {
             Some(error_ty) => quote! {
-                let __v = self.conn.call_member_detailed(
-                    self.service_id.as_deref(), #module::ID, #wire, __params).await
+                let __v = ::linkrpc::prelude::RpcCall::call_detailed(
+                    &self.conn, &self.method_name(#wire), __params).await
                     .map_err(::linkrpc::prelude::CallError::<#error_ty>::from_call_error)?;
                 ::serde_json::from_value(__v).map_err(|e| {
                     ::linkrpc::prelude::CallError::Local(
@@ -1161,8 +1578,8 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
                 })
             },
             None => quote! {
-                let __v = self.conn.call_member(
-                    self.service_id.as_deref(), #module::ID, #wire, __params).await?;
+                let __v = ::linkrpc::prelude::RpcCall::call(
+                    &self.conn, &self.method_name(#wire), __params).await?;
                 ::serde_json::from_value(__v).map_err(|e| {
                     ::linkrpc::prelude::JsonRpcError::new(
                         ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
@@ -1244,6 +1661,73 @@ fn to_snake_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_schema_options_validate_json_identity_and_layout() {
+        for (args, diagnostic) in [
+            (quote!(schema_json = "{"), "invalid schema_json"),
+            (quote!(schema_json = "{}"), "interface id"),
+            (
+                quote!(id = "a", schema_json = r#"{"id":"b","methods":{}}"#),
+                "does not match",
+            ),
+            (
+                quote!(
+                    schema = "inline",
+                    schema_json = r#"{"id":"a","methods":{}}"#
+                ),
+                "mutually exclusive",
+            ),
+        ] {
+            assert!(parse_options(args)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains(diagnostic));
+        }
+    }
+
+    #[test]
+    fn imported_traits_must_match_wire_members_and_stream_directions() {
+        let json = r#"{"id":"a","hash":"","methods":{"lookup":{"params":true,"result":true,"serverStream":false}}}"#;
+        for (item, diagnostic) in [
+            (
+                quote!(
+                    trait Test {}
+                ),
+                "every schema_json method",
+            ),
+            (
+                quote!(
+                    trait Test {
+                        async fn missing(#[params] value: String) -> Result<String, JsonRpcError>;
+                    }
+                ),
+                "absent from schema_json",
+            ),
+            (
+                quote!(
+                    trait Test {
+                        async fn lookup(#[params] value: String) -> Result<String, JsonRpcError>;
+                    }
+                ),
+                "streams do not match",
+            ),
+            (
+                quote!(
+                    trait Test {
+                        #[output_stream(NoStream)]
+                        async fn lookup(value: String) -> Result<String, JsonRpcError>;
+                    }
+                ),
+                "#[params] parameter",
+            ),
+        ] {
+            let options = parse_options(quote!(schema_json = #json)).unwrap();
+            let error = expand(options, syn::parse2(item).unwrap()).unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error}");
+        }
+    }
 
     #[test]
     fn schema_layout_defaults_to_shared_and_can_preserve_inline_contracts() {

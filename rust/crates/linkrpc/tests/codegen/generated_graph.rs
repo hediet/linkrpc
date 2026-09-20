@@ -236,102 +236,38 @@ impl ResetParams {
     }
 }
 
+#[linkrpc::prelude::link_rpc_interface(
+    schema_json = "{\"id\":\"com.example.graph\",\"hash\":\"\",\"description\":\"A demo interface exercising the full codegen surface.\",\"methods\":{\"configure\":{\"params\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"label\":{\"type\":\"string\",\"description\":\"Optional display label.\"},\"payload\":true},\"required\":[\"id\"],\"additionalProperties\":false},\"result\":{\"type\":\"boolean\"},\"description\":\"A method whose params mix required and optional fields.\"},\"get_tree\":{\"params\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"],\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/TreeNode\"},\"description\":\"Fetch the tree rooted at an id.\",\"x-safety\":{\"readOnly\":true}},\"notify_changed\":{\"params\":{\"type\":\"object\",\"properties\":{\"node\":{\"$ref\":\"#/components/schemas/TreeNode\"}},\"required\":[\"node\"],\"additionalProperties\":false}},\"paint\":{\"params\":{\"type\":\"object\",\"properties\":{\"shape\":{\"$ref\":\"#/components/schemas/Shape\"},\"color\":{\"$ref\":\"#/components/schemas/Color\"}},\"required\":[\"shape\",\"color\"],\"additionalProperties\":false},\"result\":{\"type\":\"boolean\"}},\"raw_echo\":{\"params\":true,\"result\":true},\"reset\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"description\":\"A method with an empty (all-defaults) params object.\"},\"tree_changed\":{\"params\":{\"$ref\":\"#/components/schemas/TreeNode\"},\"description\":\"Server-emitted event fired whenever the tree changes.\",\"x-linkrpc-codegen\":{\"kind\":\"serverNotification\"}}},\"components\":{\"schemas\":{\"Bag\":{\"description\":\"An open object with a known field plus arbitrary extras.\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"],\"additionalProperties\":true},\"Color\":{\"enum\":[\"red\",\"green\",\"blue\",\"self\"]},\"JsonNode\":{\"description\":\"A recursive JSON value, recursing only through arrays and maps.\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/JsonNode\"}},{\"type\":\"object\",\"additionalProperties\":{\"$ref\":\"#/components/schemas/JsonNode\"}}]},\"Metadata\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},\"Ping\":{\"type\":\"object\",\"properties\":{\"pong\":{\"$ref\":\"#/components/schemas/Pong\"}},\"additionalProperties\":false},\"Point\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"required\":[\"x\",\"y\"],\"additionalProperties\":false},\"Pong\":{\"type\":\"object\",\"properties\":{\"ping\":{\"$ref\":\"#/components/schemas/Ping\"}},\"additionalProperties\":false},\"Shape\":{\"description\":\"A tagged union of shapes.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"circle\"},\"radius\":{\"type\":\"number\"}},\"required\":[\"kind\",\"radius\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"rectangle\"},\"width\":{\"type\":\"number\"},\"height\":{\"type\":\"number\"}},\"required\":[\"kind\",\"width\",\"height\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"point\"}},\"required\":[\"kind\"],\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"Tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"TreeNode\":{\"description\":\"A recursive tree node.\",\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"point\":{\"$ref\":\"#/components/schemas/Point\"},\"parent\":{\"$ref\":\"#/components/schemas/TreeNode\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/TreeNode\"}}},\"required\":[\"value\"],\"additionalProperties\":false}}},\"x-linkrpc-codegen\":{\"note\":\"identity-neutral codegen hint; stripped from the hash\"}}",
+    client = "ComExampleGraphClient",
+    server = "ComExampleGraphServer",
+    module = "__linkrpc_interface",
+    generate_server = false,
+    runtime = "linkrpc",
+)]
 /// A demo interface exercising the full codegen surface.
-#[derive(Clone)]
-pub struct ComExampleGraphClient<C> {
-    caller: C,
-    prefix: String,
-}
-
-impl<C: linkrpc::prelude::RpcCall> ComExampleGraphClient<C> {
-    /// The interface id (the `id` half of `id@hash`).
-    pub const INTERFACE_ID: &'static str = "com.example.graph";
-
-    /// Address members with the interface-qualified name `id::member`.
-    pub fn new(caller: C) -> Self {
-        Self { caller, prefix: format!("{}::", Self::INTERFACE_ID) }
-    }
-
-    /// Address members by bare method name (root-addressed, e.g. a CDP channel).
-    pub fn root(caller: C) -> Self {
-        Self { caller, prefix: String::new() }
-    }
-
-    /// Address members under a specific service id: `service::id::member`.
-    pub fn with_service(caller: C, service_id: &str) -> Self {
-        Self { caller, prefix: format!("{}::{}::", service_id, Self::INTERFACE_ID) }
-    }
-
-    /// Address members with an explicit wire-name prefix (e.g. `"Page."`).
-    pub fn with_prefix(caller: C, prefix: impl Into<String>) -> Self {
-        Self { caller, prefix: prefix.into() }
-    }
-
-    fn method_name(&self, member: &str) -> String {
-        format!("{}{}", self.prefix, member)
-    }
-
+pub trait ComExampleGraphService {
     /// A method whose params mix required and optional fields.
-    pub async fn configure(&self, params: ConfigureParams) -> Result<bool, linkrpc::prelude::JsonRpcError> {
-        let __p = serde_json::to_value(&params).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })?;
-        let __v = self.caller.call(&self.method_name("configure"), __p).await?;
-        serde_json::from_value(__v).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })
-    }
-
+    #[name("configure")]
+    async fn configure(#[params] params: ConfigureParams) -> Result<bool, linkrpc::prelude::JsonRpcError>;
     /// Fetch the tree rooted at an id.
-    pub async fn get_tree(&self, params: GetTreeParams) -> Result<TreeNode, linkrpc::prelude::JsonRpcError> {
-        let __p = serde_json::to_value(&params).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })?;
-        let __v = self.caller.call(&self.method_name("get_tree"), __p).await?;
-        serde_json::from_value(__v).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })
-    }
-
-    pub async fn notify_changed(&self, params: NotifyChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let __p = serde_json::to_value(&params).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })?;
-        self.caller.notify(&self.method_name("notify_changed"), __p).await
-    }
-
-    pub async fn paint(&self, params: PaintParams) -> Result<bool, linkrpc::prelude::JsonRpcError> {
-        let __p = serde_json::to_value(&params).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })?;
-        let __v = self.caller.call(&self.method_name("paint"), __p).await?;
-        serde_json::from_value(__v).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })
-    }
-
-    pub async fn raw_echo(&self, params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
-        let __p = serde_json::to_value(&params).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })?;
-        let __v = self.caller.call(&self.method_name("raw_echo"), __p).await?;
-        serde_json::from_value(__v).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })
-    }
-
+    #[name("get_tree")]
+    async fn get_tree(#[params] params: GetTreeParams) -> Result<TreeNode, linkrpc::prelude::JsonRpcError>;
+    #[name("notify_changed")]
+    #[notification]
+    async fn notify_changed(#[params] params: NotifyChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError>;
+    #[name("paint")]
+    async fn paint(#[params] params: PaintParams) -> Result<bool, linkrpc::prelude::JsonRpcError>;
+    #[name("raw_echo")]
+    async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
     /// A method with an empty (all-defaults) params object.
-    pub async fn reset(&self, params: ResetParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let __p = serde_json::to_value(&params).map_err(|e| {
-            linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        })?;
-        self.caller.notify(&self.method_name("reset"), __p).await
-    }
-
+    #[name("reset")]
+    #[notification]
+    async fn reset(#[params] params: ResetParams) -> Result<(), linkrpc::prelude::JsonRpcError>;
     /// Server-emitted event fired whenever the tree changes.
-    /// Server notification (server→client, `x-linkrpc-codegen.kind = "serverNotification"`).
-    /// No client send method is generated; decode inbound payloads as `TreeNode`.
-    pub fn tree_changed_event_name(&self) -> String {
-        self.method_name("tree_changed")
-    }
+    #[name("tree_changed")]
+    #[server_notification]
+    async fn tree_changed(#[params] params: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError>;
 }
+
+#[allow(unused_imports)]
+pub use __linkrpc_interface::interface;

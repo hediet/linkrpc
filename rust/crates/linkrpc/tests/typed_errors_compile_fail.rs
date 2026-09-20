@@ -1,4 +1,4 @@
-//! Compile-fail coverage for diagnostics which derive expansion must reject.
+//! Compile-fail coverage for error derives and imported interface bindings.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -68,4 +68,17 @@ fn typed_variant_rejects_wrong_payload_type() {
 #[test]
 fn inferred_error_requires_application_contract() {
     assert_compile_fails("undeclared_error", "MissingContract: ApplicationError");
+}
+
+#[test]
+fn imported_trait_cannot_omit_wire_members() {
+    assert_compile_fails(
+        "missing_imported_member",
+        "trait must declare every schema_json method",
+    );
+}
+
+#[test]
+fn client_only_generation_does_not_send_server_events() {
+    assert_compile_fails("client_only_event", "no method named `changed`");
 }

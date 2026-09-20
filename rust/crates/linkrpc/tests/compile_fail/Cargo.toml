@@ -32,3 +32,11 @@ path = "wrong_payload.rs"
 [[bin]]
 name = "undeclared_error"
 path = "undeclared_error.rs"
+
+[[bin]]
+name = "missing_imported_member"
+path = "missing_imported_member.rs"
+
+[[bin]]
+name = "client_only_event"
+path = "client_only_event.rs"

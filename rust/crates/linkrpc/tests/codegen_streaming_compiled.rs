@@ -200,9 +200,10 @@ fn generated_streaming_fixture_has_no_codegen_drift() {
         },
     );
     assert!(generated.unsupported.is_empty());
-    assert!(generated.code.contains(
-        r##"\"allOf\":[{\"$ref\":\"#/components/schemas/Command\"}],\"components\":{\"schemas\":"##
-    ));
+    assert!(generated.code.contains("#[input_stream(Command)]"));
+    assert!(generated
+        .code
+        .contains(r##"\"clientStream\":{\"$ref\":\"#/components/schemas/Command\"}"##));
     assert_eq!(
         generated.code.replace("\r\n", "\n"),
         include_str!("codegen/generated_streaming.rs").replace("\r\n", "\n")
