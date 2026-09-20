@@ -1,23 +1,16 @@
 import {
     directoryInterface,
     directoryWatchNever,
-    ErrorCode, nodeInterface,
+    ErrorCode,
     type RootPrincipalSet,
     type ServiceIdPattern,
     RpcError,
     schemasInterface,
     LinkRpcConnection
 } from '@hediet/linkrpc';
-import type { StreamApi } from '@hediet/linkrpc';
-import {
-    topologyInterface,
-    trafficInterface,
-    type TrafficEvent,
-    type TrafficWatchResult,
-    type ParticipantDescriptorSource,
-} from '@hediet/linkrpc/inspection';
+import type { ParticipantDescriptorSource } from '@hediet/linkrpc/inspection';
 import { normalizeServiceIdScopes, serviceIdMatchesScopes } from '@hediet/linkrpc/hub/common';
-import { HubInspector, type HubTrafficWatchOptions } from './hubInspector';
+import { HubInspector } from './hubInspector';
 import { registerHubServiceIdRegistry, type RegisterCallContext, withRequestIdContext } from './hubRegister';
 import type { Hub } from './routing/routingHub';
 
@@ -57,7 +50,12 @@ export function createHubServiceInterfaces(hub: Hub, options: HubServicesOptions
     const connection = LinkRpcConnection.fromTransport(withRequestIdContext(link.transport));
 
     const inspector = new HubInspector(hub);
-    registerInspectionInterfaces(connection, hub, inspector, hubServiceId, link.portId, options.descriptors);
+    inspector.host.expose(connection, {
+        serviceId: hubServiceId,
+        portId: link.portId,
+        descriptors: options.descriptors,
+        includeRoute: false,
+    });
     registerHubReflection(connection, hub, hubServiceId, options.beforeDirectoryQuery);
     registerHubServiceIdRegistry(connection, { hub, hubServiceId });
 
@@ -71,79 +69,6 @@ export function createHubServiceInterfaces(hub: Hub, options: HubServicesOptions
             link.dispose();
         },
     };
-}
-
-function registerInspectionInterfaces(
-    connection: LinkRpcConnection<RegisterCallContext>,
-    hub: Hub,
-    inspector: HubInspector,
-    hubServiceId: string,
-    portId: string,
-    descriptors: readonly ParticipantDescriptorSource[] | undefined,
-): void {
-    connection.register(nodeInterface, {
-        getNodeId: () => ({
-            nodeId: hub.nodeId,
-            portId,
-            ...(descriptors !== undefined ? { descriptors: [...descriptors] } : {}),
-        }),
-    }, { serviceId: hubServiceId });
-
-    connection.register(topologyInterface, {
-        getGraph: () => hub.getTopologyGraph(hubServiceId),
-        watchGraph: (_params, _ctx, stream) => new Promise<Record<string, never>>((resolve) => {
-            if (stream.signal.aborted) {
-                resolve({});
-                return;
-            }
-            let pending = false;
-            const flush = () => {
-                pending = false;
-                if (!stream.signal.aborted) void stream.send({}).catch(() => undefined);
-            };
-            const unsubscribe = hub.onDidChangeTopology(() => {
-                if (pending) return;
-                pending = true;
-                queueMicrotask(flush);
-            });
-            stream.signal.addEventListener('abort', () => {
-                unsubscribe();
-                resolve({});
-            }, { once: true });
-        }),
-    }, { serviceId: hubServiceId });
-
-    connection.register(trafficInterface, {
-        watch: ({ methodPrefix, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
-            runTrafficWatch(inspector, { methodPrefix, trafficIgnoreKey, focusRequest }, stream),
-        watchWithPayloads: ({ methodPrefix, maxPayloadBytes, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
-            runTrafficWatch(inspector, {
-                methodPrefix,
-                maxPayloadBytes,
-                trafficIgnoreKey,
-                focusRequest,
-            }, stream),
-    }, { serviceId: hubServiceId });
-}
-
-async function runTrafficWatch(
-    inspector: HubInspector,
-    options: HubTrafficWatchOptions,
-    stream: StreamApi<unknown, TrafficEvent>,
-): Promise<TrafficWatchResult> {
-    const subscription = inspector.subscribe(options, (event) => stream.send(event));
-    const dispose = () => subscription.dispose();
-    if (stream.signal.aborted) {
-        dispose();
-    } else {
-        stream.signal.addEventListener('abort', dispose, { once: true });
-    }
-    try {
-        return await subscription.closed;
-    } finally {
-        stream.signal.removeEventListener('abort', dispose);
-        subscription.dispose();
-    }
 }
 
 /**

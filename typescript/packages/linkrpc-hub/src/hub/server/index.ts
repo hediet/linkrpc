@@ -35,6 +35,7 @@ export type {
 } from './nodeTransit';
 export {
     HubInspector,
+    HubInspectionSource,
     type HubTrafficSource,
 } from './hubInspector';
 export type {

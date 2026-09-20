@@ -3,6 +3,8 @@ import {
     directoryInterface,
     ErrorCode,
     LinkRpcConnection,
+    nodeInterface,
+    isRequest,
     isResponse,
     type IMessageTransport,
     type JsonRpcMessage,
@@ -117,6 +119,25 @@ describe('Hub dynamic transit observation', () => {
 });
 
 describe('HubInspector', () => {
+    it('keeps the shared host attached until the inspector is disposed', () => {
+        const hub = new Hub({ nodeId: 'hub-a' });
+        const inspector = new HubInspector(hub);
+
+        expect({
+            traffic: hub.transitObserverCount,
+            topology: hub.topologyObserverCount,
+            subscribers: inspector.observerCount,
+        }).toEqual({ traffic: 1, topology: 1, subscribers: 0 });
+        expect(inspector.host.getGraph('inspection')).toEqual(hub.getTopologyGraph('inspection'));
+
+        inspector.dispose();
+        inspector.dispose();
+        expect({
+            traffic: hub.transitObserverCount,
+            topology: hub.topologyObserverCount,
+        }).toEqual({ traffic: 0, topology: 0 });
+    });
+
     it('reports every managed routing transit without correlation', async () => {
         const hub = new Hub({ nodeId: 'hub-a' });
         const inspector = new HubInspector(hub);
@@ -396,6 +417,72 @@ describe('HubInspector', () => {
 });
 
 describe('hub traffic services', () => {
+    it('includes separately owned connections in the shared hub graph and traffic stream', async () => {
+        const hub = new Hub({ nodeId: 'main' });
+        const services = createHubServiceInterfaces(hub);
+        const frontendLink = hub.attachOut();
+        const frontend = LinkRpcConnection.fromTransport(frontendLink.transport);
+        const cdpPair = new TransportPair();
+        const cdp = LinkRpcConnection.fromTransport(cdpPair.a);
+        const browser = new Endpoint(cdpPair.b);
+        const tracked = services.inspector.host.trackConnection(cdp, {
+            portId: 'cdp', peer: { nodeId: 'chrome', portId: 'debugger' },
+        });
+        const events: TrafficTransitEvent[] = [];
+        const watch = new TrafficClient(frontend, services.hubServiceId).watch(
+            { methodPrefix: 'Runtime.' },
+            { onTransit: event => { events.push(event); } },
+        );
+        try {
+            await waitFor(() => services.inspector.observerCount === 1);
+            const call = cdp.channel.sendRequest('Runtime.evaluate', { expression: '1+1' });
+            await waitFor(() => browser.inbox.length === 1);
+            const request = browser.inbox[0];
+            if (!isRequest(request)) throw new Error('Expected a CDP request');
+            browser.respond(request, { value: 2 });
+            await expect(call).resolves.toEqual({ value: 2 });
+            await waitFor(() => events.length === 2);
+            expect(events).toMatchObject([
+                { nodeId: 'main', kind: 'request', out: { portId: 'cdp' } },
+                { nodeId: 'main', kind: 'response', in: { portId: 'cdp' } },
+            ]);
+            const graph = await frontend.service(services.hubServiceId).get(topologyInterface).getGraph({});
+            expect(graph.nodes.find(node => node.nodeId === 'main')?.ports).toContainEqual({ portId: 'cdp' });
+            expect(graph.links).toContainEqual({
+                from: { nodeId: 'main', portId: 'cdp' },
+                to: { nodeId: 'chrome', portId: 'debugger' }, peerState: 'identified',
+            });
+        } finally {
+            await watch.cancel();
+            await watch.done;
+            tracked.dispose();
+            cdp.close();
+            frontend.close();
+            frontendLink.dispose();
+            services.dispose();
+        }
+    });
+
+    it('preserves hub topology and node identity through shared inspection handlers', async () => {
+        const hub = new Hub({ nodeId: 'hub-a' });
+        const services = createHubServiceInterfaces(hub, { hubServiceId: 'custom-inspection' });
+        const callerLink = hub.attachOut();
+        const connection = LinkRpcConnection.fromTransport(callerLink.transport);
+        const inspection = connection.service(services.hubServiceId);
+
+        expect(await inspection.get(topologyInterface).getGraph({}))
+            .toEqual(hub.getTopologyGraph(services.hubServiceId));
+        const identity = await inspection.get(nodeInterface).getNodeId({});
+        expect(identity.nodeId).toBe(hub.nodeId);
+        expect(hub.getTopologyGraph(services.hubServiceId).nodes
+            .find(node => node.nodeId === identity.nodeId)?.ports
+            .some(port => port.portId === identity.portId)).toBe(true);
+
+        connection.close();
+        callerLink.dispose();
+        services.dispose();
+    });
+
     it('runs demand handlers before serving the global directory', async () => {
         const hub = new Hub();
         let directoryQueried = false;
