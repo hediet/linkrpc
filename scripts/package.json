@@ -1,0 +1,12 @@
+{
+  "name": "linkrpc-release-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test *.test.mjs"
+  },
+  "dependencies": {
+    "smol-toml": "^1.4.2",
+    "tar": "7.5.22"
+  }
+}

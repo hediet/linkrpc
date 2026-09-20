@@ -6,38 +6,36 @@ on:
     paths:
       - "typescript/**"
       - "interop/**"
-      - "rust/crates/linkrpc-examples/**"
-      - "conformance/protocols/**"
-      - "conformance/vectors/bare_bindings.json"
-      - "conformance/vectors/reflection_defaults.json"
-      - "rust/Cargo.toml"
-      - "rust/Cargo.lock"
-      - "rust/crates/linkrpc/**"
-      - "rust/crates/linkrpc-macros/**"
-      - "rust/crates/linkrpc-tokio/**"
+      - "rust/**"
+      - "conformance/**"
+      - "scripts/**"
+      - ".github/actions/upload-release/**"
       - ".github/workflows/package-artifacts.yml"
+      - ".github/workflows/release.yml"
   pull_request:
     paths:
       - "typescript/**"
       - "interop/**"
-      - "rust/crates/linkrpc-examples/**"
-      - "conformance/protocols/**"
-      - "conformance/vectors/bare_bindings.json"
-      - "conformance/vectors/reflection_defaults.json"
-      - "rust/Cargo.toml"
-      - "rust/Cargo.lock"
-      - "rust/crates/linkrpc/**"
-      - "rust/crates/linkrpc-macros/**"
-      - "rust/crates/linkrpc-tokio/**"
+      - "rust/**"
+      - "conformance/**"
+      - "scripts/**"
+      - ".github/actions/upload-release/**"
       - ".github/workflows/package-artifacts.yml"
+      - ".github/workflows/release.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  npm:
-    name: Build, test, and package
+  candidates:
+    name: Check Rust and TypeScript, then package candidates
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@v4
         with:
           version: 11.10.0
@@ -47,7 +45,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: typescript/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install dependencies
+        with:
+          components: clippy, rustfmt
+      - name: Install release tools
+        working-directory: scripts
+        run: npm ci --ignore-scripts
+      - name: Test release generation
+        run: node --test scripts/*.test.mjs
+      - name: Install TypeScript dependencies
         working-directory: typescript
         run: pnpm install --frozen-lockfile
       - name: Restore Turborepo cache
@@ -57,7 +62,16 @@ jobs:
           key: ${{ runner.os }}-turbo-typescript-${{ hashFiles('typescript/pnpm-lock.yaml') }}-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-turbo-typescript-${{ hashFiles('typescript/pnpm-lock.yaml') }}-
-      - name: Build and test packages
+      - name: Rust format
+        working-directory: rust
+        run: cargo fmt --all -- --check
+      - name: Rust clippy
+        working-directory: rust
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Rust tests
+        working-directory: rust
+        run: cargo test --workspace --locked
+      - name: TypeScript build and tests
         working-directory: typescript
         run: pnpm check
       - name: Check Rust-exported streaming contract
@@ -67,121 +81,18 @@ jobs:
         env:
           LINKRPC_STREAMING_INTEROP: "1"
         run: pnpm --filter @hediet/linkrpc test src/connection/streamingInterop.test.ts
-      - name: Create npm tarballs
-        id: package
-        working-directory: typescript
+      - name: Verify conformance vectors
         run: |
-          pack_package() {
-            local selector="$1"
-            local output_name="$2"
-            local output_dir="$GITHUB_WORKSPACE/artifacts/npm/$output_name"
-
-            mkdir -p "$output_dir"
-            pnpm --filter "$selector" pack --pack-destination "$output_dir"
-
-            mapfile -t tarballs < <(find "$output_dir" -maxdepth 1 -type f -name '*.tgz')
-            test "${#tarballs[@]}" -eq 1
-
-            local tarball="${tarballs[0]}"
-            echo "${output_name}_path=$tarball" >> "$GITHUB_OUTPUT"
-            echo "${output_name}_artifact=npm-package-$(basename "$tarball")" >> "$GITHUB_OUTPUT"
-          }
-
-          pack_package @hediet/linkrpc linkrpc
-          pack_package @hediet/linkrpc-infra linkrpc_infra
-          pack_package @hediet/linkrpc-hub linkrpc_hub
-          pack_package @hediet/linkrpc-cli linkrpc_cli
-          pack_package @hediet/linkrpc-mcp linkrpc_mcp
-
-      - name: Upload @hediet/linkrpc
-        uses: actions/upload-artifact@v4
+          npm --prefix conformance/generate run gen
+          git diff --exit-code -- conformance/vectors
+      - name: Create candidates (not publication artifacts)
+        run: node scripts/release-pack.mjs candidates
+      - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.package.outputs.linkrpc_artifact }}
-          path: ${{ steps.package.outputs.linkrpc_path }}
+          name: candidate-packages
+          path: |
+            artifacts/candidates/candidates.json
+            artifacts/candidates/*.tgz
+            artifacts/candidates/*.crate
           if-no-files-found: error
-
-      - name: Upload @hediet/linkrpc-infra
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.linkrpc_infra_artifact }}
-          path: ${{ steps.package.outputs.linkrpc_infra_path }}
-          if-no-files-found: error
-
-      - name: Upload @hediet/linkrpc-hub
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.linkrpc_hub_artifact }}
-          path: ${{ steps.package.outputs.linkrpc_hub_path }}
-          if-no-files-found: error
-
-      - name: Upload @hediet/linkrpc-cli
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.linkrpc_cli_artifact }}
-          path: ${{ steps.package.outputs.linkrpc_cli_path }}
-          if-no-files-found: error
-
-      - name: Upload @hediet/linkrpc-mcp
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.package.outputs.linkrpc_mcp_artifact }}
-          path: ${{ steps.package.outputs.linkrpc_mcp_path }}
-          if-no-files-found: error
-
-  cargo:
-    name: Package Rust crates
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Restore packaged crates
-        id: crate-cache
-        uses: actions/cache@v4
-        with:
-          path: artifacts/cargo
-          key: cargo-packages-${{ runner.os }}-${{ hashFiles('rust/Cargo.toml', 'rust/Cargo.lock', 'rust/crates/linkrpc/Cargo.toml', 'rust/crates/linkrpc/README.md', 'rust/crates/linkrpc/src/**', 'rust/crates/linkrpc-macros/Cargo.toml', 'rust/crates/linkrpc-macros/src/**', 'rust/crates/linkrpc-tokio/Cargo.toml', 'rust/crates/linkrpc-tokio/src/**') }}
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.crate-cache.outputs.cache-hit != 'true'
-      - name: Create crate archives
-        if: steps.crate-cache.outputs.cache-hit != 'true'
-        working-directory: rust
-        run: |
-          cargo package --locked --exclude-lockfile -p linkrpc-macros
-          # The packaged macro cannot be resolved from crates.io before its first publication.
-          cargo package --locked --exclude-lockfile --no-verify -p linkrpc
-          cargo package --locked --exclude-lockfile --no-verify -p linkrpc-tokio
-
-          mkdir -p ../artifacts/cargo/linkrpc-macros ../artifacts/cargo/linkrpc ../artifacts/cargo/linkrpc-tokio
-          cp target/package/linkrpc-macros-*.crate ../artifacts/cargo/linkrpc-macros/
-          cp target/package/linkrpc-[0-9]*.crate ../artifacts/cargo/linkrpc/
-          cp target/package/linkrpc-tokio-*.crate ../artifacts/cargo/linkrpc-tokio/
-      - name: Identify crate archives
-        id: crates
-        run: |
-          mapfile -t macros_crates < <(find artifacts/cargo/linkrpc-macros -maxdepth 1 -type f -name '*.crate')
-          mapfile -t linkrpc_crates < <(find artifacts/cargo/linkrpc -maxdepth 1 -type f -name '*.crate')
-          mapfile -t tokio_crates < <(find artifacts/cargo/linkrpc-tokio -maxdepth 1 -type f -name '*.crate')
-          test "${#macros_crates[@]}" -eq 1
-          test "${#linkrpc_crates[@]}" -eq 1
-          test "${#tokio_crates[@]}" -eq 1
-
-          echo "macros_artifact=cargo-crate-$(basename "${macros_crates[0]}")" >> "$GITHUB_OUTPUT"
-          echo "linkrpc_artifact=cargo-crate-$(basename "${linkrpc_crates[0]}")" >> "$GITHUB_OUTPUT"
-          echo "tokio_artifact=cargo-crate-$(basename "${tokio_crates[0]}")" >> "$GITHUB_OUTPUT"
-      - name: Upload linkrpc-macros crate
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.crates.outputs.macros_artifact }}
-          path: artifacts/cargo/linkrpc-macros/*.crate
-          if-no-files-found: error
-      - name: Upload linkrpc crate
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.crates.outputs.linkrpc_artifact }}
-          path: artifacts/cargo/linkrpc/*.crate
-          if-no-files-found: error
-      - name: Upload linkrpc-tokio crate
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ steps.crates.outputs.tokio_artifact }}
-          path: artifacts/cargo/linkrpc-tokio/*.crate
-          if-no-files-found: error
+          retention-days: 90

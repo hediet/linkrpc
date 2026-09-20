@@ -1,0 +1,64 @@
+name: Release packages
+
+on:
+  workflow_run:
+    workflows: [Packages]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.id == github.event.repository.id &&
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install release tools
+        working-directory: scripts
+        run: npm ci --ignore-scripts
+      - name: Prepare release packages
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: node scripts/release.mjs prepare
+      - name: Upload next packages
+        uses: ./.github/actions/upload-release
+        with:
+          channel: next
+          npm: 'true'
+          cargo_macros: 'true'
+          cargo_linkrpc: 'true'
+          cargo_tokio: 'true'
+      - name: Upload stable packages
+        uses: ./.github/actions/upload-release
+        with:
+          channel: stable
+          npm: ${{ steps.prepare.outputs.npm_stable }}
+          cargo_macros: ${{ steps.prepare.outputs.cargo_linkrpc_macros_stable }}
+          cargo_linkrpc: ${{ steps.prepare.outputs.cargo_linkrpc_stable }}
+          cargo_tokio: ${{ steps.prepare.outputs.cargo_linkrpc_tokio_stable }}
+      - name: Finalize stable reservations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/release.mjs finalize

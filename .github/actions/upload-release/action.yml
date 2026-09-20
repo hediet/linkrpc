@@ -1,0 +1,77 @@
+name: Upload release packages
+description: Upload one artifact per package for ArtifactGate (never publishes).
+inputs:
+  channel:
+    description: next or stable
+    required: true
+  npm:
+    description: Whether npm packages were prepared
+    required: true
+  cargo_macros:
+    description: Whether linkrpc-macros was prepared
+    required: true
+  cargo_linkrpc:
+    description: Whether linkrpc was prepared
+    required: true
+  cargo_tokio:
+    description: Whether linkrpc-tokio was prepared
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@v4
+      if: inputs.npm == 'true'
+      with:
+        name: npm-${{ inputs.channel }}-linkrpc
+        path: artifacts/release/npm-${{ inputs.channel }}-linkrpc/*.tgz
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.npm == 'true'
+      with:
+        name: npm-${{ inputs.channel }}-linkrpc-infra
+        path: artifacts/release/npm-${{ inputs.channel }}-linkrpc-infra/*.tgz
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.npm == 'true'
+      with:
+        name: npm-${{ inputs.channel }}-linkrpc-hub
+        path: artifacts/release/npm-${{ inputs.channel }}-linkrpc-hub/*.tgz
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.npm == 'true'
+      with:
+        name: npm-${{ inputs.channel }}-linkrpc-cli
+        path: artifacts/release/npm-${{ inputs.channel }}-linkrpc-cli/*.tgz
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.npm == 'true'
+      with:
+        name: npm-${{ inputs.channel }}-linkrpc-mcp
+        path: artifacts/release/npm-${{ inputs.channel }}-linkrpc-mcp/*.tgz
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.cargo_macros == 'true'
+      with:
+        name: cargo-crate-${{ inputs.channel }}-linkrpc-macros
+        path: artifacts/release/cargo-crate-${{ inputs.channel }}-linkrpc-macros/*.crate
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.cargo_linkrpc == 'true'
+      with:
+        name: cargo-crate-${{ inputs.channel }}-linkrpc
+        path: artifacts/release/cargo-crate-${{ inputs.channel }}-linkrpc/*.crate
+        if-no-files-found: error
+        overwrite: true
+    - uses: actions/upload-artifact@v4
+      if: inputs.cargo_tokio == 'true'
+      with:
+        name: cargo-crate-${{ inputs.channel }}-linkrpc-tokio
+        path: artifacts/release/cargo-crate-${{ inputs.channel }}-linkrpc-tokio/*.crate
+        if-no-files-found: error
+        overwrite: true
