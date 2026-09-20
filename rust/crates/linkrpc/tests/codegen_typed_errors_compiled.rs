@@ -18,6 +18,25 @@ impl DevLinkrpcTsErrorsService for Provider {
             MissingData::new("gone".into()),
         )))
     }
+
+    async fn stream_check(
+        &self,
+        _ctx: &CallCtx,
+        params: StreamCheckParams,
+        stream_sender: StreamSender<String>,
+    ) -> Result<String, CallError<StreamCheckError>> {
+        stream_sender.send("checking".into()).await.unwrap();
+        match params.mode.as_str() {
+            "missing" => Err(CallError::Application(StreamCheckError::Code2001(
+                MissingData::new("streamed".into()),
+            ))),
+            "busy" => Err(CallError::Application(StreamCheckError::Code2002)),
+            _ => {
+                stream_sender.send("complete".into()).await.unwrap();
+                Ok("found".into())
+            }
+        }
+    }
 }
 
 struct RawErrorProvider;
@@ -34,6 +53,15 @@ impl DevLinkrpcTsErrorsService for RawErrorProvider {
             message: "Undeclared".into(),
             data: Some(serde_json::json!({ "kept": true })),
         }))
+    }
+
+    async fn stream_check(
+        &self,
+        _ctx: &CallCtx,
+        _params: StreamCheckParams,
+        _stream_sender: StreamSender<String>,
+    ) -> Result<String, CallError<StreamCheckError>> {
+        unreachable!()
     }
 }
 
@@ -99,6 +127,59 @@ async fn generated_typed_error_round_trips_and_rejects_malformed_data() {
     assert!(matches!(
         CheckError::try_from_rpc_error(recursive),
         Ok(CheckError::Code2004(RecursiveData { children, .. })) if children.len() == 1
+    ));
+}
+
+#[tokio::test]
+async fn generated_typed_stream_preserves_payloads_and_final_application_errors() {
+    let (a, b) = transport_pair();
+    let client_connection = LinkRpcConnection::new(Box::new(a));
+    let server_connection = LinkRpcConnection::new(Box::new(b));
+    server_connection
+        .register_service(
+            Arc::new(DevLinkrpcTsErrorsServer::new(Arc::new(Provider))),
+            RegisterOptions::default(),
+        )
+        .unwrap();
+    let client_run = client_connection.clone();
+    let server_run = server_connection.clone();
+    tokio::spawn(async move { client_run.run().await });
+    tokio::spawn(async move { server_run.run().await });
+    let client = DevLinkrpcTsErrorsClient::new(client_connection);
+
+    let call = client
+        .stream_check(StreamCheckParams::new("ok".into()))
+        .await
+        .unwrap();
+    let (result, _, mut payloads, _) = call.into_parts();
+    assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
+    assert_eq!(payloads.recv().await.as_deref(), Some("complete"));
+    assert_eq!(result.await.unwrap(), "found");
+    assert_eq!(payloads.recv().await, None);
+
+    let call = client
+        .stream_check(StreamCheckParams::new("missing".into()))
+        .await
+        .unwrap();
+    let (result, _, mut payloads, _) = call.into_parts();
+    assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
+    assert!(matches!(
+        result.await,
+        Err(CallError::Application(StreamCheckError::Code2001(
+            MissingData { resource }
+        ))) if resource == "streamed"
+    ));
+    assert_eq!(payloads.recv().await, None);
+
+    let call = client
+        .stream_check(StreamCheckParams::new("busy".into()))
+        .await
+        .unwrap();
+    let (result, _, mut payloads, _) = call.into_parts();
+    assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
+    assert!(matches!(
+        result.await,
+        Err(CallError::Application(StreamCheckError::Code2002))
     ));
 }
 

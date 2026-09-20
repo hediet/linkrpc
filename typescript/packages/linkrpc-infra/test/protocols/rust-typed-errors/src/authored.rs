@@ -36,7 +36,6 @@ pub enum FixtureError {
 
 #[link_rpc_interface(id = "dev.linkrpc.rust-errors")]
 pub trait RustErrors {
-    #[errors(FixtureError)]
     async fn check(mode: String) -> Result<String, CallError<FixtureError>>;
 }
 

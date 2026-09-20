@@ -12,6 +12,7 @@
 
 use async_trait::async_trait;
 
+use crate::connection::streaming::RawStreamingCall;
 use crate::protocol::json_value::JsonValue;
 use crate::protocol::jsonrpc::JsonRpcError;
 use crate::transport::message::TransportError;
@@ -46,6 +47,28 @@ pub trait RpcCall: Send + Sync {
 
     /// Fire a notification addressed by `method` (no response expected).
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError>;
+
+    async fn call_stream(
+        &self,
+        _method: &str,
+        _params: JsonValue,
+    ) -> Result<RawStreamingCall, JsonRpcError> {
+        Err(JsonRpcError::new(
+            crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
+            "streaming calls are not supported by this RpcCall implementation",
+        ))
+    }
+
+    /// Start a streaming request without collapsing transport failures into JSON-RPC errors.
+    async fn call_stream_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, RpcCallError> {
+        self.call_stream(method, params)
+            .await
+            .map_err(RpcCallError::Remote)
+    }
 }
 
 #[async_trait]
@@ -62,6 +85,20 @@ impl<T: RpcCall + ?Sized> RpcCall for &T {
     }
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
         (**self).notify(method, params).await
+    }
+    async fn call_stream(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, JsonRpcError> {
+        (**self).call_stream(method, params).await
+    }
+    async fn call_stream_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, RpcCallError> {
+        (**self).call_stream_detailed(method, params).await
     }
 }
 
@@ -80,6 +117,20 @@ impl<T: RpcCall + ?Sized> RpcCall for std::sync::Arc<T> {
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
         (**self).notify(method, params).await
     }
+    async fn call_stream(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, JsonRpcError> {
+        (**self).call_stream(method, params).await
+    }
+    async fn call_stream_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, RpcCallError> {
+        (**self).call_stream_detailed(method, params).await
+    }
 }
 
 #[async_trait]
@@ -96,6 +147,20 @@ impl<T: RpcCall + ?Sized> RpcCall for Box<T> {
     }
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
         (**self).notify(method, params).await
+    }
+    async fn call_stream(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, JsonRpcError> {
+        (**self).call_stream(method, params).await
+    }
+    async fn call_stream_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, RpcCallError> {
+        (**self).call_stream_detailed(method, params).await
     }
 }
 
@@ -114,6 +179,20 @@ impl RpcCall for crate::connection::channel::Channel {
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
         crate::connection::channel::Channel::notify(self, method, params).await
     }
+    async fn call_stream(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, JsonRpcError> {
+        crate::connection::channel::Channel::call_stream(self, method, params).await
+    }
+    async fn call_stream_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, RpcCallError> {
+        crate::connection::channel::Channel::call_stream_detailed(self, method, params).await
+    }
 }
 
 #[async_trait]
@@ -131,5 +210,19 @@ impl RpcCall for crate::connection::hub_connection::LinkRpcConnection {
     }
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
         crate::connection::hub_connection::LinkRpcConnection::notify(self, method, params).await
+    }
+    async fn call_stream(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, JsonRpcError> {
+        self.channel().call_stream(method, params).await
+    }
+    async fn call_stream_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<RawStreamingCall, RpcCallError> {
+        self.channel().call_stream_detailed(method, params).await
     }
 }

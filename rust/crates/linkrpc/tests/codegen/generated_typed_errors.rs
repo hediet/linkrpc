@@ -50,6 +50,21 @@ impl CheckParams {
     }
 }
 
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct StreamCheckParams {
+    pub mode: String,
+}
+
+impl StreamCheckParams {
+    /// Construct with all required fields; optional fields default to `None`
+    /// and any open-object extra map defaults to `Default::default()`.
+    pub fn new(mode: String) -> Self {
+        Self {
+            mode,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum CheckError {
     Code2001(MissingData),
@@ -70,6 +85,107 @@ impl std::fmt::Display for CheckError {
 }
 
 impl linkrpc::prelude::ApplicationError for CheckError {
+    fn into_rpc_error(self) -> linkrpc::prelude::JsonRpcError {
+        match self {
+            Self::Code2001(__data) => {
+                let __data = match serde_json::to_value(__data) {
+                    Ok(__data) => __data,
+                    Err(__error) => return linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, __error.to_string()),
+                };
+                let __schema: serde_json::Value = serde_json::from_str("{\"$ref\":\"#/components/schemas/MissingData\"}").expect("generated error schema is valid");
+                let __components: Option<linkrpc::prelude::Components> = serde_json::from_str("{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}").expect("generated components are valid");
+                if !linkrpc::prelude::validate_json_schema(&__data, &__schema, __components.as_ref()) {
+                    return linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, "application error payload does not match its declared schema");
+                }
+                let mut __error = linkrpc::prelude::JsonRpcError::new(2001, "Missing");
+                __error.data = Some(__data);
+                __error
+            }
+            Self::Code2002 => linkrpc::prelude::JsonRpcError::new(2002, "Busy"),
+            Self::Code2003(__data) => {
+                let __data = match serde_json::to_value(__data) {
+                    Ok(__data) => __data,
+                    Err(__error) => return linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, __error.to_string()),
+                };
+                let __schema: serde_json::Value = serde_json::from_str("{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}").expect("generated error schema is valid");
+                let __components: Option<linkrpc::prelude::Components> = serde_json::from_str("{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}").expect("generated components are valid");
+                if !linkrpc::prelude::validate_json_schema(&__data, &__schema, __components.as_ref()) {
+                    return linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, "application error payload does not match its declared schema");
+                }
+                let mut __error = linkrpc::prelude::JsonRpcError::new(2003, "Nullable");
+                __error.data = Some(__data);
+                __error
+            }
+            Self::Code2004(__data) => {
+                let __data = match serde_json::to_value(__data) {
+                    Ok(__data) => __data,
+                    Err(__error) => return linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, __error.to_string()),
+                };
+                let __schema: serde_json::Value = serde_json::from_str("{\"$ref\":\"#/components/schemas/RecursiveData\"}").expect("generated error schema is valid");
+                let __components: Option<linkrpc::prelude::Components> = serde_json::from_str("{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}").expect("generated components are valid");
+                if !linkrpc::prelude::validate_json_schema(&__data, &__schema, __components.as_ref()) {
+                    return linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, "application error payload does not match its declared schema");
+                }
+                let mut __error = linkrpc::prelude::JsonRpcError::new(2004, "Recursive");
+                __error.data = Some(__data);
+                __error
+            }
+        }
+    }
+
+    fn try_from_rpc_error(__error: linkrpc::prelude::JsonRpcError) -> Result<Self, linkrpc::prelude::JsonRpcError> {
+        match __error.code {
+            2001 if __error.message == "Missing" => {
+                let Some(__data) = __error.data.as_ref() else { return Err(__error); };
+                let __schema: serde_json::Value = serde_json::from_str("{\"$ref\":\"#/components/schemas/MissingData\"}").expect("generated error schema is valid");
+                let __components: Option<linkrpc::prelude::Components> = serde_json::from_str("{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}").expect("generated components are valid");
+                if !linkrpc::prelude::validate_json_schema(__data, &__schema, __components.as_ref()) { return Err(__error); }
+                match serde_json::from_value::<MissingData>(__data.clone()) { Ok(__data) => Ok(Self::Code2001(__data)), Err(_) => Err(__error) }
+            }
+            2002 if __error.message == "Busy" && __error.data.is_none() => Ok(Self::Code2002),
+            2003 if __error.message == "Nullable" => {
+                let Some(__data) = __error.data.as_ref() else { return Err(__error); };
+                let __schema: serde_json::Value = serde_json::from_str("{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}").expect("generated error schema is valid");
+                let __components: Option<linkrpc::prelude::Components> = serde_json::from_str("{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}").expect("generated components are valid");
+                if !linkrpc::prelude::validate_json_schema(__data, &__schema, __components.as_ref()) { return Err(__error); }
+                match serde_json::from_value::<Option<String>>(__data.clone()) { Ok(__data) => Ok(Self::Code2003(__data)), Err(_) => Err(__error) }
+            }
+            2004 if __error.message == "Recursive" => {
+                let Some(__data) = __error.data.as_ref() else { return Err(__error); };
+                let __schema: serde_json::Value = serde_json::from_str("{\"$ref\":\"#/components/schemas/RecursiveData\"}").expect("generated error schema is valid");
+                let __components: Option<linkrpc::prelude::Components> = serde_json::from_str("{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}").expect("generated components are valid");
+                if !linkrpc::prelude::validate_json_schema(__data, &__schema, __components.as_ref()) { return Err(__error); }
+                match serde_json::from_value::<RecursiveData>(__data.clone()) { Ok(__data) => Ok(Self::Code2004(__data)), Err(_) => Err(__error) }
+            }
+            _ => Err(__error),
+        }
+    }
+
+    fn error_schemas() -> Vec<linkrpc::prelude::ErrorSchema> {
+        serde_json::from_str("[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]").expect("generated error schemas are valid")
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum StreamCheckError {
+    Code2001(MissingData),
+    Code2002,
+    Code2003(Option<String>),
+    Code2004(RecursiveData),
+}
+
+impl std::fmt::Display for StreamCheckError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Code2001(..) => f.write_str("Missing"),
+            Self::Code2002 => f.write_str("Busy"),
+            Self::Code2003(..) => f.write_str("Nullable"),
+            Self::Code2004(..) => f.write_str("Recursive"),
+        }
+    }
+}
+
+impl linkrpc::prelude::ApplicationError for StreamCheckError {
     fn into_rpc_error(self) -> linkrpc::prelude::JsonRpcError {
         match self {
             Self::Code2001(__data) => {
@@ -194,17 +310,26 @@ impl<C: linkrpc::prelude::RpcCall> DevLinkrpcTsErrorsClient<C> {
             linkrpc::prelude::CallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string()))
         })
     }
+
+    pub async fn stream_check(&self, params: StreamCheckParams) -> Result<linkrpc::prelude::TypedStreamingCall<String, linkrpc::prelude::NoStream, String, StreamCheckError>, linkrpc::prelude::CallError<StreamCheckError>> {
+        let __p = serde_json::to_value(&params).map_err(|e| {
+            linkrpc::prelude::CallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string()))
+        })?;
+        let __call = self.caller.call_stream_detailed(&self.method_name("streamCheck"), __p).await.map_err(linkrpc::prelude::CallError::<StreamCheckError>::from_call_error)?;
+        Ok(__call.typed_error::<String, linkrpc::prelude::NoStream, String, StreamCheckError>(None, Some(serde_json::from_str("{\"allOf\":[{\"type\":\"string\"}],\"components\":{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}}").expect("generated stream schema is valid"))))
+    }
 }
 
 /// Build the exact interface schema supplied to the generator.
 pub fn interface() -> linkrpc::prelude::InterfaceDefinition {
-    let schema: linkrpc::prelude::LinkRpcInterfaceSchema = serde_json::from_str("{\"id\":\"dev.linkrpc.ts-errors\",\"hash\":\"\",\"methods\":{\"check\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"errors\":[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]}},\"components\":{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}}").expect("generated interface schema is valid");
+    let schema: linkrpc::prelude::LinkRpcInterfaceSchema = serde_json::from_str("{\"id\":\"dev.linkrpc.ts-errors\",\"hash\":\"\",\"methods\":{\"check\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"errors\":[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]},\"streamCheck\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"serverStream\":{\"type\":\"string\"},\"errors\":[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]}},\"components\":{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}}").expect("generated interface schema is valid");
     linkrpc::prelude::InterfaceDefinition::from_schema(schema)
 }
 
 #[linkrpc::prelude::async_trait]
 pub trait DevLinkrpcTsErrorsService: Send + Sync {
     async fn check(&self, ctx: &linkrpc::prelude::CallCtx, params: CheckParams) -> Result<String, linkrpc::prelude::CallError<CheckError>>;
+    async fn stream_check(&self, ctx: &linkrpc::prelude::CallCtx, params: StreamCheckParams, stream_sender: linkrpc::prelude::StreamSender<String>) -> Result<String, linkrpc::prelude::CallError<StreamCheckError>>;
 }
 
 /// Server adapter wrapping a typed provider implementation.
@@ -264,6 +389,16 @@ impl<T: DevLinkrpcTsErrorsService + 'static> linkrpc::prelude::InterfaceHandler 
                     linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INVALID_PARAMS, e.to_string())
                 })?;
                 let __r = self.0.check(&ctx, __p).await.map_err(linkrpc::prelude::CallError::into_rpc_error)?;
+                serde_json::to_value(__r).map_err(|e| {
+                    linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
+                })
+            }
+            "streamCheck" => {
+                let __p: StreamCheckParams = serde_json::from_value(params).map_err(|e| {
+                    linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INVALID_PARAMS, e.to_string())
+                })?;
+                let __stream_sender = ctx.stream_sender()?;
+                let __r = self.0.stream_check(&ctx, __p, __stream_sender).await.map_err(linkrpc::prelude::CallError::into_rpc_error)?;
                 serde_json::to_value(__r).map_err(|e| {
                     linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
                 })

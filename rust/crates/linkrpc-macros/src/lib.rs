@@ -11,9 +11,9 @@
 //! - a **`<trait_snake>::interface()`** builder (+ `ID`) producing the runtime
 //!   [`InterfaceDefinition`] whose content hash is the interface identity.
 //!
-//! This first slice supports request methods (`-> Result<T, E>` or `-> T`) and `#[notification]`
-//! methods (`-> ()`); streaming attributes are rejected for now. Doc comments are normative
-//! (hashed); `#[annotations(dangerous, read_only, ...)]` attach member annotations.
+//! Request methods may declare `#[input_stream(T)]` (caller→provider) and
+//! `#[output_stream(T)]` (provider→caller). Doc comments are normative (hashed);
+//! `#[annotations(dangerous, read_only, ...)]` attach member annotations.
 //!
 //! Generated code references `::linkrpc`, `::serde`, `::serde_json`, `::schemars`, and
 //! `::async_trait` by absolute path, so the consuming crate must depend on those.
@@ -325,9 +325,13 @@ struct MethodModel {
     passthrough_ty: Option<Type>,
     /// The success/result type for a request (None for notifications).
     result_ty: Option<Type>,
-    /// Opt-in application error enum from `#[errors(E)]`.
+    /// Application error enum inferred from the request's return type.
     error_ty: Option<Type>,
     server_returns_call_error: bool,
+    /// Caller→provider payload type from `#[input_stream(T)]`.
+    input_stream_ty: Option<Type>,
+    /// Provider→caller payload type from `#[output_stream(T)]`.
+    output_stream_ty: Option<Type>,
     /// Doc-comment text (normative).
     doc: Option<String>,
     /// `#[annotations(...)]` flag idents.
@@ -367,11 +371,20 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
     let trait_methods = methods.iter().map(|m| {
         let name = &m.name;
         let args = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
+        let receiver = m
+            .input_stream_ty
+            .as_ref()
+            .map(|ty| quote!(_: ::linkrpc::prelude::StreamReceiver<#ty>));
+        let sender = m
+            .output_stream_ty
+            .as_ref()
+            .map(|ty| quote!(_: ::linkrpc::prelude::StreamSender<#ty>));
+        let stream_args = [receiver, sender].into_iter().flatten();
         let output = &m.raw_output;
         let doc = m.doc.as_ref().map(|d| quote!(#[doc = #d]));
         quote! {
             #doc
-            async fn #name(&self, ctx: &#ctx_ty, #(#args),*) #output;
+            async fn #name(&self, ctx: &#ctx_ty, #(#args,)* #(#stream_args),*) #output;
         }
     });
     let rewritten_trait = quote! {
@@ -387,6 +400,29 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
     // ── interface() builder module ────────────────────────────────────────────
     let module_ident = format_ident!("{}", to_snake_case(&trait_ident.to_string()));
     let member_exprs = methods.iter().map(|m| member_expr(&trait_ident, m));
+    let schema_types = methods
+        .iter()
+        .flat_map(|m| {
+            m.params
+                .iter()
+                .map(|(_, ty)| ty)
+                .chain(m.result_ty.iter())
+                .chain(m.input_stream_ty.iter())
+                .chain(m.output_stream_ty.iter())
+        })
+        .collect::<Vec<_>>();
+    let schema_registrations = schema_types.iter().map(|ty| {
+        quote! {
+            __schemas.register::<#ty>()
+                .expect("linkrpc schema roots have distinct schema ids");
+        }
+    });
+    let validation_schema_registrations = schema_types.iter().map(|ty| {
+        quote! {
+            __schemas.register::<#ty>()
+                .expect("linkrpc schema roots have distinct schema ids");
+        }
+    });
     let iface_desc = match &trait_doc {
         Some(d) => quote!(info = info.with_description(#d);),
         None => quote!(),
@@ -399,21 +435,37 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
             /// The interface id (the `id` half of `id@hash`).
             pub const ID: &str = #id;
 
-            fn subset<T: ::schemars::JsonSchema>() -> ::linkrpc::prelude::JsonValue {
-                ::linkrpc::schema::schemars_to_subset(
-                    &::serde_json::to_value(::schemars::schema_for!(T)).expect("schema serializes"),
-                )
-                .expect("type is in the linkrpc schema subset")
+            pub(super) fn validation_schema<T: ::schemars::JsonSchema>()
+                -> ::linkrpc::prelude::JsonValue
+            {
+                let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
+                #(#validation_schema_registrations)*
+                __schemas.initialize().expect("linkrpc schema roots initialize");
+                let __root = __schemas.root_schema::<T>()
+                    .expect("registered stream schema is in the linkrpc schema subset");
+                match __schemas.components().expect("stream schema components are valid") {
+                    ::core::option::Option::Some(__components) => ::serde_json::json!({
+                        "allOf": [__root],
+                        "components": __components,
+                    }),
+                    ::core::option::Option::None => __root,
+                }
             }
 
             /// Build the runtime interface definition (its content hash is the identity).
             pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
                 let mut info = ::linkrpc::prelude::InterfaceInfo::new(ID);
                 #iface_desc
+                let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
+                #(#schema_registrations)*
+                __schemas.initialize().expect("linkrpc schema roots initialize");
                 let members: ::std::vec::Vec<(::std::string::String, ::linkrpc::prelude::Member)> = ::std::vec![
                     #(#member_exprs),*
                 ];
-                ::linkrpc::prelude::InterfaceDefinition::new(info, members)
+                let components = __schemas.components()
+                    .expect("type is in the linkrpc schema subset");
+                ::linkrpc::prelude::InterfaceDefinition::new_with_components(
+                    info, members, components)
             }
         }
     };
@@ -436,13 +488,36 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
         } else {
             quote!(.map_err(::core::convert::Into::into)?)
         };
+        let receiver = m.input_stream_ty.as_ref().map(|ty| {
+            quote! {
+                let __stream_receiver = ctx.stream_receiver::<#ty>(
+                    #module_ident::validation_schema::<#ty>()
+                )?;
+            }
+        });
+        let sender = m.output_stream_ty.as_ref().map(|ty| {
+            quote! {
+                let __stream_sender = ctx.stream_sender::<#ty>()?;
+            }
+        });
+        let stream_args = [
+            m.input_stream_ty
+                .as_ref()
+                .map(|_| quote!(__stream_receiver)),
+            m.output_stream_ty.as_ref().map(|_| quote!(__stream_sender)),
+        ]
+        .into_iter()
+        .flatten();
         quote! {
             #wire => {
                 let __p: #params_ty = ::serde_json::from_value(params).map_err(|e| {
                     ::linkrpc::prelude::JsonRpcError::new(
                         ::linkrpc::prelude::error_codes::INVALID_PARAMS, e.to_string())
                 })?;
-                let __r = self.0.#name(&ctx, #(#call_args),*).await #map_error;
+                #receiver
+                #sender
+                let __r = self.0.#name(&ctx, #(#call_args,)* #(#stream_args),*).await
+                    #map_error;
                 ::serde_json::to_value(__r).map_err(|e| {
                     ::linkrpc::prelude::JsonRpcError::new(
                         ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
@@ -572,16 +647,15 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
             "interface methods must be `async fn`",
         ));
     }
-    for attr in &f.attrs {
-        if attr.path().is_ident("incoming_stream") || attr.path().is_ident("outgoing_stream") {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "streaming methods are not supported yet",
-            ));
-        }
-    }
-
     let is_notification = f.attrs.iter().any(|a| a.path().is_ident("notification"));
+    let input_stream_ty = parse_stream_attr(&f.attrs, "input_stream")?;
+    let output_stream_ty = parse_stream_attr(&f.attrs, "output_stream")?;
+    if is_notification && (input_stream_ty.is_some() || output_stream_ty.is_some()) {
+        return Err(syn::Error::new_spanned(
+            &f.sig,
+            "streaming is only supported on request methods, not #[notification] methods",
+        ));
+    }
     let doc = extract_doc(&f.attrs);
     let annotations = extract_annotations(&f.attrs)?;
 
@@ -621,36 +695,20 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
     }
 
     let (result_ty, return_error_ty) = parse_output(&sig.output, is_notification)?;
-    let error_ty = extract_errors(&f.attrs)?;
-    if is_notification && error_ty.is_some() {
+    if let Some(attr) = f.attrs.iter().find(|attr| attr.path().is_ident("errors")) {
         return Err(syn::Error::new_spanned(
-            &f.sig,
-            "#[errors(...)] is not valid on notifications",
+            attr,
+            "remove #[errors(...)]: application errors are inferred from the Result return type",
         ));
     }
-    let mut server_returns_call_error = false;
-    if let Some(declared) = &error_ty {
-        let Some(actual) = &return_error_ty else {
-            return Err(syn::Error::new_spanned(
-                &f.sig.output,
-                "#[errors(E)] requires a `Result<T, E>` return type",
-            ));
-        };
-        let matches_direct =
-            declared.to_token_stream().to_string() == actual.to_token_stream().to_string();
-        let matches_wrapped = call_error_arg(actual)
-            .map(|inner| {
-                inner.to_token_stream().to_string() == declared.to_token_stream().to_string()
-            })
-            .unwrap_or(false);
-        if !matches_direct && !matches_wrapped {
-            return Err(syn::Error::new_spanned(
-                &f.sig.output,
-                "#[errors(E)] must name the error type in `Result<T, E>`",
-            ));
-        }
-        server_returns_call_error = matches_wrapped;
-    }
+    let wrapped_error_ty = return_error_ty.as_ref().and_then(call_error_arg).cloned();
+    let server_returns_call_error = wrapped_error_ty.is_some();
+    let error_ty = wrapped_error_ty.or_else(|| {
+        return_error_ty.filter(|ty| {
+            !matches!(ty, Type::Path(path)
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "JsonRpcError"))
+        })
+    });
 
     Ok(MethodModel {
         name: sig.ident.clone(),
@@ -661,10 +719,28 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         result_ty,
         error_ty,
         server_returns_call_error,
+        input_stream_ty,
+        output_stream_ty,
         doc,
         annotations,
         raw_output: rewritten_output(&sig.output, is_notification),
     })
+}
+
+fn parse_stream_attr(attrs: &[syn::Attribute], name: &str) -> syn::Result<Option<Type>> {
+    let mut found = None;
+    for attr in attrs.iter().filter(|attr| attr.path().is_ident(name)) {
+        if found.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                format!("duplicate #[{name}(T)] attribute"),
+            ));
+        }
+        found = Some(attr.parse_args::<Type>().map_err(|_| {
+            syn::Error::new_spanned(attr, format!("expected #[{name}(StreamItemType)]"))
+        })?);
+    }
+    Ok(found)
 }
 
 /// Extract `(result_ty, error_ty)` from the return type.
@@ -781,12 +857,23 @@ fn param_struct(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
 fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
     let wire = &m.wire_name;
     let params_ty = params_ty(trait_ident, m);
+    let params_schema = if m.passthrough_ty.is_some() {
+        quote! {
+            __schemas.root_schema::<#params_ty>()
+                .expect("registered params schema is in the linkrpc schema subset")
+        }
+    } else {
+        quote! {
+            __schemas.inline_schema::<#params_ty>()
+                .expect("inline params schema is in the linkrpc schema subset")
+        }
+    };
     let docs = member_docs(m);
     if m.is_notification {
         quote! {
             (#wire.to_string(), ::linkrpc::prelude::Member::Notification(
                 ::linkrpc::prelude::NotificationMember {
-                    params_schema: subset::<#params_ty>(),
+                    params_schema: #params_schema,
                     docs: #docs,
                 }))
         }
@@ -820,15 +907,34 @@ fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
             },
             None => quote!(::core::option::Option::None),
         };
+        let client_stream_schema = match &m.input_stream_ty {
+            Some(ty) => quote! {
+                ::core::option::Option::Some(
+                    __schemas.root_schema::<#ty>()
+                        .expect("registered input stream schema is in the linkrpc schema subset")
+                )
+            },
+            None => quote!(::core::option::Option::None),
+        };
+        let server_stream_schema = match &m.output_stream_ty {
+            Some(ty) => quote! {
+                ::core::option::Option::Some(
+                    __schemas.root_schema::<#ty>()
+                        .expect("registered output stream schema is in the linkrpc schema subset")
+                )
+            },
+            None => quote!(::core::option::Option::None),
+        };
         quote! {
             (#wire.to_string(), ::linkrpc::prelude::Member::Request(::std::boxed::Box::new(
                 ::linkrpc::prelude::RequestMember {
-                    params_schema: subset::<#params_ty>(),
-                    result_schema: subset::<#result_ty>(),
-                    client_stream_schema: ::core::option::Option::None,
-                    server_stream_schema: ::core::option::Option::None,
                     errors: #errors,
                     error_components: #error_components,
+                    params_schema: #params_schema,
+                    result_schema: __schemas.root_schema::<#result_ty>()
+                        .expect("registered result schema is in the linkrpc schema subset"),
+                    client_stream_schema: #client_stream_schema,
+                    server_stream_schema: #server_stream_schema,
                     docs: #docs,
                 })))
         }
@@ -916,6 +1022,70 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
             Some(error_ty) => quote!(::linkrpc::prelude::CallError<#error_ty>),
             None => quote!(::linkrpc::prelude::JsonRpcError),
         };
+        if m.input_stream_ty.is_some() || m.output_stream_ty.is_some() {
+            let client_ty = m
+                .input_stream_ty
+                .as_ref()
+                .map(|ty| quote!(#ty))
+                .unwrap_or_else(|| quote!(::linkrpc::prelude::NoStream));
+            let server_ty = m
+                .output_stream_ty
+                .as_ref()
+                .map(|ty| quote!(#ty))
+                .unwrap_or_else(|| quote!(::linkrpc::prelude::NoStream));
+            let client_schema = m
+                .input_stream_ty
+                .as_ref()
+                .map(|ty| quote!(::core::option::Option::Some(#module::validation_schema::<#ty>())))
+                .unwrap_or_else(|| quote!(::core::option::Option::None));
+            let server_schema = m
+                .output_stream_ty
+                .as_ref()
+                .map(|ty| quote!(::core::option::Option::Some(#module::validation_schema::<#ty>())))
+                .unwrap_or_else(|| quote!(::core::option::Option::None));
+            let (streaming_ty, start_call, typed_call) = match error_ty {
+                Some(error_ty) => (
+                    quote!(::linkrpc::prelude::TypedStreamingCall<
+                        #result_ty, #client_ty, #server_ty, #error_ty>),
+                    quote! {
+                        ::linkrpc::prelude::RpcCall::call_stream_detailed(
+                            &self.conn, &__method, __params).await
+                            .map_err(::linkrpc::prelude::CallError::<#error_ty>::from_call_error)?
+                    },
+                    quote! {
+                        __call.typed_error::<#result_ty, #client_ty, #server_ty, #error_ty>(
+                            #client_schema, #server_schema)
+                    },
+                ),
+                None => (
+                    quote!(::linkrpc::prelude::StreamingCall<#result_ty, #client_ty, #server_ty>),
+                    quote! {
+                        ::linkrpc::prelude::RpcCall::call_stream(
+                            &self.conn, &__method, __params).await?
+                    },
+                    quote! {
+                        __call.typed::<#result_ty, #client_ty, #server_ty>(
+                            #client_schema, #server_schema)
+                    },
+                ),
+            };
+            return quote! {
+                #doc
+                pub async fn #name(&self, #(#args),*)
+                    -> ::core::result::Result<#streaming_ty, #return_ty>
+                {
+                    #build_params
+                    let __method = match self.service_id.as_deref() {
+                        ::core::option::Option::Some(__service) =>
+                            ::std::format!("{}::{}::{}", __service, #module::ID, #wire),
+                        ::core::option::Option::None =>
+                            ::std::format!("{}::{}", #module::ID, #wire),
+                    };
+                    let __call = #start_call;
+                    ::core::result::Result::Ok(#typed_call)
+                }
+            };
+        }
         let call = match error_ty {
             Some(error_ty) => quote! {
                 let __v = self.conn.call_member_detailed(
@@ -994,23 +1164,6 @@ fn extract_annotations(attrs: &[syn::Attribute]) -> syn::Result<Vec<Ident>> {
     Ok(out)
 }
 
-fn extract_errors(attrs: &[syn::Attribute]) -> syn::Result<Option<Type>> {
-    let mut result = None;
-    for attr in attrs {
-        if !attr.path().is_ident("errors") {
-            continue;
-        }
-        if result.is_some() {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "duplicate #[errors(...)] attribute",
-            ));
-        }
-        result = Some(attr.parse_args::<Type>()?);
-    }
-    Ok(result)
-}
-
 fn to_snake_case(s: &str) -> String {
     let mut out = String::new();
     for (i, ch) in s.char_indices() {
@@ -1024,4 +1177,119 @@ fn to_snake_case(s: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn infers_direct_and_wrapped_application_errors() {
+        let direct: TraitItemFn = parse_quote! {
+            async fn lookup() -> std::result::Result<String, errors::LookupError>;
+        };
+        let direct = parse_method(&direct).unwrap();
+        assert_eq!(
+            direct.error_ty.unwrap().to_token_stream().to_string(),
+            "errors :: LookupError"
+        );
+        assert!(!direct.server_returns_call_error);
+
+        let wrapped: TraitItemFn = parse_quote! {
+            async fn lookup() -> Result<String, linkrpc::prelude::CallError<LookupError>>;
+        };
+        let wrapped = parse_method(&wrapped).unwrap();
+        assert_eq!(
+            wrapped.error_ty.unwrap().to_token_stream().to_string(),
+            "LookupError"
+        );
+        assert!(wrapped.server_returns_call_error);
+    }
+
+    #[test]
+    fn preserves_untyped_errors_and_notifications() {
+        let legacy: TraitItemFn = parse_quote! {
+            async fn lookup() -> Result<String, linkrpc::prelude::JsonRpcError>;
+        };
+        assert!(parse_method(&legacy).unwrap().error_ty.is_none());
+        let notification: TraitItemFn = parse_quote! {
+            #[notification]
+            async fn notify();
+        };
+        assert!(parse_method(&notification).unwrap().error_ty.is_none());
+    }
+
+    #[test]
+    fn rejects_redundant_error_annotation() {
+        let method: TraitItemFn = parse_quote! {
+            #[errors(LookupError)]
+            async fn lookup() -> Result<String, LookupError>;
+        };
+        assert!(parse_method(&method)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("inferred from the Result return type"));
+    }
+    use syn::parse_quote;
+
+    #[test]
+    fn parses_duplex_stream_directions() {
+        let method: TraitItemFn = parse_quote! {
+            #[input_stream(Command)]
+            #[output_stream(Event)]
+            async fn exchange(value: u32) -> Result<String, Error>;
+        };
+        let model = parse_method(&method).unwrap();
+        assert_eq!(
+            model.input_stream_ty.unwrap().to_token_stream().to_string(),
+            "Command"
+        );
+        assert_eq!(
+            model
+                .output_stream_ty
+                .unwrap()
+                .to_token_stream()
+                .to_string(),
+            "Event"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_duplicate_stream_attributes() {
+        let malformed: TraitItemFn = parse_quote! {
+            #[output_stream]
+            async fn watch() -> String;
+        };
+        assert!(parse_method(&malformed)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("expected #[output_stream(StreamItemType)]"));
+
+        let duplicate: TraitItemFn = parse_quote! {
+            #[input_stream(String)]
+            #[input_stream(u32)]
+            async fn upload() -> String;
+        };
+        assert!(parse_method(&duplicate)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("duplicate #[input_stream(T)]"));
+    }
+
+    #[test]
+    fn rejects_streaming_notifications() {
+        let method: TraitItemFn = parse_quote! {
+            #[notification]
+            #[output_stream(String)]
+            async fn invalid();
+        };
+        assert!(parse_method(&method)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("not #[notification]"));
+    }
 }

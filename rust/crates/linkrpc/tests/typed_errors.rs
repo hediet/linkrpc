@@ -82,24 +82,26 @@ enum CombinedError {
 
 #[linkrpc::prelude::link_rpc_interface(id = "example.collisions")]
 trait CollisionApi {
-    #[errors(first::Error)]
     async fn first() -> Result<(), first::Error>;
-    #[errors(second::Error)]
     async fn second() -> Result<(), second::Error>;
-    #[errors(CombinedError)]
     async fn combined() -> Result<(), CombinedError>;
 }
 
 #[linkrpc::prelude::link_rpc_interface(id = "example.lookup")]
 trait Lookup {
-    #[errors(LookupError)]
     async fn lookup(resource: String) -> Result<String, CallError<LookupError>>;
 
-    #[errors(LookupError)]
     async fn bad_param(value: BadParam) -> Result<String, LookupError>;
 
-    async fn legacy() -> Result<String, JsonRpcError>;
+    async fn direct(resource: String) -> std::result::Result<String, LookupErrorAlias>;
+
+    #[output_stream(String)]
+    async fn streaming(resource: String) -> Result<String, CallError<LookupError>>;
+
+    async fn legacy() -> Result<String, linkrpc::prelude::JsonRpcError>;
 }
+
+type LookupErrorAlias = LookupError;
 
 struct Provider;
 
@@ -155,6 +157,38 @@ fn imported_notifications_reject_even_empty_error_declarations() {
 
 #[async_trait]
 impl Lookup for Provider {
+    async fn streaming(
+        &self,
+        _ctx: &CallCtx,
+        resource: String,
+        progress: StreamSender<String>,
+    ) -> Result<String, CallError<LookupError>> {
+        progress
+            .send("started".into())
+            .await
+            .map_err(CallError::Local)?;
+        match resource.as_str() {
+            "unknown" => Err(CallError::Remote(JsonRpcError::new(9999, "Unknown"))),
+            "malformed" => Err(CallError::Remote(JsonRpcError {
+                code: 1001,
+                message: "Missing".into(),
+                data: Some(json!({ "resource": 42 })),
+            })),
+            _ => self
+                .direct(_ctx, resource)
+                .await
+                .map_err(CallError::Application),
+        }
+    }
+
+    async fn direct(&self, _ctx: &CallCtx, resource: String) -> Result<String, LookupErrorAlias> {
+        match resource.as_str() {
+            "known" => Ok("found".into()),
+            "busy" => Err(LookupError::Busy),
+            _ => Err(LookupError::Missing(MissingData { resource })),
+        }
+    }
+
     async fn lookup(
         &self,
         _ctx: &CallCtx,
@@ -310,6 +344,63 @@ async fn typed_client_and_server_round_trip() {
 
     let legacy = client.legacy().await.unwrap_err();
     assert_eq!(legacy.code, -31_000);
+
+    assert_eq!(client.direct("known".into()).await, Ok("found".into()));
+    assert_eq!(
+        client.direct("busy".into()).await,
+        Err(CallError::Application(LookupError::Busy))
+    );
+    assert_eq!(
+        client.direct("widget".into()).await,
+        Err(CallError::Application(LookupError::Missing(MissingData {
+            resource: "widget".into()
+        })))
+    );
+
+    let schema = lookup::interface().to_schema();
+    assert_eq!(schema.methods["direct"].errors.as_ref().unwrap().len(), 4);
+    assert!(schema.methods["legacy"].errors.is_none());
+}
+
+#[tokio::test]
+async fn inferred_errors_preserve_streaming_and_final_error_types() {
+    let (a, b) = transport_pair();
+    let client_conn = LinkRpcConnection::new(Box::new(a));
+    let server_conn = LinkRpcConnection::new(Box::new(b));
+    server_conn
+        .register_service(
+            Arc::new(LookupServer::new(Arc::new(Provider))),
+            RegisterOptions::default(),
+        )
+        .unwrap();
+    let client_run = client_conn.clone();
+    tokio::spawn(async move { client_run.run().await });
+    tokio::spawn(async move { server_conn.run().await });
+    let client = LookupClient::new(client_conn);
+
+    for resource in ["known", "busy", "widget", "unknown", "malformed"] {
+        let call = client.streaming(resource.into()).await.unwrap();
+        let (result, _, mut progress, _) = call.into_parts();
+        assert_eq!(progress.recv().await, Some("started".into()));
+        let result: Result<String, CallError<LookupError>> = result.await;
+        match resource {
+            "known" => assert_eq!(result, Ok("found".into())),
+            "busy" => assert_eq!(result, Err(CallError::Application(LookupError::Busy))),
+            "widget" => assert_eq!(
+                result,
+                Err(CallError::Application(LookupError::Missing(MissingData {
+                    resource: "widget".into(),
+                })))
+            ),
+            "unknown" => {
+                assert!(matches!(result, Err(CallError::Remote(error)) if error.code == 9999))
+            }
+            "malformed" => assert!(matches!(result, Err(CallError::Remote(error))
+                if error.data == Some(json!({ "resource": 42 })))),
+            _ => unreachable!(),
+        }
+        assert_eq!(progress.recv().await, None);
+    }
 }
 
 #[tokio::test]

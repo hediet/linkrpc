@@ -37,6 +37,10 @@ pub mod prelude {
     pub use crate::connection::reflection::{
         defaults_interface, directory_interface, schemas_interface,
     };
+    pub use crate::connection::streaming::{
+        CallControl, CallResult, NoStream, RawStreamingCall, StreamReceiver, StreamSender,
+        StreamingCall, TypedCallResult, TypedStreamingCall,
+    };
     pub use async_trait::async_trait;
     // Typed clients (+ their result types) for the built-in reflection interfaces, so consumers
     // can introspect an endpoint without hand-rolling `call_member` calls.

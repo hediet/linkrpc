@@ -18,5 +18,6 @@ pub use interface_schema::{
 };
 pub use normalize::{normalize_json_schema, NormalizeError, KEPT_KEYS};
 pub use schemars_subset::{
-    schemars_to_subset, schemars_to_subset_with_components, SchemarsSubsetError,
+    schemars_to_subset, schemars_to_subset_with_components, InterfaceSchemaCollector,
+    SchemarsSubsetError,
 };

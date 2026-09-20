@@ -28,6 +28,34 @@
           "data": { "$ref": "#/components/schemas/RecursiveData" }
         }
       ]
+    },
+    "streamCheck": {
+      "params": {
+        "type": "object",
+        "properties": { "mode": { "type": "string" } },
+        "required": ["mode"],
+        "additionalProperties": false
+      },
+      "result": { "type": "string" },
+      "serverStream": { "type": "string" },
+      "errors": [
+        {
+          "code": 2001,
+          "message": "Missing",
+          "data": { "$ref": "#/components/schemas/MissingData" }
+        },
+        { "code": 2002, "message": "Busy" },
+        {
+          "code": 2003,
+          "message": "Nullable",
+          "data": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+        },
+        {
+          "code": 2004,
+          "message": "Recursive",
+          "data": { "$ref": "#/components/schemas/RecursiveData" }
+        }
+      ]
     }
   },
   "components": {

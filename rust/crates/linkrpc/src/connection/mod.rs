@@ -13,3 +13,4 @@ pub mod endpoint;
 pub mod hub_connection;
 pub mod interface_def;
 pub mod reflection;
+pub mod streaming;

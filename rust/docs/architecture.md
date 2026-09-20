@@ -204,7 +204,7 @@ enum RequestId { Num(i64), Str(String) }
 ### Channel
 The correlation engine sitting directly on a transport. It **owns response correlation itself**
 (matches outbound requests to inbound responses by `id`), routes inbound
-**requests/notifications** to a bound handler, and (in the streaming phase) routes `$stream::send`
+**requests/notifications** to a bound handler, and routes `$stream::send`
 frames to the owning in-flight call. The channel is symmetric — it serves *and* calls over the
 same transport — and is **generic over per-call context** in both directions:
 
@@ -249,7 +249,7 @@ struct IncomingCall<InCtx> {
     method:  String,
     params:  JsonValue,
     context: InCtx,                  // out-of-band ctx the transport attached (Participant/headers)
-    stream:  IncomingStream,         // per-call streaming handle, both directions; auto-detached
+    stream:  CallStreamState,        // per-call correlation and typed input/output stream state
     signal:  CancellationToken,      // aborts on caller cancel / disconnect / idle
 }
 
@@ -505,28 +505,24 @@ reserved cancel/ping/pong controls. **Direction is named from the caller's persp
 
 | attribute | direction | provider handle | caller |
 |---|---|---|---|
-| `#[incoming_stream(T)]` | server → client | `IncomingStream<T>` (source, `.send`) | `.next()` |
-| `#[outgoing_stream(T)]` | client → server | `OutgoingStream<T>` (sink, `.recv`) | `.send()` |
+| `#[input_stream(T)]` | caller → provider | `StreamReceiver<T>` (`.recv()`) | `StreamSender<T>` (`.send()`) |
+| `#[output_stream(T)]` | provider → caller | `StreamSender<T>` (`.send()`) | `StreamReceiver<T>` (`.recv()`) |
 
 ```rust
-// provider side (macro-injected handles):
-struct IncomingStream<T> { /* … */ }            // server is the SOURCE → push
-impl<T: Serialize> IncomingStream<T> { async fn send(&self, item: T); }
+// The generated client returns this after sending the request.
+struct StreamingCall<R, Input, Output> { /* … */ }
 
-struct OutgoingStream<T> { /* … */ }            // server is the SINK → pull
-impl<T: DeserializeOwned> OutgoingStream<T> { async fn recv(&mut self) -> Option<T>; }
-
-// caller side: one handle, R = result, Out = client→server, In = server→client, E = error.
-struct RpcCall<R, Out, In, E> { /* … */ }
-impl<R, Out, In, E> RpcCall<R, Out, In, E> {
-    async fn send(&self, item: Out) -> Result<(), E>;     // push to server
-    async fn next(&mut self) -> Option<In>;               // pull from server
-    async fn finish(self) -> Result<R, E>;                // close + final result
-}
+let (result, input, mut output, control) = call.into_parts();
+input.send(item).await?;                  // caller → provider
+let event = output.recv().await;          // provider → caller
+control.cancel(Some(reason)).await?;      // advisory cancellation
+let final_result: R = result.await?;
 ```
 
-The caller drives one handle `RpcCall<R, Out, In, E>` (`.send`, `.next`, `.finish().await`).
-A member with no stream attributes is a plain awaitable `Result<R, E>`.
+`NoStream` marks a direction not declared by the method. Streams have no application-visible
+half-close; protocols should use an explicit payload such as `Finish` when completion must be
+signalled before the final response. A member with no stream attributes remains a plain
+awaitable result.
 
 ### Signing / capabilities (optional, advanced)
 An optional `$hubrpc` envelope wraps calls with an Ed25519 signature over a canonical

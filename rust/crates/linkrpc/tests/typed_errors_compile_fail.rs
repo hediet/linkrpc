@@ -64,3 +64,8 @@ fn derive_rejects_duplicate_error_code() {
 fn typed_variant_rejects_wrong_payload_type() {
     assert_compile_fails("wrong_payload", "expected `MissingData`, found `String`");
 }
+
+#[test]
+fn inferred_error_requires_application_contract() {
+    assert_compile_fails("undeclared_error", "MissingContract: ApplicationError");
+}

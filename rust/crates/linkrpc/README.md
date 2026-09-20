@@ -51,8 +51,8 @@ From that one trait you get:
 
 ## Typed application errors
 
-Application errors are opt-in per method; existing
-`Result<T, JsonRpcError>` methods are unchanged.
+Application errors are inferred from the method's `Result` error type; existing
+`Result<T, JsonRpcError>` methods are unchanged. No error annotation is needed.
 
 ```rust
 #[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -68,8 +68,7 @@ enum LookupError {
 
 #[link_rpc_interface(id = "example.lookup")]
 trait Lookup {
-    #[errors(LookupError)]
-    async fn lookup(resource: String) -> Result<String, CallError<LookupError>>;
+    async fn lookup(resource: String) -> Result<String, LookupError>;
 }
 ```
 
@@ -103,6 +102,41 @@ disagreement instead of as a runtime decode error three calls later.
 The hashing is byte-for-byte defined (RFC 8785 JCS → SHA-256, truncated to 16 hex chars) and pinned
 by a shared [conformance corpus](../../../conformance), so independent implementations in different
 languages compute the same hash for the same contract.
+
+### Shared schemas in trait exports
+
+Trait descriptors export reusable types once in `components.schemas`. Method parameters,
+results, and nested types refer to those definitions with `#/components/schemas/...`.
+The same type is shared across the entire interface, rather than expanded separately at
+each use. Guarded recursive types (such as nodes containing child nodes) retain finite
+references. Type and field descriptions remain part of the contract. This does not extend
+the supported schema subset to arbitrary intersections or unguarded reference cycles.
+
+Types are registered in schema-identity order, so reordering trait methods does not
+change component allocation or the hash. Sharing uses Schemars' `JsonSchema::schema_id`,
+not structural similarity. As with Schemars itself, custom implementations must give
+different contracts different schema IDs; generic `#[schemars(rename = "...")]`
+attributes should include their type parameters. Schemars can number colliding display
+names, so adding another colliding type or changing nested type discovery can rename
+components. Names are deterministic for a fixed type graph, not a promise of stable
+names across contract edits.
+
+Exports that now use shared definitions intentionally have different JSON and content
+hashes from their previously inlined versions. Primitive-only exports need not change.
+The hash algorithm has not changed: component names and reference topology are
+part of the canonical document, so an inlined document and a referenced document need not
+have the same hash even if they accept the same values. Regenerate consumers from the
+exported interface JSON; do not hand-author matching TypeScript types or assume a separately
+declared Zod interface has the same identity. For TypeScript CLI generation, use
+`linkrpc codegen --preserve-wire-schema` to retain the exported contract exactly.
+The JSON-to-Rust generator also consumes these existing component references.
+
+The standalone `schema::schemars_to_subset` function retains its inline behavior for
+callers that need the original Zod-compatible representation; it still rejects recursion.
+Runtime message shapes and the generated trait client/server APIs are unchanged.
+
+The [shared-schema interoperability fixture](../../../interop/shared-schemas) measures
+the reduction and exercises the CLI-generated TypeScript and JSON-generated Rust peers.
 
 ## Serving and calling
 
@@ -177,12 +211,12 @@ The full normative protocol lives in the repository's shared [`spec/`](../../../
 
 ## Status
 
-This is a port-in-progress of the TypeScript `@hediet/linkrpc` framework. The non-streaming **wire
-core, schema hashing, the connection runtime, reflection, and the `#[link_rpc_interface]` macro are
-implemented and interop-tested** against the TS reference via the conformance vectors. Streaming,
-identity (Ed25519), and capabilities are specified and on the roadmap — see
-[`executionPlan.md`](../../executionPlan.md). The `incoming_stream` / `outgoing_stream` macro
-attributes are reserved but not yet wired.
+This is a port-in-progress of the TypeScript `@hediet/linkrpc` framework. The **wire core, schema
+hashing, connection runtime, reflection, typed streaming, and the `#[link_rpc_interface]` macro are
+implemented and interop-tested** against the TS reference. Streaming methods use
+`#[input_stream(T)]` for caller-to-provider payloads and `#[output_stream(T)]` for
+provider-to-caller payloads. Identity (Ed25519) and capabilities are specified and on the roadmap
+— see [`executionPlan.md`](../../executionPlan.md).
 
 ## License
 
