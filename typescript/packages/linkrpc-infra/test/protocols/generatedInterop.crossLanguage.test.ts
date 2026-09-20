@@ -23,6 +23,7 @@ const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
 const manifest = fileURLToPath(new URL('./rust/Cargo.toml', import.meta.url));
 const targetDirectory = join(repoRoot, 'rust', 'target', 'protocol-interop');
+const coldRustBuildTimeoutMs = 600_000;
 const binary = join(targetDirectory, 'debug',
     process.platform === 'win32' ? 'linkrpc-protocol-interop.exe' : 'linkrpc-protocol-interop');
 const contracts = importedInteropContracts();
@@ -55,11 +56,11 @@ beforeAll(async () => {
             LINKRPC_PROTOCOL_SCHEMAS: schemas,
             LINKRPC_PROTOCOL_REPORT: reportPath,
         },
-        timeout: 240_000,
+        timeout: coldRustBuildTimeoutMs,
         maxBuffer: 4 * 1024 * 1024,
     });
     report = JSON.parse(await readFile(reportPath, 'utf8'));
-}, 250_000);
+}, coldRustBuildTimeoutMs + 10_000);
 
 afterAll(async () => {
     if (scratch) await rm(scratch, { recursive: true });
