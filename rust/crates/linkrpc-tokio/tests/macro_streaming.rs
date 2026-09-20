@@ -15,8 +15,8 @@ struct Progress(u32);
 
 #[link_rpc_interface(id = "com.example.macro-streaming")]
 trait StreamingService {
-    #[outgoing_stream(Command)]
-    #[incoming_stream(Progress)]
+    #[input_stream(Command)]
+    #[output_stream(Progress)]
     async fn exchange(stream_receiver: u32, stream_sender: u32) -> Result<u32, JsonRpcError>;
 }
 

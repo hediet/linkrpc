@@ -15,11 +15,11 @@ enum Command {
 
 #[link_rpc_interface(id = "dev.linkrpc.streaming-interop")]
 trait StreamingInterop {
-    #[outgoing_stream(Command)]
-    #[incoming_stream(Option<i64>)]
+    #[input_stream(Command)]
+    #[output_stream(Option<i64>)]
     async fn exchange(fail: bool) -> Result<i64, JsonRpcError>;
 
-    #[incoming_stream(String)]
+    #[output_stream(String)]
     async fn cancellable() -> Result<String, JsonRpcError>;
 }
 

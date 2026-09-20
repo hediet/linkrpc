@@ -42,8 +42,9 @@ it once M6 lands if you like — it is a scratch handoff, not permanent docs.
 | M7 | end-to-end north-star scenario | pending |
 | M8 | Rust hub server (optional) | pending |
 
-Streaming (incoming/outgoing/bidirectional) in the macro + runtime is deferred;
-`incoming_stream`/`outgoing_stream` attrs currently emit a compile error.
+Typed input/output/bidirectional streaming is implemented in the macro and runtime.
+`#[input_stream(T)]` carries caller-to-provider payloads, while `#[output_stream(T)]`
+carries provider-to-caller payloads.
 
 ## Current crate layout
 - `crates/linkrpc/src/connection/` — `channel.rs`, `dispatch.rs`,

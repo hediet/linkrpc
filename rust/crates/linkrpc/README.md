@@ -136,12 +136,12 @@ The full normative protocol lives in the repository's shared [`spec/`](../../../
 
 ## Status
 
-This is a port-in-progress of the TypeScript `@hediet/linkrpc` framework. The non-streaming **wire
-core, schema hashing, the connection runtime, reflection, and the `#[link_rpc_interface]` macro are
-implemented and interop-tested** against the TS reference via the conformance vectors. Streaming,
-identity (Ed25519), and capabilities are specified and on the roadmap — see
-[`executionPlan.md`](../../executionPlan.md). The `incoming_stream` / `outgoing_stream` macro
-attributes are reserved but not yet wired.
+This is a port-in-progress of the TypeScript `@hediet/linkrpc` framework. The **wire core, schema
+hashing, connection runtime, reflection, typed streaming, and the `#[link_rpc_interface]` macro are
+implemented and interop-tested** against the TS reference. Streaming methods use
+`#[input_stream(T)]` for caller-to-provider payloads and `#[output_stream(T)]` for
+provider-to-caller payloads. Identity (Ed25519) and capabilities are specified and on the roadmap
+— see [`executionPlan.md`](../../executionPlan.md).
 
 ## License
 

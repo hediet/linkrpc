@@ -5,8 +5,8 @@ typed client, and interface schema. Streaming directions are named from the call
 
 | Attribute | Wire direction | Provider argument | Client handle |
 |---|---|---|---|
-| `#[outgoing_stream(T)]` | client → server | `StreamReceiver<T>` | `StreamSender<T>` |
-| `#[incoming_stream(T)]` | server → client | `StreamSender<T>` | `StreamReceiver<T>` |
+| `#[input_stream(T)]` | caller → provider | `StreamReceiver<T>` | `StreamSender<T>` |
+| `#[output_stream(T)]` | provider → caller | `StreamSender<T>` | `StreamReceiver<T>` |
 
 For a duplex method, provider stream arguments are injected after ordinary parameters, receiver
 first and sender second.
@@ -27,8 +27,8 @@ struct KitchenEvent { completed: u32 }
 
 #[link_rpc_interface(id = "com.acme.kitchen")]
 trait Kitchen {
-    #[outgoing_stream(KitchenCommand)]
-    #[incoming_stream(KitchenEvent)]
+    #[input_stream(KitchenCommand)]
+    #[output_stream(KitchenEvent)]
     async fn prepare(order_id: String) -> Result<u32, JsonRpcError>;
 }
 

@@ -11,8 +11,8 @@
 //! - a **`<trait_snake>::interface()`** builder (+ `ID`) producing the runtime
 //!   [`InterfaceDefinition`] whose content hash is the interface identity.
 //!
-//! Request methods may declare `#[outgoing_stream(T)]` (client→server) and
-//! `#[incoming_stream(T)]` (server→client). Doc comments are normative (hashed);
+//! Request methods may declare `#[input_stream(T)]` (caller→provider) and
+//! `#[output_stream(T)]` (provider→caller). Doc comments are normative (hashed);
 //! `#[annotations(dangerous, read_only, ...)]` attach member annotations.
 //!
 //! Generated code references `::linkrpc`, `::serde`, `::serde_json`, `::schemars`, and
@@ -67,10 +67,10 @@ struct MethodModel {
     passthrough_ty: Option<Type>,
     /// The success/result type for a request (None for notifications).
     result_ty: Option<Type>,
-    /// Client→server payload type from `#[outgoing_stream(T)]`.
-    outgoing_stream_ty: Option<Type>,
-    /// Server→client payload type from `#[incoming_stream(T)]`.
-    incoming_stream_ty: Option<Type>,
+    /// Caller→provider payload type from `#[input_stream(T)]`.
+    input_stream_ty: Option<Type>,
+    /// Provider→caller payload type from `#[output_stream(T)]`.
+    output_stream_ty: Option<Type>,
     /// Doc-comment text (normative).
     doc: Option<String>,
     /// `#[annotations(...)]` flag idents.
@@ -111,11 +111,11 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
         let name = &m.name;
         let args = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
         let receiver = m
-            .outgoing_stream_ty
+            .input_stream_ty
             .as_ref()
             .map(|ty| quote!(_: ::linkrpc::prelude::StreamReceiver<#ty>));
         let sender = m
-            .incoming_stream_ty
+            .output_stream_ty
             .as_ref()
             .map(|ty| quote!(_: ::linkrpc::prelude::StreamSender<#ty>));
         let stream_args = [receiver, sender].into_iter().flatten();
@@ -181,25 +181,23 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
         } else {
             m.params.iter().map(|(id, _)| quote!(__p.#id)).collect()
         };
-        let receiver = m.outgoing_stream_ty.as_ref().map(|ty| {
+        let receiver = m.input_stream_ty.as_ref().map(|ty| {
             quote! {
                 let __stream_receiver = ctx.stream_receiver::<#ty>(
                     #module_ident::subset::<#ty>()
                 )?;
             }
         });
-        let sender = m.incoming_stream_ty.as_ref().map(|ty| {
+        let sender = m.output_stream_ty.as_ref().map(|ty| {
             quote! {
                 let __stream_sender = ctx.stream_sender::<#ty>()?;
             }
         });
         let stream_args = [
-            m.outgoing_stream_ty
+            m.input_stream_ty
                 .as_ref()
                 .map(|_| quote!(__stream_receiver)),
-            m.incoming_stream_ty
-                .as_ref()
-                .map(|_| quote!(__stream_sender)),
+            m.output_stream_ty.as_ref().map(|_| quote!(__stream_sender)),
         ]
         .into_iter()
         .flatten();
@@ -343,9 +341,9 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         ));
     }
     let is_notification = f.attrs.iter().any(|a| a.path().is_ident("notification"));
-    let incoming_stream_ty = parse_stream_attr(&f.attrs, "incoming_stream")?;
-    let outgoing_stream_ty = parse_stream_attr(&f.attrs, "outgoing_stream")?;
-    if is_notification && (incoming_stream_ty.is_some() || outgoing_stream_ty.is_some()) {
+    let input_stream_ty = parse_stream_attr(&f.attrs, "input_stream")?;
+    let output_stream_ty = parse_stream_attr(&f.attrs, "output_stream")?;
+    if is_notification && (input_stream_ty.is_some() || output_stream_ty.is_some()) {
         return Err(syn::Error::new_spanned(
             &f.sig,
             "streaming is only supported on request methods, not #[notification] methods",
@@ -398,8 +396,8 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         params,
         passthrough_ty,
         result_ty,
-        outgoing_stream_ty,
-        incoming_stream_ty,
+        input_stream_ty,
+        output_stream_ty,
         doc,
         annotations,
         raw_output: rewritten_output(&sig.output, is_notification),
@@ -531,11 +529,11 @@ fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
         }
     } else {
         let result_ty = m.result_ty.as_ref().expect("request has result type");
-        let client_stream_schema = match &m.outgoing_stream_ty {
+        let client_stream_schema = match &m.input_stream_ty {
             Some(ty) => quote!(::core::option::Option::Some(subset::<#ty>())),
             None => quote!(::core::option::Option::None),
         };
-        let server_stream_schema = match &m.incoming_stream_ty {
+        let server_stream_schema = match &m.output_stream_ty {
             Some(ty) => quote!(::core::option::Option::Some(subset::<#ty>())),
             None => quote!(::core::option::Option::None),
         };
@@ -617,24 +615,24 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
         }
     } else {
         let result_ty = m.result_ty.as_ref().expect("request has result type");
-        if m.outgoing_stream_ty.is_some() || m.incoming_stream_ty.is_some() {
+        if m.input_stream_ty.is_some() || m.output_stream_ty.is_some() {
             let client_ty = m
-                .outgoing_stream_ty
+                .input_stream_ty
                 .as_ref()
                 .map(|ty| quote!(#ty))
                 .unwrap_or_else(|| quote!(::linkrpc::prelude::NoStream));
             let server_ty = m
-                .incoming_stream_ty
+                .output_stream_ty
                 .as_ref()
                 .map(|ty| quote!(#ty))
                 .unwrap_or_else(|| quote!(::linkrpc::prelude::NoStream));
             let client_schema = m
-                .outgoing_stream_ty
+                .input_stream_ty
                 .as_ref()
                 .map(|ty| quote!(::core::option::Option::Some(#module::subset::<#ty>())))
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
             let server_schema = m
-                .incoming_stream_ty
+                .output_stream_ty
                 .as_ref()
                 .map(|ty| quote!(::core::option::Option::Some(#module::subset::<#ty>())))
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
@@ -744,22 +742,18 @@ mod tests {
     #[test]
     fn parses_duplex_stream_directions() {
         let method: TraitItemFn = parse_quote! {
-            #[outgoing_stream(Command)]
-            #[incoming_stream(Event)]
+            #[input_stream(Command)]
+            #[output_stream(Event)]
             async fn exchange(value: u32) -> Result<String, Error>;
         };
         let model = parse_method(&method).unwrap();
         assert_eq!(
-            model
-                .outgoing_stream_ty
-                .unwrap()
-                .to_token_stream()
-                .to_string(),
+            model.input_stream_ty.unwrap().to_token_stream().to_string(),
             "Command"
         );
         assert_eq!(
             model
-                .incoming_stream_ty
+                .output_stream_ty
                 .unwrap()
                 .to_token_stream()
                 .to_string(),
@@ -770,32 +764,32 @@ mod tests {
     #[test]
     fn rejects_malformed_and_duplicate_stream_attributes() {
         let malformed: TraitItemFn = parse_quote! {
-            #[incoming_stream]
+            #[output_stream]
             async fn watch() -> String;
         };
         assert!(parse_method(&malformed)
             .err()
             .unwrap()
             .to_string()
-            .contains("expected #[incoming_stream(StreamItemType)]"));
+            .contains("expected #[output_stream(StreamItemType)]"));
 
         let duplicate: TraitItemFn = parse_quote! {
-            #[outgoing_stream(String)]
-            #[outgoing_stream(u32)]
+            #[input_stream(String)]
+            #[input_stream(u32)]
             async fn upload() -> String;
         };
         assert!(parse_method(&duplicate)
             .err()
             .unwrap()
             .to_string()
-            .contains("duplicate #[outgoing_stream(T)]"));
+            .contains("duplicate #[input_stream(T)]"));
     }
 
     #[test]
     fn rejects_streaming_notifications() {
         let method: TraitItemFn = parse_quote! {
             #[notification]
-            #[incoming_stream(String)]
+            #[output_stream(String)]
             async fn invalid();
         };
         assert!(parse_method(&method)
