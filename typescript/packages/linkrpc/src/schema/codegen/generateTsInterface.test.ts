@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import ts from "typescript";
+import { fileURLToPath } from "node:url";
 import { computeInterfaceHash } from "../hash";
 import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
 import { applicationError, notificationType, requestType } from "../memberTypes";
@@ -661,7 +662,7 @@ const invalidRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, false] }
 });
 
 function _expectTypeChecks(source: string): void {
-    const fileName = new URL("./generated-type-test.ts", import.meta.url).pathname;
+    const fileName = fileURLToPath(new URL("./generated-type-test.ts", import.meta.url)).replace(/\\/g, "/");
     const options: ts.CompilerOptions = {
         target: ts.ScriptTarget.ES2022,
         module: ts.ModuleKind.ESNext,

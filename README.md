@@ -17,3 +17,8 @@ The TypeScript workspace contains the core runtime, client helpers, Hub, CLI,
 and MCP bridge under [`typescript/packages/`](./typescript/packages). The Rust
 workspace contains the core, procedural macros, Tokio transports, and examples
 under [`rust/crates/`](./rust/crates).
+
+## Releases
+
+See [package artifacts and releases](docs/releases.md) for stable/next version
+reservations, the ArtifactGate contract, and safe rollout requirements.
