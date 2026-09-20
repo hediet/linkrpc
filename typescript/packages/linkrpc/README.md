@@ -132,6 +132,76 @@ g.shout({ msg: 'boom' });                               // fire-and-forget notif
 Pass the wrong shape and TypeScript stops you at compile time; if a bad value reaches the wire
 anyway, the provider rejects it with a JSON-RPC `-32602 invalidParams`.
 
+## Inspecting independently owned connections
+
+`InspectionHost` exposes one topology and traffic view through any number of
+LinkRPC connections. It does not route application messages and does not require
+a Hub. Tracking a connection and exposing inspection are separate operations:
+
+```ts
+import { InspectionHost } from '@hediet/linkrpc/inspection';
+
+const inspection = new InspectionHost({ nodeId: 'main', label: 'Main process' });
+
+// cdpClient is a LinkRpcConnection over a CDP adapter.
+const tracked = inspection.trackConnection(cdpClient, {
+    portId: 'cdp-1',
+    label: 'Chrome connection',
+    peer: { nodeId: 'chrome', portId: 'debugger' },
+    transport: { type: 'websocket' },
+});
+
+// Repeat for each frontend connection; they share the same inspection host.
+const binding = inspection.expose(frontendConnection, {
+    serviceId: 'main.inspection',
+});
+frontendConnection.enableReflection();
+```
+
+The remote frontend uses the standard inspection interfaces:
+
+```ts
+import { topologyInterface, trafficInterface } from '@hediet/linkrpc/inspection';
+
+const service = frontendClient.service('main.inspection');
+const graph = await service.get(topologyInterface).getGraph({});
+const watch = service.get(trafficInterface).watch({}, {
+    onMessage: event => console.log(event),
+});
+
+// Later:
+await watch.cancel();
+await watch;
+```
+
+- Tracked connections share the host's node identity and have distinct port IDs.
+  Peer identity is optional; without it, the graph includes the local port but
+  does not invent a remote node or probe a foreign protocol.
+- `watchGraph` emits invalidation ticks; re-fetch `getGraph` after each tick.
+  Adding/removing sources and bindings, closing tracked connections, and source
+  topology changes invalidate the graph.
+- `watch` omits payloads. `watchWithPayloads` explicitly requests capped payloads.
+  Use the connection's normal authentication/authorization policy to restrict
+  inspection access; topology IDs are not security identities.
+- Each subscriber has independent filtering and a bounded queue with overflow
+  reporting. Watch-control flows remain tracked even without subscribers, so
+  inspection streams never recursively observe themselves. Ordinary frontend
+  traffic is not included unless that connection is explicitly tracked.
+- `binding.dispose()` unregisters that exposure and ends its watches.
+  `tracked.dispose()` removes that connection from inspection.
+  `inspection.dispose()` removes all exposures and observations.
+  None of these closes application connections. `LinkRpcConnection.close()`
+  automatically removes its bindings and tracked ports; adapters must still
+  propagate transport shutdown to the connection's lifecycle.
+- CDP traffic is observed above the adapter: events contain normalized JSON-RPC
+  messages and logical request IDs, not exact CDP WebSocket frames.
+
+For custom producers, `addSource` accepts an `InspectionSource` supplying topology
+snapshots, topology invalidations, and normalized traffic. The Hub uses this same
+host through a routing-source adapter. `connection.enableInspection()` remains
+the convenience API for inspecting just that endpoint, using the same shared
+RPC implementation.
+
 ## Typed application errors
 
 Checked application errors are opt-in and remain ordinary JSON-RPC errors on the wire. Declare

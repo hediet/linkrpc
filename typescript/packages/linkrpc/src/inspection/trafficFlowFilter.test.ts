@@ -24,6 +24,18 @@ function transit(
 }
 
 describe('TrafficFlowFilter', () => {
+    it('forgets closed ports without retaining request IDs or unclaimed watches', () => {
+        const tracker = new TrafficWatchFlowTracker();
+        tracker.accept(transit('request', 7, 'svc::hubrpc.traffic::watch', {
+            trafficIgnoreKey: 'closed-watch',
+        }));
+        tracker.forgetPort('unrelated');
+        expect(tracker.accept(transit('stream', 7, '$stream::send'))).toBe(true);
+        tracker.forgetPort('port');
+        expect(tracker.claim('closed-watch')).toBe(false);
+        expect(tracker.accept(transit('stream', 7, '$stream::send'))).toBe(false);
+    });
+
     it('claims a watch request and excludes its correlated stream lifecycle', () => {
         const tracker = new TrafficWatchFlowTracker();
         expect(tracker.accept(transit(

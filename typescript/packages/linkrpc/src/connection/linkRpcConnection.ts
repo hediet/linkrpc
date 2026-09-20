@@ -13,11 +13,8 @@ import { nodeInterface, type NodeInfo, type TopologyIdGenerator } from '../inspe
 import {
     topologyInterface,
     trafficInterface,
-    type TopologyGraph,
     type ParticipantDescriptorSource,
-    type TrafficEvent,
     type TrafficTransitEvent,
-    type TrafficWatchResult,
 } from '../inspection/inspection.interfaces';
 import type {
     CheckedCall,
@@ -49,13 +46,11 @@ import {
     type IRequestSender, type Result,
     RpcError,
     type StreamSendOpts,
+    type WireMessageObserver,
 } from './channel';
 import { JsonRpcChannel } from './jsonRpcChannel';
 import { bytesToBase64Url } from '../crypto/cryptoProvider';
-import {
-    EndpointTrafficInspector,
-    type EndpointTrafficWatchOptions,
-} from '../inspection/endpointTrafficInspector';
+import { InspectionHost } from '../inspection/inspectionHost';
 import {
     isBareInterfaceTarget,
     validateBarePrefix,
@@ -126,8 +121,11 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private readonly _directoryListeners = new Set<() => void>();
 
     private _inspection: InspectionRegistration | undefined;
-    private _trafficInspector: EndpointTrafficInspector | undefined;
+    private _inspectionHost: InspectionHost | undefined;
     private readonly _serviceInspectionRegistrations = new Map<string, InterfaceRegistration[]>();
+    private readonly _wireObservers = new Set<WireMessageObserver>();
+    private readonly _closeListeners = new Set<() => void>();
+    private _closed = false;
     private readonly _wireChannel: Channel<TInCtx, TOutCtx> | undefined;
     private readonly _validateOutboundParams: boolean;
     /** Bare-method bindings, keyed by their exact wire prefix. */
@@ -218,6 +216,41 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         opts: RegisterOptions = {},
     ): InterfaceRegistration {
         return this._register(iface, handlers, opts, false);
+    }
+
+    /** Register inspection contracts without recursively enabling service inspection. */
+    public registerInspection<TDef extends InterfaceDefinition<any>>(
+        iface: TDef,
+        handlers: InterfaceHandlers<TDef, TInCtx>,
+        opts: RegisterOptions = {},
+    ): InterfaceRegistration {
+        return this._register(iface, handlers, opts, true);
+    }
+
+    /** Observe this connection without replacing another inspection scope's observer. */
+    public observeWireMessages(observer: WireMessageObserver): InterfaceRegistration {
+        if (this._closed) throw new Error('Connection is closed');
+        if (this._wireChannel === undefined) throw new Error('Connection has no observable wire channel');
+        this._wireObservers.add(observer);
+        this._wireChannel.setWireMessageObserver((direction, message) => {
+            for (const listener of [...this._wireObservers]) {
+                try {
+                    listener(direction, message);
+                } catch {
+                    // Diagnostic observers cannot interrupt transport delivery.
+                }
+            }
+        });
+        return { dispose: () => {
+            this._wireObservers.delete(observer);
+            if (this._wireObservers.size === 0) this._wireChannel?.setWireMessageObserver(undefined);
+        } };
+    }
+
+    public onDidClose(listener: () => void): InterfaceRegistration {
+        if (this._closed) throw new Error('Connection is closed');
+        this._closeListeners.add(listener);
+        return { dispose: () => { this._closeListeners.delete(listener); } };
     }
 
     private _register<TDef extends InterfaceDefinition<any>>(
@@ -599,29 +632,29 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             getNodeId: () => info,
         }, {}, true);
 
-        const trafficInspector = new EndpointTrafficInspector(
-            info.nodeId,
-            info.portId,
-            (active) => this._wireChannel?.setWireMessageObserver(
-                active ? trafficInspector.observe : undefined,
-            ),
-        );
-        this._trafficInspector = trafficInspector;
-        trafficInspector.start();
+        const host = new InspectionHost({ nodeId: info.nodeId, descriptors });
+        try {
+            if (this._wireChannel !== undefined) host.trackConnection(this, { portId: info.portId });
+        } catch (error) {
+            host.dispose();
+            registration.dispose();
+            throw error;
+        }
+        this._inspectionHost = host;
 
         let disposed = false;
         const result: InspectionRegistration = {
             ...info,
-            observeTraffic: (observer) => trafficInspector.observeTransits(observer),
+            observeTraffic: (observer) => host.observeTraffic(observer),
             dispose: () => {
                 if (disposed) return;
                 disposed = true;
                 for (const serviceId of [...this._serviceInspectionRegistrations.keys()]) {
                     this._removeServiceInspection(serviceId);
                 }
-                trafficInspector.dispose();
-                if (this._trafficInspector === trafficInspector) {
-                    this._trafficInspector = undefined;
+                host.dispose();
+                if (this._inspectionHost === host) {
+                    this._inspectionHost = undefined;
                 }
                 registration.dispose();
                 if (this._inspection === result) {
@@ -647,10 +680,17 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
 
     /** Number of active endpoint traffic stream subscribers. */
     public get trafficObserverCount(): number {
-        return this._trafficInspector?.observerCount ?? 0;
+        return this._inspectionHost?.observerCount ?? 0;
     }
 
     public close(): void {
+        if (this._closed) return;
+        this._closed = true;
+        for (const listener of [...this._closeListeners]) listener();
+        this._closeListeners.clear();
+        this._inspection?.dispose();
+        this._wireObservers.clear();
+        this._wireChannel?.setWireMessageObserver(undefined);
         this.channel.close();
     }
 
@@ -919,51 +959,11 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     private _installServiceInspection(serviceId: string): void {
         if (this._serviceInspectionRegistrations.has(serviceId)) return;
         const info = this._inspection;
-        const trafficInspector = this._trafficInspector;
-        if (info === undefined || trafficInspector === undefined) return;
-
-        const registrations: InterfaceRegistration[] = [];
-        const opts = { serviceId };
-        try {
-            registrations.push(this._register(nodeInterface, {
-                getNodeId: () => ({ nodeId: info.nodeId, portId: info.portId }),
-            }, opts, true));
-            registrations.push(this._register(topologyInterface, {
-                getGraph: () => this._endpointGraph(serviceId, info),
-                watchGraph: async (_params, _ctx, stream) => {
-                    await waitForAbort(stream.signal);
-                    return {};
-                },
-            }, opts, true));
-            registrations.push(this._register(trafficInterface, {
-                watch: ({ methodPrefix, trafficIgnoreKey, focusRequest }, _ctx, stream) =>
-                    this._watchTraffic(
-                        trafficInspector,
-                        { methodPrefix, trafficIgnoreKey, focusRequest },
-                        stream,
-                    ),
-                watchWithPayloads: ({
-                    methodPrefix,
-                    maxPayloadBytes,
-                    trafficIgnoreKey,
-                    focusRequest,
-                }, _ctx, stream) =>
-                    this._watchTraffic(
-                        trafficInspector,
-                        {
-                            methodPrefix,
-                            maxPayloadBytes,
-                            trafficIgnoreKey,
-                            focusRequest,
-                        },
-                        stream,
-                    ),
-            }, opts, true));
-        } catch (error) {
-            for (const registration of registrations.reverse()) registration.dispose();
-            throw error;
-        }
-        this._serviceInspectionRegistrations.set(serviceId, registrations);
+        const host = this._inspectionHost;
+        if (info === undefined || host === undefined) return;
+        this._serviceInspectionRegistrations.set(serviceId, [
+            host.expose(this, { serviceId, portId: info.portId }),
+        ]);
     }
 
     private _removeServiceInspection(serviceId: string): void {
@@ -978,45 +978,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             entry.serviceId === serviceId && !entry.internalInspection);
     }
 
-    private _endpointGraph(serviceId: string, info: NodeInfo): TopologyGraph {
-        return {
-            observerServiceId: serviceId,
-            entryNodeId: info.nodeId,
-            nodes: [{
-                nodeId: info.nodeId,
-                kind: 'endpoint',
-                ...(info.descriptors !== undefined ? { descriptors: info.descriptors } : {}),
-                ports: [{ portId: info.portId }],
-            }],
-            links: [],
-            routes: [{
-                serviceId,
-                nodeId: info.nodeId,
-                portId: info.portId,
-                match: 'exact',
-            }],
-        };
-    }
-
-    private async _watchTraffic<TClient>(
-        inspector: EndpointTrafficInspector,
-        options: EndpointTrafficWatchOptions,
-        stream: StreamApi<TClient, TrafficEvent>,
-    ): Promise<TrafficWatchResult> {
-        const subscription = inspector.subscribe(options, (event) => stream.send(event));
-        const dispose = () => subscription.dispose();
-        if (stream.signal.aborted) {
-            dispose();
-        } else {
-            stream.signal.addEventListener('abort', dispose, { once: true });
-        }
-        try {
-            return await subscription.closed;
-        } finally {
-            stream.signal.removeEventListener('abort', dispose);
-            subscription.dispose();
-        }
-    }
 }
 
 
@@ -1074,8 +1035,8 @@ export interface InterfaceRegistration {
 /** Generated topology identity and its live root-interface registration. */
 export interface InspectionRegistration extends InterfaceRegistration, NodeInfo {
     /**
-     * Observe this endpoint's full-payload traffic in-process. Wire observation
-     * remains disabled until either this or an RPC traffic watch is active.
+     * Observe this endpoint's full-payload traffic in-process. Watch-control
+     * flows are tracked even when no public observations are active.
      */
     observeTraffic(observer: (transit: TrafficTransitEvent) => void): InterfaceRegistration;
 }
@@ -1357,11 +1318,4 @@ function isInspectionInterface(iface: InterfaceDefinition<any>): boolean {
     return iface === nodeInterface
         || iface === topologyInterface
         || iface === trafficInterface;
-}
-
-function waitForAbort(signal: AbortSignal): Promise<void> {
-    if (signal.aborted) return Promise.resolve();
-    return new Promise((resolve) => {
-        signal.addEventListener('abort', () => resolve(), { once: true });
-    });
 }

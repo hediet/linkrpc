@@ -84,17 +84,27 @@ export class TrafficWatchFlowTracker {
         this._active.clear();
         this._unclaimed.clear();
     }
+
+    public forgetPort(portId: string): void {
+        for (const flow of this._active) {
+            if (flow.hasPort(portId)) this._removeFlow(flow);
+        }
+    }
 }
 
 class CorrelatedFlow {
     private readonly _endpoints = new Set<string>();
+    private readonly _ports = new Set<string>();
     private readonly _completionEndpoint: string | undefined;
 
     constructor(
         endpoints: readonly TrafficRequestRef[],
         completionEndpoint: TrafficRequestRef | undefined = endpoints[0],
     ) {
-        for (const endpoint of endpoints) this._endpoints.add(endpointKey(endpoint));
+        for (const endpoint of endpoints) {
+            this._endpoints.add(endpointKey(endpoint));
+            this._ports.add(endpoint.portId);
+        }
         this._completionEndpoint = completionEndpoint === undefined
             ? undefined
             : endpointKey(completionEndpoint);
@@ -105,6 +115,10 @@ class CorrelatedFlow {
             .some((endpoint) => this._endpoints.has(endpointKey(endpoint)));
     }
 
+    public hasPort(portId: string): boolean {
+        return this._ports.has(portId);
+    }
+
     public accept(transit: TrafficTransitEvent): {
         readonly matches: boolean;
         readonly completed: boolean;
@@ -113,7 +127,10 @@ class CorrelatedFlow {
         if (!this.matches(transit)) {
             return { matches: false, completed: false };
         }
-        for (const endpoint of endpoints) this._endpoints.add(endpointKey(endpoint));
+        for (const endpoint of endpoints) {
+            this._endpoints.add(endpointKey(endpoint));
+            this._ports.add(endpoint.portId);
+        }
         const completed = transit.kind === 'response'
             && (
                 isTerminal(transit)

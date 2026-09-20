@@ -9,16 +9,7 @@ import {
     STREAM_METHOD,
     type StreamSendParams,
 } from '../connection/streaming';
-import type {
-    TrafficEvent,
-    TrafficTransitEvent,
-} from './inspection.interfaces';
-import {
-    BoundedTrafficSubscription,
-    type TrafficSubscription,
-    type TrafficSubscriptionOptions,
-} from './boundedTrafficSubscription';
-import { TrafficWatchFlowTracker } from './trafficFlowFilter';
+import type { TrafficTransitEvent } from './inspection.interfaces';
 import type { WireMessageDirection, WireMessageObserver } from '../connection/channel';
 
 interface RequestCorrelation {
@@ -29,20 +20,9 @@ interface RequestCorrelation {
 const REQUEST_CORRELATION_RETENTION_MS = 30 * 60_000;
 const MAX_REQUEST_CORRELATIONS = 4096;
 
-export interface EndpointTrafficWatchOptions extends TrafficSubscriptionOptions {}
-
-export interface EndpointTrafficSubscription extends TrafficSubscription {}
-
-export interface EndpointTrafficObservation {
-    dispose(): void;
-}
-
 export class EndpointTrafficInspector {
-    private readonly _subscribers = new Set<BoundedTrafficSubscription>();
-    private readonly _observers = new Set<(transit: TrafficTransitEvent) => void>();
     private readonly _outboundRequests = new Map<string, RequestCorrelation>();
     private readonly _inboundRequests = new Map<string, RequestCorrelation>();
-    private readonly _trafficWatches = new TrafficWatchFlowTracker();
 
     public readonly observe: WireMessageObserver = (direction, message) => {
         this._onMessage(direction, message);
@@ -51,56 +31,13 @@ export class EndpointTrafficInspector {
     constructor(
         private readonly _nodeId: string,
         private readonly _portId: string,
-        private readonly _setActive: (active: boolean) => void,
+        private readonly _emit: (event: TrafficTransitEvent) => void,
+        private readonly _isObserved: () => boolean,
     ) { }
 
-    public start(): void {
-        this._setActive(true);
-    }
-
-    public get observerCount(): number {
-        return this._subscribers.size + this._observers.size;
-    }
-
-    public subscribe(
-        options: EndpointTrafficWatchOptions,
-        send: (event: TrafficEvent) => Promise<void>,
-    ): EndpointTrafficSubscription {
-        if (
-            options.trafficIgnoreKey !== undefined
-            && !this._trafficWatches.claim(options.trafficIgnoreKey)
-        ) {
-            throw new Error('Traffic watch request was not observed before subscription');
-        }
-        const subscriber = new BoundedTrafficSubscription(options, send, () => {
-            this._subscribers.delete(subscriber);
-            this._clearCorrelationsIfUnused();
-        });
-        this._subscribers.add(subscriber);
-        return subscriber;
-    }
-
-    public observeTransits(observer: (transit: TrafficTransitEvent) => void): EndpointTrafficObservation {
-        this._observers.add(observer);
-        let disposed = false;
-        return {
-            dispose: () => {
-                if (disposed) return;
-                disposed = true;
-                this._observers.delete(observer);
-                this._clearCorrelationsIfUnused();
-            },
-        };
-    }
-
     public dispose(): void {
-        for (const subscriber of [...this._subscribers]) subscriber.dispose();
-        this._subscribers.clear();
-        this._observers.clear();
         this._outboundRequests.clear();
         this._inboundRequests.clear();
-        this._trafficWatches.clear();
-        this._setActive(false);
     }
 
     private _onMessage(
@@ -109,7 +46,8 @@ export class EndpointTrafficInspector {
     ): void {
         const now = Date.now();
         this._pruneRequestCorrelations(now);
-        const publiclyObserved = this._subscribers.size !== 0 || this._observers.size !== 0;
+        const publiclyObserved = this._isObserved();
+        if (!publiclyObserved) this.dispose();
         let transit: TrafficTransitEvent;
         const endpoint = this._endpoint('id' in message ? message.id ?? undefined : undefined);
         const base = {
@@ -173,16 +111,7 @@ export class EndpointTrafficInspector {
             return JSON.stringify([typeof requestId, requestId]);
         }
 
-        if (this._trafficWatches.accept(transit)) return;
-        if (!publiclyObserved) return;
-        for (const observer of [...this._observers]) {
-            try {
-                observer(transit);
-            } catch {
-                // Diagnostic observers never participate in transport lifecycle.
-            }
-        }
-        for (const subscriber of this._subscribers) subscriber.enqueue(transit);
+        this._emit(transit);
     }
 
     private _requestMap(
@@ -199,12 +128,6 @@ export class EndpointTrafficInspector {
             portId: this._portId,
             ...(requestId !== undefined ? { requestId } : {}),
         } as const;
-    }
-
-    private _clearCorrelationsIfUnused(): void {
-        if (this._subscribers.size !== 0 || this._observers.size !== 0) return;
-        this._outboundRequests.clear();
-        this._inboundRequests.clear();
     }
 
     private _pruneRequestCorrelations(timeMs: number): void {
