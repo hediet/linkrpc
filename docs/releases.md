@@ -41,7 +41,7 @@ does not need candidate reservation tags.
 
 Keep older `cargo/{crate}/v0.1.0` markers untouched. The workflow does not consume
 an ecosystem-wide `cargo/v0.1.0` marker. The committed bases have since advanced
-to npm 0.0.2 and Cargo 0.2.0, so their first successful release generates stable
+to npm 0.0.2 and Cargo 0.2.1, so their first successful release generates stable
 and next artifacts. If either base was already published before activation,
 bootstrap it from its verified source run as well. ArtifactGate's skip-existing
 policy is the final safeguard against republishing an existing version.
@@ -62,7 +62,7 @@ produces publication artifacts.
 ## Versions and immutable reservations
 
 The five npm packages share the committed base version **0.0.2**. The Rust
-crates `linkrpc-macros`, `linkrpc`, and `linkrpc-tokio` share **0.2.0**.
+crates `linkrpc-macros`, `linkrpc`, and `linkrpc-tokio` share **0.2.1**.
 The examples remain unpublished and are not packaged.
 
 Every source CI run reserves one annotated tag `next-builds/YYYYMMDD/N`. The
@@ -70,16 +70,16 @@ date is the source run's UTC creation date, not the retry date. Its message
 records the run ID, commit, both bases and suffix. Atomic reference creation
 resolves contention; a retry of the same run reuses its reservation. Both
 ecosystems use the **same** `next.YYYYMMDD.N` suffix, e.g.
-`0.0.2-next.20260920.1` and `0.2.0-next.20260920.1`.
+`0.0.2-next.20260920.1` and `0.2.1-next.20260920.1`.
 
 Stable candidates are independently reserved at
-`release-candidates/npm/v0.0.2` and `release-candidates/cargo/{crate}/v0.2.0`.
+`release-candidates/npm/v0.0.2` and `release-candidates/cargo/{crate}/v0.2.1`.
 Cargo reservations are per crate so adding an unpublished crate cannot change
 the recorded source identity of an already-published stable version.
 Reservations are created before packing and never moved. Until all artifact
 uploads succeed, a retry or later run can recover the original candidate's
 artifacts and revalidate its successful trusted CI run. After upload, immutable
-completion tags `npm/v0.0.2` and `cargo/{crate}/v0.2.0` suppress future stable
+completion tags `npm/v0.0.2` and `cargo/{crate}/v0.2.1` suppress future stable
 generation for those package/base combinations. These tags mean **artifacts generated**, not registry
 publication confirmed. Registry availability/retries remain ArtifactGate's
 responsibility. Bump committed bases intentionally for a new stable release.
@@ -125,7 +125,7 @@ Release repacking retains the original Cargo file set, `Cargo.toml.orig`, and
 change. Archive timestamps and owner metadata are normalized so retries of a
 reserved release produce identical bytes. The normalized manifest has no workspace/path dependencies and pins
 all generated prerelease internal requirements exactly, e.g.
-`=0.2.0-next.20260920.1`, including target-specific, renamed, build, and dev
+`=0.2.1-next.20260920.1`, including target-specific, renamed, build, and dev
 dependencies. ArtifactGate must wait for dependencies to be available in the
 Cargo registry index: `linkrpc-macros` before `linkrpc`, and `linkrpc` before
 `linkrpc-tokio` (for both channels). Upload order is not itself a dependency gate.
