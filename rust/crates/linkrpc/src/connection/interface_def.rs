@@ -2,16 +2,17 @@
 //! ordered set of typed members (request/notification). Lowers to a wire `LinkRpcInterfaceSchema`
 //! and exposes the content hash. Mirrors TS `connection/interfaceDefinition.ts`.
 //!
-//! Member param/result/stream schemas are carried as the already-normalized linkrpc
-//! `JsonValue` subset (typically produced by [`crate::schema::schemars_to_subset`] in the macro,
-//! or hand-authored). This keeps the definition language-agnostic and makes the hash match TS.
+//! Member param/result/stream schemas are carried as the already-normalized linkrpc `JsonValue`
+//! subset. Trait exports produce them with [`crate::schema::InterfaceSchemaCollector`] and may
+//! attach shared `components`; direct callers may supply normalized schemas themselves. This keeps
+//! the definition language-agnostic and makes the hash match TS.
 
 use std::sync::OnceLock;
 
 use crate::protocol::json_value::JsonValue;
 use crate::schema::hash::compute_interface_hash;
 use crate::schema::interface_schema::{
-    LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
+    Components, LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
 };
 
 /// Identity + human docs for an interface.
@@ -95,15 +96,35 @@ impl Member {
 pub struct InterfaceDefinition {
     info: InterfaceInfo,
     members: Vec<(String, Member)>,
+    components: Option<Components>,
     hash: OnceLock<String>,
     frozen_schema: Option<LinkRpcInterfaceSchema>,
 }
 
 impl InterfaceDefinition {
     pub fn new(info: InterfaceInfo, members: Vec<(String, Member)>) -> Self {
+        Self::new_with_components(info, members, None)
+    }
+
+    /// Build a runtime definition with a shared schema-components bag.
+    ///
+    /// An absent or empty bag is omitted from the wire schema, preserving [`Self::new`]'s output.
+    pub fn new_with_components(
+        info: InterfaceInfo,
+        members: Vec<(String, Member)>,
+        components: Option<Components>,
+    ) -> Self {
+        let components = components.filter(|components| {
+            components
+                .schemas
+                .as_ref()
+                .map(|schemas| !schemas.is_empty())
+                .unwrap_or(false)
+        });
         InterfaceDefinition {
             info,
             members,
+            components,
             hash: OnceLock::new(),
             frozen_schema: None,
         }
@@ -111,10 +132,9 @@ impl InterfaceDefinition {
 
     /// Build a runtime definition from an already-authored interface schema.
     ///
-    /// Unlike the Rust-trait schema bridge, this preserves components,
-    /// extensions, errors, and recursive references verbatim. Generated server
-    /// adapters use it so registration publishes the exact schema they were
-    /// generated from.
+    /// This preserves components, extensions, errors, recursive references, and other authored
+    /// schema content verbatim. Generated server adapters use it so registration publishes the
+    /// exact schema they were generated from.
     pub fn from_schema(schema: LinkRpcInterfaceSchema) -> Self {
         let info = InterfaceInfo {
             id: schema.id.clone(),
@@ -149,6 +169,7 @@ impl InterfaceDefinition {
         InterfaceDefinition {
             info,
             members,
+            components: None,
             hash: OnceLock::new(),
             frozen_schema: Some(schema),
         }
@@ -213,7 +234,7 @@ impl InterfaceDefinition {
             description: self.info.description.clone(),
             comment: self.info.comment.clone(),
             methods,
-            components: None,
+            components: self.components.clone(),
             extensions: Default::default(),
         }
     }

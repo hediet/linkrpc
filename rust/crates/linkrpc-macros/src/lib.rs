@@ -139,6 +139,29 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
     // ── interface() builder module ────────────────────────────────────────────
     let module_ident = format_ident!("{}", to_snake_case(&trait_ident.to_string()));
     let member_exprs = methods.iter().map(|m| member_expr(&trait_ident, m));
+    let schema_types = methods
+        .iter()
+        .flat_map(|m| {
+            m.params
+                .iter()
+                .map(|(_, ty)| ty)
+                .chain(m.result_ty.iter())
+                .chain(m.input_stream_ty.iter())
+                .chain(m.output_stream_ty.iter())
+        })
+        .collect::<Vec<_>>();
+    let schema_registrations = schema_types.iter().map(|ty| {
+        quote! {
+            __schemas.register::<#ty>()
+                .expect("linkrpc schema roots have distinct schema ids");
+        }
+    });
+    let validation_schema_registrations = schema_types.iter().map(|ty| {
+        quote! {
+            __schemas.register::<#ty>()
+                .expect("linkrpc schema roots have distinct schema ids");
+        }
+    });
     let iface_desc = match &trait_doc {
         Some(d) => quote!(info = info.with_description(#d);),
         None => quote!(),
@@ -151,21 +174,37 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
             /// The interface id (the `id` half of `id@hash`).
             pub const ID: &str = #id;
 
-            pub(super) fn subset<T: ::schemars::JsonSchema>() -> ::linkrpc::prelude::JsonValue {
-                ::linkrpc::schema::schemars_to_subset(
-                    &::serde_json::to_value(::schemars::schema_for!(T)).expect("schema serializes"),
-                )
-                .expect("type is in the linkrpc schema subset")
+            pub(super) fn validation_schema<T: ::schemars::JsonSchema>()
+                -> ::linkrpc::prelude::JsonValue
+            {
+                let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
+                #(#validation_schema_registrations)*
+                __schemas.initialize().expect("linkrpc schema roots initialize");
+                let __root = __schemas.root_schema::<T>()
+                    .expect("registered stream schema is in the linkrpc schema subset");
+                match __schemas.components().expect("stream schema components are valid") {
+                    ::core::option::Option::Some(__components) => ::serde_json::json!({
+                        "allOf": [__root],
+                        "components": __components,
+                    }),
+                    ::core::option::Option::None => __root,
+                }
             }
 
             /// Build the runtime interface definition (its content hash is the identity).
             pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
                 let mut info = ::linkrpc::prelude::InterfaceInfo::new(ID);
                 #iface_desc
+                let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
+                #(#schema_registrations)*
+                __schemas.initialize().expect("linkrpc schema roots initialize");
                 let members: ::std::vec::Vec<(::std::string::String, ::linkrpc::prelude::Member)> = ::std::vec![
                     #(#member_exprs),*
                 ];
-                ::linkrpc::prelude::InterfaceDefinition::new(info, members)
+                let components = __schemas.components()
+                    .expect("type is in the linkrpc schema subset");
+                ::linkrpc::prelude::InterfaceDefinition::new_with_components(
+                    info, members, components)
             }
         }
     };
@@ -184,7 +223,7 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
         let receiver = m.input_stream_ty.as_ref().map(|ty| {
             quote! {
                 let __stream_receiver = ctx.stream_receiver::<#ty>(
-                    #module_ident::subset::<#ty>()
+                    #module_ident::validation_schema::<#ty>()
                 )?;
             }
         });
@@ -518,30 +557,52 @@ fn param_struct(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
 fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
     let wire = &m.wire_name;
     let params_ty = params_ty(trait_ident, m);
+    let params_schema = if m.passthrough_ty.is_some() {
+        quote! {
+            __schemas.root_schema::<#params_ty>()
+                .expect("registered params schema is in the linkrpc schema subset")
+        }
+    } else {
+        quote! {
+            __schemas.inline_schema::<#params_ty>()
+                .expect("inline params schema is in the linkrpc schema subset")
+        }
+    };
     let docs = member_docs(m);
     if m.is_notification {
         quote! {
             (#wire.to_string(), ::linkrpc::prelude::Member::Notification(
                 ::linkrpc::prelude::NotificationMember {
-                    params_schema: subset::<#params_ty>(),
+                    params_schema: #params_schema,
                     docs: #docs,
                 }))
         }
     } else {
         let result_ty = m.result_ty.as_ref().expect("request has result type");
         let client_stream_schema = match &m.input_stream_ty {
-            Some(ty) => quote!(::core::option::Option::Some(subset::<#ty>())),
+            Some(ty) => quote! {
+                ::core::option::Option::Some(
+                    __schemas.root_schema::<#ty>()
+                        .expect("registered input stream schema is in the linkrpc schema subset")
+                )
+            },
             None => quote!(::core::option::Option::None),
         };
         let server_stream_schema = match &m.output_stream_ty {
-            Some(ty) => quote!(::core::option::Option::Some(subset::<#ty>())),
+            Some(ty) => quote! {
+                ::core::option::Option::Some(
+                    __schemas.root_schema::<#ty>()
+                        .expect("registered output stream schema is in the linkrpc schema subset")
+                )
+            },
             None => quote!(::core::option::Option::None),
         };
         quote! {
             (#wire.to_string(), ::linkrpc::prelude::Member::Request(::std::boxed::Box::new(
                 ::linkrpc::prelude::RequestMember {
-                    params_schema: subset::<#params_ty>(),
-                    result_schema: subset::<#result_ty>(),
+                    params_schema: #params_schema,
+                    result_schema: __schemas.root_schema::<#result_ty>()
+                        .expect("registered result schema is in the linkrpc schema subset"),
                     client_stream_schema: #client_stream_schema,
                     server_stream_schema: #server_stream_schema,
                     docs: #docs,
@@ -629,12 +690,12 @@ fn client_method(trait_ident: &Ident, module: &Ident, m: &MethodModel) -> TokenS
             let client_schema = m
                 .input_stream_ty
                 .as_ref()
-                .map(|ty| quote!(::core::option::Option::Some(#module::subset::<#ty>())))
+                .map(|ty| quote!(::core::option::Option::Some(#module::validation_schema::<#ty>())))
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
             let server_schema = m
                 .output_stream_ty
                 .as_ref()
-                .map(|ty| quote!(::core::option::Option::Some(#module::subset::<#ty>())))
+                .map(|ty| quote!(::core::option::Option::Some(#module::validation_schema::<#ty>())))
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
             return quote! {
                 #doc

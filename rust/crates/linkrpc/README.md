@@ -63,6 +63,41 @@ The hashing is byte-for-byte defined (RFC 8785 JCS → SHA-256, truncated to 16 
 by a shared [conformance corpus](../../../conformance), so independent implementations in different
 languages compute the same hash for the same contract.
 
+### Shared schemas in trait exports
+
+Trait descriptors export reusable types once in `components.schemas`. Method parameters,
+results, and nested types refer to those definitions with `#/components/schemas/...`.
+The same type is shared across the entire interface, rather than expanded separately at
+each use. Guarded recursive types (such as nodes containing child nodes) retain finite
+references. Type and field descriptions remain part of the contract. This does not extend
+the supported schema subset to arbitrary intersections or unguarded reference cycles.
+
+Types are registered in schema-identity order, so reordering trait methods does not
+change component allocation or the hash. Sharing uses Schemars' `JsonSchema::schema_id`,
+not structural similarity. As with Schemars itself, custom implementations must give
+different contracts different schema IDs; generic `#[schemars(rename = "...")]`
+attributes should include their type parameters. Schemars can number colliding display
+names, so adding another colliding type or changing nested type discovery can rename
+components. Names are deterministic for a fixed type graph, not a promise of stable
+names across contract edits.
+
+Exports that now use shared definitions intentionally have different JSON and content
+hashes from their previously inlined versions. Primitive-only exports need not change.
+The hash algorithm has not changed: component names and reference topology are
+part of the canonical document, so an inlined document and a referenced document need not
+have the same hash even if they accept the same values. Regenerate consumers from the
+exported interface JSON; do not hand-author matching TypeScript types or assume a separately
+declared Zod interface has the same identity. For TypeScript CLI generation, use
+`linkrpc codegen --preserve-wire-schema` to retain the exported contract exactly.
+The JSON-to-Rust generator also consumes these existing component references.
+
+The standalone `schema::schemars_to_subset` function retains its inline behavior for
+callers that need the original Zod-compatible representation; it still rejects recursion.
+Runtime message shapes and the generated trait client/server APIs are unchanged.
+
+The [shared-schema interoperability fixture](../../../interop/shared-schemas) measures
+the reduction and exercises the CLI-generated TypeScript and JSON-generated Rust peers.
+
 ## Serving and calling
 
 A connection wraps any message transport and hosts a live registry of interfaces. Registering an
