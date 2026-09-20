@@ -105,6 +105,12 @@ languages compute the same hash for the same contract.
 
 ### Shared schemas in trait exports
 
+Built-in reflection interfaces retain their original inline schemas and hashes.
+For existing non-recursive contracts that must preserve that layout, use
+`#[link_rpc_interface(id = "...", schema = "inline")]`. This reuses the standalone
+Schemars conversion for params, results, and stream payloads; the default remains
+shared schemas. Declared application-error components are retained independently.
+
 Trait descriptors export reusable types once in `components.schemas`. Method parameters,
 results, and nested types refer to those definitions with `#/components/schemas/...`.
 The same type is shared across the entire interface, rather than expanded separately at

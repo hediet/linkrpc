@@ -263,7 +263,9 @@ describe('bundle size', () => {
         // eslint-disable-next-line no-console
         console.log(`  written to ${outDir}`);
 
-        // Upper bound (current real size ≈ 228 KiB, including checked-error wire validation).
+        // Measured baseline: 228.0 KiB versus 215.0 KiB before typed errors.
+        // The ~13 KiB increase includes origin-aware calls and checked-error wire/schema
+        // validation in the shared connection path. Keep only ~2 KiB of headroom.
         // The example authors with
         // `zod/mini` and linkrpc's internals do too, so only zod's shared *core*
         // (parsing + json-schema, ~75 KiB) is pulled — the classic schema

@@ -60,7 +60,7 @@ pub mod iface {
     }
 
     /// Reflection: preset default service / interface on this connection.
-    #[link_rpc_interface(id = "hubrpc.defaults")]
+    #[link_rpc_interface(id = "hubrpc.defaults", schema = "inline")]
     #[allow(non_snake_case)]
     pub trait DefaultsService {
         async fn get() -> Result<DefaultsGetResult, JsonRpcError>;
@@ -89,7 +89,7 @@ pub mod iface {
     }
 
     /// Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.
-    #[link_rpc_interface(id = "hubrpc.directory")]
+    #[link_rpc_interface(id = "hubrpc.directory", schema = "inline")]
     pub trait DirectoryService {
         async fn list(
             interface_id: Option<String>,
@@ -108,7 +108,7 @@ pub mod iface {
     }
 
     /// Reflection: fetch interface schemas by id (+ optional hash). Must serve the interfaces advertised in this endpoint's directory.
-    #[link_rpc_interface(id = "hubrpc.schemas")]
+    #[link_rpc_interface(id = "hubrpc.schemas", schema = "inline")]
     pub trait SchemasService {
         async fn get(
             interface_id: String,

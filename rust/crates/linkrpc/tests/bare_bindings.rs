@@ -136,6 +136,26 @@ fn reflection_defaults_schema_and_hash_match_shared_fixture() {
     assert_eq!(iface.schema_hash(), expected["hash"].as_str().unwrap());
 }
 
+#[test]
+fn builtin_reflection_contracts_keep_their_inline_schema_layout() {
+    for interface in [
+        linkrpc::connection::reflection::defaults_interface(),
+        linkrpc::connection::reflection::directory_interface(),
+        linkrpc::connection::reflection::schemas_interface(),
+    ] {
+        let schema = interface.to_schema();
+        assert!(schema.components.is_none(), "{}", schema.id);
+        for method in schema.methods.values() {
+            assert!(method.params.get("$ref").is_none(), "{}", schema.id);
+            assert!(
+                method.result.as_ref().unwrap().get("$ref").is_none(),
+                "{}",
+                schema.id
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn shared_conformance_vectors_match_runtime_routing() {
     let vectors = bare_binding_vectors();

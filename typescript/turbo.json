@@ -3,6 +3,7 @@
     "concurrency": "100%",
     "globalDependencies": ["tsconfig.json"],
     "globalEnv": ["CI"],
+    "globalPassThroughEnv": ["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"],
     "tasks": {
         "build": {
             "dependsOn": ["^build"],
@@ -30,6 +31,10 @@
             "cache": false
         },
         "@hediet/linkrpc-infra#test": {
+            "dependsOn": ["build"],
+            "cache": false
+        },
+        "@hediet/linkrpc-cli#test": {
             "dependsOn": ["build"],
             "cache": false
         },

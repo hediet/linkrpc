@@ -287,30 +287,60 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
 /// See crate docs.
 #[proc_macro_attribute]
 pub fn link_rpc_interface(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let id = match parse_id(attr.into()) {
-        Ok(id) => id,
+    let options = match parse_options(attr.into()) {
+        Ok(options) => options,
         Err(e) => return e.to_compile_error().into(),
     };
     let item = parse_macro_input!(item as ItemTrait);
-    match expand(id, item) {
+    match expand(options, item) {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-/// Parse the `id = "..."` attribute argument.
-fn parse_id(attr: TokenStream2) -> syn::Result<String> {
-    let meta: Meta = syn::parse2(attr)?;
-    match meta {
-        Meta::NameValue(nv) if nv.path.is_ident("id") => {
-            let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
-            Ok(lit.value())
+struct InterfaceOptions {
+    id: String,
+    inline_schemas: bool,
+}
+
+fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
+    let args = syn::parse::Parser::parse2(
+        syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+        attr,
+    )?;
+    let mut id = None;
+    let mut inline_schemas = None;
+    for arg in args {
+        match arg {
+            Meta::NameValue(nv) if nv.path.is_ident("id") && id.is_none() => {
+                let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
+                id = Some(lit.value());
+            }
+            Meta::NameValue(nv) if nv.path.is_ident("schema") && inline_schemas.is_none() => {
+                let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
+                inline_schemas = Some(match lit.value().as_str() {
+                    "inline" => true,
+                    "shared" => false,
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            lit,
+                            "expected \"inline\" or \"shared\"",
+                        ))
+                    }
+                });
+            }
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "expected unique `id = \"...\"` and optional `schema = \"inline\"` arguments",
+                ))
+            }
         }
-        other => Err(syn::Error::new_spanned(
-            other,
-            "expected `#[link_rpc_interface(id = \"...\")]`",
-        )),
     }
+    Ok(InterfaceOptions {
+        id: id.ok_or_else(|| syn::Error::new(Span::call_site(), "missing interface id"))?,
+        inline_schemas: inline_schemas.unwrap_or(false),
+    })
 }
 
 struct MethodModel {
@@ -340,7 +370,8 @@ struct MethodModel {
     raw_output: ReturnType,
 }
 
-fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
+fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream2> {
+    let id = &options.id;
     let trait_ident = item.ident.clone();
     let vis = item.vis.clone();
     let trait_doc = extract_doc(&item.attrs);
@@ -399,7 +430,9 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
 
     // ── interface() builder module ────────────────────────────────────────────
     let module_ident = format_ident!("{}", to_snake_case(&trait_ident.to_string()));
-    let member_exprs = methods.iter().map(|m| member_expr(&trait_ident, m));
+    let member_exprs = methods
+        .iter()
+        .map(|m| member_expr(&trait_ident, m, options.inline_schemas));
     let schema_types = methods
         .iter()
         .flat_map(|m| {
@@ -427,6 +460,31 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
         Some(d) => quote!(info = info.with_description(#d);),
         None => quote!(),
     };
+    let schema_setup = if options.inline_schemas {
+        quote!()
+    } else {
+        quote! {
+            let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
+            #(#schema_registrations)*
+            __schemas.initialize().expect("linkrpc schema roots initialize");
+        }
+    };
+    let components = if options.inline_schemas {
+        quote!(::core::option::Option::None)
+    } else {
+        quote!(__schemas
+            .components()
+            .expect("type is in the linkrpc schema subset"))
+    };
+    let inline_schema = options.inline_schemas.then(|| {
+        quote! {
+            fn inline_schema<T: ::schemars::JsonSchema>() -> ::linkrpc::prelude::JsonValue {
+                ::linkrpc::schema::schemars_to_subset(
+                    &::serde_json::to_value(::schemars::schema_for!(T)).expect("schema serializes"),
+                ).expect("inline interface schemas must be non-recursive and in the linkrpc subset")
+            }
+        }
+    });
     let interface_mod = quote! {
         #vis mod #module_ident {
             #[allow(unused_imports)]
@@ -434,6 +492,7 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
 
             /// The interface id (the `id` half of `id@hash`).
             pub const ID: &str = #id;
+            #inline_schema
 
             pub(super) fn validation_schema<T: ::schemars::JsonSchema>()
                 -> ::linkrpc::prelude::JsonValue
@@ -456,14 +515,11 @@ fn expand(id: String, item: ItemTrait) -> syn::Result<TokenStream2> {
             pub fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
                 let mut info = ::linkrpc::prelude::InterfaceInfo::new(ID);
                 #iface_desc
-                let mut __schemas = ::linkrpc::schema::InterfaceSchemaCollector::new();
-                #(#schema_registrations)*
-                __schemas.initialize().expect("linkrpc schema roots initialize");
+                #schema_setup
                 let members: ::std::vec::Vec<(::std::string::String, ::linkrpc::prelude::Member)> = ::std::vec![
                     #(#member_exprs),*
                 ];
-                let components = __schemas.components()
-                    .expect("type is in the linkrpc schema subset");
+                let components = #components;
                 ::linkrpc::prelude::InterfaceDefinition::new_with_components(
                     info, members, components)
             }
@@ -854,10 +910,12 @@ fn param_struct(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
     }
 }
 
-fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
+fn member_expr(trait_ident: &Ident, m: &MethodModel, inline_schemas: bool) -> TokenStream2 {
     let wire = &m.wire_name;
     let params_ty = params_ty(trait_ident, m);
-    let params_schema = if m.passthrough_ty.is_some() {
+    let params_schema = if inline_schemas {
+        quote!(inline_schema::<#params_ty>())
+    } else if m.passthrough_ty.is_some() {
         quote! {
             __schemas.root_schema::<#params_ty>()
                 .expect("registered params schema is in the linkrpc schema subset")
@@ -879,6 +937,15 @@ fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
         }
     } else {
         let result_ty = m.result_ty.as_ref().expect("request has result type");
+        let root_schema = |ty: &Type| {
+            if inline_schemas {
+                quote!(inline_schema::<#ty>())
+            } else {
+                quote!(__schemas.root_schema::<#ty>()
+                    .expect("registered schema is in the linkrpc schema subset"))
+            }
+        };
+        let result_schema = root_schema(result_ty);
         let errors = match &m.error_ty {
             Some(error_ty) => quote! {
                 {
@@ -908,21 +975,17 @@ fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
             None => quote!(::core::option::Option::None),
         };
         let client_stream_schema = match &m.input_stream_ty {
-            Some(ty) => quote! {
-                ::core::option::Option::Some(
-                    __schemas.root_schema::<#ty>()
-                        .expect("registered input stream schema is in the linkrpc schema subset")
-                )
-            },
+            Some(ty) => {
+                let schema = root_schema(ty);
+                quote!(::core::option::Option::Some(#schema))
+            }
             None => quote!(::core::option::Option::None),
         };
         let server_stream_schema = match &m.output_stream_ty {
-            Some(ty) => quote! {
-                ::core::option::Option::Some(
-                    __schemas.root_schema::<#ty>()
-                        .expect("registered output stream schema is in the linkrpc schema subset")
-                )
-            },
+            Some(ty) => {
+                let schema = root_schema(ty);
+                quote!(::core::option::Option::Some(#schema))
+            }
             None => quote!(::core::option::Option::None),
         };
         quote! {
@@ -931,8 +994,7 @@ fn member_expr(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
                     errors: #errors,
                     error_components: #error_components,
                     params_schema: #params_schema,
-                    result_schema: __schemas.root_schema::<#result_ty>()
-                        .expect("registered result schema is in the linkrpc schema subset"),
+                    result_schema: #result_schema,
                     client_stream_schema: #client_stream_schema,
                     server_stream_schema: #server_stream_schema,
                     docs: #docs,
@@ -1182,6 +1244,27 @@ fn to_snake_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn schema_layout_defaults_to_shared_and_can_preserve_inline_contracts() {
+        assert!(
+            !parse_options(quote!(id = "test.shared"))
+                .unwrap()
+                .inline_schemas
+        );
+        assert!(
+            parse_options(quote!(id = "test.inline", schema = "inline"))
+                .unwrap()
+                .inline_schemas
+        );
+        assert!(parse_options(quote!(id = "test.invalid", schema = "unknown")).is_err());
+        assert!(parse_options(quote!(
+            id = "test.duplicate",
+            schema = "inline",
+            schema = "shared"
+        ))
+        .is_err());
+    }
 
     #[test]
     fn infers_direct_and_wrapped_application_errors() {
