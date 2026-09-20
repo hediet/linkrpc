@@ -78,7 +78,7 @@ const PRESENTATION_SCHEMA = z.enum(["auto", "raw"]).optional().describe(
 );
 
 const SERVER_NAME = "linkrpc-mcp";
-const SERVER_VERSION = "0.0.1";
+const SERVER_VERSION = "0.0.2";
 
 /**
  * MCP server exposing the `runLinkRpcScript` tool plus task-management helpers.

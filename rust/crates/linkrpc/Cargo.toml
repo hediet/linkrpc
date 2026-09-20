@@ -19,7 +19,7 @@ sha2.workspace = true
 schemars.workspace = true
 url.workspace = true
 percent-encoding.workspace = true
-linkrpc-macros = { version = "0.1.1", path = "../linkrpc-macros" }
+linkrpc-macros = { version = "0.2.0", path = "../linkrpc-macros" }
 
 [dev-dependencies]
 tokio.workspace = true
