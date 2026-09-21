@@ -52,10 +52,10 @@ import { JsonRpcChannel } from './jsonRpcChannel';
 import { bytesToBase64Url } from '../crypto/cryptoProvider';
 import { InspectionHost } from '../inspection/inspectionHost';
 import {
-    isBareInterfaceTarget,
     validateBarePrefix,
     type BareInterfaceTarget,
 } from './bareInterfaceTarget';
+import { isInterfaceTarget, type InterfaceTarget } from './interfaceTarget';
 
 export interface LinkRpcConnectionOptions {
     /** Topology node/port ID generator. Defaults to cryptographic randomness. */
@@ -157,9 +157,9 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         }
     }
 
-    /** Get a typed metadata-free client for a bundled bare interface target. */
+    /** Get a typed client using a bundled qualified, default, or bare route. */
     public get<TDef extends InterfaceDefinition<any>>(
-        target: BareInterfaceTarget<TDef>,
+        target: InterfaceTarget<TDef>,
     ): InterfaceClient<TDef>;
 
     /** Get a typed client for `iface`, routed to the implicit (root) service. */
@@ -169,16 +169,19 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
     ): InterfaceClient<TDef>;
 
     public get<TDef extends InterfaceDefinition<any>>(
-        ifaceOrTarget: TDef | BareInterfaceTarget<TDef>,
+        ifaceOrTarget: TDef | InterfaceTarget<TDef>,
         opts?: GetOptions<TOutCtx>,
     ): InterfaceClient<TDef> {
-        if (isBareInterfaceTarget(ifaceOrTarget)) {
+        if (isInterfaceTarget(ifaceOrTarget)) {
             if (opts !== undefined) {
-                throw new Error('get: bare interface targets do not accept service or call options.');
+                throw new Error(`get: ${ifaceOrTarget.mode === 'bare' ? 'bare ' : ''}interface targets do not accept service or call options.`);
             }
-            return this.getBare(ifaceOrTarget.interface, {
-                prefix: ifaceOrTarget.prefix,
-            });
+            if (ifaceOrTarget.mode === 'bare') {
+                return this.getBare(ifaceOrTarget.interface, { prefix: ifaceOrTarget.prefix });
+            }
+            return this._buildClient(ifaceOrTarget.interface,
+                (ifaceOrTarget.mode === 'qualified' ? { serviceId: ifaceOrTarget.serviceId } : {}) as GetOptions<TOutCtx>,
+                undefined, ifaceOrTarget.mode === 'default') as InterfaceClient<TDef>;
         }
         return this._buildClient(ifaceOrTarget, opts ?? {}) as InterfaceClient<TDef>;
     }
@@ -209,20 +212,28 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         return new ServiceHandle<TInCtx, TOutCtx>(this, serviceId);
     }
 
-    /** Register handlers, adding bare routing when passed a metadata-free target. */
+    /** Register handlers, adding preset routing when passed a default or bare target. */
     public register<TDef extends InterfaceDefinition<any>>(
-        ifaceOrTarget: TDef | BareInterfaceTarget<TDef>,
+        ifaceOrTarget: TDef | InterfaceTarget<TDef>,
         handlers: InterfaceHandlers<TDef, TInCtx>,
         opts: RegisterOptions = {},
     ): InterfaceRegistration {
-        if (isBareInterfaceTarget(ifaceOrTarget)) {
-            validateBarePrefix(ifaceOrTarget.prefix);
+        if (isInterfaceTarget(ifaceOrTarget)) {
+            if (ifaceOrTarget.mode === 'qualified') {
+                if (opts.serviceId !== undefined && opts.serviceId !== ifaceOrTarget.serviceId) {
+                    throw new Error('register: serviceId conflicts with interface target.');
+                }
+                return this._register(ifaceOrTarget.interface, handlers,
+                    { ...opts, serviceId: ifaceOrTarget.serviceId || undefined }, false);
+            }
+            const prefix = ifaceOrTarget.mode === 'bare' ? ifaceOrTarget.prefix : '';
+            validateBarePrefix(prefix);
             return this._register(
                 ifaceOrTarget.interface,
                 handlers,
                 opts,
                 false,
-                ifaceOrTarget.prefix,
+                prefix,
             );
         }
         return this._register(ifaceOrTarget, handlers, opts, false);
@@ -674,12 +685,13 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         iface: InterfaceDefinition<any>,
         opts: GetOptions<TOutCtx>,
         barePrefix?: string,
+        defaultRoute = false,
     ): Record<string, (params: any) => any> {
         const { serviceId, ...ctxRest } = opts;
         const sendOpts = barePrefix === undefined
             ? { ctx: ctxRest as unknown as TOutCtx, interfaceHash: iface.schemaHash }
             : undefined;
-        const prefix = barePrefix ?? (serviceId ? `${serviceId}::${iface.info.id}::` : `${iface.info.id}::`);
+        const prefix = barePrefix ?? (defaultRoute ? '' : serviceId ? `${serviceId}::${iface.info.id}::` : `${iface.info.id}::`);
         const proxy: Record<string, (p: any) => any> = {};
         for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
             const wireMethod = `${prefix}${name}`;

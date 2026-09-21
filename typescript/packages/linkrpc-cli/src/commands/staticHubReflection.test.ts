@@ -38,6 +38,27 @@ function schema(): StaticHubSchema {
 }
 
 describe('withStaticHubReflection', () => {
+    it('serves bare-only contracts without inventing a default or directory entry', async () => {
+        const ref = { interfaceId: greeter.info.id, interfaceHash: greeter.schemaHash };
+        const remote = {
+            sendRequest: vi.fn(async () => ({ remote: true })),
+            sendNotification: vi.fn(async () => {}),
+            sendRequestWithStream: () => { throw new Error('unexpected stream'); },
+            close: vi.fn(),
+        } satisfies IRequestSender;
+        const sender = withStaticHubReflection(remote, {
+            interfaceSchemas: [greeter.toSchema()],
+            bareInterfaces: [{ interface: ref, prefix: 'Runtime.' }],
+        });
+        await expect(sender.sendRequest('hubrpc.directory::list', {})).resolves.toEqual({ items: [] });
+        await expect(sender.sendRequest('hubrpc.defaults::get', {})).resolves.toEqual({});
+        await expect(sender.sendRequest('hubrpc.defaults::listBindings', {}))
+            .resolves.toEqual({ bindings: [{ ...ref, prefix: 'Runtime.' }] });
+        await expect(sender.sendRequest('hubrpc.schemas::get', { interfaceId: ref.interfaceId }))
+            .resolves.toEqual({ schema: greeter.toSchema() });
+        expect(remote.sendRequest).not.toHaveBeenCalled();
+    });
+
     it('serves reflection locally and forwards application requests', async () => {
         const sendRequest = vi.fn(async () => ({ remote: true }));
         const remote = {

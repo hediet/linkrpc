@@ -133,15 +133,47 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `ls`                          | Explore the directory referral graph and its services/interfaces. Supports exact and prefix filters, regexp `--search`, `--format pretty\|json\|jsonl`, `--watch`, `--dump <file>`, and `--dump-patches <file\|->`. |
 | `defaults`                    | Print the preset service/interface (wraps `hubrpc.defaults::get`).                                   |
+| `contract export --output <file\|-> [--service <id>] [--max-depth <n>]` | Export a complete reusable static contract from live reflection. |
 | `schema show <interfaceId>[@hash]` | Print an interface schema (wraps `hubrpc.schemas::get`). `--method <name>`, `--json`.           |
 | `schema hash <schema.json>` | Compute `computeInterfaceHash` for a local schema without connecting.                                  |
 | `schema check-compat <interfaceId> <local.json>` | Compare a live interface schema with a local schema.                                  |
 | `codegen --input <bundle> --interface <id> --name <name> --output <file> [--preserve-wire-schema] [--check]` | Generate a TypeScript interface definition from a validated offline static bundle. |
+| `codegen --input <contract> --output <file> [--names <json>] [--check]` | Generate all reusable interface definitions and typed root/service/default/bare bindings. |
 
-`codegen` uses the same `{ interfaceSchemas, services, defaultInterface }`
+`codegen` uses the same `{ interfaceSchemas, services?, defaultInterface?, bareInterfaces? }`
 bundle parser and interface-hash verification as static reflection. `--check`
 compares the generated source with the output file and exits unsuccessfully if
 the file is missing or stale; it never overwrites in check mode.
+
+```sh
+linkrpc --endpoint-cmd-stdio "node server.js" contract export --output contract.json
+linkrpc codegen --input contract.json --output generated.ts
+linkrpc codegen --input contract.json --output generated.ts --check
+# Existing per-interface generation remains available:
+linkrpc codegen --input contract.json --interface demo.echo --name echoInterface \
+  --output echo.ts --preserve-wire-schema
+```
+
+Omit both `--interface` and `--name` for whole-contract generation. Every interface
+is emitted once, with canonical wire schemas preserved, and each binding refers
+to that definition. For `demo.echo`, default names include `demoEchoInterface`,
+`demoEchoRoot`, `demoEchoDefault`, and (for bare prefix `Runtime.`) `runtimeBare`.
+A service `worker` produces `workerDemoEchoService`. If names collide, supply a
+local `--names` JSON file containing `interfaceNames` (`"id@hash": "exportName"`)
+and/or `bindingNames` (`"root:id@hash"`, `"service:serviceId:id@hash"`,
+`"default"`, or `"bare:prefix"` keys). Unknown keys and colliding overrides fail.
+
+Contract export queries directory interfaces, `defaults.get`, and
+`defaults.listBindings`; it fails explicitly if discovery is inaccessible,
+truncated or depth-limited, default metadata is incomplete, or schemas cannot be
+retrieved and hash-verified. It writes the output only after successful completion.
+`--service` selects a reflection scope; default/bare bindings describe that scope's
+preset routes, not additional service-qualified foreign methods. No default or
+bare bindings are guessed from directory listings.
+
+`ls --dump` remains the diagnostic graph format, including directory provenance.
+It is not a static contract and is not an input to `contract export`. Export a
+contract directly from the endpoint for offline generation instead.
 
 `hub ls --format json` waits for finite exploration and prints the final state.
 `--format jsonl` emits progressive state while requests fan out: the first line

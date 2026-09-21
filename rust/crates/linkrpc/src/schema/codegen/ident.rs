@@ -92,7 +92,7 @@ pub fn to_snake_case(input: &str) -> String {
 }
 
 /// Escape a candidate identifier that collides with a Rust keyword.
-fn escape_ident(name: String) -> String {
+pub(super) fn escape_ident(name: String) -> String {
     if !is_keyword(&name) {
         return name;
     }

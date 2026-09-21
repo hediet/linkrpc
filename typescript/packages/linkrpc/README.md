@@ -132,6 +132,70 @@ g.shout({ msg: 'boom' });                               // fire-and-forget notif
 Pass the wrong shape and TypeScript stops you at compile time; if a bad value reaches the wire
 anyway, the provider rejects it with a JSON-RPC `-32602 invalidParams`.
 
+## Static contracts and reusable bindings
+
+`StaticHubSchemaDocument`, `InterfaceRef`, and `parseStaticHubSchema` are library
+APIs, independent of the CLI. A document contains `interfaceSchemas` and optional
+`services`, `defaultInterface`, and `bareInterfaces`:
+
+```ts
+const ref = { interfaceId: greeter.info.id, interfaceHash: greeter.schemaHash };
+const contract = parseStaticHubSchema({
+    interfaceSchemas: [greeter.toSchema()],
+    services: [{ serviceId: '', interfaces: [ref] }],
+    defaultInterface: ref,
+    bareInterfaces: [{ interface: ref, prefix: 'Runtime.' }],
+});
+```
+
+Every reference must resolve to an exact id/hash pair, and every declared schema
+hash is verified. Duplicate services, interfaces within a service, and bare
+prefixes are rejected. Overlapping prefixes retain longest-prefix routing;
+an empty bare prefix may coexist with `defaultInterface` only for the same ref.
+The default and a root-qualified interface with the same id must also use the
+same hash; different versions under named services remain independent.
+Schema-only and bare-only documents do not need `services`.
+
+The same interface definition can be used with immutable typed descriptors:
+
+```ts
+import { interfaceTarget, defaultInterfaceTarget, bareInterfaceTarget } from '@hediet/linkrpc';
+
+const root = interfaceTarget(greeter);                         // test.greeter::hello
+const service = interfaceTarget(greeter, { serviceId: 'app' }); // app::test.greeter::hello
+const preset = defaultInterfaceTarget(greeter);               // hello, LinkRPC metadata
+const foreign = bareInterfaceTarget(greeter, { prefix: 'Runtime.' }); // Runtime.hello, no metadata
+
+await connection.get(service).hello({ name: 'world' });
+connection.register(service, { hello: ({ name }) => ({ greeting: name }), shout: () => {} });
+```
+
+`get` and `register` accept all descriptors. Existing definition-based overloads,
+`service()`, `getBare()`, and `bareInterfaceTarget()` remain supported. Default
+targets retain interface-hash metadata and streaming; bare targets deliberately
+omit metadata and reject streaming clients. Registering a default or bare target
+also installs its qualified interface registration, exactly as existing bare
+registration does. Do not register its root alias a second time. Duplicate
+registrations and occupied prefixes still fail atomically; disposal removes the
+registration and its binding.
+
+`generateTsContract(contract, options)` produces a single TypeScript module with
+one definition per schema and separate bindings (no duplicated interface types).
+It composes `generateTsInterface` and preserves canonical wire schemas. Options
+include `linkRpcImport`, `interfaceNames` keyed by `id@hash`, and `bindingNames`
+keyed by `root:id@hash`, `service:serviceId:id@hash`, `default`, or `bare:prefix`.
+Derived export names are deterministic; ambiguous names require explicit
+overrides rather than order-dependent suffixes. Unknown overrides are errors.
+
+`exportStaticHubSchema(channel, { serviceId?, maxDepth?, timeoutMs? })` reflects
+directory interfaces, `defaults.get`, and `defaults.listBindings`, retrieves and
+verifies schemas, and returns this same document. Missing reflection, inaccessible
+or depth-limited directories, truncation, incomplete defaults, and schema failures
+are errors, not partial successful contracts. `serviceId` selects the reflection
+scope; default/bare descriptors describe the preset routes reported by that
+scope and must be used against the corresponding endpoint. Diagnostic directory
+graphs are not part of the static contract.
+
 ## Inspecting independently owned connections
 
 `InspectionHost` exposes one topology and traffic view through any number of

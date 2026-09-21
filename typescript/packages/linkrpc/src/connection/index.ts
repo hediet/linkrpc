@@ -14,6 +14,7 @@ export {
     type StreamSendOpts,
 } from './channel';
 export * from './linkRpcConnection';
+export * from './interfaceTarget';
 export {
     bareInterfaceTarget,
     type BareInterfaceTarget,

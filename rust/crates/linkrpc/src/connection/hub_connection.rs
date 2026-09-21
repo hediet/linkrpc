@@ -29,7 +29,7 @@ use crate::protocol::jsonrpc::{error_codes, JsonRpcError};
 use crate::protocol::method_name::{parse_method_name, ParsedMethodName};
 use crate::transport::message::MessageTransport;
 
-/// Errors from registry mutations.
+/// Errors from registration or invalid binding configuration.
 #[derive(Debug, thiserror::Error)]
 pub enum ConnError {
     #[error("interface \"{interface_id}\" already registered{}", .service.as_deref().map(|s| format!(" under service \"{s}\"")).unwrap_or_default())]
@@ -41,6 +41,10 @@ pub enum ConnError {
     InvalidBarePrefix,
     #[error("register: bare prefix \"{0}\" is already bound")]
     BarePrefixAlreadyBound(String),
+    #[error("register: invalid service id")]
+    InvalidServiceId,
+    #[error("bare interface clients do not support streaming methods")]
+    BareStreamingUnsupported,
 }
 
 /// Options for [`LinkRpcConnection::register`].
@@ -173,7 +177,7 @@ impl LinkRpcConnection {
     /// Build a connection over `transport`, binding the inbound dispatch handler.
     pub fn new(transport: Box<dyn MessageTransport>) -> Self {
         let inner = Arc::new(RegistryInner::default());
-        let handler = ConnectionDispatch {
+        let handler = InterfaceRouter {
             inner: inner.clone(),
         };
         let channel = Channel::new(transport, Box::new(handler));
@@ -190,6 +194,13 @@ impl LinkRpcConnection {
         self.channel.run().await;
     }
 
+    /// The transport-independent router backed by this connection's live registry.
+    pub fn router(&self) -> InterfaceRouter {
+        InterfaceRouter {
+            inner: self.inner.clone(),
+        }
+    }
+
     /// Register an interface's server-side handler.
     pub fn register(
         &self,
@@ -197,6 +208,113 @@ impl LinkRpcConnection {
         handler: Arc<dyn InterfaceHandler>,
         opts: RegisterOptions,
     ) -> Result<InterfaceRegistration, ConnError> {
+        self.router().register(iface, handler, opts)
+    }
+
+    /// Register a descriptor's address; see [`InterfaceRouter::register_binding`].
+    pub fn register_binding(
+        &self,
+        iface: Arc<InterfaceDefinition>,
+        handler: Arc<dyn InterfaceHandler>,
+        address: crate::binding::BindingAddress,
+    ) -> Result<InterfaceRegistration, ConnError> {
+        self.router().register_binding(iface, handler, address)
+    }
+}
+
+impl InterfaceRouter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Decode and deliver a recognized notification. Unknown methods return `false`.
+    pub async fn dispatch_notification(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<bool, JsonRpcError> {
+        self.dispatch_notification_with_context(method, params, CallCtx::default())
+            .await
+    }
+
+    pub async fn dispatch_notification_with_context(
+        &self,
+        method: &str,
+        params: JsonValue,
+        ctx: CallCtx,
+    ) -> Result<bool, JsonRpcError> {
+        let Ok(routed) = self.inner.route(method) else {
+            return Ok(false);
+        };
+        if !matches!(
+            routed.entry.iface.member(&routed.member),
+            Some(Member::Notification(_))
+        ) {
+            return Ok(false);
+        }
+        routed
+            .entry
+            .handler
+            .dispatch_notification(&routed.member, params, ctx)
+            .await
+    }
+
+    /// Register an interface's server-side handler.
+    pub fn register(
+        &self,
+        iface: Arc<InterfaceDefinition>,
+        handler: Arc<dyn InterfaceHandler>,
+        opts: RegisterOptions,
+    ) -> Result<InterfaceRegistration, ConnError> {
+        self.register_impl(iface, handler, opts)
+    }
+
+    /// Register a descriptor's address using the existing registry and dispatcher.
+    ///
+    /// Bare and default targets reuse `RegisterOptions::bare_prefix`, retaining
+    /// the qualified root route and reflection metadata. Their client-side
+    /// policies differ: bare clients do not support LinkRPC streaming.
+    pub fn register_binding(
+        &self,
+        iface: Arc<InterfaceDefinition>,
+        handler: Arc<dyn InterfaceHandler>,
+        address: crate::binding::BindingAddress,
+    ) -> Result<InterfaceRegistration, ConnError> {
+        use crate::binding::BindingAddress;
+        let options = match address {
+            BindingAddress::Root => RegisterOptions::default(),
+            BindingAddress::Service(service) => RegisterOptions {
+                service_id: Some(service.to_string()),
+                ..Default::default()
+            },
+            BindingAddress::Default => RegisterOptions {
+                bare_prefix: Some(String::new()),
+                ..Default::default()
+            },
+            BindingAddress::Bare(prefix) => RegisterOptions {
+                bare_prefix: Some(prefix.to_string()),
+                ..Default::default()
+            },
+        };
+        self.register_impl(iface, handler, options)
+    }
+
+    fn register_impl(
+        &self,
+        iface: Arc<InterfaceDefinition>,
+        handler: Arc<dyn InterfaceHandler>,
+        mut opts: RegisterOptions,
+    ) -> Result<InterfaceRegistration, ConnError> {
+        if opts.service_id.as_deref() == Some("") {
+            opts.service_id = None;
+        }
+        if opts
+            .service_id
+            .as_deref()
+            .is_some_and(|id| !crate::schema::contract::valid_service_id(id))
+        {
+            return Err(ConnError::InvalidServiceId);
+        }
         if let Some(prefix) = &opts.bare_prefix {
             validate_bare_prefix(prefix)?;
         }
@@ -243,7 +361,9 @@ impl LinkRpcConnection {
             registration_id,
         })
     }
+}
 
+impl LinkRpcConnection {
     /// Register a service from its handler alone, deriving the [`InterfaceDefinition`] via
     /// [`ServiceExport`]. Convenience over [`register`](Self::register) for macro-generated
     /// `…Server` adapters: no separate `interface()` argument needed.
@@ -370,7 +490,7 @@ impl LinkRpcConnection {
 }
 
 fn validate_bare_prefix(prefix: &str) -> Result<(), ConnError> {
-    if prefix.contains("::") || !prefix.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+    if !crate::schema::contract::valid_prefix(prefix) {
         return Err(ConnError::InvalidBarePrefix);
     }
     Ok(())
@@ -378,8 +498,8 @@ fn validate_bare_prefix(prefix: &str) -> Result<(), ConnError> {
 
 fn wire_method(service_id: Option<&str>, interface_id: &str, member: &str) -> String {
     match service_id {
+        None | Some("") => format!("{interface_id}::{member}"),
         Some(sid) => format!("{sid}::{interface_id}::{member}"),
-        None => format!("{interface_id}::{member}"),
     }
 }
 
@@ -451,12 +571,67 @@ impl RegistryInner {
     }
 }
 
-struct ConnectionDispatch {
+/// Transport-independent dispatch over the same registry used by [`LinkRpcConnection`].
+///
+/// Register typed descriptors with `target.register(&router, adapter)`, use it as
+/// an [`InterfaceHandler`] or [`RequestHandler`], or dispatch notifications with
+/// validation and explicit unknown-member results.
+#[derive(Clone, Default)]
+pub struct InterfaceRouter {
     inner: Arc<RegistryInner>,
 }
 
+impl crate::binding::BindingRegistrar for InterfaceRouter {
+    fn register_binding(
+        &self,
+        iface: Arc<InterfaceDefinition>,
+        handler: Arc<dyn InterfaceHandler>,
+        address: crate::binding::BindingAddress,
+    ) -> Result<InterfaceRegistration, ConnError> {
+        InterfaceRouter::register_binding(self, iface, handler, address)
+    }
+}
+
+impl crate::binding::BindingRegistrar for LinkRpcConnection {
+    fn register_binding(
+        &self,
+        iface: Arc<InterfaceDefinition>,
+        handler: Arc<dyn InterfaceHandler>,
+        address: crate::binding::BindingAddress,
+    ) -> Result<InterfaceRegistration, ConnError> {
+        LinkRpcConnection::register_binding(self, iface, handler, address)
+    }
+}
+
 #[async_trait]
-impl RequestHandler for ConnectionDispatch {
+impl InterfaceHandler for InterfaceRouter {
+    async fn handle_request(
+        &self,
+        member: &str,
+        params: JsonValue,
+        ctx: CallCtx,
+    ) -> Result<JsonValue, JsonRpcError> {
+        RequestHandler::handle_request_with_context(self, member.to_string(), params, ctx).await
+    }
+
+    async fn handle_notification(&self, member: &str, params: JsonValue, ctx: CallCtx) {
+        RequestHandler::handle_notification_with_context(self, member.to_string(), params, ctx)
+            .await;
+    }
+
+    async fn dispatch_notification(
+        &self,
+        member: &str,
+        params: JsonValue,
+        ctx: CallCtx,
+    ) -> Result<bool, JsonRpcError> {
+        self.dispatch_notification_with_context(member, params, ctx)
+            .await
+    }
+}
+
+#[async_trait]
+impl RequestHandler for InterfaceRouter {
     async fn handle_request(
         &self,
         method: String,

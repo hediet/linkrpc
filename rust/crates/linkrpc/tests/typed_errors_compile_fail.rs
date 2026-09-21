@@ -82,3 +82,13 @@ fn imported_trait_cannot_omit_wire_members() {
 fn client_only_generation_does_not_send_server_events() {
     assert_compile_fails("client_only_event", "no method named `changed`");
 }
+
+#[test]
+fn binding_rejects_another_interfaces_provider() {
+    assert_compile_fails("wrong_binding_provider", "InterfaceProvider<RuntimeClient>");
+}
+
+#[test]
+fn binding_address_cannot_be_mutated() {
+    assert_compile_fails("immutable_binding", "field `address`");
+}

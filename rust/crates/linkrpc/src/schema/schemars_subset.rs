@@ -548,14 +548,12 @@ impl SchemaReferenceGraph {
             return Ok(());
         };
         if let Some(JsonValue::String(reference)) = object.get("$ref") {
-            let name = reference
-                .strip_prefix("#/components/schemas/")
-                .filter(|name| !name.is_empty())
+            let name = super::interface_schema::component_ref_name(reference)
                 .ok_or_else(|| SchemarsSubsetError::UnresolvedRef(reference.clone()))?;
-            self.pending_refs.push((id, name.to_string()));
+            self.pending_refs.push((id, name));
         }
 
-        for key in ["anyOf", "oneOf"] {
+        for key in ["anyOf", "oneOf", "allOf"] {
             if let Some(JsonValue::Array(schemas)) = object.get(key) {
                 for schema in schemas {
                     let child = self.add_schema(schema)?;
@@ -564,23 +562,37 @@ impl SchemaReferenceGraph {
             }
         }
 
-        if object.get("type").and_then(JsonValue::as_str) == Some("object") {
-            if let Some(JsonValue::Object(properties)) = object.get("properties") {
+        for key in ["not", "if", "then", "else"] {
+            if let Some(schema) = object.get(key) {
+                let child = self.add_schema(schema)?;
+                self.edges[id].push(child);
+            }
+        }
+        for key in ["properties", "patternProperties", "dependentSchemas"] {
+            if let Some(JsonValue::Object(properties)) = object.get(key) {
                 for schema in properties.values() {
                     self.add_schema(schema)?;
                 }
             }
-            if let Some(schema) = object.get("additionalProperties") {
+        }
+        for key in [
+            "additionalProperties",
+            "propertyNames",
+            "contains",
+            "additionalItems",
+            "unevaluatedProperties",
+            "unevaluatedItems",
+        ] {
+            if let Some(schema) = object.get(key) {
                 self.add_schema(schema)?;
             }
         }
-        if object.get("type").and_then(JsonValue::as_str) == Some("array") {
-            if let Some(JsonValue::Array(schemas)) = object.get("prefixItems") {
+        for key in ["prefixItems", "items"] {
+            if let Some(JsonValue::Array(schemas)) = object.get(key) {
                 for schema in schemas {
                     self.add_schema(schema)?;
                 }
-            }
-            if let Some(schema) = object.get("items") {
+            } else if let Some(schema) = object.get(key) {
                 self.add_schema(schema)?;
             }
         }
@@ -624,7 +636,7 @@ impl SchemaReferenceGraph {
     }
 }
 
-fn validate_guarded_references(
+pub(crate) fn validate_guarded_references(
     roots: &[JsonValue],
     components: &BTreeMap<String, JsonValue>,
 ) -> Result<(), SchemarsSubsetError> {

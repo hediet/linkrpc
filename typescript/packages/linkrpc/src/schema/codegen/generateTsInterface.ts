@@ -9,6 +9,8 @@ import { validateBarePrefix } from '../../connection/bareInterfaceTarget';
 import { CodeWriter } from './utils/codeWriter';
 
 export interface GenerateInterfaceOptions {
+    /** Omit imports when composing definitions inside a generated module. */
+    omitImports?: boolean;
     /**
      * Module specifier from which `defineInterface`, `requestType`,
      * `notificationType` are imported. Defaults to `@hediet/linkrpc`.
@@ -65,9 +67,11 @@ export function generateTsInterface(
     const definitionImport = preserveWireSchema ?
         `${errorImport}${bareTargetImport}InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema` :
         `${errorImport}${bareTargetImport}defineInterface, notificationType, requestType`;
-    w.writeLine(`import { ${definitionImport} } from "${linkRpcImport}";`);
-    w.writeLine(`import { z } from "zod";`);
-    w.writeLine();
+    if (!options.omitImports) {
+        w.writeLine(`import { ${definitionImport} } from "${linkRpcImport}";`);
+        w.writeLine(`import { z } from "zod";`);
+        w.writeLine();
+    }
 
     const componentSchemas = schema.components?.schemas ?? {};
     const cyclicComponents = _findCyclicComponents(componentSchemas);

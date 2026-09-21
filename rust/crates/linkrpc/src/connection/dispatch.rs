@@ -140,6 +140,21 @@ pub trait InterfaceHandler: Send + Sync {
 
     /// Handle a notification member. Errors are swallowed (notifications have no response).
     async fn handle_notification(&self, _member: &str, _params: JsonValue, _ctx: CallCtx) {}
+
+    /// Fallible notification dispatch for typed consumers outside a channel.
+    ///
+    /// Routers check membership before calling this. Generated adapters override
+    /// it to return `false` for unknown members and retain typed decoding errors.
+    /// Existing hand-written handlers keep their notification behavior.
+    async fn dispatch_notification(
+        &self,
+        member: &str,
+        params: JsonValue,
+        ctx: CallCtx,
+    ) -> Result<bool, JsonRpcError> {
+        self.handle_notification(member, params, ctx).await;
+        Ok(true)
+    }
 }
 
 /// A handler that also knows its own [`InterfaceDefinition`].
