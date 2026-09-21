@@ -56,8 +56,13 @@ fn derive_rejects_linkrpc_cancelled_error_code() {
 }
 
 #[test]
-fn derive_rejects_duplicate_error_code() {
-    assert_compile_fails("duplicate", "duplicate application error code 1001");
+fn derive_rejects_duplicate_error_type() {
+    assert_compile_fails("duplicate", "duplicate application error type `First`");
+}
+
+#[test]
+fn derive_rejects_empty_error_type() {
+    assert_compile_fails("empty_name", "application error type must not be empty");
 }
 
 #[test]

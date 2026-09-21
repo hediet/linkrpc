@@ -295,11 +295,14 @@ function _writeMethod(
         w.append('.withErrors([').newline();
         w.indent();
         for (const error of method.errors!) {
-            w.append(`applicationError(${error.code}, ${JSON.stringify(error.message)}`);
+            w.append(error.type === undefined
+                ? `applicationError(${error.code}, ${JSON.stringify(error.message)}`
+                : `applicationError(${JSON.stringify(error.type)}, { code: ${error.code}, message: ${JSON.stringify(error.message)}`);
             if (error.data !== undefined) {
-                w.append(', ');
+                w.append(error.type === undefined ? ', ' : ', data: ');
                 _writeSchema(w, error.data, components, preserveWireSchema);
             }
+            if (error.type !== undefined) w.append(' }');
             w.append('),').newline();
         }
         w.dedent();
@@ -331,7 +334,7 @@ function _validateErrors(methods: Record<string, MethodSchema>): void {
         if (method.result === undefined && method.errors !== undefined) {
             throw new Error(`generateInterface: notification "${name}" cannot declare errors`);
         }
-        const seen = new Set<number>();
+        const seen = new Set<string>();
         for (const error of method.errors ?? []) {
             if (typeof error.message !== 'string') {
                 throw new Error(`generateInterface: error message on "${name}" is not a string`);
@@ -342,10 +345,14 @@ function _validateErrors(methods: Record<string, MethodSchema>): void {
             if ((error.code >= -32768 && error.code <= -32000) || error.code === -32800) {
                 throw new Error(`generateInterface: error code ${error.code} on "${name}" is reserved`);
             }
-            if (seen.has(error.code)) {
-                throw new Error(`generateInterface: duplicate error code ${error.code} on "${name}"`);
+            if (error.type !== undefined && (typeof error.type !== 'string' || error.type.length === 0)) {
+                throw new Error(`generateInterface: error type on "${name}" must be a nonempty string`);
             }
-            seen.add(error.code);
+            const key = error.type === undefined ? `code:${error.code}` : `type:${error.type}`;
+            if (seen.has(key)) {
+                throw new Error(`generateInterface: duplicate error ${key} on "${name}"`);
+            }
+            seen.add(key);
         }
     }
 }

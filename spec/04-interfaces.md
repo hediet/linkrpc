@@ -32,7 +32,7 @@ MethodSchema = {
   result?:       JsonSchema,       // omit ⇒ notification-only member
   clientStream?: JsonSchema,       // caller→provider stream payload schema (03)
   serverStream?: JsonSchema,       // provider→caller stream payload schema (03)
-  errors?:       ErrorSchema[],         // application errors; codes MUST be unique
+  errors?:       ErrorSchema[],    // application errors; named variants MAY share a code
   summary?:      string,
   description?:  string,           // NORMATIVE; part of the hash
   comment?:      string,           // non-normative; stripped
@@ -40,7 +40,7 @@ MethodSchema = {
   annotations?:  MemberAnnotations
 }
 
-ErrorSchema = { code: number, message: string, data?: JsonSchema }
+ErrorSchema = { type?: string, code: number, message: string, data?: JsonSchema }
 
 MemberAnnotations = {             // every flag defaults to false; NORMATIVE
   readOnly?:   boolean,           // no observable state change; implies idempotent, reversible
@@ -60,32 +60,72 @@ Each key of `methods` MUST conform to the `member` production in chapter 01 §2.
 ### 2.1 Declared application errors
 
 Only request members MAY declare `errors`. Each application error code MUST be a signed
-32-bit integer, unique within its method, and outside the reserved JSON-RPC range
-`-32768` through `-32000` (inclusive) and the LinkRPC cancellation code `-32800`.
-The declaration's `message` is the exact wire
-message, not a formatting template. Variable diagnostics belong in `data`.
+32-bit integer outside the reserved JSON-RPC range `-32768` through `-32000`
+(inclusive) and the LinkRPC cancellation code `-32800`.
+LinkRPC defines `1` as its default application error code; JSON-RPC itself does not
+assign a standard application error code. Authoring APIs SHOULD default to `1`
+and MAY allow an explicit code. Exported schemas MUST include the resolved code.
 
-Omitting an error's `data` schema means that its wire error MUST omit `data`. When a
-`data` schema is present, the wire error MUST include `data` and its value MUST match
-that schema. In particular, absent data and JSON `null` are distinct: a nullable
-schema permits an explicit `null`, not an omitted field. Data schemas can use the
-same local component references and guarded recursion as other schema positions.
+A named error declares a nonempty `type`, unique among the method's named errors.
+Named errors MAY share a code. They use an adjacent-tagged envelope in the
+JSON-RPC error's `data`:
 
-A consumer MUST recognize a declared application error only after matching its code,
-exact message, data presence, and data schema. An unknown code, mismatched message,
-or malformed payload MUST NOT be coerced into a declared variant. Consumers MUST
-retain such errors as generic remote errors, including the original wire payload.
+```json
+{
+  "code": 1,
+  "message": "Resource not found",
+  "data": {
+    "type": "NotFound",
+    "data": { "resource": "document:123" }
+  }
+}
+```
+
+The envelope MUST contain only `type` and, when declared, `data`.
+The declaration's `data` schema describes the **inner** `data`, not the envelope.
+Omitting this schema requires the inner `data` to be absent; the outer envelope
+and its `type` remain required. When the schema is present, the inner `data` MUST
+be present and match it. In particular, absent data and JSON `null` are distinct.
+Data schemas support the same local component references and guarded recursion as
+other schema positions.
+
+Consumers recognize named errors by the declared `type`, code, data presence, and
+data schema. The wire `message` is diagnostic and MUST NOT be used to select the
+variant. The schema's `message` is the producer's default diagnostic message.
+Numeric code alone never establishes a declared variant or a local failure.
+
+For compatibility, declarations without `type` retain the legacy representation:
+their codes MUST be unique among the method's legacy errors, their wire `message`
+MUST exactly match the declaration, and their schema describes the outer wire
+`data` directly (including presence or absence). Consumers MUST attempt named
+recognition before legacy recognition when both use the same code.
+Once a named declaration matches the wire code and envelope type, an invalid
+envelope or payload MUST remain a generic remote error; consumers MUST NOT retry
+that error against a permissive legacy declaration.
+
+Unknown variants, wrong codes, and malformed payloads MUST NOT be coerced into a
+named variant. Errors not recognized by either representation MUST remain generic
+remote errors, including the original wire payload.
 Protocol errors and local transport failures are not declared application errors.
 Typed application-error producers MUST validate their error before encoding it;
 invalid application values are local implementation failures, not valid instances
 of the declared error.
 
-The declarations, including their codes, messages, and normalized data schemas, are
+The declarations, including their types, codes, messages, and normalized data schemas, are
 normative and participate in the interface hash. Declaration order is preserved.
 Clients MUST still support undeclared remote errors: the list is not a closed set of
 all possible failures of a call. In languages without checked exceptions, typed
 application failures SHOULD be exposed through an explicit discriminated result API
 rather than an assertion about the type of an arbitrary caught exception.
+Client APIs SHOULD separate declared application failures from generic RPC failures.
+TypeScript clients may return application failures as nominally branded values while
+throwing generic failures, with a separate result client returning both categories.
+Rust clients may return `Result<T, CallError<E>>`, where `CallError` distinguishes
+`Application(E)` from `Generic(...)`. Generic failures retain remote, local, and
+transport provenance instead of interpreting a remote code as a local transport event.
+
+Adding a `type` to a legacy declaration changes both its wire representation and
+interface hash. It is a contract change, not a wire-compatible optional annotation.
 
 ## 3. The JSON Schema subset
 

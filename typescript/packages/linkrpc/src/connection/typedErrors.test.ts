@@ -72,10 +72,10 @@ describe('typed application errors', () => {
             ok: true,
             value: 'value:ok',
         });
-        await expect(client.read({ id: 'missing' })).rejects.toMatchObject({
+        await expect(client.read({ id: 'missing' })).resolves.toMatchObject({ error: {
             code: 404,
             message: 'Not found',
-        });
+        } });
         expect(await client.read({ id: 'missing' }).result()).toEqual({
             ok: false,
             error: { kind: 'application', code: 404, message: 'Not found' },

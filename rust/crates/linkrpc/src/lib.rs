@@ -16,10 +16,11 @@ pub mod protocol;
 pub mod schema;
 pub mod transport;
 
-pub use application_error::{ApplicationError, CallError};
+pub use application_error::{ApplicationError, CallError, DEFAULT_APPLICATION_ERROR_CODE};
 pub mod prelude {
     pub use crate::application_error::{
         scope_error_contract, validate_json_schema, ApplicationError, CallError,
+        DEFAULT_APPLICATION_ERROR_CODE,
     };
     pub use crate::client::{RpcCall, RpcCallError};
     pub use crate::connection::channel::{Channel, RequestHandler};

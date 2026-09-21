@@ -2,7 +2,7 @@
 enum Duplicate {
     #[rpc_error(code = 1001, message = "First")]
     First,
-    #[rpc_error(code = 1001, message = "Second")]
+    #[rpc_error(code = 1002, message = "Second", name = "First")]
     Second,
 }
 

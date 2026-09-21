@@ -112,6 +112,8 @@ struct MethodModel {
 
 struct ErrorModel {
     code: i32,
+    wire_name: Option<String>,
+    variant: String,
     message: String,
     data: Option<TypeRef>,
 }
@@ -227,6 +229,17 @@ impl<'a> Collector<'a> {
         };
         let mut errors = Vec::new();
         let mut codes = HashSet::new();
+        let mut names = HashSet::new();
+        let mut variants = HashSet::new();
+        // Legacy variants use private serde tags too; reserve every public wire
+        // name before allocating those tags, including names declared later.
+        let mut binding_names: HashSet<String> = method
+            .errors
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|error| error.r#type.clone())
+            .collect();
         for error in method.errors.as_deref().unwrap_or_default() {
             if method.result.is_none() {
                 self.invalid
@@ -239,17 +252,45 @@ impl<'a> Collector<'a> {
                     error.code
                 ));
             }
-            if !codes.insert(error.code) {
+            if let Some(name) = &error.r#type {
+                if name.is_empty() {
+                    self.invalid
+                        .push(format!("method `{wire}` error type must not be empty"));
+                }
+                if !names.insert(name) {
+                    self.invalid
+                        .push(format!("method `{wire}` has duplicate error type `{name}`"));
+                }
+            } else if !codes.insert(error.code) {
                 self.invalid.push(format!(
                     "method `{wire}` has duplicate error code {}",
                     error.code
                 ));
             }
+            let variant = unique_name(
+                &error
+                    .r#type
+                    .as_ref()
+                    .map(|name| to_pascal_case(name))
+                    .unwrap_or_else(|| format!("Code{}", code_name(error.code))),
+                &mut variants,
+            );
             let data = error.data.as_ref().map(|schema| {
-                self.error_type_ref(schema, &format!("{base}Error{}Data", code_name(error.code)))
+                let suffix = error
+                    .r#type
+                    .as_ref()
+                    .map(|_| variant.clone())
+                    .unwrap_or_else(|| code_name(error.code));
+                self.error_type_ref(schema, &format!("{base}Error{suffix}Data"))
+            });
+            let wire_name = error.r#type.clone().or_else(|| {
+                let binding = unique_name(&variant, &mut binding_names);
+                (binding != variant).then_some(binding)
             });
             errors.push(ErrorModel {
                 code: error.code,
+                wire_name,
+                variant,
                 message: error.message.clone(),
                 data,
             });
@@ -1185,9 +1226,14 @@ pub(super) fn generate(
         w.line(&format!("pub enum {name} {{"));
         w.indent();
         for error in &method.errors {
-            let variant = format!("Code{}", code_name(error.code));
+            let variant = &error.variant;
+            let name_attr = error
+                .wire_name
+                .as_ref()
+                .map(|name| format!(", name = {}", quote_str(name)))
+                .unwrap_or_default();
             w.line(&format!(
-                "#[rpc_error(code = {}, message = {})]",
+                "#[rpc_error(code = {}, message = {}{name_attr})]",
                 error.code,
                 quote_str(&error.message)
             ));

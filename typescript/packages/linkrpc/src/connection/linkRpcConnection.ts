@@ -17,13 +17,16 @@ import {
     type TrafficTransitEvent,
 } from '../inspection/inspection.interfaces';
 import type {
-    CheckedCall,
     CheckedCallResult,
     InterfaceClient,
+    InterfaceResultClient,
+    GenericRpcError,
     InterfaceDefinition,
     InterfaceHandlers,
     StreamApi,
 } from './interfaceDefinition';
+import { RpcFailure } from './rpcFailure';
+import { brandApplicationError } from '../schema/applicationErrorBrand';
 import {
     type ApplicationErrorDescriptorBase,
     type ApplicationErrorValue,
@@ -191,7 +194,14 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         iface: TDef,
         opts: BareGetOptions = {},
     ): InterfaceClient<TDef> {
-        const prefix = opts.prefix ?? '';
+        return this._buildBareClient(iface, opts.prefix ?? '', false) as InterfaceClient<TDef>;
+    }
+
+    private _buildBareClient(
+        iface: InterfaceDefinition<any>,
+        prefix: string,
+        allFailuresAsValues: boolean,
+    ): Record<string, (params: any) => any> {
         validateBarePrefix(prefix);
         for (const [name, member] of Object.entries(iface.members)) {
             if (
@@ -201,7 +211,31 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 throw new Error(`getBare: streaming method "${name}" is not supported on foreign wires.`);
             }
         }
-        return this._buildClient(iface, {}, prefix) as InterfaceClient<TDef>;
+        return this._buildClient(iface, {}, prefix, allFailuresAsValues);
+    }
+
+    /** Return request failures as values for a metadata-free foreign-protocol target. */
+    public getResultClient<TDef extends InterfaceDefinition<any>>(
+        target: BareInterfaceTarget<TDef>,
+    ): InterfaceResultClient<TDef>;
+
+    /** Return application and generic request failures as values instead of throwing. */
+    public getResultClient<TDef extends InterfaceDefinition<any>>(
+        iface: TDef,
+        opts?: GetOptions<TOutCtx>,
+    ): InterfaceResultClient<TDef>;
+
+    public getResultClient<TDef extends InterfaceDefinition<any>>(
+        ifaceOrTarget: TDef | BareInterfaceTarget<TDef>,
+        opts?: GetOptions<TOutCtx>,
+    ): InterfaceResultClient<TDef> {
+        if (isBareInterfaceTarget(ifaceOrTarget)) {
+            if (opts !== undefined) {
+                throw new Error('getResultClient: bare interface targets do not accept service or call options.');
+            }
+            return this._buildBareClient(ifaceOrTarget.interface, ifaceOrTarget.prefix, true) as InterfaceResultClient<TDef>;
+        }
+        return this._buildClient(ifaceOrTarget, opts ?? {}, undefined, true) as InterfaceResultClient<TDef>;
     }
 
     /** Get a service-scoped handle; all interfaces obtained from it route via `serviceId` (form 3). */
@@ -674,6 +708,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         iface: InterfaceDefinition<any>,
         opts: GetOptions<TOutCtx>,
         barePrefix?: string,
+        allFailuresAsValues = false,
     ): Record<string, (params: any) => any> {
         const { serviceId, ...ctxRest } = opts;
         const sendOpts = barePrefix === undefined
@@ -719,15 +754,26 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         const channelOpts: StreamSendOpts<TOutCtx> | undefined = onStreamMessage !== undefined ?
                             { ...sendOpts, onStreamMessage } :
                             sendOpts;
-                        this._validateOutboundParamsFor(member, wireMethod, params);
-                        const call = this.channel.sendRequestWithStream(
-                            wireMethod,
-                            params as JsonValue | undefined,
-                            channelOpts,
-                        );
+                        let call: import('./channel').RawStreamingCall;
+                        try {
+                            this._validateOutboundParamsFor(member, wireMethod, params);
+                            call = this.channel.sendRequestWithStream(
+                                wireMethod,
+                                params as JsonValue | undefined,
+                                channelOpts,
+                            );
+                        } catch (cause) {
+                            if (!allFailuresAsValues) throw cause;
+                            call = {
+                                result: Promise.reject(cause),
+                                send: () => { throw cause; },
+                                cancel: () => { throw cause; },
+                                ping: async () => { throw cause; },
+                            };
+                        }
                         const result = call.result.then((raw) =>
                             validateWireResult(member.resultSchema, raw, wireMethod));
-                        const checked = addCheckedResult(result, member);
+                        const checked = addCheckedResult(result, member, allFailuresAsValues);
 
                         return Object.assign(checked, {
                             send: async (payload: unknown) => call.send(payload as JsonValue),
@@ -739,15 +785,15 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 } else {
                     proxy[name] = (params: unknown) => {
                         const result = (async () => {
-                        this._validateOutboundParamsFor(member, wireMethod, params);
-                        const raw = await this.channel.sendRequest(
-                            wireMethod,
-                            params as JsonValue | undefined,
-                            sendOpts,
-                        );
-                        return validateWireResult(member.resultSchema, raw, wireMethod);
+                            this._validateOutboundParamsFor(member, wireMethod, params);
+                            const raw = await this.channel.sendRequest(
+                                wireMethod,
+                                params as JsonValue | undefined,
+                                sendOpts,
+                            );
+                            return validateWireResult(member.resultSchema, raw, wireMethod);
                         })();
-                        return addCheckedResult(result, member);
+                        return addCheckedResult(result, member, allFailuresAsValues);
                     };
                 }
             } else {
@@ -1072,22 +1118,35 @@ interface BareBinding {
     readonly entry: RegisteredInterface;
 }
 
-type DecodedApplicationError = ApplicationErrorValue | ApplicationErrorValue<number, string, JsonValue>;
+type DecodedApplicationError = ApplicationErrorValue<number, string, never, string | undefined>
+    | ApplicationErrorValue<number, string, JsonValue, string | undefined>;
 
 function addCheckedResult<TResult>(
     promise: Promise<TResult>,
     member: RequestType<any, any, any, any, any, any, any>,
-): CheckedCall<TResult, DecodedApplicationError> {
-    return Object.assign(promise, {
+    allFailuresAsValues = false,
+) {
+    const settled = promise.then(
+        (value) => ({ ok: true as const, value }),
+        (cause) => ({ ok: false as const, error: decodeCheckedError(cause, member.applicationErrors), cause }),
+    );
+    const result = settled.then((outcome) => {
+        if (outcome.ok) return outcome.value;
+        if (allFailuresAsValues) {
+            return new RpcFailure(outcome.error.kind === 'application'
+                ? { kind: 'application' as const, error: outcome.error }
+                : { kind: 'generic' as const, error: outcome.error });
+        }
+        if (outcome.error.kind === 'application') return new RpcFailure(outcome.error);
+        throw outcome.cause;
+    });
+    return Object.assign(result, {
         result: async (): Promise<CheckedCallResult<TResult, DecodedApplicationError>> => {
-            try {
-                return { ok: true, value: await promise };
-            } catch (cause) {
-                return {
-                    ok: false,
-                    error: decodeCheckedError(cause, member.applicationErrors),
-                };
-            }
+            // Only suppress the default view's rejection when its compatibility
+            // view is actually consumed.
+            void result.catch(() => {});
+            const outcome = await settled;
+            return outcome.ok ? outcome : { ok: false, error: outcome.error };
         },
     });
 }
@@ -1095,31 +1154,43 @@ function addCheckedResult<TResult>(
 function decodeCheckedError(
     cause: unknown,
     descriptors: readonly ApplicationErrorDescriptorBase[],
-): DecodedApplicationError | import('./interfaceDefinition').RemoteRpcError |
-    import('./interfaceDefinition').LocalRpcError {
+): DecodedApplicationError | GenericRpcError {
     if (!(cause instanceof RpcError) || cause.origin !== 'remote') {
-        return { kind: 'local', cause };
+        return { kind: cause instanceof RpcError && cause.origin === 'transport' ? 'transport' : 'local', cause };
     }
 
+    const envelopeType = typeof cause.data === 'object' && cause.data !== null && !Array.isArray(cause.data)
+        ? cause.data.type : undefined;
     const descriptor = descriptors.find(
-        (candidate) => candidate.code === cause.code && candidate.message === cause.message,
+        (candidate) => candidate.type !== undefined && candidate.code === cause.code
+            && envelopeType === candidate.type,
+    ) ?? descriptors.find(
+        (candidate) => candidate.type === undefined && candidate.code === cause.code
+            && candidate.message === cause.message,
     );
-    if (descriptor !== undefined) {
-        if (descriptor.dataSchema === undefined && !cause.hasData) {
-            return { kind: 'application', code: descriptor.code, message: descriptor.message };
+    if (descriptor !== undefined && (descriptor.type === undefined || isNamedErrorEnvelope(cause.data))) {
+        const data = descriptor.type === undefined ? cause.data : (cause.data as { data?: JsonValue }).data;
+        const hasData = descriptor.type === undefined ? cause.hasData : Object.hasOwn(cause.data as object, 'data');
+        const value = {
+            kind: 'application' as const, code: descriptor.code, message: cause.message,
+            ...(descriptor.type === undefined ? {} : { type: descriptor.type }),
+        };
+        if (descriptor.dataSchema === undefined && !hasData) {
+            return brandApplicationError(value) as DecodedApplicationError;
         }
-        if (descriptor.dataSchema !== undefined && cause.hasData
-            && matchesApplicationData(descriptor.dataSchema, cause.data)) {
-            const parsed = safeParse(descriptor.dataSchema, cause.data);
+        if (descriptor.dataSchema !== undefined && hasData
+            && matchesApplicationData(descriptor.dataSchema, data)) {
+            const parsed = safeParse(descriptor.dataSchema, data);
             if (parsed.success) {
-                return {
-                    kind: 'application',
-                    code: descriptor.code,
-                    message: descriptor.message,
-                    data: cause.data,
-                };
+                return brandApplicationError({ ...value, data }) as DecodedApplicationError;
             }
         }
+    }
+
+    function isNamedErrorEnvelope(value: unknown): value is { type: string; data?: JsonValue } {
+        return typeof value === 'object' && value !== null && !Array.isArray(value)
+            && typeof (value as { type?: unknown }).type === 'string'
+            && Object.keys(value).every((key) => key === 'type' || key === 'data');
     }
 
     return {
@@ -1139,10 +1210,12 @@ function encodeApplicationError(
         code?: unknown;
         message?: unknown;
         data?: unknown;
+        type?: unknown;
     };
     const descriptor = member.applicationErrors.find(
         (error: ApplicationErrorDescriptorBase) =>
-            error.code === candidate.code && error.message === candidate.message,
+            error.code === candidate.code && error.type === candidate.type
+                && (error.type !== undefined || error.message === candidate.message),
     );
     if (descriptor === undefined) {
         throw new RpcError(
@@ -1159,7 +1232,10 @@ function encodeApplicationError(
                 ErrorCode.internalError,
             );
         }
-        return { code: descriptor.code, message: descriptor.message };
+        return {
+            code: descriptor.code, message: String(candidate.message),
+            ...(descriptor.type === undefined ? {} : { data: { type: descriptor.type } }),
+        };
     }
     if (!hasData) {
         throw new RpcError(
@@ -1184,8 +1260,8 @@ function encodeApplicationError(
     }
     return {
         code: descriptor.code,
-        message: descriptor.message,
-        data: candidate.data,
+        message: String(candidate.message),
+        data: descriptor.type === undefined ? candidate.data : { type: descriptor.type, data: candidate.data },
     };
 }
 
@@ -1261,6 +1337,13 @@ export class ServiceHandle<TInCtx = undefined, TOutCtx = undefined> {
         private readonly _connection: LinkRpcConnection<TInCtx, TOutCtx>,
         private readonly _serviceId: string,
     ) { }
+
+    public getResultClient<TDef extends InterfaceDefinition<any>>(
+        iface: TDef,
+        opts: Partial<TOutCtx> = {},
+    ): InterfaceResultClient<TDef> {
+        return this._connection.getResultClient(iface, { ...opts, serviceId: this._serviceId } as GetOptions<TOutCtx>);
+    }
 
     public get<TDef extends InterfaceDefinition<any>>(
         iface: TDef,

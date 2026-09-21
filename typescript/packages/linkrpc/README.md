@@ -204,14 +204,16 @@ RPC implementation.
 
 ## Typed application errors
 
-Checked application errors are opt-in and remain ordinary JSON-RPC errors on the wire. Declare
-stable code/message pairs (and, optionally, a data schema), then attach them to a request:
+Declared application errors are returned as values by the default client. Declare stable
+names (and optional payload schemas), then attach them to a request:
 
 ```ts
-import { applicationError } from '@hediet/linkrpc';
+import { applicationError, isRpcFailure } from '@hediet/linkrpc';
 
-const notFound = applicationError(404, 'Not found');
-const conflict = applicationError(409, 'Conflict', z.object({ currentVersion: z.number() }));
+const notFound = applicationError('NotFound', { message: 'Not found' });
+const conflict = applicationError('Conflict', {
+    message: 'Conflict', data: z.object({ currentVersion: z.number() }),
+});
 
 const documents = defineInterface({ id: 'acme.documents' }, {
     read: requestType(z.object({ id: z.string() }), z.string())
@@ -223,38 +225,75 @@ connection.register(documents, {
 });
 ```
 
-Calls are still real promises: `await client.read(...)` succeeds or rejects exactly as before.
-For explicit handling, methods declaring application errors also expose `result()`:
+Calls are real promises of `Result<T, E>`, an alias for `T | RpcFailure<E>`. The branded
+library wrapper cannot collide with an ordinary successful object. Generic RPC errors
+(undeclared/malformed peer errors, validation failures, transport failures) still throw:
 
 ```ts
 const client = connection.get(documents);
-const outcome = await client.read({ id }).result();
-if (!outcome.ok) {
-    if (outcome.error.kind === 'application') {
-        if (outcome.error.code === 409) {
-            console.log(outcome.error.data.currentVersion); // statically typed
-        } else {
-            console.log('Document not found'); // code 404, no data
-        }
-    } else if (outcome.error.kind === 'remote') {
-        console.error(outcome.error.code, outcome.error.message); // undeclared/malformed peer error
+const outcome = await client.read({ id });
+if (isRpcFailure(outcome)) {
+    if (conflict.is(outcome.error)) {
+        console.log(outcome.error.data.currentVersion); // statically typed
     } else {
-        console.error(outcome.error.cause); // local validation or transport failure
+        console.log(outcome.error.type); // 'NotFound'
+    }
+} else {
+    console.log(outcome); // string
+}
+```
+
+Use `connection.getResultClient(documents)` (also available on service handles) to return
+**all request failures** as values, even for methods without declared errors:
+
+```ts
+const safe = connection.getResultClient(documents);
+const result = await safe.read({ id });
+if (isRpcFailure(result)) {
+    const failure = result.error;
+    if (failure.kind === 'application') {
+        console.log(failure.error.type); // 'NotFound' | 'Conflict'
+    } else if (failure.error.kind === 'remote') {
+        console.error(failure.error.code, failure.error.message);
+    } else {
+        console.error(failure.error.cause); // local or explicitly identified transport failure
     }
 }
 ```
 
-Promotion to `kind: 'application'` requires an exact code and message match. A descriptor without a
-data schema requires `data` to be absent; one with a schema requires valid data (including explicit
-`null` only when the schema allows it). Unknown or malformed peer errors remain generic remote
-errors. The legacy third `requestType` error-schema argument is still accepted for source
-compatibility, but does not opt a method into checked errors.
+The safe client also captures synchronous request-initiation errors. Streaming terminal
+responses follow the same policy and retain `send`, `cancel`, `dispose`, and `ping`.
+Notification and stream-control failures do not become terminal result values.
+The deprecated `.result()` compatibility method retains its `{ ok, value/error }` shape.
+Metadata-free targets also work: `connection.getResultClient(bareInterfaceTarget(documents))`.
+Like `get`, this target form does not accept LinkRPC routing options or streaming methods.
+Descriptor `.is` matchers require a branded application value or `RpcFailure` wrapper;
+decoded application payloads carry an internal brand, so successful lookalike objects
+never match.
 
-Codes must be unique within the method, fit a signed 32-bit integer, and avoid
-`-32768..-32000` and LinkRPC's `-32800` cancellation code. Created errors are branded locally
-so an ordinary success object with similar fields is never mistaken for an error. Payloads
-must be JSON values matching the declared wire schema; encoding does not silently strip
-properties, insert defaults, or turn missing data into `null`.
+Named errors use JSON-RPC `{ code: 1, message, data: { type: 'NotFound' } }` by default;
+payload errors put their data in `error.data.data`. `ErrorCode.applicationError` exports
+the default code `1`. The optional `code` overrides this default,
+and an omitted diagnostic message defaults to the name. Recognition checks the declared
+**type, code and payload**, not the message. Names must be unique within a method, but
+different names may share a code. Names must be nonempty. Unit errors omit the inner `data`; payload errors require
+valid JSON data (including `null` only when their schema allows it).
+
+Legacy `applicationError(404, 'Not found', optionalDataSchema)` and schemas without `type`
+retain their old untagged wire format and exact code/message matching. Legacy numeric
+codes must be unique independently of named errors; named and legacy errors may share
+a code, with named recognition attempted first. All codes must fit a signed 32-bit integer and avoid `-32768..-32000`
+and LinkRPC's `-32800` cancellation code. The legacy third `requestType` error-schema
+argument remains accepted, but does not declare checked errors. Generic origin is based
+on explicit channel metadata, never inferred from a numeric code. Unclassified exceptions
+are local; senders can identify transport errors with `RpcError`'s `transport` origin.
+When a declared name and code match, malformed envelopes or payloads stay generic;
+they never fall back to a permissive legacy declaration sharing the code. Legacy
+matching runs only when no named declaration matches the envelope's name and code.
+
+Payload validation does not silently strip properties, insert defaults, or turn missing
+data into `null`. Exported `ErrorSchema` includes `type` for named errors, a required
+resolved numeric `code`, and a `data` schema describing the inner payload.
 
 Interface JSON includes these declarations and their referenced data schemas in the hash.
 CLI-generated definitions expose the same typed constructors through

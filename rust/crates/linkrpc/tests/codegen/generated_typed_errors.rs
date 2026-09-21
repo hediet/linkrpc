@@ -68,7 +68,15 @@ impl StreamCheckParams {
 #[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]
 #[rpc_error(schema = __linkrpc_interface::schema, method = "check", runtime = "linkrpc", display)]
 pub enum CheckError {
-    #[rpc_error(code = 2001, message = "Missing")]
+    #[rpc_error(code = 1, message = "Not found", name = "NotFound")]
+    NotFound(MissingData),
+    #[rpc_error(code = 1, message = "Busy", name = "Busy")]
+    Busy,
+    #[rpc_error(code = 1, message = "Nullable", name = "nullable-value")]
+    NullableValue(Option<String>),
+    #[rpc_error(code = 1, message = "Recursive", name = "Recursive")]
+    Recursive(RecursiveData),
+    #[rpc_error(code = 2001, message = "Missing", name = "Code20012")]
     Code2001(MissingData),
     #[rpc_error(code = 2002, message = "Busy")]
     Code2002,
@@ -76,6 +84,8 @@ pub enum CheckError {
     Code2003(Option<String>),
     #[rpc_error(code = 2004, message = "Recursive")]
     Code2004(RecursiveData),
+    #[rpc_error(code = 2001, message = "Missing", name = "Code2001")]
+    Code20012(bool),
 }
 
 #[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]
@@ -92,7 +102,7 @@ pub enum StreamCheckError {
 }
 
 #[linkrpc::prelude::link_rpc_interface(
-    schema_json = "{\"id\":\"dev.linkrpc.ts-errors\",\"hash\":\"\",\"methods\":{\"check\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"errors\":[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]},\"streamCheck\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"serverStream\":{\"type\":\"string\"},\"errors\":[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]}},\"components\":{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}}",
+    schema_json = "{\"id\":\"dev.linkrpc.ts-errors\",\"hash\":\"\",\"methods\":{\"check\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"errors\":[{\"code\":1,\"type\":\"NotFound\",\"message\":\"Not found\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":1,\"type\":\"Busy\",\"message\":\"Busy\"},{\"code\":1,\"type\":\"nullable-value\",\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":1,\"type\":\"Recursive\",\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}},{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}},{\"code\":2001,\"type\":\"Code2001\",\"message\":\"Missing\",\"data\":{\"type\":\"boolean\"}}]},\"streamCheck\":{\"params\":{\"type\":\"object\",\"properties\":{\"mode\":{\"type\":\"string\"}},\"required\":[\"mode\"],\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"serverStream\":{\"type\":\"string\"},\"errors\":[{\"code\":2001,\"message\":\"Missing\",\"data\":{\"$ref\":\"#/components/schemas/MissingData\"}},{\"code\":2002,\"message\":\"Busy\"},{\"code\":2003,\"message\":\"Nullable\",\"data\":{\"anyOf\":[{\"type\":\"string\"},{\"type\":\"null\"}]}},{\"code\":2004,\"message\":\"Recursive\",\"data\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}]}},\"components\":{\"schemas\":{\"MissingData\":{\"type\":\"object\",\"properties\":{\"resource\":{\"type\":\"string\"}},\"required\":[\"resource\"],\"additionalProperties\":false},\"RecursiveData\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/RecursiveData\"}}},\"required\":[\"label\",\"children\"],\"additionalProperties\":false}}}}",
     client = "DevLinkrpcTsErrorsClient",
     server = "DevLinkrpcTsErrorsServer",
     module = "__linkrpc_interface",

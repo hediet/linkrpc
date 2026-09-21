@@ -8,10 +8,10 @@ const detail = z.strictObject({
 
 export const tsErrors = defineInterface({ id: 'dev.linkrpc.ts-errors' }, {
     check: requestType(z.object({ mode: z.string() }), z.string()).withErrors([
-        applicationError(2001, 'Missing', z.strictObject({ resource: z.string() })),
-        applicationError(2002, 'Busy'),
-        applicationError(2003, 'Nullable', z.nullable(z.string())),
-        applicationError(2004, 'Recursive', detail),
-        applicationError(2005, 'Numeric', z.number()),
+        applicationError('Missing', { message: 'Missing', data: z.strictObject({ resource: z.string() }) }),
+        applicationError('Busy', { message: 'Busy' }),
+        applicationError('Nullable', { code: 2003, message: 'Nullable', data: z.nullable(z.string()) }),
+        applicationError('Recursive', { code: 2004, message: 'Recursive', data: detail }),
+        applicationError('Numeric', { code: 2005, message: 'Numeric', data: z.number() }),
     ]),
 });

@@ -18,24 +18,52 @@ pub fn remote_error(mode: &str, base: i64) -> JsonRpcError {
         "unknown" => data(9001, "Unknown", serde_json::json!({"kept": true})),
         "protocol" => JsonRpcError::new(error_codes::INVALID_PARAMS, "Protocol failure"),
         "spoof-transport" => JsonRpcError::new(error_codes::PEER_DISCONNECTED, "Connection closed"),
-        "wrong-message" => data(
-            base + 1,
-            "Wrong message",
-            serde_json::json!({"resource": "file"}),
+        "changed-message" => data(
+            1,
+            "Dynamic diagnostic",
+            serde_json::json!({"type": "Missing", "data": {"resource": "file"}}),
         ),
-        "wrong-data" => data(base + 1, "Missing", serde_json::json!({"resource": 42})),
-        "missing-data" => JsonRpcError::new(base + 1, "Missing"),
-        "extra-data" => data(base + 2, "Busy", serde_json::Value::Null),
-        "missing-nullable" => JsonRpcError::new(base + 3, "Nullable"),
-        "extra-property" => data(
-            base + 1,
+        "unknown-type" => data(
+            1,
             "Missing",
-            serde_json::json!({"resource": "file", "extra": true}),
+            serde_json::json!({"type": "Undeclared", "data": {"resource": "file"}}),
+        ),
+        "missing-type" => data(
+            1,
+            "Missing",
+            serde_json::json!({"data": {"resource": "file"}}),
+        ),
+        "wrong-code" => data(
+            9001,
+            "Missing",
+            serde_json::json!({"type": "Missing", "data": {"resource": "file"}}),
+        ),
+        "wrong-data" => data(
+            1,
+            "Missing",
+            serde_json::json!({"type": "Missing", "data": {"resource": 42}}),
+        ),
+        "missing-data" => data(1, "Missing", serde_json::json!({"type": "Missing"})),
+        "extra-data" => data(1, "Busy", serde_json::json!({"type": "Busy", "data": null})),
+        "missing-nullable" => data(
+            base + 3,
+            "Nullable",
+            serde_json::json!({"type": "Nullable"}),
+        ),
+        "extra-property" => data(
+            1,
+            "Missing",
+            serde_json::json!({"type": "Missing", "data": {"resource": "file", "extra": true}}),
         ),
         "bad-recursion" => data(
             base + 4,
             "Recursive",
-            serde_json::json!({"label": "root", "children": [{"label": 42, "children": []}]}),
+            serde_json::json!({"type": "Recursive", "data": {"label": "root", "children": [{"label": 42, "children": []}]}}),
+        ),
+        "extra-envelope" => data(
+            1,
+            "Missing",
+            serde_json::json!({"type": "Missing", "data": {"resource": "file"}, "extra": true}),
         ),
         _ => panic!("unexpected fixture mode: {mode}"),
     }

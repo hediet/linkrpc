@@ -38,6 +38,8 @@ export type JsonRpcResponse = JsonRpcSuccess | JsonRpcError;
 export type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse;
 
 export const ErrorCode = {
+    /** Default code for named LinkRPC application errors. */
+    applicationError: 1,
     parseError: -32700,
     invalidRequest: -32600,
     methodNotFound: -32601,

@@ -39,6 +39,238 @@ enum LookupError {
     Recursive(RecursiveData),
 }
 
+#[derive(Clone, Debug, PartialEq, linkrpc::ApplicationError)]
+#[rpc_error(display)]
+enum NamedError {
+    #[rpc_error(message = "Not found")]
+    NotFound { resource: String },
+    #[rpc_error(message = "Busy")]
+    Busy,
+    #[rpc_error(message = "Nullable")]
+    Nullable(Option<String>),
+    #[rpc_error(message = "Recursive")]
+    Recursive(RecursiveData),
+    #[rpc_error(code = 41, message = "Explicit", name = "stable-wire-name")]
+    Renamed { resource: String },
+}
+
+#[test]
+fn named_errors_use_default_code_and_tagged_serde_payloads() {
+    for (error, code, data) in [
+        (
+            NamedError::NotFound {
+                resource: "widget".into(),
+            },
+            1,
+            json!({"type": "NotFound", "data": {"resource": "widget"}}),
+        ),
+        (NamedError::Busy, 1, json!({"type": "Busy"})),
+        (
+            NamedError::Nullable(None),
+            1,
+            json!({"type": "Nullable", "data": null}),
+        ),
+        (
+            NamedError::Renamed {
+                resource: "widget".into(),
+            },
+            41,
+            json!({"type": "stable-wire-name", "data": {"resource": "widget"}}),
+        ),
+    ] {
+        let mut wire = error.clone().into_rpc_error();
+        assert_eq!(wire.code, code);
+        assert_eq!(wire.data, Some(data));
+        wire.message = "Human-readable explanation may vary".into();
+        assert_eq!(NamedError::try_from_rpc_error(wire), Ok(error));
+    }
+    assert_eq!(DEFAULT_APPLICATION_ERROR_CODE, 1);
+    assert_eq!(
+        NamedError::NotFound {
+            resource: "x".into()
+        }
+        .to_string(),
+        "Not found"
+    );
+    let schemas = NamedError::error_schemas();
+    assert_eq!(schemas[0].code, 1);
+    assert_eq!(schemas[0].r#type.as_deref(), Some("NotFound"));
+    assert_eq!(
+        schemas[0].data.as_ref().unwrap()["properties"]["resource"]["type"],
+        "string"
+    );
+    assert!(schemas[1].data.is_none());
+    let mut schema = lookup::interface().to_schema();
+    schema.methods.get_mut("lookup").unwrap().errors = Some(schemas);
+    schema.validate().unwrap();
+    let recursive = NamedError::Recursive(RecursiveData {
+        label: "root".into(),
+        children: vec![RecursiveData {
+            label: "leaf".into(),
+            children: vec![],
+        }],
+    });
+    assert_eq!(
+        NamedError::try_from_rpc_error(recursive.clone().into_rpc_error()),
+        Ok(recursive)
+    );
+}
+
+#[test]
+fn malformed_named_errors_retain_original_remote_error() {
+    for data in [
+        json!({"data": {"resource": "x"}}),
+        json!({"type": "Unknown"}),
+        json!({"type": 42, "data": {"resource": "x"}}),
+        json!({"type": "NotFound"}),
+        json!({"type": "NotFound", "data": {"resource": 42}}),
+        json!({"type": "NotFound", "data": {"resource": "x", "extra": true}}),
+        json!({"type": "NotFound", "data": null}),
+        json!({"type": "Busy", "data": null}),
+        json!({"type": "Busy", "extra": true}),
+        json!({"type": "Nullable"}),
+        json!({"type": "stable-wire-name", "data": {"resource": "x"}}),
+        json!({"type": "Recursive", "data": {"label": "x", "children": [null]}}),
+        json!(null),
+    ] {
+        let original = JsonRpcError {
+            code: 1,
+            message: "Not found".into(),
+            data: Some(data),
+        };
+        assert_eq!(
+            CallError::<NamedError>::from_remote(original.clone()),
+            CallError::Generic(RpcCallError::Remote(original))
+        );
+    }
+}
+
+fn nullable_field_schema() -> LinkRpcInterfaceSchema {
+    serde_json::from_value(json!({
+        "id": "nullable.field", "hash": "", "methods": {
+            "check": { "params": true, "result": true, "errors": [{
+                "code": 1, "type": "Nullable", "message": "Nullable",
+                "data": {
+                    "type": "object",
+                    "properties": { "value": { "anyOf": [{ "type": "string" }, { "type": "null" }] } },
+                    "required": ["value"],
+                    "additionalProperties": false
+                }
+            }] }
+        }
+    })).unwrap()
+}
+
+#[derive(Debug, PartialEq, linkrpc::ApplicationError)]
+#[rpc_error(schema = nullable_field_schema, method = "check")]
+enum NullableFieldError {
+    #[rpc_error(message = "Nullable")]
+    Nullable { value: Option<String> },
+}
+
+#[test]
+fn required_nullable_struct_field_distinguishes_absence_and_null() {
+    let error = NullableFieldError::Nullable { value: None }.into_rpc_error();
+    assert_eq!(
+        error.data,
+        Some(json!({ "type": "Nullable", "data": { "value": null } }))
+    );
+    assert_eq!(
+        NullableFieldError::try_from_rpc_error(error),
+        Ok(NullableFieldError::Nullable { value: None })
+    );
+    for data in [
+        None,
+        Some(json!({ "type": "Nullable" })),
+        Some(json!({ "type": "Nullable", "data": {} })),
+        Some(json!({ "type": "Nullable", "data": { "value": null, "extra": true } })),
+    ] {
+        let original = JsonRpcError {
+            code: 1,
+            message: "Nullable".into(),
+            data,
+        };
+        assert_eq!(
+            CallError::<NullableFieldError>::from_remote(original.clone()),
+            CallError::Generic(RpcCallError::Remote(original)),
+        );
+    }
+}
+
+fn mixed_error_schema() -> LinkRpcInterfaceSchema {
+    serde_json::from_value(json!({
+        "id": "mixed.errors", "hash": "", "methods": {
+            "check": { "params": true, "result": true, "errors": [
+                { "code": 1, "message": "Shared", "data": true },
+                { "code": 1, "type": "Named", "message": "Shared", "data": { "type": "boolean" } }
+            ] }
+        }
+    }))
+    .unwrap()
+}
+
+#[derive(Debug, PartialEq, linkrpc::ApplicationError)]
+#[rpc_error(schema = mixed_error_schema, method = "check")]
+enum MixedError {
+    #[rpc_error(message = "Shared")]
+    Legacy(JsonValue),
+    #[rpc_error(message = "Shared")]
+    Named(bool),
+}
+
+#[test]
+fn named_recognition_precedes_legacy_when_codes_collide() {
+    let schema = mixed_error_schema();
+    schema.validate().unwrap();
+    let generated = generate_rust_interface(&schema, &GenerateRustOptions::default());
+    assert!(!generated.code.contains("compile_error!"));
+    assert!(generated.code.contains("Code1("));
+    assert!(generated.code.contains("Named(bool)"));
+
+    let named = MixedError::Named(true).into_rpc_error();
+    assert_eq!(named.data, Some(json!({ "type": "Named", "data": true })));
+    assert_eq!(
+        MixedError::try_from_rpc_error(named),
+        Ok(MixedError::Named(true))
+    );
+    let legacy = MixedError::Legacy(json!(42)).into_rpc_error();
+    assert_eq!(legacy.data, Some(json!(42)));
+    assert_eq!(
+        MixedError::try_from_rpc_error(legacy),
+        Ok(MixedError::Legacy(json!(42)))
+    );
+}
+
+#[test]
+fn malformed_named_errors_never_fall_back_to_permissive_legacy() {
+    for data in [
+        json!({ "type": "Named", "data": "not a boolean" }),
+        json!({ "type": "Named", "data": true, "extra": true }),
+        json!({ "type": "Named" }),
+        json!({ "type": "Named", "data": null }),
+    ] {
+        let original = JsonRpcError {
+            code: 1,
+            message: "Shared".into(),
+            data: Some(data),
+        };
+        assert_eq!(
+            CallError::<MixedError>::from_remote(original.clone()),
+            CallError::Generic(RpcCallError::Remote(original)),
+        );
+    }
+    let data = json!({ "type": "Unknown", "data": "legacy payload" });
+    let legacy = JsonRpcError {
+        code: 1,
+        message: "Shared".into(),
+        data: Some(data.clone()),
+    };
+    assert_eq!(
+        MixedError::try_from_rpc_error(legacy),
+        Ok(MixedError::Legacy(data))
+    );
+}
+
 #[derive(Debug, linkrpc::ApplicationError)]
 enum InvalidPayloadError {
     #[rpc_error(code = 1100, message = "Invalid float")]
@@ -119,6 +351,7 @@ fn manually_authored_errors_cannot_bypass_validation() {
                 server_stream_schema: None,
                 errors: Some(vec![ErrorSchema {
                     code: -32603,
+                    r#type: None,
                     message: "Invalid application code".into(),
                     data: None,
                 }]),
@@ -131,8 +364,8 @@ fn manually_authored_errors_cannot_bypass_validation() {
 }
 
 #[test]
-#[should_panic(expected = "duplicate error code")]
-fn imported_interfaces_reject_duplicate_codes() {
+#[should_panic(expected = "duplicate error type")]
+fn imported_interfaces_reject_duplicate_names() {
     let mut schema = lookup::interface().to_schema();
     let errors = schema
         .methods
@@ -141,7 +374,7 @@ fn imported_interfaces_reject_duplicate_codes() {
         .errors
         .as_mut()
         .unwrap();
-    errors[1].code = errors[0].code;
+    errors[1].r#type = errors[0].r#type.clone();
     InterfaceDefinition::from_schema(schema);
 }
 
@@ -166,14 +399,16 @@ impl Lookup for Provider {
         progress
             .send("started".into())
             .await
-            .map_err(CallError::Local)?;
+            .map_err(|e| CallError::Generic(RpcCallError::Local(e)))?;
         match resource.as_str() {
-            "unknown" => Err(CallError::Remote(JsonRpcError::new(9999, "Unknown"))),
-            "malformed" => Err(CallError::Remote(JsonRpcError {
+            "unknown" => Err(CallError::Generic(RpcCallError::Remote(JsonRpcError::new(
+                9999, "Unknown",
+            )))),
+            "malformed" => Err(CallError::Generic(RpcCallError::Remote(JsonRpcError {
                 code: 1001,
                 message: "Missing".into(),
                 data: Some(json!({ "resource": 42 })),
-            })),
+            }))),
             _ => self
                 .direct(_ctx, resource)
                 .await
@@ -212,8 +447,8 @@ impl Lookup for Provider {
 fn derive_requires_exact_wire_contract() {
     let known = JsonRpcError {
         code: 1001,
-        message: "Missing".into(),
-        data: Some(json!({ "resource": "a" })),
+        message: "Descriptive text is not a discriminator".into(),
+        data: Some(json!({ "type": "Missing", "data": { "resource": "a" } })),
     };
     assert_eq!(
         LookupError::try_from_rpc_error(known),
@@ -225,7 +460,7 @@ fn derive_requires_exact_wire_contract() {
         LookupError::try_from_rpc_error(JsonRpcError {
             code: 1003,
             message: "Nullable".into(),
-            data: Some(JsonValue::Null),
+            data: Some(json!({ "type": "Nullable", "data": null })),
         }),
         Ok(LookupError::Nullable(None))
     );
@@ -300,21 +535,17 @@ fn outgoing_invalid_payload_becomes_internal_error_without_panicking() {
 }
 
 #[test]
-fn derived_error_components_are_scoped_by_method_and_code() {
+fn derived_error_components_are_scoped_by_method_and_name() {
     let schema = collision_api::interface().to_schema();
     let schemas = schema.components.unwrap().schemas.unwrap();
+    assert!(schemas.keys().any(|name| name.starts_with("first.Value.")));
+    assert!(schemas.keys().any(|name| name.starts_with("second.Value.")));
     assert!(schemas
         .keys()
-        .any(|name| name.starts_with("first.Code1201.")));
+        .any(|name| name.starts_with("combined.First.")));
     assert!(schemas
         .keys()
-        .any(|name| name.starts_with("second.Code1202.")));
-    assert!(schemas
-        .keys()
-        .any(|name| name.starts_with("combined.Code1203.")));
-    assert!(schemas
-        .keys()
-        .any(|name| name.starts_with("combined.Code1204.")));
+        .any(|name| name.starts_with("combined.Second.")));
     assert_eq!(schemas.len(), 4);
 }
 
@@ -393,10 +624,14 @@ async fn inferred_errors_preserve_streaming_and_final_error_types() {
                 })))
             ),
             "unknown" => {
-                assert!(matches!(result, Err(CallError::Remote(error)) if error.code == 9999))
+                assert!(
+                    matches!(result, Err(CallError::Generic(RpcCallError::Remote(error))) if error.code == 9999)
+                )
             }
-            "malformed" => assert!(matches!(result, Err(CallError::Remote(error))
-                if error.data == Some(json!({ "resource": 42 })))),
+            "malformed" => assert!(
+                matches!(result, Err(CallError::Generic(RpcCallError::Remote(error)))
+                if error.data == Some(json!({ "resource": 42 })))
+            ),
             _ => unreachable!(),
         }
         assert_eq!(progress.recv().await, None);
@@ -410,10 +645,10 @@ async fn authored_client_marks_param_serialization_failures_local() {
     let error = client.bad_param(BadParam).await.unwrap_err();
     assert!(matches!(
         error,
-        CallError::Local(JsonRpcError {
+        CallError::Generic(RpcCallError::Local(JsonRpcError {
             code: error_codes::INTERNAL_ERROR,
             ..
-        })
+        }))
     ));
 }
 
@@ -433,7 +668,10 @@ async fn typed_client_preserves_transport_origin_when_peer_closes() {
         .lookup("disconnect".into())
         .await
         .unwrap_err();
-    assert_eq!(error, CallError::Transport(TransportError::Closed));
+    assert_eq!(
+        error,
+        CallError::Generic(RpcCallError::Transport(TransportError::Closed))
+    );
 
     // A peer cannot spoof this branch with the JSON-RPC PEER_DISCONNECTED code:
     // wire errors always enter through Remote classification.
@@ -441,7 +679,10 @@ async fn typed_client_preserves_transport_origin_when_peer_closes() {
         error_codes::PEER_DISCONNECTED,
         "channel closed",
     ));
-    assert!(matches!(spoofed, CallError::Remote(_)));
+    assert!(matches!(
+        spoofed,
+        CallError::Generic(RpcCallError::Remote(_))
+    ));
 }
 
 #[test]

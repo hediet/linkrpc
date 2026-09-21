@@ -99,6 +99,15 @@ fn normalize_schema_positions(schema: &JsonValue) -> JsonValue {
             for (field, value) in normalized {
                 method.insert(field, value);
             }
+            if let Some(errors) = method.get_mut("errors").and_then(JsonValue::as_array_mut) {
+                for error in errors {
+                    if let Some(data) = error.get_mut("data") {
+                        if let Ok(normalized) = normalize_json_schema(data) {
+                            *data = normalized;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -183,6 +192,33 @@ mod tests {
         let a = compute_interface_hash_value(&iface(json!({ "description": "first" })));
         let b = compute_interface_hash_value(&iface(json!({ "description": "second" })));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn error_payload_schemas_are_normalized_and_names_are_normative() {
+        let mut a = iface(json!({}));
+        a["methods"]["ping"]["errors"] = json!([{
+            "code": 1, "type": "NotFound", "message": "Not found",
+            "data": {"type": "object", "properties": {}, "examples": [{}]}
+        }]);
+        let mut b = a.clone();
+        b["methods"]["ping"]["errors"][0]["data"] = json!({
+            "type": "object", "properties": {}, "additionalProperties": false
+        });
+        assert_eq!(
+            compute_interface_hash_value(&a),
+            compute_interface_hash_value(&b)
+        );
+        b["methods"]["ping"]["errors"][0]["type"] = json!("Missing");
+        assert_ne!(
+            compute_interface_hash_value(&a),
+            compute_interface_hash_value(&b)
+        );
+        let original: LinkRpcInterfaceSchema = serde_json::from_value(a.clone()).unwrap();
+        assert_eq!(
+            compute_interface_hash_value(&a),
+            compute_interface_hash(&original)
+        );
     }
 
     #[test]

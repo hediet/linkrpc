@@ -8,11 +8,12 @@ export {
     type IRequestHandler,
     type IRequestSender,
     type RawStreamingCall,
-    type Result,
+    type Result as ChannelResult,
     RpcError,
     type SendOpts,
     type StreamSendOpts,
 } from './channel';
+export { RpcFailure, isRpcFailure, type Result } from './rpcFailure';
 export * from './linkRpcConnection';
 export {
     bareInterfaceTarget,

@@ -32,28 +32,31 @@ For a CLI-generated TypeScript definition named `contract`, the application-erro
 union can be named without repeating any wire declarations:
 
 ```ts
-import type { ApplicationErrorsOf, PublicApplicationErrorOf } from '@hediet/linkrpc';
+import { isRpcFailure, type ApplicationErrorsOf, type PublicApplicationErrorOf } from '@hediet/linkrpc';
 import { contract } from './contract';
 
 type CheckError = PublicApplicationErrorOf<
     ApplicationErrorsOf<typeof contract.members.check.errors>
 >;
 
-const outcome = await connection.get(contract).check({ mode: 'missing' }).result();
-if (!outcome.ok && outcome.error.kind === 'application' && outcome.error.code === 1001) {
+const outcome = await connection.get(contract).check({ mode: 'missing' });
+if (isRpcFailure(outcome) && outcome.error.type === 'Missing') {
     const resource: string = outcome.error.data.resource;
 }
 ```
 
-The Rust-authored fixture produces error codes 1001 through 1005, with literal
-messages and typed structured, absent, nullable, recursive, and numeric data.
-The TypeScript-authored fixture produces codes 2001 through 2005; generated Rust
-exposes these as `CheckError::Code2001(...)` through `CheckError::Code2005(...)`.
+Both fixtures declare named variants `Missing`, `Busy`, `Nullable`, `Recursive`,
+and `Numeric`. `Missing` and `Busy` share the default LinkRPC application code `1`;
+the remaining variants demonstrate optional explicit codes (1003 through 1005 in
+Rust, 2003 through 2005 in TypeScript). Generated Rust exposes named enum variants.
+JSON-RPC `error.data` contains `{ type, data? }`, with the variant payload in the
+inner `data`. Human-readable messages do not select named variants.
 Unknown or malformed wire errors do not enter these application-error unions.
 
 Both directions check success, structured and data-less variants, explicit nullable
 data, numeric and recursive error data, invalid producer values (`NaN`), unknown and
-protocol errors, mismatched messages, malformed or missing data, unexpected data,
+protocol errors, dynamic messages, unknown or absent types, wrong codes,
+malformed or missing data, unexpected data,
 and closed-object validation. The tests also check
 interface hashes, compile the actual generated contracts and their usages, exercise
 TypeScript negative type assertions, and deliberately reject an invalid generated
@@ -70,17 +73,24 @@ other language. The full generated-protocol suite remains available with
 
 ## Compatibility and integration notes
 
-- TypeScript calls still support ordinary `await`, `then`, and rejection handling.
-  Only methods declaring typed errors add `.result()` to their public client type,
-  so existing client mocks and streaming types remain compatible. Promise rejection
-  types remain unchecked. The old `requestType` error-schema argument is retained
+- TypeScript's normal client returns successes or branded application failures.
+  Generic failures reject the promise. `connection.getResultClient(contract)`
+  instead returns both application and generic failures as branded values, including
+  for methods without declared errors. Use `isRpcFailure` or a descriptor's `.is`
+  matcher rather than interpreting an ordinary JSON object's shape as failure.
+  The old `requestType` error-schema argument is retained
   for source compatibility, but checked errors require `.withErrors(...)`.
 - Rust derives typed trait errors from `Result<T, E>` or `Result<T, CallError<E>>`,
   where `E` implements `ApplicationError`; no method error annotation is needed.
+  Clients separate `CallError::Application(E)` from `CallError::Generic(...)`;
+  generic failures preserve remote, local, and transport provenance.
   Existing generic `JsonRpcError` methods retain their API. `RequestMember` struct literals now need
   the error declarations and error-component fields (empty for untyped methods).
-- Error codes, exact messages, data presence, and normalized data schemas are part
-  of the contract hash. Absent data is not interchangeable with `null`.
+- Error types, codes, default messages, data presence, and normalized data schemas
+  are part of the contract hash. Absent data is not interchangeable with `null`.
+  Legacy declarations without a type retain code/message-based wire recognition.
+  Adding a type changes the wire representation and hash, so requires migrating
+  both ends of that interface contract.
 - Error components are merged with shared parameter, result, and streaming schema
   components rather than replacing them.
 

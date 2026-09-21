@@ -278,13 +278,15 @@ impl RawStreamingCall {
             inner: Box::pin(async move {
                 let value = result
                     .await
-                    .map_err(|_| CallError::Transport(TransportError::Closed))?
+                    .map_err(|_| {
+                        CallError::Generic(RpcCallError::Transport(TransportError::Closed))
+                    })?
                     .map_err(CallError::from_call_error)?;
                 serde_json::from_value(value).map_err(|e| {
-                    CallError::Local(JsonRpcError::new(
+                    CallError::Generic(RpcCallError::Local(JsonRpcError::new(
                         error_codes::INVALID_PARAMS,
                         format!("invalid response payload: {e}"),
-                    ))
+                    )))
                 })
             }),
             _lifetime: Some(lifetime.clone()),

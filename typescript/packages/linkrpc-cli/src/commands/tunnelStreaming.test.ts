@@ -4,7 +4,7 @@ import {
     type IncomingCall,
     JsonRpcChannel,
     type JsonValue,
-    type Result,
+    type ChannelResult as Result,
     TransportPair,
 } from '@hediet/linkrpc';
 import { connectViaTransport } from '@hediet/linkrpc-client';

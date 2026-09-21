@@ -12,6 +12,25 @@
       "result": { "type": "string" },
       "errors": [
         {
+          "code": 1,
+          "type": "NotFound",
+          "message": "Not found",
+          "data": { "$ref": "#/components/schemas/MissingData" }
+        },
+        { "code": 1, "type": "Busy", "message": "Busy" },
+        {
+          "code": 1,
+          "type": "nullable-value",
+          "message": "Nullable",
+          "data": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+        },
+        {
+          "code": 1,
+          "type": "Recursive",
+          "message": "Recursive",
+          "data": { "$ref": "#/components/schemas/RecursiveData" }
+        },
+        {
           "code": 2001,
           "message": "Missing",
           "data": { "$ref": "#/components/schemas/MissingData" }
@@ -26,6 +45,12 @@
           "code": 2004,
           "message": "Recursive",
           "data": { "$ref": "#/components/schemas/RecursiveData" }
+        },
+        {
+          "code": 2001,
+          "type": "Code2001",
+          "message": "Missing",
+          "data": { "type": "boolean" }
         }
       ]
     },

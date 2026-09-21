@@ -59,6 +59,39 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("round-trips named errors with shared default codes and inner payload schemas", async () => {
+        const definition = defineInterface({ id: "test.generated-named-errors" }, {
+            read: requestType(z.object({}), z.string()).withErrors([
+                applicationError("NotFound", { message: "Not found" }),
+                applicationError("Conflict", {
+                    message: "Conflict", data: z.object({ revision: z.number() }),
+                }),
+                applicationError("Override", { code: 42, data: z.string().nullable() }),
+            ]),
+        });
+        const source = generateTsInterface(definition.toSchema());
+        expect(source).toContain('applicationError("NotFound", { code: 1, message: "Not found" })');
+        expect(source).toContain('applicationError("Conflict", { code: 1');
+        _expectTypeChecks(source);
+        await _roundTrip(definition);
+        const preserved = await _evalGenerated(generateTsInterface(definition.toSchema(), { preserveWireSchema: true }));
+        expect(preserved.toSchema()).toEqual(definition.toSchema());
+        const schema = definition.toSchema();
+        expect(() => generateTsInterface({
+            ...schema,
+            methods: { read: { ...schema.methods.read, errors: [
+                { type: "Duplicate", code: 1, message: "a" },
+                { type: "Duplicate", code: 2, message: "b" },
+            ] } },
+        })).toThrow(/duplicate/);
+        expect(() => generateTsInterface({
+            ...schema,
+            methods: { read: { ...schema.methods.read,
+                errors: [{ type: "", code: 1, message: "Invalid" }],
+            } },
+        })).toThrow(/nonempty/);
+    }, TYPECHECK_TIMEOUT_MS);
+
     it("emits typed error descriptors and preserves recursive referenced data", async () => {
         const schema: LinkRpcInterfaceSchema = {
             id: "test.generated-errors",

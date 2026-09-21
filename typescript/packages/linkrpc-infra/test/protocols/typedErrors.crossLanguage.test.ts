@@ -63,8 +63,8 @@ beforeAll(async () => {
         const source = await readFile(join(here, 'typedErrorsPeer.ts.template'), 'utf8');
         const base = author === 'Rust' ? 1000 : 2000;
         await writeFile(join(directory, 'peer.ts'), source
-            .replaceAll('__MISSING__', String(base + 1))
-            .replaceAll('__BUSY__', String(base + 2))
+            .replaceAll('__MISSING__', '1')
+            .replaceAll('__BUSY__', '1')
             .replaceAll('__NULLABLE__', String(base + 3))
             .replaceAll('__RECURSIVE__', String(base + 4))
             .replaceAll('__NUMERIC__', String(base + 5)));

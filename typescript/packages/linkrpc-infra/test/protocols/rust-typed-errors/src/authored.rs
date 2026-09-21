@@ -9,12 +9,6 @@ mod common;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct MissingData {
-    pub resource: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct Detail {
     pub label: String,
     pub children: Vec<Detail>,
@@ -22,9 +16,9 @@ pub struct Detail {
 
 #[derive(Debug, linkrpc::ApplicationError)]
 pub enum FixtureError {
-    #[rpc_error(code = 1001, message = "Missing")]
-    Missing(MissingData),
-    #[rpc_error(code = 1002, message = "Busy")]
+    #[rpc_error(message = "Missing")]
+    Missing { resource: String },
+    #[rpc_error(message = "Busy")]
     Busy,
     #[rpc_error(code = 1003, message = "Nullable")]
     Nullable(Option<String>),
@@ -46,9 +40,9 @@ impl RustErrors for Service {
     async fn check(&self, _ctx: &CallCtx, mode: String) -> Result<String, CallError<FixtureError>> {
         match mode.as_str() {
             "success" => Ok("ok".into()),
-            "missing" => Err(CallError::Application(FixtureError::Missing(MissingData {
+            "missing" => Err(CallError::Application(FixtureError::Missing {
                 resource: "file".into(),
-            }))),
+            })),
             "busy" => Err(CallError::Application(FixtureError::Busy)),
             "nullable" => Err(CallError::Application(FixtureError::Nullable(None))),
             "numeric" => Err(CallError::Application(FixtureError::Numeric(42.5))),
@@ -60,7 +54,9 @@ impl RustErrors for Service {
                     children: vec![],
                 }],
             }))),
-            mode => Err(CallError::Remote(common::remote_error(mode, 1000))),
+            mode => Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
+                common::remote_error(mode, 1000),
+            ))),
         }
     }
 }
@@ -69,7 +65,7 @@ async fn client(connection: LinkRpcConnection) {
     let client = RustErrorsClient::new(connection.clone());
     assert_eq!(client.check("success".into()).await.unwrap(), "ok");
     match client.check("missing".into()).await.unwrap_err() {
-        CallError::Application(FixtureError::Missing(data)) => assert_eq!(data.resource, "file"),
+        CallError::Application(FixtureError::Missing { resource }) => assert_eq!(resource, "file"),
         error => panic!("expected Missing, got {error:?}"),
     }
     assert!(matches!(
@@ -91,35 +87,48 @@ async fn client(connection: LinkRpcConnection) {
         client.check("numeric".into()).await,
         Err(CallError::Application(FixtureError::Numeric(value))) if value == 42.5
     ));
+    match client.check("changed-message".into()).await.unwrap_err() {
+        CallError::Application(FixtureError::Missing { resource }) => assert_eq!(resource, "file"),
+        error => panic!("expected Missing despite dynamic message, got {error:?}"),
+    }
     for mode in [
         "unknown",
         "protocol",
         "spoof-transport",
-        "wrong-message",
+        "unknown-type",
+        "missing-type",
+        "wrong-code",
         "wrong-data",
         "missing-data",
         "extra-data",
         "missing-nullable",
         "extra-property",
+        "extra-envelope",
         "bad-recursion",
     ] {
         match client.check(mode.into()).await.unwrap_err() {
-            CallError::Remote(error) => assert_eq!(error, common::remote_error(mode, 1000)),
+            CallError::Generic(linkrpc::client::RpcCallError::Remote(error)) => {
+                assert_eq!(error, common::remote_error(mode, 1000))
+            }
             error => panic!("{mode}: expected original generic error, got {error:?}"),
         }
     }
     assert!(matches!(
         client.check("invalid-encoding".into()).await,
-        Err(CallError::Remote(JsonRpcError {
-            code: error_codes::INTERNAL_ERROR,
-            ..
-        }))
+        Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
+            JsonRpcError {
+                code: error_codes::INTERNAL_ERROR,
+                ..
+            }
+        )))
     ));
     let disconnected = client.check("disconnect".into()).await.unwrap_err();
     assert!(
         matches!(
             disconnected,
-            CallError::Transport(linkrpc::transport::message::TransportError::Closed)
+            CallError::Generic(linkrpc::client::RpcCallError::Transport(
+                linkrpc::transport::message::TransportError::Closed
+            ))
         ),
         "transport closure must not masquerade as a remote error: {disconnected:?}",
     );

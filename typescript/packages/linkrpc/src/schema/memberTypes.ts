@@ -1,8 +1,11 @@
 import { void as zVoid } from 'zod/mini';
-import { toJSONSchema, type $ZodType } from 'zod/v4/core';
+import { safeParse, toJSONSchema, type $ZodType } from 'zod/v4/core';
 import { normalizeJsonSchema } from './normalize';
 import type { MemberAnnotations } from './linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from './linkRpcJsonSchema';
+import { isRpcFailure, type RpcFailure } from '../connection/rpcFailure';
+import { ErrorCode } from '../protocol/jsonRpc';
+import { applicationErrorBrand } from './applicationErrorBrand';
 
 /**
  * The schema type linkrpc accepts everywhere: the zod *core* base shared by
@@ -21,23 +24,24 @@ export type Schema<O = unknown> = $ZodType<O>;
  */
 export type MemberType = RequestType<any, any, any, any, any, any, any> | NotificationType<any>;
 
-const applicationErrorBrand: unique symbol = Symbol('linkrpc.applicationError');
-
 export type ApplicationErrorValue<
     TCode extends number = number,
     TMessage extends string = string,
     TData = never,
+    TType extends string | undefined = undefined,
 > = {
     readonly kind: 'application';
     readonly code: TCode;
     readonly message: TMessage;
-} & ([TData] extends [never] ? { readonly data?: never; } : { readonly data: TData; });
+} & ([TData] extends [never] ? { readonly data?: never; } : { readonly data: TData; })
+    & (TType extends string ? { readonly type: TType } : { readonly type?: never });
 
 export type CreatedApplicationErrorValue<
     TCode extends number = number,
     TMessage extends string = string,
     TData = never,
-> = ApplicationErrorValue<TCode, TMessage, TData> & {
+    TType extends string | undefined = undefined,
+> = ApplicationErrorValue<TCode, TMessage, TData, TType> & {
     readonly [applicationErrorBrand]: true;
 };
 
@@ -45,16 +49,24 @@ export interface ApplicationErrorDescriptor<
     TCode extends number = number,
     TMessage extends string = string,
     TData = never,
+    TType extends string | undefined = undefined,
 > {
     readonly code: TCode;
     readonly message: TMessage;
     readonly dataSchema?: Schema<TData>;
+    readonly type: TType;
+    /** Match a validated application payload or its failure wrapper. */
+    is(value: RpcFailure<unknown>): value is RpcFailure<ApplicationErrorValue<TCode, string, TData, TType>>;
+    is(value: { readonly kind: 'application' }): value is ApplicationErrorValue<TCode, string, TData, TType>;
+    is(value: unknown): value is ApplicationErrorValue<TCode, string, TData, TType>
+        | RpcFailure<ApplicationErrorValue<TCode, string, TData, TType>>;
     readonly create: [TData] extends [never]
-        ? () => CreatedApplicationErrorValue<TCode, TMessage, TData>
-        : (data: TData) => CreatedApplicationErrorValue<TCode, TMessage, TData>;
+        ? () => CreatedApplicationErrorValue<TCode, TMessage, TData, TType>
+        : (data: TData) => CreatedApplicationErrorValue<TCode, TMessage, TData, TType>;
 }
 
 export interface ApplicationErrorDescriptorBase {
+    readonly type?: string;
     readonly code: number;
     readonly message: string;
     readonly dataSchema?: Schema<any>;
@@ -63,20 +75,21 @@ export interface ApplicationErrorDescriptorBase {
         readonly code: number;
         readonly message: string;
         readonly data?: unknown;
+        readonly type?: string;
         readonly [applicationErrorBrand]: true;
     };
 }
 
 export type ApplicationErrorOf<T> =
-    T extends ApplicationErrorDescriptor<infer C, infer M, infer D>
-        ? CreatedApplicationErrorValue<C, M, D>
+    T extends ApplicationErrorDescriptor<infer C, infer M, infer D, infer N>
+        ? CreatedApplicationErrorValue<C, M, D, N>
         : never;
 
 // Legacy schemas can infer `any`; they must neither declare checked errors nor erase result types.
 export type PublicApplicationErrorOf<T> =
     0 extends (1 & T) ? never :
-    T extends CreatedApplicationErrorValue<infer C, infer M, infer D>
-        ? ApplicationErrorValue<C, M, D>
+    T extends CreatedApplicationErrorValue<infer C, infer M, infer D, infer N>
+        ? ApplicationErrorValue<C, N extends string ? string : M, D, N>
         : never;
 
 export type DeclaredApplicationErrorOf<T> = 0 extends (1 & T)
@@ -87,6 +100,14 @@ export type ApplicationErrorsOf<T extends readonly ApplicationErrorDescriptorBas
     ApplicationErrorOf<T[number]>;
 
 /** Declare one checked application error for use with {@link RequestType.withErrors}. */
+export function applicationError<const TType extends string, TData, const TCode extends number = typeof ErrorCode.applicationError>(
+    type: TType,
+    options: { message?: string; data: Schema<TData>; code?: TCode },
+): ApplicationErrorDescriptor<TCode, string, TData, TType>;
+export function applicationError<const TType extends string, const TCode extends number = typeof ErrorCode.applicationError>(
+    type: TType,
+    options?: { message?: string; code?: TCode },
+): ApplicationErrorDescriptor<TCode, string, never, TType>;
 export function applicationError<const TCode extends number, const TMessage extends string>(
     code: TCode,
     message: TMessage,
@@ -97,14 +118,20 @@ export function applicationError<const TCode extends number, const TMessage exte
     data: Schema<TData>,
 ): ApplicationErrorDescriptor<TCode, TMessage, TData>;
 export function applicationError(
-    code: number,
-    message: string,
+    codeOrType: number | string,
+    messageOrOptions?: string | { message?: string; code?: number; data?: Schema<any> },
     dataSchema?: Schema<any>,
 ): ApplicationErrorDescriptorBase {
+    const type = typeof codeOrType === 'string' ? codeOrType : undefined;
+    if (type === '') throw new Error('Application error type must be a nonempty string.');
+    const options = typeof messageOrOptions === 'object' ? messageOrOptions : undefined;
+    const code = typeof codeOrType === 'number' ? codeOrType : options?.code ?? ErrorCode.applicationError;
+    const message = type === undefined ? messageOrOptions : options?.message ?? type;
+    if (type !== undefined) dataSchema = options?.data;
     assertApplicationErrorCode(code);
     if (typeof message !== 'string') throw new Error('Application error message must be a string.');
     const create = dataSchema === undefined
-        ? function (this: void): CreatedApplicationErrorValue<number, string, never> {
+        ? function (this: void) {
             if (arguments.length !== 0) {
                 throw new Error(`Application error ${code} does not accept data.`);
             }
@@ -112,10 +139,11 @@ export function applicationError(
                 kind: 'application' as const,
                 code,
                 message,
+                ...(type === undefined ? {} : { type }),
                 [applicationErrorBrand]: true as const,
             });
         }
-        : function (this: void, data: unknown): CreatedApplicationErrorValue<number, string, unknown> {
+        : function (this: void, data: unknown) {
             if (arguments.length !== 1) {
                 throw new Error(`Application error ${code} requires exactly one data value.`);
             }
@@ -123,15 +151,31 @@ export function applicationError(
                 kind: 'application' as const,
                 code,
                 message,
+                ...(type === undefined ? {} : { type }),
                 [applicationErrorBrand]: true as const,
                 data,
             });
         };
     return Object.freeze({
+        type,
         code,
         message,
         ...(dataSchema === undefined ? {} : { dataSchema }),
         create,
+        is(value: unknown): boolean {
+            if (!isRpcFailure(value) && !isApplicationErrorValue(value)) return false;
+            const payload = isRpcFailure(value) ? value.error : value;
+            return typeof payload === 'object' && payload !== null
+                && (payload as { kind?: unknown }).kind === 'application'
+                && (payload as { code?: unknown }).code === code
+                && typeof (payload as { message?: unknown }).message === 'string'
+                && (dataSchema === undefined ? !Object.hasOwn(payload, 'data')
+                    : Object.hasOwn(payload, 'data') && safeParse(dataSchema, (payload as { data: unknown }).data).success)
+                && (type === undefined
+                    ? (payload as { type?: unknown }).type === undefined
+                        && (payload as { message?: unknown }).message === message
+                    : (payload as { type?: unknown }).type === type);
+        },
     }) as ApplicationErrorDescriptorBase;
 }
 
@@ -198,16 +242,20 @@ export class RequestType<
         /** Checked application errors explicitly declared with `.withErrors()`. */
         public readonly applicationErrors: TErrors = [] as unknown as TErrors,
     ) {
-        const seen = new Set<number>();
+        const seen = new Set<string>();
         for (const error of applicationErrors) {
             assertApplicationErrorCode(error.code);
             if (typeof error.message !== 'string') {
                 throw new Error('Application error message must be a string.');
             }
-            if (seen.has(error.code)) {
-                throw new Error(`Duplicate application error code ${error.code}.`);
+            if (error.type !== undefined && (typeof error.type !== 'string' || error.type.length === 0)) {
+                throw new Error('Application error type must be a nonempty string.');
             }
-            seen.add(error.code);
+            const key = error.type === undefined ? `code:${error.code}` : `type:${error.type}`;
+            if (seen.has(key)) {
+                throw new Error(`Duplicate application error ${key}.`);
+            }
+            seen.add(key);
         }
         this.applicationErrors = Object.freeze([...applicationErrors]) as unknown as TErrors;
         this.errors = this.applicationErrors;

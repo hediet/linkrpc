@@ -18,20 +18,22 @@ impl DevLinkrpcTsErrorsService for Service {
     ) -> Result<String, CallError<CheckError>> {
         match params.mode.as_str() {
             "success" => Ok("ok".into()),
-            "missing" => Err(CallError::Application(CheckError::Code2001(
-                CheckError2001Data::new("file".into()),
+            "missing" => Err(CallError::Application(CheckError::Missing(
+                CheckErrorMissingData::new("file".into()),
             ))),
-            "busy" => Err(CallError::Application(CheckError::Code2002)),
-            "nullable" => Err(CallError::Application(CheckError::Code2003(None))),
-            "numeric" => Err(CallError::Application(CheckError::Code2005(42.5))),
-            "invalid-encoding" => Err(CallError::Application(CheckError::Code2005(f64::NAN))),
-            "recursive" => Err(CallError::Application(CheckError::Code2004(
+            "busy" => Err(CallError::Application(CheckError::Busy)),
+            "nullable" => Err(CallError::Application(CheckError::Nullable(None))),
+            "numeric" => Err(CallError::Application(CheckError::Numeric(42.5))),
+            "invalid-encoding" => Err(CallError::Application(CheckError::Numeric(f64::NAN))),
+            "recursive" => Err(CallError::Application(CheckError::Recursive(
                 MethodCheckSchemaError3D2004Root::new(
                     "root".into(),
                     vec![MethodCheckSchemaError3D2004Root::new("leaf".into(), vec![])],
                 ),
             ))),
-            mode => Err(CallError::Remote(common::remote_error(mode, 2000))),
+            mode => Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
+                common::remote_error(mode, 2000),
+            ))),
         }
     }
 }
@@ -50,23 +52,23 @@ async fn client(connection: LinkRpcConnection) {
         .await
         .unwrap_err()
     {
-        CallError::Application(CheckError::Code2001(data)) => assert_eq!(data.resource, "file"),
+        CallError::Application(CheckError::Missing(data)) => assert_eq!(data.resource, "file"),
         error => panic!("expected declared Missing, got {error:?}"),
     }
     assert!(matches!(
         client.check(CheckParams::new("busy".into())).await,
-        Err(CallError::Application(CheckError::Code2002))
+        Err(CallError::Application(CheckError::Busy))
     ));
     assert!(matches!(
         client.check(CheckParams::new("nullable".into())).await,
-        Err(CallError::Application(CheckError::Code2003(None)))
+        Err(CallError::Application(CheckError::Nullable(None)))
     ));
     match client
         .check(CheckParams::new("recursive".into()))
         .await
         .unwrap_err()
     {
-        CallError::Application(CheckError::Code2004(data)) => {
+        CallError::Application(CheckError::Recursive(data)) => {
             assert_eq!(data.label, "root");
             assert_eq!(data.children[0].label, "leaf");
         }
@@ -74,18 +76,29 @@ async fn client(connection: LinkRpcConnection) {
     }
     assert!(matches!(
         client.check(CheckParams::new("numeric".into())).await,
-        Err(CallError::Application(CheckError::Code2005(value))) if value == 42.5
+        Err(CallError::Application(CheckError::Numeric(value))) if value == 42.5
     ));
+    match client
+        .check(CheckParams::new("changed-message".into()))
+        .await
+        .unwrap_err()
+    {
+        CallError::Application(CheckError::Missing(data)) => assert_eq!(data.resource, "file"),
+        error => panic!("expected Missing despite dynamic message, got {error:?}"),
+    }
     for mode in [
         "unknown",
         "protocol",
         "spoof-transport",
-        "wrong-message",
+        "unknown-type",
+        "missing-type",
+        "wrong-code",
         "wrong-data",
         "missing-data",
         "extra-data",
         "missing-nullable",
         "extra-property",
+        "extra-envelope",
         "bad-recursion",
     ] {
         match client
@@ -93,7 +106,9 @@ async fn client(connection: LinkRpcConnection) {
             .await
             .unwrap_err()
         {
-            CallError::Remote(error) => assert_eq!(error, common::remote_error(mode, 2000)),
+            CallError::Generic(linkrpc::client::RpcCallError::Remote(error)) => {
+                assert_eq!(error, common::remote_error(mode, 2000))
+            }
             error => panic!("{mode}: expected original generic error, got {error:?}"),
         }
     }
@@ -101,10 +116,12 @@ async fn client(connection: LinkRpcConnection) {
         client
             .check(CheckParams::new("invalid-encoding".into()))
             .await,
-        Err(CallError::Remote(JsonRpcError {
-            code: error_codes::INTERNAL_ERROR,
-            ..
-        }))
+        Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
+            JsonRpcError {
+                code: error_codes::INTERNAL_ERROR,
+                ..
+            }
+        )))
     ));
     let disconnected = client
         .check(CheckParams::new("disconnect".into()))
@@ -113,7 +130,9 @@ async fn client(connection: LinkRpcConnection) {
     assert!(
         matches!(
             disconnected,
-            CallError::Transport(linkrpc::transport::message::TransportError::Closed)
+            CallError::Generic(linkrpc::client::RpcCallError::Transport(
+                linkrpc::transport::message::TransportError::Closed
+            ))
         ),
         "transport closure must not masquerade as a remote error: {disconnected:?}",
     );
@@ -121,7 +140,7 @@ async fn client(connection: LinkRpcConnection) {
 
 #[cfg(typed_error_negative_test)]
 fn wrong_generated_payload() {
-    let _ = CheckError::Code2001("not the generated data struct");
+    let _ = CheckError::Missing("not the generated data struct");
 }
 
 #[tokio::main(flavor = "current_thread")]

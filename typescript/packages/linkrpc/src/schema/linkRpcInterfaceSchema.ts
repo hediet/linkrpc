@@ -62,7 +62,7 @@ export interface MethodSchema {
      */
     serverStream?: LinkRpcJsonSchema;
 
-    /** Application-level errors. Codes MUST be unique. */
+    /** Application errors. Named types must be unique; legacy errors have unique codes. */
     errors?: ErrorSchema[];
 
     summary?: string;
@@ -125,9 +125,11 @@ export interface MemberAnnotations {
 }
 
 export interface ErrorSchema {
+    /** Named error discriminator in `error.data.type`. Absent for legacy numeric errors. */
+    type?: string;
     /** JSON-RPC error code. -32768..-32000 and LinkRPC cancellation code -32800 are reserved. */
     code: number;
     message: string;
-    /** Optional schema describing the shape of `error.data`. */
+    /** Payload schema: `error.data.data` for named errors, `error.data` for legacy errors. */
     data?: LinkRpcJsonSchema;
 }

@@ -22,6 +22,10 @@ name = "duplicate"
 path = "duplicate.rs"
 
 [[bin]]
+name = "empty_name"
+path = "empty_name.rs"
+
+[[bin]]
 name = "cancelled"
 path = "cancelled.rs"
 

@@ -5,15 +5,18 @@ use std::fmt;
 
 use serde_json::Value;
 
+use crate::client::RpcCallError;
 use crate::protocol::jsonrpc::JsonRpcError;
 use crate::schema::interface_schema::{component_ref, component_ref_name};
 use crate::schema::{Components, ErrorSchema};
-use crate::transport::message::TransportError;
+
+/// LinkRPC's default application-error code (not a JSON-RPC standard code).
+pub const DEFAULT_APPLICATION_ERROR_CODE: i32 = 1;
 
 /// A closed set of application errors declared by an RPC method.
 ///
-/// Implementations must only recognize an error when its code, normative
-/// message, data presence, and data shape all match. A failed recognition
+/// Named errors match code, type, data presence, and data shape, not message.
+/// Legacy unnamed errors additionally match the declared message. Failed recognition
 /// returns the original wire error unchanged.
 pub trait ApplicationError: Sized {
     fn into_rpc_error(self) -> JsonRpcError;
@@ -29,12 +32,8 @@ pub trait ApplicationError: Sized {
 pub enum CallError<E> {
     /// A declared, fully validated application error.
     Application(E),
-    /// Any undeclared or malformed remote JSON-RPC error.
-    Remote(JsonRpcError),
-    /// A local encode/decode failure unrelated to the transport.
-    Local(JsonRpcError),
-    /// The transport closed or failed locally; this can never be spoofed by a peer error code.
-    Transport(TransportError),
+    /// An undeclared remote error, local codec failure, or transport failure.
+    Generic(RpcCallError),
 }
 
 impl<E> CallError<E> {
@@ -44,7 +43,7 @@ impl<E> CallError<E> {
     {
         match E::try_from_rpc_error(error) {
             Ok(error) => Self::Application(error),
-            Err(original) => Self::Remote(original),
+            Err(original) => Self::Generic(RpcCallError::Remote(original)),
         }
     }
 
@@ -54,8 +53,7 @@ impl<E> CallError<E> {
     {
         match error {
             crate::client::RpcCallError::Remote(error) => Self::from_remote(error),
-            crate::client::RpcCallError::Local(error) => Self::Local(error),
-            crate::client::RpcCallError::Transport(error) => Self::Transport(error),
+            error => Self::Generic(error),
         }
     }
 
@@ -65,9 +63,8 @@ impl<E> CallError<E> {
     {
         match self {
             Self::Application(error) => error.into_rpc_error(),
-            Self::Remote(error) => error,
-            Self::Local(error) => error,
-            Self::Transport(error) => JsonRpcError::new(
+            Self::Generic(RpcCallError::Remote(error) | RpcCallError::Local(error)) => error,
+            Self::Generic(RpcCallError::Transport(error)) => JsonRpcError::new(
                 crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
                 error.to_string(),
             ),
@@ -79,14 +76,132 @@ impl<E: fmt::Display> fmt::Display for CallError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Application(error) => error.fmt(f),
-            Self::Remote(error) => write!(f, "remote error {}: {}", error.code, error.message),
-            Self::Local(error) => write!(f, "local error {}: {}", error.code, error.message),
-            Self::Transport(error) => error.fmt(f),
+            Self::Generic(RpcCallError::Remote(error)) => {
+                write!(f, "remote error {}: {}", error.code, error.message)
+            }
+            Self::Generic(RpcCallError::Local(error)) => {
+                write!(f, "local error {}: {}", error.code, error.message)
+            }
+            Self::Generic(RpcCallError::Transport(error)) => error.fmt(f),
         }
     }
 }
 
 impl<E: fmt::Debug + fmt::Display> std::error::Error for CallError<E> {}
+
+/// Runtime support for the derive: binds Rust variants to either named or legacy contracts.
+#[doc(hidden)]
+pub fn encode_application_error(
+    tagged: Value,
+    code: i32,
+    message: &str,
+    schemas: &[ErrorSchema],
+    components: &Components,
+) -> JsonRpcError {
+    let name = tagged.get("type").and_then(Value::as_str);
+    let payload = tagged.get("data");
+    let named = schemas
+        .iter()
+        .find(|s| s.r#type.as_deref().is_some_and(|ty| Some(ty) == name));
+    let declaration = named.filter(|s| s.code == code).or_else(|| {
+        if named.is_some() {
+            return None;
+        }
+        schemas
+            .iter()
+            .find(|s| s.r#type.is_none() && s.code == code && s.message == message)
+    });
+    let Some(declaration) = declaration.filter(|s| valid_payload(payload, s, components)) else {
+        return JsonRpcError::new(
+            crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
+            "application error payload or variant does not match its declared schema",
+        );
+    };
+    JsonRpcError {
+        code: i64::from(code),
+        message: message.to_owned(),
+        data: if declaration.r#type.is_some() {
+            Some(tagged)
+        } else {
+            payload.cloned()
+        },
+    }
+}
+
+#[doc(hidden)]
+pub fn decode_application_error(
+    error: &JsonRpcError,
+    bindings: &[(&str, i32, &str, bool)],
+    schemas: &[ErrorSchema],
+    components: &Components,
+) -> Option<Value> {
+    let wire_name = error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("type"))
+        .and_then(Value::as_str);
+    let named = schemas.iter().find(|schema| {
+        i64::from(schema.code) == error.code
+            && schema
+                .r#type
+                .as_deref()
+                .is_some_and(|name| Some(name) == wire_name)
+    });
+    // A matching named declaration owns validation, even when malformed.
+    // Do not let a permissive legacy payload bypass its envelope or payload checks.
+    for declaration in named.into_iter().chain(
+        schemas
+            .iter()
+            .filter(|schema| named.is_none() && schema.r#type.is_none()),
+    ) {
+        if i64::from(declaration.code) != error.code {
+            continue;
+        }
+        let (name, payload) = if let Some(name) = &declaration.r#type {
+            let Some(envelope) = error.data.as_ref().and_then(Value::as_object) else {
+                continue;
+            };
+            if envelope.get("type").and_then(Value::as_str) != Some(name)
+                || envelope.keys().any(|k| k != "type" && k != "data")
+            {
+                continue;
+            }
+            (name.as_str(), envelope.get("data"))
+        } else {
+            if error.message != declaration.message {
+                continue;
+            }
+            let Some(binding) = bindings.iter().find(|(name, code, message, _)| {
+                *code == declaration.code
+                    && *message == declaration.message
+                    && !schemas.iter().any(|s| s.r#type.as_deref() == Some(*name))
+            }) else {
+                continue;
+            };
+            (binding.0, error.data.as_ref())
+        };
+        if !bindings.iter().any(|(n, code, _, has_payload)| {
+            *n == name && *code == declaration.code && *has_payload == payload.is_some()
+        }) || !valid_payload(payload, declaration, components)
+        {
+            continue;
+        }
+        let mut tagged = serde_json::json!({ "type": name });
+        if let Some(payload) = payload {
+            tagged["data"] = payload.clone();
+        }
+        return Some(tagged);
+    }
+    None
+}
+
+fn valid_payload(payload: Option<&Value>, schema: &ErrorSchema, components: &Components) -> bool {
+    match (payload, &schema.data) {
+        (None, None) => true,
+        (Some(payload), Some(schema)) => validate_json_schema(payload, schema, Some(components)),
+        _ => false,
+    }
+}
 
 /// Validate a value against the normalized LinkRPC JSON Schema subset.
 ///
@@ -377,6 +492,7 @@ mod tests {
     fn scoping_rewrites_only_schema_refs() {
         let mut errors = vec![ErrorSchema {
             code: 1,
+            r#type: None,
             message: "x".into(),
             data: Some(json!({
                 "type": "object",

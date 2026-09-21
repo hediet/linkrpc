@@ -15,6 +15,7 @@ import {
 import { schemaToZod } from '../schema/schemaToZod';
 import type { MethodSchema, LinkRpcInterfaceSchema } from '../schema/linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
+import type { Result } from './rpcFailure';
 
 /**
  * Per-call stream API handed to a request handler as its third argument.
@@ -145,17 +146,26 @@ export interface LocalRpcError {
     readonly cause: unknown;
 }
 
+export interface TransportRpcError {
+    readonly kind: 'transport';
+    readonly cause: unknown;
+}
+
+export type GenericRpcError = RemoteRpcError | LocalRpcError | TransportRpcError;
+export type RpcCallError<E = never> =
+    | { readonly kind: 'application'; readonly error: E }
+    | { readonly kind: 'generic'; readonly error: GenericRpcError };
+
 export type CheckedCallResult<TResult, TApplicationError = never> =
     | { readonly ok: true; readonly value: TResult; }
     | {
         readonly ok: false;
-        readonly error: TApplicationError | RemoteRpcError | LocalRpcError;
+        readonly error: TApplicationError | GenericRpcError;
     };
 
-export interface CheckedCall<TResult, TApplicationError = never> extends Promise<TResult> {
+export interface CheckedCall<TResult, TApplicationError = never> extends Promise<Result<TResult, TApplicationError>> {
     /**
-     * Settle without throwing. Only an exact code/message/data-schema match is
-     * promoted to a typed application error.
+     * @deprecated Use getResultClient() for values that include generic errors.
      */
     result(): Promise<CheckedCallResult<TResult, TApplicationError>>;
 }
@@ -172,6 +182,7 @@ type _HasStream<TClient, TServer> = [TClient] extends [never] ? ([TServer] exten
 type ClientCall<TResult, TApplicationError> = [TApplicationError] extends [never]
     ? Promise<TResult>
     : CheckedCall<TResult, TApplicationError>;
+type ClientResult<R, E> = [E] extends [never] ? R : Result<R, E>;
 
 /**
  * Compile-time TypeScript shape of an interface — useful for typed
@@ -188,7 +199,7 @@ type ClientCall<TResult, TApplicationError> = [TApplicationError] extends [never
 type InterfaceClientMember<TMember> =
     TMember extends RequestType<infer P, infer R, infer E, infer TC, infer TS, any, any> ? (
         _HasStream<TC, TS> extends true ? (params: P, opts?: StreamCallOptions<TS>) =>
-            StreamingCall<R, TC> & ClientCall<R, PublicApplicationErrorOf<E>> :
+            StreamingCall<ClientResult<R, PublicApplicationErrorOf<E>>, TC> & ClientCall<R, PublicApplicationErrorOf<E>> :
         (params: P) => ClientCall<R, PublicApplicationErrorOf<E>>
     ) :
     TMember extends NotificationType<infer P> ? (params: P) => void :
@@ -196,6 +207,17 @@ type InterfaceClientMember<TMember> =
 
 export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
     [K in keyof TDef['members']]: InterfaceClientMember<TDef['members'][K]>;
+};
+
+/** Every request returns failures as values, including methods with no declared errors. */
+export type InterfaceResultClient<TDef extends InterfaceDefinition<any>> = {
+    [K in keyof TDef['members']]: TDef['members'][K] extends
+        RequestType<infer P, infer R, infer E, infer TC, infer TS, any, any>
+        ? _HasStream<TC, TS> extends true
+            ? (params: P, opts?: StreamCallOptions<TS>) =>
+                StreamingCall<Result<R, RpcCallError<PublicApplicationErrorOf<E>>>, TC>
+            : (params: P) => Promise<Result<R, RpcCallError<PublicApplicationErrorOf<E>>>>
+        : TDef['members'][K] extends NotificationType<infer P> ? (params: P) => void : never;
 };
 
 /**
@@ -357,6 +379,7 @@ function toMethodSchema(
                 const result: NonNullable<MethodSchema['errors']>[number] = {
                     code: error.code,
                     message: error.message,
+                    ...(error.type === undefined ? {} : { type: error.type }),
                 };
                 if (error.dataSchema !== undefined) {
                     result.data = convertMemberSchema(
@@ -390,7 +413,7 @@ function validateInterfaceErrors(schema: LinkRpcInterfaceSchema | undefined): vo
         if (method.result === undefined && method.errors !== undefined) {
             throw new Error(`Notification "${methodName}" cannot declare application errors.`);
         }
-        const seen = new Set<number>();
+        const seen = new Set<string>();
         for (const error of method.errors ?? []) {
             if (typeof error.message !== 'string') {
                 throw new Error(`Application error message on "${methodName}" must be a string.`);
@@ -401,10 +424,14 @@ function validateInterfaceErrors(schema: LinkRpcInterfaceSchema | undefined): vo
             if ((error.code >= -32768 && error.code <= -32000) || error.code === -32800) {
                 throw new Error(`Application error code ${error.code} on "${methodName}" is reserved by JSON-RPC or LinkRPC.`);
             }
-            if (seen.has(error.code)) {
-                throw new Error(`Duplicate application error code ${error.code} on "${methodName}".`);
+            if (error.type !== undefined && (typeof error.type !== 'string' || error.type.length === 0)) {
+                throw new Error(`Application error type on "${methodName}" must be a nonempty string.`);
             }
-            seen.add(error.code);
+            const key = error.type === undefined ? `code:${error.code}` : `type:${error.type}`;
+            if (seen.has(key)) {
+                throw new Error(`Duplicate application error ${key} on "${methodName}".`);
+            }
+            seen.add(key);
         }
     }
 }
@@ -471,7 +498,14 @@ export function interfaceFromSchema(schema: LinkRpcInterfaceSchema): InterfaceDe
             continue;
         }
         const base = new RequestType<unknown, unknown, void>(zAny(), zAny(), zVoid())
-            .withErrors((method.errors ?? []).map((error) => error.data === undefined
+            .withErrors((method.errors ?? []).map((error) => error.type !== undefined
+                ? error.data === undefined
+                    ? applicationError(error.type, { code: error.code, message: error.message })
+                    : applicationError(error.type, {
+                        code: error.code, message: error.message,
+                        data: schemaToZod(error.data, schema.components?.schemas),
+                    })
+                : error.data === undefined
                 ? applicationError(error.code, error.message)
                 : applicationError(error.code, error.message, schemaToZod(
                     error.data, schema.components?.schemas,

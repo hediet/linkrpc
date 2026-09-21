@@ -4,7 +4,7 @@ import {
     type IncomingCall,
     type IRequestSender,
     type JsonValue,
-    type Result,
+    type ChannelResult as Result,
     RpcError,
 } from '@hediet/linkrpc';
 import type {

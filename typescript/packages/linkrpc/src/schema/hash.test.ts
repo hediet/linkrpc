@@ -6,6 +6,22 @@ import { computeInterfaceHash, EXTENSION_PREFIX } from "./hash";
 import type { LinkRpcInterfaceSchema } from "./linkRpcInterfaceSchema";
 
 describe("computeInterfaceHash", () => {
+    it("normalizes inner error payload schemas and retains named error identity", () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.error-hash", hash: "", methods: {
+                read: { params: true, result: true, errors: [
+                    { type: "NotFound", code: 1, message: "Missing",
+                        data: { type: "object", properties: {} } as import('./linkRpcJsonSchema').LinkRpcJsonSchema },
+                ] },
+            },
+        };
+        const normalized = structuredClone(schema);
+        normalized.methods.read.errors![0].data = { type: "object", properties: {}, additionalProperties: false };
+        expect(computeInterfaceHash(schema)).toBe(computeInterfaceHash(normalized));
+        normalized.methods.read.errors![0].type = "Other";
+        expect(computeInterfaceHash(schema)).not.toBe(computeInterfaceHash(normalized));
+    });
+
     it("is stable, 16 hex chars, and independent of `comment`", () => {
         const a = defineInterface(
             { id: "test.iface", comment: "first note" },

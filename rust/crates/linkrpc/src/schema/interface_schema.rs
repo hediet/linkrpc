@@ -119,6 +119,7 @@ impl LinkRpcInterfaceSchema {
                 )));
             }
             let mut codes = std::collections::BTreeSet::new();
+            let mut names = std::collections::BTreeSet::new();
             for error in errors {
                 if (-32768..=-32000).contains(&error.code) || error.code == -32800 {
                     return Err(InterfaceSchemaError(format!(
@@ -126,7 +127,18 @@ impl LinkRpcInterfaceSchema {
                         error.code
                     )));
                 }
-                if !codes.insert(error.code) {
+                if let Some(name) = &error.r#type {
+                    if name.is_empty() {
+                        return Err(InterfaceSchemaError(format!(
+                            "method `{method_name}` error type must not be empty"
+                        )));
+                    }
+                    if !names.insert(name) {
+                        return Err(InterfaceSchemaError(format!(
+                            "method `{method_name}` has duplicate error type `{name}`"
+                        )));
+                    }
+                } else if !codes.insert(error.code) {
                     return Err(InterfaceSchemaError(format!(
                         "method `{method_name}` has duplicate error code {}",
                         error.code
@@ -172,7 +184,7 @@ pub struct MethodSchema {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub server_stream: Option<JsonValue>,
 
-    /// Application-level errors. Codes MUST be unique.
+    /// Application-level errors. Named types and unnamed codes must be unique.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub errors: Option<Vec<ErrorSchema>>,
 
@@ -266,8 +278,11 @@ pub struct MemberAnnotations {
 pub struct ErrorSchema {
     /// JSON-RPC error code. -32768..-32000 and LinkRPC -32800 are reserved.
     pub code: i32,
+    /// Stable named-envelope discriminator; absent for legacy raw-data errors.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub r#type: Option<String>,
     pub message: String,
-    /// Optional schema describing the shape of `error.data`.
+    /// Inner variant payload schema (legacy: the entire `error.data`).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub data: Option<JsonValue>,
 }

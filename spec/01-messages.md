@@ -99,3 +99,8 @@ JSON-RPC 2.0 already defines the codes in the first group; linkrpc reuses them u
 | -32800 | `cancelled` | linkrpc | the request was cancelled (03) |
 
 A node MUST use the listed code for the listed condition. Application interfaces MAY define additional error codes outside the JSON-RPC reserved range (`-32768`..`-32000`); see chapter 04.
+
+LinkRPC uses `1` (`applicationError`) as the default code for declared application
+errors. This is a LinkRPC convention, not a standard JSON-RPC error code. Named
+variants share this code and are distinguished by a tagged `error.data` envelope;
+interfaces MAY override the numeric code for individual variants (chapter 04 §2.1).

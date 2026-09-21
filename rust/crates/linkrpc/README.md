@@ -55,13 +55,10 @@ Application errors are inferred from the method's `Result` error type; existing
 `Result<T, JsonRpcError>` methods are unchanged. No error annotation is needed.
 
 ```rust
-#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-struct MissingData { resource: String }
-
 #[derive(linkrpc::ApplicationError)]
 enum LookupError {
-    #[rpc_error(code = 1001, message = "Missing")]
-    Missing(MissingData),
+    #[rpc_error(message = "Not found")]
+    NotFound { resource: String },
     #[rpc_error(code = -7, message = "Offline")]
     Offline,
 }
@@ -75,19 +72,34 @@ trait Lookup {
 The server trait may return either `LookupError` directly or
 `CallError<LookupError>` when it also needs to forward a raw remote error. The client returns
 `Result<String, CallError<LookupError>>`. `CallError::Application` is produced
-only when code, message, data presence, and schema all match. Otherwise
-`CallError::Remote` retains the original `JsonRpcError`.
-`CallError::Local` reports local serialization/decoding failures, while
-`CallError::Transport` reports connection failures without inferring their
+only when code, declared type, data presence, and payload schema all match;
+the message is descriptive, not a discriminator. Otherwise
+`CallError::Generic(RpcCallError::Remote(error))` retains the original error.
+`Generic(RpcCallError::Local(error))` reports local serialization/decoding failures,
+while `Generic(RpcCallError::Transport(error))` reports connection failures without inferring their
 origin from a peer-controlled error code.
 
-Codes are signed 32-bit integers. The reserved `-32768..=-32000` range and
-LinkRPC cancellation code `-32800`,
-duplicate codes within a method, and errors on notifications are rejected.
-Unit variants require absent `data`; payload variants require present,
-schema-valid `data` (including `null` when its schema permits it).
-Schema-driven generation emits stable variants such as `Code1001` and
-`CodeMinus7`.
+Codes are signed 32-bit integers and default to `DEFAULT_APPLICATION_ERROR_CODE`
+(`1`, a LinkRPC convention, not a JSON-RPC standard code). Explicit codes still
+use named envelopes. The reserved `-32768..=-32000` range and LinkRPC cancellation
+code `-32800`, duplicate names within a method, and errors on notifications are
+rejected. Names must be nonempty. Named variants may share a code, including
+with a legacy unnamed declaration; named recognition is attempted first.
+A matching code/type owns validation: malformed named envelopes or payloads
+remain generic rather than falling back to a permissive legacy declaration.
+
+The wire shape is `{ "code": 1, "message": "Not found", "data": {
+"type": "NotFound", "data": { "resource": "widget" } } }`. Unit variants omit
+the **inner** `data`; payload variants require it, including explicit `null`
+when permitted. Wire names default to the Rust variant identifier; override with
+`#[rpc_error(name = "stable-name", message = "...")]`. Named-field and single-payload
+variants are supported. A private serde tagged enum performs decoding; the error
+enum itself need not derive serde traits.
+
+`ErrorSchema.type` carries the optional wire name, `code` always carries its
+resolved numeric value, and `data` describes the inner payload. Imported
+schemas without `type` retain legacy raw-data encoding and code/message
+validation; generated legacy variants remain `Code1001` or `CodeMinus7`.
 | `pizza_service::interface()` / `::ID` | the interface descriptor and its content hash |
 
 ## Why content-hashed interfaces?

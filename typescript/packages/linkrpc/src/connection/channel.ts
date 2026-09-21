@@ -214,7 +214,7 @@ export class RpcError extends Error {
         public readonly code: number,
         data?: JsonValue,
         /** Whether this error was decoded from a peer response. */
-        public readonly origin: 'local' | 'remote' = 'local',
+        public readonly origin: 'local' | 'remote' | 'transport' = 'local',
         hasData = data !== undefined,
     ) {
         super(message);

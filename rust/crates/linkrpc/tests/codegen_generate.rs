@@ -245,8 +245,34 @@ fn typed_error_output_matches_fixture() {
 }
 
 #[test]
+fn legacy_helper_names_reserve_later_named_wire_types() {
+    let schema = schema(
+        r#"{
+        "id": "colliding.errors", "hash": "", "methods": {
+            "check": { "params": true, "result": true, "errors": [
+                { "code": 2001, "message": "Legacy" },
+                { "code": 2001, "type": "Code2001", "message": "Named" }
+            ] }
+        }
+    }"#,
+    );
+    schema.validate().unwrap();
+    let code = generate_rust_interface(&schema, &GenerateRustOptions::default()).code;
+    assert!(code.contains("#[rpc_error(code = 2001, message = \"Legacy\", name = \"Code20012\")]"));
+    assert!(code.contains("#[rpc_error(code = 2001, message = \"Named\", name = \"Code2001\")]"));
+}
+
+#[test]
 fn invalid_error_contracts_are_rejected() {
     for (method, expected) in [
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":1,"type":"","message":"a"}]}"#,
+            "error type must not be empty",
+        ),
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":1,"type":"Busy","message":"a"},{"code":2,"type":"Busy","message":"b"}]}"#,
+            "duplicate error type `Busy`",
+        ),
         (
             r#""bad":{"params":true,"result":true,"errors":[{"code":7,"message":"a"},{"code":7,"message":"b"}]}"#,
             "duplicate error code 7",

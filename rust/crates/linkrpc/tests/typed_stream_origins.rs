@@ -43,7 +43,7 @@ async fn streaming_startup_transport_failure_preserves_origin() {
 
     assert!(matches!(
         error,
-        CallError::Transport(TransportError::Closed)
+        CallError::Generic(RpcCallError::Transport(TransportError::Closed))
     ));
 }
 
@@ -69,7 +69,9 @@ async fn mid_stream_transport_closure_preserves_origin() {
     peer.await.unwrap();
     assert!(matches!(
         result.await,
-        Err(CallError::Transport(TransportError::Closed))
+        Err(CallError::Generic(RpcCallError::Transport(
+            TransportError::Closed
+        )))
     ));
 }
 
@@ -100,10 +102,10 @@ async fn malformed_success_response_is_local() {
 
     assert!(matches!(
         result.await,
-        Err(CallError::Local(JsonRpcError {
+        Err(CallError::Generic(RpcCallError::Local(JsonRpcError {
             code: error_codes::INVALID_PARAMS,
             ..
-        }))
+        })))
     ));
 }
 
@@ -137,9 +139,9 @@ async fn remote_reserved_disconnect_code_is_not_transport() {
 
     assert!(matches!(
         result.await,
-        Err(CallError::Remote(JsonRpcError {
+        Err(CallError::Generic(RpcCallError::Remote(JsonRpcError {
             code: error_codes::PEER_DISCONNECTED,
             ..
-        }))
+        })))
     ));
 }
