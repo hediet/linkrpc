@@ -181,14 +181,17 @@ fn register<S: ServiceExport + 'static>(
     connection: &LinkRpcConnection,
     service: S,
     prefix: &str,
-    interface_id: &str,
+    _interface_id: &str,
 ) {
     connection
-        .register_service(Arc::new(service), RegisterOptions::default())
+        .register_service(
+            Arc::new(service),
+            RegisterOptions {
+                bare_prefix: Some(prefix.to_string()),
+                ..Default::default()
+            },
+        )
         .expect("register generated service adapter");
-    connection
-        .bind_bare(prefix, None, interface_id)
-        .expect("bind native protocol prefix");
 }
 
 async fn server(protocol: &str) {

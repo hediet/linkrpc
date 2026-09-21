@@ -89,6 +89,32 @@ fn register(
         .unwrap();
 }
 
+fn register_bare(
+    connection: &LinkRpcConnection,
+    iface: Arc<InterfaceDefinition>,
+    service_id: Option<&str>,
+    bare_prefix: &str,
+    notifications: Arc<Mutex<Vec<(String, JsonValue)>>>,
+) -> linkrpc::prelude::InterfaceRegistration {
+    let interface_id = iface.id().to_string();
+    let service_id = service_id.map(str::to_string);
+    connection
+        .register(
+            iface,
+            Arc::new(RecordingHandler {
+                interface_id,
+                service_id: service_id.clone(),
+                notifications,
+            }),
+            RegisterOptions {
+                service_id,
+                bare_prefix: Some(bare_prefix.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+}
+
 fn connected_pair() -> (LinkRpcConnection, LinkRpcConnection) {
     let (a, b) = transport_pair();
     let caller = LinkRpcConnection::new(Box::new(a));
@@ -172,15 +198,13 @@ async fn shared_conformance_vectors_match_runtime_routing() {
                 .iter()
                 .map(|member| member.as_str().unwrap())
                 .collect();
-            register(
+            register_bare(
                 &provider,
                 interface(interface_id, &members, &[]),
                 service_id,
+                prefix,
                 notifications.clone(),
             );
-            provider
-                .bind_bare(prefix, service_id, interface_id)
-                .unwrap();
         }
 
         let result = caller
@@ -208,44 +232,41 @@ async fn shared_conformance_vectors_match_runtime_routing() {
 async fn cdp_and_lsp_prefixes_route_requests_and_notifications() {
     let (caller, provider) = connected_pair();
     let notifications = Arc::new(Mutex::new(Vec::new()));
-    register(
+    register_bare(
         &provider,
         interface("cdp.DOM", &["getDocument"], &[]),
         None,
+        "DOM.",
         notifications.clone(),
     );
-    register(
+    register_bare(
         &provider,
         interface("cdp.Runtime", &["evaluate"], &[]),
         None,
+        "Runtime.",
         notifications.clone(),
     );
-    register(
+    register_bare(
         &provider,
         interface("lsp.lifecycle", &["initialize"], &[]),
         None,
+        "",
         notifications.clone(),
     );
-    register(
+    register_bare(
         &provider,
         interface("lsp.textDocument", &["hover"], &[]),
         None,
+        "textDocument/",
         notifications.clone(),
     );
-    register(
+    register_bare(
         &provider,
         interface("lsp.protocol", &[], &["cancelRequest"]),
         None,
+        "$/",
         notifications.clone(),
     );
-
-    provider.bind_bare("DOM.", None, "cdp.DOM").unwrap();
-    provider.bind_bare("Runtime.", None, "cdp.Runtime").unwrap();
-    provider.bind_bare("", None, "lsp.lifecycle").unwrap();
-    provider
-        .bind_bare("textDocument/", None, "lsp.textDocument")
-        .unwrap();
-    provider.bind_bare("$/", None, "lsp.protocol").unwrap();
 
     let runtime = caller
         .call("Runtime.evaluate", json!({ "x": 1 }))
@@ -275,22 +296,20 @@ async fn cdp_and_lsp_prefixes_route_requests_and_notifications() {
 async fn longest_prefix_wins_without_member_fallback_and_addressed_calls_are_unchanged() {
     let (caller, provider) = connected_pair();
     let notifications = Arc::new(Mutex::new(Vec::new()));
-    register(
+    register_bare(
         &provider,
         interface("test.short", &["bc"], &[]),
         None,
+        "a",
         notifications.clone(),
     );
-    register(
+    register_bare(
         &provider,
         interface("test.long", &["other"], &[]),
         Some("tools"),
+        "ab",
         notifications,
     );
-    provider.bind_bare("a", None, "test.short").unwrap();
-    provider
-        .bind_bare("ab", Some("tools"), "test.long")
-        .unwrap();
 
     let err = caller.call("abc", json!({})).await.unwrap_err();
     assert_eq!(err.code, error_codes::METHOD_NOT_FOUND);
@@ -312,65 +331,82 @@ async fn longest_prefix_wins_without_member_fallback_and_addressed_calls_are_unc
 }
 
 #[test]
-fn binding_validation_duplicates_and_unbind_lifecycle() {
+fn invalid_and_duplicate_prefixes_roll_back_registration() {
     let (_a, b) = transport_pair();
     let provider = LinkRpcConnection::new(Box::new(b));
     let notifications = Arc::new(Mutex::new(Vec::new()));
 
-    assert!(matches!(
-        provider.bind_bare("DOM.", None, "cdp.DOM"),
-        Err(ConnError::BareTargetNotRegistered { .. })
-    ));
-    register(
+    register_bare(
         &provider,
         interface("cdp.DOM", &["getDocument"], &[]),
         None,
+        "DOM.",
         notifications,
     );
     let vectors = bare_binding_vectors();
-    for prefix in vectors["invalidPrefixes"].as_array().unwrap() {
+    for (index, prefix) in vectors["invalidPrefixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+    {
         let prefix = prefix.as_str().unwrap();
+        let iface = interface(&format!("invalid.{index}"), &["run"], &[]);
         assert!(
             matches!(
-                provider.bind_bare(prefix, None, "cdp.DOM"),
+                provider.register(
+                    iface,
+                    Arc::new(RecordingHandler {
+                        interface_id: format!("invalid.{index}"),
+                        service_id: None,
+                        notifications: Arc::new(Mutex::new(Vec::new())),
+                    }),
+                    RegisterOptions {
+                        bare_prefix: Some(prefix.to_string()),
+                        ..Default::default()
+                    },
+                ),
                 Err(ConnError::InvalidBarePrefix)
             ),
             "{prefix:?}"
         );
     }
-    provider.bind_bare("DOM.", None, "cdp.DOM").unwrap();
+    let duplicate = interface("duplicate", &["run"], &[]);
     assert!(matches!(
-        provider.bind_bare("DOM.", None, "cdp.DOM"),
+        provider.register(
+            duplicate,
+            Arc::new(RecordingHandler {
+                interface_id: "duplicate".into(),
+                service_id: Some("named".into()),
+                notifications: Arc::new(Mutex::new(Vec::new())),
+            }),
+            RegisterOptions {
+                service_id: Some("named".into()),
+                bare_prefix: Some("DOM.".into()),
+                ..Default::default()
+            },
+        ),
         Err(ConnError::BarePrefixAlreadyBound(prefix)) if prefix == "DOM."
     ));
-    assert!(provider.unbind_bare("DOM."));
-    assert!(!provider.unbind_bare("DOM."));
-    provider.bind_bare("DOM.", None, "cdp.DOM").unwrap();
+    assert_eq!(provider.list_registered().len(), 1);
 }
 
 #[tokio::test]
-async fn legacy_preset_replaces_empty_binding_and_reflection_lists_sorted_bindings() {
+async fn unregister_removes_routes_and_allows_reregistration() {
     let (caller, provider) = connected_pair();
     let notifications = Arc::new(Mutex::new(Vec::new()));
-    let old = interface("test.old", &["run"], &[]);
-    let old_hash = old.schema_hash().to_string();
-    register(&provider, old, None, notifications.clone());
     let lifecycle = interface("lsp.lifecycle", &["run"], &[]);
     let lifecycle_hash = lifecycle.schema_hash().to_string();
-    register(&provider, lifecycle, None, notifications.clone());
+    let registration = register_bare(&provider, lifecycle, None, "", notifications.clone());
     let runtime = interface("cdp.Runtime", &["evaluate"], &[]);
     let runtime_hash = runtime.schema_hash().to_string();
-    register(&provider, runtime, Some("browser"), notifications.clone());
-
-    provider.bind_bare("", None, "test.old").unwrap();
-    provider
-        .bind_bare("Runtime.", Some("browser"), "cdp.Runtime")
-        .unwrap();
-    assert!(matches!(
-        provider.bind_bare("", None, "lsp.lifecycle"),
-        Err(ConnError::BarePrefixAlreadyBound(prefix)) if prefix.is_empty()
-    ));
-    provider.set_preset("lsp.lifecycle").unwrap();
+    register_bare(
+        &provider,
+        runtime,
+        Some("browser"),
+        "Runtime.",
+        notifications.clone(),
+    );
     provider.enable_reflection();
 
     let routed = caller.call("run", json!({})).await.unwrap();
@@ -382,7 +418,6 @@ async fn legacy_preset_replaces_empty_binding_and_reflection_lists_sorted_bindin
         .unwrap();
     assert_eq!(defaults["interfaceId"], "lsp.lifecycle");
     assert_eq!(defaults["interfaceHash"], lifecycle_hash);
-    assert_ne!(defaults["interfaceHash"], old_hash);
 
     let listed = caller
         .call("hubrpc.defaults::listBindings", json!({}))
@@ -404,6 +439,25 @@ async fn legacy_preset_replaces_empty_binding_and_reflection_lists_sorted_bindin
             }
         ])
     );
+
+    assert!(registration.unregister());
+    assert!(!registration.unregister());
+    assert_eq!(
+        caller.call("run", json!({})).await.unwrap_err().code,
+        error_codes::METHOD_NOT_FOUND
+    );
+    let replacement = register_bare(
+        &provider,
+        interface("lsp.lifecycle", &["run"], &[]),
+        None,
+        "",
+        notifications,
+    );
+    assert_eq!(
+        caller.call("run", json!({})).await.unwrap()["interfaceId"],
+        "lsp.lifecycle"
+    );
+    assert!(replacement.unregister());
 }
 
 #[tokio::test]
@@ -412,7 +466,12 @@ async fn defaults_get_only_reports_the_empty_prefix_binding() {
     let notifications = Arc::new(Mutex::new(Vec::new()));
     let runtime = interface("cdp.Runtime", &["evaluate"], &[]);
     let runtime_hash = runtime.schema_hash().to_string();
-    register(&provider, runtime, Some("browser"), notifications.clone());
+    register(
+        &provider,
+        runtime.clone(),
+        Some("browser"),
+        notifications.clone(),
+    );
     provider.enable_reflection();
 
     let defaults = caller
@@ -421,8 +480,20 @@ async fn defaults_get_only_reports_the_empty_prefix_binding() {
         .unwrap();
     assert_eq!(defaults, json!({}));
 
-    provider
-        .bind_bare("Runtime.", Some("browser"), "cdp.Runtime")
+    let registration = provider
+        .register(
+            interface("cdp.Runtime.bare", &["evaluate"], &[]),
+            Arc::new(RecordingHandler {
+                interface_id: "cdp.Runtime.bare".into(),
+                service_id: Some("browser".into()),
+                notifications: notifications.clone(),
+            }),
+            RegisterOptions {
+                service_id: Some("browser".into()),
+                bare_prefix: Some("Runtime.".into()),
+                ..Default::default()
+            },
+        )
         .unwrap();
     let defaults = caller
         .call("hubrpc.defaults::get", json!({}))
@@ -430,9 +501,8 @@ async fn defaults_get_only_reports_the_empty_prefix_binding() {
         .unwrap();
     assert_eq!(defaults, json!({}));
 
-    provider
-        .bind_bare("", Some("browser"), "cdp.Runtime")
-        .unwrap();
+    registration.unregister();
+    register_bare(&provider, runtime, Some("browser2"), "", notifications);
     let defaults = caller
         .call("hubrpc.defaults::get", json!({}))
         .await
@@ -440,7 +510,7 @@ async fn defaults_get_only_reports_the_empty_prefix_binding() {
     assert_eq!(
         defaults,
         json!({
-            "serviceId": "browser",
+            "serviceId": "browser2",
             "interfaceId": "cdp.Runtime",
             "interfaceHash": runtime_hash,
         })

@@ -167,6 +167,27 @@ describe("pinned protocol contract import", () => {
                 // @ts-expect-error bare targets cannot accept service routing options.
                 connection.get(cdpRuntime, { serviceId: "runtime" });
 
+                declare const runtimeHandlers: InterfaceHandlers<typeof cdpRuntime.interface>;
+                connection.register(cdpRuntime, {
+                    ...runtimeHandlers,
+                    evaluate: async (params) => {
+                        params.expression satisfies string;
+                        return { result: { type: "number", value: 42 } };
+                    },
+                }, { serviceId: "browser-1" });
+                connection.service("browser-2").register(cdpRuntime, {
+                    ...runtimeHandlers,
+                    evaluate: async (params) => {
+                        params.expression satisfies string;
+                        return { result: { type: "number", value: 42 } };
+                    },
+                });
+                connection.register(cdpRuntime, {
+                    ...runtimeHandlers,
+                    // @ts-expect-error generated evaluate handler must return its result object.
+                    evaluate: async () => "invalid",
+                });
+
                 declare const cdpClient: InterfaceClient<typeof cdpDomProtocol>;
                 const document = await cdpClient.getDocument({ depth: 2, pierce: true });
                 const recursiveNode: typeof document.root = document.root.children![0]!;

@@ -9,14 +9,15 @@ export interface BareInterfaceTarget<TDef extends InterfaceDefinition<any>> {
 
 /**
  * Bundle an interface definition with metadata-free foreign-protocol
- * addressing for use with `connection.get(target)`.
+ * addressing for use with `connection.get(target)` or
+ * `connection.register(target, handlers)`.
  */
 export function bareInterfaceTarget<TDef extends InterfaceDefinition<any>>(
     iface: TDef,
     options: { readonly prefix?: string } = {},
 ): BareInterfaceTarget<TDef> {
     const prefix = options.prefix ?? '';
-    validateBarePrefix(prefix, 'bareInterfaceTarget');
+    validateBarePrefix(prefix);
     return Object.freeze({
         mode: 'bare' as const,
         interface: iface,
@@ -37,9 +38,8 @@ export function isBareInterfaceTarget<TDef extends InterfaceDefinition<any>>(
 
 export function validateBarePrefix(
     prefix: string,
-    api: 'bareInterfaceTarget' | 'bindBare' | 'getBare',
 ): void {
     if (prefix.includes('::') || !/^[\x20-\x7e]*$/.test(prefix)) {
-        throw new Error(`${api}: prefix must contain only printable ASCII and must not contain "::".`);
+        throw new Error('Bare interface prefix must contain only printable ASCII and must not contain "::".');
     }
 }

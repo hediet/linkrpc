@@ -270,11 +270,15 @@ runtime:
 
 - **`hubrpc.directory`** — which services and interfaces this connection serves (each with its `id@hash`).
 - **`hubrpc.schemas`** — the full schema for any advertised interface.
-- **`hubrpc.defaults`** — the connection's preset service/interface, if any (`setPreset(iface)`).
+- **`hubrpc.defaults`** — the connection's empty-prefix bare interface registration, if any.
 
 ```ts
-connection.register(greeter, handlers);
-connection.setPreset(greeter);      // lets callers use the bare `hello` form
+connection.register(bareInterfaceTarget(greeter), handlers);
+// The interface remains available as `test.greeter::hello` and also as bare `hello`.
+connection.service('acme').register(
+    bareInterfaceTarget(documents, { prefix: 'documents/' }),
+    documentHandlers,
+);
 connection.enableReflection();      // directory / schemas / defaults, for free
 ```
 

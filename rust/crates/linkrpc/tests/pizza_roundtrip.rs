@@ -113,9 +113,15 @@ fn make_pair(cancelled: Arc<Mutex<Vec<String>>>) -> (LinkRpcConnection, LinkRpcC
     let iface = Arc::new(pizza_interface());
     let shop: Arc<dyn InterfaceHandler> = Arc::new(PizzaShop { cancelled });
     server
-        .register(iface.clone(), shop, RegisterOptions::default())
+        .register(
+            iface.clone(),
+            shop,
+            RegisterOptions {
+                bare_prefix: Some(String::new()),
+                ..Default::default()
+            },
+        )
         .expect("register pizza");
-    server.set_preset(PIZZA_ID).expect("set preset");
     server.enable_reflection();
 
     let (c, s) = (client.clone(), server.clone());

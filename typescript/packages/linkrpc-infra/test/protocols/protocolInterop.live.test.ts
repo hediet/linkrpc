@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { describe, expect, it } from 'vitest';
 import {
+    bareInterfaceTarget,
     LinkRpcConnection,
     JsonRpcChannel,
     traceMessageTransport,
@@ -190,12 +191,11 @@ function receiveNotification(
 ): Promise<unknown> {
     const { definition, binding, prefix } = selectMember(contract, wireMethod, 'serverToClient');
     return new Promise((resolve) => {
-        connection.register(definition, {
+        connection.register(bareInterfaceTarget(definition, { prefix }), {
             [binding.member]: (params: unknown) => {
                 if (accept(params)) resolve(params);
             },
         });
-        connection.bindBare(definition, { prefix });
     });
 }
 
