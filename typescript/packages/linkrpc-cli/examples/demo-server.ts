@@ -2,6 +2,7 @@
 // Runs over stdio and registers a single demo interface + reflection.
 import { z } from "zod";
 import {
+    bareInterfaceTarget,
     defineInterface,
     notificationType,
     requestType,
@@ -21,10 +22,9 @@ const echoInterface = defineInterface(
 
 void (async () => {
     const conn = await serveOnStdio();
-    conn.register(echoInterface, {
+    conn.register(bareInterfaceTarget(echoInterface), {
         echo: async ({ text }) => ({ text: text.toUpperCase() }),
         ping: () => { },
     });
-    conn.setPreset(echoInterface);
     conn.enableReflection();
 })();

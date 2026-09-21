@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
 import {
+    bareInterfaceTarget,
     defineInterface,
     notificationType,
     requestType,
@@ -47,7 +48,7 @@ function makeFixture(): Fixture {
     const server = LinkRpcConnection.fromTransport(pair.b);
     const received = { bounceTo: [] as string[] };
 
-    server.register(mailerInterface, {
+    server.register(bareInterfaceTarget(mailerInterface), {
         send: async ({ to, subject }) => ({ messageId: `m_${to}_${subject.length}` }),
         bounce: ({ to }) => { received.bounceTo.push(to); },
     });
@@ -55,7 +56,6 @@ function makeFixture(): Fixture {
         send: async ({ to }) => ({ messageId: `mailer_${to}` }),
         bounce: () => { },
     });
-    server.setPreset(mailerInterface);
     server.enableReflection();
     // Mirror the hub-mode convention: services that live behind a prefix
     // expose reflection both at root and at their prefix, so form-3

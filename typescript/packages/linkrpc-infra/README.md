@@ -61,14 +61,22 @@ core `materializeJsonSchema` helper; they are not automatically enforced by
 these structural validators. Review importer diagnostics before treating an
 approximation as an exact protocol model.
 
-An endpoint can register several interfaces and bind each to an external prefix
-with `connection.bindBare(definition, { prefix })`. Bundle client addressing
-once with the core `bareInterfaceTarget` helper:
+Bundle an interface with its external prefix using the core
+`bareInterfaceTarget` helper. The same target supplies incoming routing at
+registration time and outgoing client addressing:
 
 ```ts
 const cdpRuntime = bareInterfaceTarget(cdpRuntimeInterface, { prefix: 'Runtime.' });
+const registration = connection.register(cdpRuntime, handlers);
 const runtime = connection.get(cdpRuntime);
 ```
+
+Registration installs the implementation and its bare route together;
+`registration.dispose()` removes both. Native interface-qualified addressing
+remains available. To mount the implementation under a named service, pass
+`{ serviceId: 'browser-1' }` as the third registration argument, or use
+`connection.service('browser-1').register(cdpRuntime, handlers)`. Prefixes
+remain unique across the whole connection, not per service.
 
 The immutable target contains the interface, bare-addressing mode, and prefix;
 it does not change the interface schema or hash. The existing

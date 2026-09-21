@@ -29,7 +29,7 @@ pub mod prelude {
         FormatEndpointOptions, ResolvedEndpoint,
     };
     pub use crate::connection::hub_connection::{
-        ConnError, LinkRpcConnection, RegisterOptions, RegisteredListing,
+        ConnError, InterfaceRegistration, LinkRpcConnection, RegisterOptions, RegisteredListing,
     };
     pub use crate::connection::interface_def::{
         InterfaceDefinition, InterfaceInfo, Member, MemberDocs, NotificationMember, RequestMember,

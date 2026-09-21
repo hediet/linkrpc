@@ -267,7 +267,7 @@ Routing is encoded in the JSON-RPC `method` string using `::`:
 
 | form | meaning |
 |---|---|
-| `member` | dispatch to the connection's **preset** interface (vanilla JSON-RPC backcompat) |
+| `member` | dispatch through the longest matching registration-time bare prefix |
 | `interfaceId::member` | interface-qualified, mounted at the root |
 | `serviceId::interfaceId::member` | fully qualified, mounted under a serviceId |
 | `rpc.*` | reserved by JSON-RPC; never used by linkrpc |
@@ -278,14 +278,14 @@ call self-describes its target.
 
 ```rust
 enum MethodName {
-    Bare    { member: String },                                       // → preset interface
+    Bare    { member: String },                                       // → longest bare-prefix match
     Qualified { interface_id: String, member: String },               // "com.acme.pizza::order"
     Full    { service_id: String, interface_id: String, member: String }, // "uptown::com.acme.pizza::order"
 }
 
 fn parse_method(s: &str) -> Result<Target, RouteError> {
     match s.split("::").collect::<Vec<_>>().as_slice() {
-        [m]          => Ok(Target::preset(m)),
+        [m]          => Ok(Target::bare(m)),
         [iid, m]     => Ok(Target::qualified(iid, m)),
         [sid, iid, m]=> Ok(Target::full(sid, iid, m)),
         _            => Err(RouteError::Malformed),
@@ -426,17 +426,15 @@ It owns:
 - **routing & dispatch** (parse `::`, validate params against schema, invoke the handler),
 - **outbound proxying** (hand out `Client`s that call the peer),
 - **reflection** (the three interfaces below),
-- an optional **preset** interface for bare-`member` calls.
+- optional registration-time bare-method routes.
 
 ```rust
 impl LinkRpcConnection {
     fn new(transport: impl MessageTransport + 'static) -> Self;
 
-    fn serve(&self, handler: impl Handler + 'static);                 // root mount, id@hash inferred
-    fn serve_as(&self, service_id: &str, handler: impl Handler + 'static);
+    fn register(&self, handler: impl Handler + 'static, opts: RegisterOptions);
 
     fn client<C: LinkRpcClient>(&self) -> C;                           // outbound proxy for an interface
-    fn set_preset(&self, interface: &LinkRpcInterfaceSchema);          // bare-method dispatch target
     fn enable_reflection(&self, opts: ReflectionOptions);
 
     async fn run(self) -> Result<(), ConnError>;                      // pump until the peer closes
@@ -445,9 +443,10 @@ impl LinkRpcConnection {
 
 Because it is symmetric, both peers can serve *and* call over the same link.
 
-### Preset
-An interface nominated as the default target for bare `member` calls (no `::`). This is the
-backwards-compatibility bridge to vanilla JSON-RPC clients that don't know about linkrpc routing.
+### Bare routes
+An interface can opt into bare-method routing when it is registered. `bare_prefix: Some("")`
+selects it for unprefixed methods; a non-empty prefix supports foreign protocols such as CDP and
+LSP. Prefixes are unique across the connection and are removed with their registration.
 
 ### Reflection
 Discovery is *not* a special protocol — it is **three ordinary interfaces** auto-registered

@@ -4,9 +4,10 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import {
+    bareInterfaceTarget,
+    defaultsInterface,
     RpcError,
 } from '@hediet/linkrpc';
-import { defaultsInterface } from '../../../linkrpc/src/hub/common/reflection.interfaces';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { startRustPeer, within } from './rustPeer';
 import { createGeneratedProtocolInterfaceDefinition } from './contracts/generated';
@@ -92,13 +93,13 @@ describe('generated CDP/LSP code across Rust and TypeScript', () => {
         it(`${protocol}: generated TypeScript client calls generated Rust server`, async () => {
             const definition = createGeneratedProtocolInterfaceDefinition(contracts.selected[protocol]);
             const peer = await startPeer('server', protocol);
-            const client = peer.connection.getBare(definition, { prefix: prefix(protocol) });
+            const target = bareInterfaceTarget(definition, { prefix: prefix(protocol) });
+            const client = peer.connection.get(target);
             const notified = deferred<unknown>();
             const notification = protocol === 'cdp' ? 'documentUpdated' : 'publishDiagnostics';
-            peer.connection.register(definition, {
+            peer.connection.register(target, {
                 [notification]: (params: unknown) => notified.resolve(params),
             });
-            peer.connection.bindBare(definition, { prefix: prefix(protocol) });
             peer.start();
             try {
                 const bindings = await within(
@@ -143,10 +144,11 @@ describe('generated CDP/LSP code across Rust and TypeScript', () => {
         it(`${protocol}: generated Rust client calls generated TypeScript server`, async () => {
             const definition = createGeneratedProtocolInterfaceDefinition(contracts.selected[protocol]);
             const peer = await startPeer('client', protocol);
-            const outgoing = peer.connection.getBare(definition, { prefix: prefix(protocol) });
+            const target = bareInterfaceTarget(definition, { prefix: prefix(protocol) });
+            const outgoing = peer.connection.get(target);
             const called: string[] = [];
             if (protocol === 'cdp') {
-                peer.connection.register(definition, {
+                peer.connection.register(target, {
                     getDocument: async (params: unknown) => {
                         called.push('getDocument');
                         if (isRecord(params) && params.depth === -99) {
@@ -158,7 +160,7 @@ describe('generated CDP/LSP code across Rust and TypeScript', () => {
                     },
                 });
             } else {
-                peer.connection.register(definition, {
+                peer.connection.register(target, {
                     didOpen: async (params: unknown) => {
                         called.push('didOpen');
                         expect(params).toEqual(lspDidOpen);
@@ -185,7 +187,6 @@ describe('generated CDP/LSP code across Rust and TypeScript', () => {
                     },
                 });
             }
-            peer.connection.bindBare(definition, { prefix: prefix(protocol) });
             peer.connection.enableReflection();
             peer.start();
             try {

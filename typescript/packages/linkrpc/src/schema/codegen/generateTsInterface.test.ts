@@ -415,11 +415,21 @@ connection.get(cdpRuntime).evaluate({});
 connection.get(cdpRuntime, { serviceId: "runtime" });
 // @ts-expect-error bare targets cannot be routed through a service
 connection.service("runtime").get(cdpRuntime);
+connection.register(cdpRuntime, {
+    evaluate: ({ expression }) => ({ result: { value: expression.length } }),
+});
+connection.service("runtime").register(cdpRuntime, {
+    evaluate: async ({ expression }) => ({ result: { value: expression.length } }),
+});
+connection.register(cdpRuntime, {
+    // @ts-expect-error generated bare targets preserve handler result types
+    evaluate: () => ({ result: { value: "invalid" } }),
+});
 `);
 
         expect(() => generateTsInterface(runtime.toSchema(), {
             bareTarget: { exportName: "invalid", prefix: "bad::prefix" },
-        })).toThrow(/bareInterfaceTarget: prefix/);
+        })).toThrow(/Bare interface prefix/);
     }, TYPECHECK_TIMEOUT_MS);
 
     it("preserves untagged oneOf and self-recursive components when requested", async () => {

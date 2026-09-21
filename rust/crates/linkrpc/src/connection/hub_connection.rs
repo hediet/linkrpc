@@ -7,7 +7,10 @@
 //!
 //! Mirrors TS `connection/linkRpcConnection.ts` (non-streaming subset for this milestone).
 
-use std::sync::{Arc, RwLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, RwLock, Weak,
+};
 
 use async_trait::async_trait;
 use serde_json::json;
@@ -34,22 +37,19 @@ pub enum ConnError {
         interface_id: String,
         service: Option<String>,
     },
-    #[error("setPreset: interface \"{0}\" is not registered under the root service")]
-    PresetNotRegistered(String),
-    #[error("bindBare: prefix must contain only printable ASCII and must not contain \"::\"")]
+    #[error("register: bare prefix must contain only printable ASCII and must not contain \"::\"")]
     InvalidBarePrefix,
-    #[error("bindBare: prefix \"{0}\" is already bound")]
+    #[error("register: bare prefix \"{0}\" is already bound")]
     BarePrefixAlreadyBound(String),
-    #[error("bindBare: interface \"{interface_id}\" is not registered{}", .service.as_deref().map(|s| format!(" under service \"{s}\"")).unwrap_or_else(|| " under the root service".to_string()))]
-    BareTargetNotRegistered {
-        interface_id: String,
-        service: Option<String>,
-    },
 }
 
 /// Options for [`LinkRpcConnection::register`].
 #[derive(Debug, Clone, Default)]
 pub struct RegisterOptions {
+    /// Also route bare wire methods beginning with this prefix to the interface.
+    ///
+    /// `None` installs no bare route. An empty string installs the default route.
+    pub bare_prefix: Option<String>,
     /// Mount the interface under this service id (form-3 addressing). Omit for the root service.
     pub service_id: Option<String>,
     /// Optional human description recorded for `service_id`, surfaced via the directory.
@@ -58,6 +58,7 @@ pub struct RegisterOptions {
 
 #[derive(Clone)]
 struct RegisteredInterface {
+    registration_id: u64,
     iface: Arc<InterfaceDefinition>,
     handler: Arc<dyn InterfaceHandler>,
     service_id: Option<String>,
@@ -72,6 +73,7 @@ impl RegisteredInterface {
 
 #[derive(Clone)]
 struct BareBinding {
+    registration_id: u64,
     prefix: String,
     service_id: Option<String>,
     interface_id: String,
@@ -79,9 +81,15 @@ struct BareBinding {
 }
 
 #[derive(Default)]
+struct RegistryState {
+    entries: Vec<RegisteredInterface>,
+    bare_bindings: Vec<BareBinding>,
+}
+
+#[derive(Default)]
 struct RegistryInner {
-    entries: RwLock<Vec<RegisteredInterface>>,
-    bare_bindings: RwLock<Vec<BareBinding>>,
+    state: RwLock<RegistryState>,
+    next_registration_id: AtomicU64,
 }
 
 fn registry_key(service_id: Option<&str>, interface_id: &str) -> String {
@@ -91,9 +99,10 @@ fn registry_key(service_id: Option<&str>, interface_id: &str) -> String {
 impl RegistryInner {
     fn find(&self, service_id: Option<&str>, interface_id: &str) -> Option<RegisteredInterface> {
         let key = registry_key(service_id, interface_id);
-        self.entries
+        self.state
             .read()
             .unwrap()
+            .entries
             .iter()
             .find(|e| e.key() == key)
             .cloned()
@@ -104,10 +113,11 @@ impl RegistryInner {
         interface_id: &str,
         hash: Option<&str>,
     ) -> Option<Arc<InterfaceDefinition>> {
-        self.entries.read().unwrap().iter().find_map(|e| {
+        self.state.read().unwrap().entries.iter().find_map(|e| {
             if e.iface.id() != interface_id {
                 return None;
             }
+
             if let Some(h) = hash {
                 if e.iface.schema_hash() != h {
                     return None;
@@ -115,6 +125,40 @@ impl RegistryInner {
             }
             Some(e.iface.clone())
         })
+    }
+}
+
+/// A live interface registration. Disposing it removes its dispatch, reflection, and
+/// bare-routing state.
+#[derive(Debug)]
+pub struct InterfaceRegistration {
+    inner: Weak<RegistryInner>,
+    registration_id: u64,
+}
+
+impl InterfaceRegistration {
+    /// Dispose this registration. Returns whether it was still registered.
+    pub fn dispose(&self) -> bool {
+        self.unregister()
+    }
+
+    /// Remove this registration. Returns whether it was still registered.
+    pub fn unregister(&self) -> bool {
+        let Some(inner) = self.inner.upgrade() else {
+            return false;
+        };
+        let mut state = inner.state.write().unwrap();
+        let old_len = state.entries.len();
+        state
+            .entries
+            .retain(|entry| entry.registration_id != self.registration_id);
+        if state.entries.len() == old_len {
+            return false;
+        }
+        state
+            .bare_bindings
+            .retain(|binding| binding.registration_id != self.registration_id);
+        true
     }
 }
 
@@ -152,23 +196,52 @@ impl LinkRpcConnection {
         iface: Arc<InterfaceDefinition>,
         handler: Arc<dyn InterfaceHandler>,
         opts: RegisterOptions,
-    ) -> Result<(), ConnError> {
+    ) -> Result<InterfaceRegistration, ConnError> {
+        if let Some(prefix) = &opts.bare_prefix {
+            validate_bare_prefix(prefix)?;
+        }
+        let registration_id = self
+            .inner
+            .next_registration_id
+            .fetch_add(1, Ordering::Relaxed);
         let entry = RegisteredInterface {
+            registration_id,
             iface,
             handler,
             service_id: opts.service_id.clone(),
             service_description: opts.service_description,
         };
         let key = entry.key();
-        let mut entries = self.inner.entries.write().unwrap();
-        if entries.iter().any(|e| e.key() == key) {
+        let mut state = self.inner.state.write().unwrap();
+        if state.entries.iter().any(|e| e.key() == key) {
             return Err(ConnError::AlreadyRegistered {
                 interface_id: entry.iface.id().to_string(),
                 service: opts.service_id,
             });
         }
-        entries.push(entry);
-        Ok(())
+        if let Some(prefix) = &opts.bare_prefix {
+            if state
+                .bare_bindings
+                .iter()
+                .any(|binding| binding.prefix == *prefix)
+            {
+                return Err(ConnError::BarePrefixAlreadyBound(prefix.clone()));
+            }
+        }
+        if let Some(prefix) = opts.bare_prefix {
+            state.bare_bindings.push(BareBinding {
+                registration_id,
+                prefix,
+                service_id: entry.service_id.clone(),
+                interface_id: entry.iface.id().to_string(),
+                hash: entry.iface.schema_hash().to_string(),
+            });
+        }
+        state.entries.push(entry);
+        Ok(InterfaceRegistration {
+            inner: Arc::downgrade(&self.inner),
+            registration_id,
+        })
     }
 
     /// Register a service from its handler alone, deriving the [`InterfaceDefinition`] via
@@ -178,69 +251,11 @@ impl LinkRpcConnection {
         &self,
         service: Arc<S>,
         opts: RegisterOptions,
-    ) -> Result<(), ConnError>
+    ) -> Result<InterfaceRegistration, ConnError>
     where
         S: ServiceExport + 'static,
     {
         self.register(Arc::new(S::interface()), service, opts)
-    }
-
-    /// Declare the preset interface for form-1 (bare-method) dispatch. Must already be registered
-    /// under the root service (no service id). Surfaced via `hubrpc.defaults::get`.
-    pub fn set_preset(&self, interface_id: &str) -> Result<(), ConnError> {
-        let entry = self
-            .inner
-            .find(None, interface_id)
-            .ok_or_else(|| ConnError::PresetNotRegistered(interface_id.to_string()))?;
-        let binding = BareBinding {
-            prefix: String::new(),
-            service_id: None,
-            interface_id: entry.iface.id().to_string(),
-            hash: entry.iface.schema_hash().to_string(),
-        };
-        let mut bindings = self.inner.bare_bindings.write().unwrap();
-        bindings.retain(|b| !b.prefix.is_empty());
-        bindings.push(binding);
-        Ok(())
-    }
-
-    /// Bind bare wire methods beginning with `prefix` to a registered interface.
-    ///
-    /// The prefix may be empty, must consist only of printable ASCII, and must not contain `::`.
-    /// The target must be registered before it is bound. Prefixes are unique; use
-    /// [`unbind_bare`](Self::unbind_bare) before replacing an explicit binding.
-    pub fn bind_bare(
-        &self,
-        prefix: &str,
-        service_id: Option<&str>,
-        interface_id: &str,
-    ) -> Result<(), ConnError> {
-        validate_bare_prefix(prefix)?;
-        let entry = self.inner.find(service_id, interface_id).ok_or_else(|| {
-            ConnError::BareTargetNotRegistered {
-                interface_id: interface_id.to_string(),
-                service: service_id.map(str::to_string),
-            }
-        })?;
-        let mut bindings = self.inner.bare_bindings.write().unwrap();
-        if bindings.iter().any(|b| b.prefix == prefix) {
-            return Err(ConnError::BarePrefixAlreadyBound(prefix.to_string()));
-        }
-        bindings.push(BareBinding {
-            prefix: prefix.to_string(),
-            service_id: service_id.map(str::to_string),
-            interface_id: interface_id.to_string(),
-            hash: entry.iface.schema_hash().to_string(),
-        });
-        Ok(())
-    }
-
-    /// Remove the bare-method binding for `prefix`, returning whether one existed.
-    pub fn unbind_bare(&self, prefix: &str) -> bool {
-        let mut bindings = self.inner.bare_bindings.write().unwrap();
-        let old_len = bindings.len();
-        bindings.retain(|b| b.prefix != prefix);
-        bindings.len() != old_len
     }
 
     /// Register the reflection interfaces (`defaults`, `directory`, `schemas`) backed by
@@ -273,9 +288,10 @@ impl LinkRpcConnection {
     /// Snapshot of registered interfaces, in registration order.
     pub fn list_registered(&self) -> Vec<RegisteredListing> {
         self.inner
-            .entries
+            .state
             .read()
             .unwrap()
+            .entries
             .iter()
             .map(|e| RegisteredListing {
                 service_id: e.service_id.clone().unwrap_or_default(),
@@ -390,18 +406,20 @@ impl RegistryInner {
         };
         match parsed {
             ParsedMethodName::Bare { member } => {
-                let selected = self
+                let state = self.state.read().unwrap();
+                let selected = state
                     .bare_bindings
-                    .read()
-                    .unwrap()
                     .iter()
                     .filter(|binding| member.starts_with(&binding.prefix))
-                    .max_by_key(|binding| binding.prefix.len())
-                    .cloned();
+                    .max_by_key(|binding| binding.prefix.len());
                 let Some(binding) = selected else {
                     return Err(not_found("no-preset", method));
                 };
-                let Some(entry) = self.find(binding.service_id.as_deref(), &binding.interface_id)
+                let Some(entry) = state
+                    .entries
+                    .iter()
+                    .find(|entry| entry.registration_id == binding.registration_id)
+                    .cloned()
                 else {
                     return Err(not_found("no-preset", method));
                 };
@@ -531,9 +549,10 @@ impl DefaultsService for Reflection {
     async fn get(&self, _ctx: &CallCtx) -> Result<DefaultsGetResult, JsonRpcError> {
         let binding = self
             .inner
-            .bare_bindings
+            .state
             .read()
             .unwrap()
+            .bare_bindings
             .iter()
             .find(|binding| binding.prefix.is_empty())
             .cloned();
@@ -558,9 +577,10 @@ impl DefaultsService for Reflection {
     ) -> Result<DefaultsListBindingsResult, JsonRpcError> {
         let mut bindings: Vec<BareBindingListing> = self
             .inner
-            .bare_bindings
+            .state
             .read()
             .unwrap()
+            .bare_bindings
             .iter()
             .map(|binding| BareBindingListing {
                 prefix: binding.prefix.clone(),
@@ -595,9 +615,10 @@ impl DirectoryService for Reflection {
 
         let all: Vec<ServiceListing> = self
             .inner
-            .entries
+            .state
             .read()
             .unwrap()
+            .entries
             .iter()
             .filter(|e| filter_iface.is_none_or(|f| e.iface.id() == f))
             .filter(|e| filter_service.is_none_or(|f| e.service_id.as_deref().unwrap_or("") == f))

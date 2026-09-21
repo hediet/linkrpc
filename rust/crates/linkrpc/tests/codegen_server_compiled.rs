@@ -78,22 +78,22 @@ async fn generated_client_provider_and_event_round_trip() {
     server_connection
         .register_service(
             Arc::new(ComExampleGraphServer::new(provider.clone())),
-            RegisterOptions::default(),
+            RegisterOptions {
+                bare_prefix: Some(String::new()),
+                ..Default::default()
+            },
         )
-        .unwrap();
-    server_connection
-        .set_preset(ComExampleGraphClient::<LinkRpcConnection>::INTERFACE_ID)
         .unwrap();
 
     let event_provider = Arc::new(EventProvider::default());
     client_connection
         .register_service(
             Arc::new(ComExampleGraphServer::new(event_provider.clone())),
-            RegisterOptions::default(),
+            RegisterOptions {
+                bare_prefix: Some(String::new()),
+                ..Default::default()
+            },
         )
-        .unwrap();
-    client_connection
-        .set_preset(ComExampleGraphClient::<LinkRpcConnection>::INTERFACE_ID)
         .unwrap();
 
     let client_run = client_connection.clone();

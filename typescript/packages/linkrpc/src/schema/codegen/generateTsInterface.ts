@@ -54,7 +54,7 @@ export function generateTsInterface(
     const exportName = options.exportName ?? _deriveExportName(schema.id);
     const preserveWireSchema = options.preserveWireSchema ?? false;
     if (options.bareTarget !== undefined) {
-        validateBarePrefix(options.bareTarget.prefix, 'bareInterfaceTarget');
+        validateBarePrefix(options.bareTarget.prefix);
     }
 
     const w = new CodeWriter();

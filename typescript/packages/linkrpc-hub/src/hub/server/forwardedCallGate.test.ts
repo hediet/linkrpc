@@ -368,7 +368,15 @@ describe('withForwardedCallGate (hub signature front door)', () => {
             trustedRoots: [root.signer.publicSigningIdentity],
         });
         const received: JsonRpcMessage[] = [];
-        gate.setListener((message) => received.push(message));
+        const drained = new Promise<void>((resolve) => {
+            gate.setListener((message) => {
+                if ('method' in message && message.method === 'test::drained') {
+                    resolve();
+                } else {
+                    received.push(message);
+                }
+            });
+        });
         const cap = await issueCap({
             issuer: root,
             audience: worker.principal,
@@ -385,10 +393,13 @@ describe('withForwardedCallGate (hub signature front door)', () => {
             method: 'svc::math::add',
             params: { a: 2, b: 2 },
         });
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        // Root-addressed messages bypass verification but still follow the gate's serial queue.
+        pair.a.send({ jsonrpc: '2.0', method: 'test::drained', params: {} });
+        await drained;
 
         expect(received).toHaveLength(1);
         expect(received[0]).toMatchObject({ method: 'svc::math::add' });
+        gate.dispose();
     });
 
     it('rejects a replayed request nonce (same signed wire sent twice)', async () => {

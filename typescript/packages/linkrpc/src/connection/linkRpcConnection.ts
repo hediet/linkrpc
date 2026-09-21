@@ -192,7 +192,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         opts: BareGetOptions = {},
     ): InterfaceClient<TDef> {
         const prefix = opts.prefix ?? '';
-        validateBarePrefix(prefix, 'getBare');
+        validateBarePrefix(prefix);
         for (const [name, member] of Object.entries(iface.members)) {
             if (
                 member instanceof RequestType
@@ -209,13 +209,23 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         return new ServiceHandle<TInCtx, TOutCtx>(this, serviceId);
     }
 
-    /** Register handlers for an interface on this connection's server side. */
+    /** Register handlers, adding bare routing when passed a metadata-free target. */
     public register<TDef extends InterfaceDefinition<any>>(
-        iface: TDef,
+        ifaceOrTarget: TDef | BareInterfaceTarget<TDef>,
         handlers: InterfaceHandlers<TDef, TInCtx>,
         opts: RegisterOptions = {},
     ): InterfaceRegistration {
-        return this._register(iface, handlers, opts, false);
+        if (isBareInterfaceTarget(ifaceOrTarget)) {
+            validateBarePrefix(ifaceOrTarget.prefix);
+            return this._register(
+                ifaceOrTarget.interface,
+                handlers,
+                opts,
+                false,
+                ifaceOrTarget.prefix,
+            );
+        }
+        return this._register(ifaceOrTarget, handlers, opts, false);
     }
 
     /** Register inspection contracts without recursively enabling service inspection. */
@@ -258,6 +268,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         handlers: InterfaceHandlers<TDef, TInCtx>,
         opts: RegisterOptions,
         internalInspection: boolean,
+        barePrefix?: string,
     ): InterfaceRegistration {
         const serviceId = opts.serviceId;
         const key = `${serviceId ?? ''}::${iface.info.id}`;
@@ -266,8 +277,11 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 `Interface "${iface.info.id}" already registered${serviceId ? ` under service "${serviceId}"` : ''}.`,
             );
         }
+        if (barePrefix !== undefined && this._bareBindings.has(barePrefix)) {
+            throw new Error(`Bare interface prefix "${barePrefix}" is already registered.`);
+        }
 
-        let serviceMetadataChanged = false;
+        let descriptionWasAdded = false;
         if (opts.serviceDescription !== undefined) {
             if (serviceId === undefined) {
                 throw new Error('register: `serviceDescription` requires `serviceId`.');
@@ -278,10 +292,10 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                     `register: conflicting descriptions for service "${serviceId}".`,
                 );
             }
-            this._serviceDescriptions.set(serviceId, opts.serviceDescription);
-            serviceMetadataChanged = existing === undefined;
+            descriptionWasAdded = existing === undefined;
         }
 
+        let rootPrincipalSetsWereAdded = false;
         if (opts.rootPrincipalSets !== undefined) {
             if (serviceId === undefined) {
                 throw new Error('register: `rootPrincipalSets` requires `serviceId`.');
@@ -292,8 +306,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                     `register: conflicting rootPrincipalSets for service "${serviceId}".`,
                 );
             }
-            this._serviceRootPrincipalSets.set(serviceId, opts.rootPrincipalSets);
-            serviceMetadataChanged ||= existing === undefined;
+            rootPrincipalSetsWereAdded = existing === undefined;
         }
 
         const entry: RegisteredInterface = {
@@ -302,8 +315,17 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             serviceId,
             internalInspection,
         };
+        if (descriptionWasAdded) {
+            this._serviceDescriptions.set(serviceId!, opts.serviceDescription!);
+        }
+        if (rootPrincipalSetsWereAdded) {
+            this._serviceRootPrincipalSets.set(serviceId!, opts.rootPrincipalSets!);
+        }
         this._registry.set(key, entry);
-        this._notifyDirectoryWatchers(entry, serviceMetadataChanged);
+        if (barePrefix !== undefined) {
+            this._bareBindings.set(barePrefix, { prefix: barePrefix, entry });
+        }
+        this._notifyDirectoryWatchers(entry, descriptionWasAdded || rootPrincipalSetsWereAdded);
 
         if (
             !internalInspection
@@ -315,6 +337,9 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 this._installServiceInspection(serviceId);
             } catch (error) {
                 this._registry.delete(key);
+                if (barePrefix !== undefined) this._bareBindings.delete(barePrefix);
+                if (descriptionWasAdded) this._serviceDescriptions.delete(serviceId);
+                if (rootPrincipalSetsWereAdded) this._serviceRootPrincipalSets.delete(serviceId);
                 this._notifyDirectoryWatchers(entry);
                 throw error;
             }
@@ -339,57 +364,6 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                     this._removeServiceInspection(serviceId);
                     this._serviceDescriptions.delete(serviceId);
                     this._serviceRootPrincipalSets.delete(serviceId);
-                }
-            },
-        };
-    }
-
-    /**
-     * Declare the preset interface for form-1 (bare-method) dispatch. The
-     * interface must already be registered under the root (no serviceId).
-     * Surfaced via `hubrpc.defaults::get`.
-     */
-    public setPreset(iface: InterfaceDefinition<any>): void {
-        const key = `::${iface.info.id}`;
-        const entry = this._registry.get(key);
-        if (!entry) {
-            throw new Error(`setPreset: interface "${iface.info.id}" is not registered under the root service.`);
-        }
-        // The preset and an explicit empty-prefix binding intentionally share
-        // one slot. Legacy setPreset replacement semantics win deterministically.
-        this._bareBindings.set('', { prefix: '', entry });
-    }
-
-    /**
-     * Bind foreign-protocol bare methods to an already registered interface.
-     * Matching uses the longest prefix; once selected, a missing member does
-     * not fall through to a shorter binding.
-     */
-    public bindBare(
-        iface: InterfaceDefinition<any>,
-        opts: { prefix: string; serviceId?: string; },
-    ): InterfaceRegistration {
-        validateBarePrefix(opts.prefix, 'bindBare');
-        const key = `${opts.serviceId ?? ''}::${iface.info.id}`;
-        const entry = this._registry.get(key);
-        if (!entry) {
-            throw new Error(
-                `bindBare: interface "${iface.info.id}" is not registered`
-                + (opts.serviceId === undefined ? ' under the root service.' : ` under service "${opts.serviceId}".`),
-            );
-        }
-        if (this._bareBindings.has(opts.prefix)) {
-            throw new Error(`bindBare: prefix "${opts.prefix}" is already bound.`);
-        }
-        const binding: BareBinding = { prefix: opts.prefix, entry };
-        this._bareBindings.set(opts.prefix, binding);
-        let disposed = false;
-        return {
-            dispose: () => {
-                if (disposed) return;
-                disposed = true;
-                if (this._bareBindings.get(opts.prefix) === binding) {
-                    this._bareBindings.delete(opts.prefix);
                 }
             },
         };
@@ -1296,11 +1270,15 @@ export class ServiceHandle<TInCtx = undefined, TOutCtx = undefined> {
     }
 
     public register<TDef extends InterfaceDefinition<any>>(
-        iface: TDef,
+        ifaceOrTarget: TDef | BareInterfaceTarget<TDef>,
         handlers: InterfaceHandlers<TDef, TInCtx>,
         opts: Omit<RegisterOptions, 'serviceId'> = {},
     ): InterfaceRegistration {
-        return this._connection.register(iface, handlers, { ...opts, serviceId: this._serviceId });
+        return this._connection.register<TDef>(
+            ifaceOrTarget,
+            handlers,
+            { ...opts, serviceId: this._serviceId },
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { LinkRpcConnection } from '../connection/linkRpcConnection';
+import { bareInterfaceTarget } from '../connection/bareInterfaceTarget';
 import type { InterfaceRegistration } from '../connection/linkRpcConnection';
 import { defineInterface } from '../connection/interfaceDefinition';
 import { requestType } from '../schema/memberTypes';
@@ -52,8 +53,9 @@ describe('InspectionHost', () => {
         const cdp = LinkRpcConnection.fromTransport(transport.a);
         const browser = LinkRpcConnection.fromTransport(transport.b);
         resources.push({ dispose: () => { cdp.close(); browser.close(); } });
-        browser.register(runtime, { evaluate: () => ({ value: 2 }) });
-        browser.bindBare(runtime, { prefix: 'Runtime.' });
+        browser.register(bareInterfaceTarget(runtime, { prefix: 'Runtime.' }), {
+            evaluate: () => ({ value: 2 }),
+        });
         inspection.trackConnection(cdp, { portId: 'cdp' });
         const frontend = pair();
         inspection.expose(frontend.local, { serviceId: 'inspection' });

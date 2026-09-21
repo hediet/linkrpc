@@ -675,7 +675,7 @@ describe('LinkRpcConnection', () => {
     });
 });
 
-describe('LinkRpcConnection — preset (form 1)', () => {
+describe('LinkRpcConnection — empty-prefix bare registration (form 1)', () => {
     function makeRawClientServer() {
         const pair = new TransportPair();
         const client = JsonRpcChannel.create(pair.a).sender;
@@ -692,11 +692,10 @@ describe('LinkRpcConnection — preset (form 1)', () => {
 
     it('routes bare method names through the preset interface', async () => {
         const { client, server, dispose } = makeRawClientServer();
-        server.register(greeter, {
+        server.register(bareInterfaceTarget(greeter), {
             hello: async ({ name }) => ({ greeting: `Yo ${name}` }),
             shout: () => { },
         });
-        server.setPreset(greeter);
         const result = await client.sendRequest('hello', { name: 'x' });
         expect(result).toEqual({ greeting: 'Yo x' });
         dispose();
@@ -715,12 +714,6 @@ describe('LinkRpcConnection — preset (form 1)', () => {
         dispose();
     });
 
-    it('setPreset throws if interface is not registered', () => {
-        const pair = new TransportPair();
-        const server = LinkRpcConnection.fromTransport(pair.b);
-        expect(() => server.setPreset(greeter)).toThrow(/not registered/);
-        server.close();
-    });
 });
 
 describe('LinkRpcConnection — bare bindings', () => {
@@ -736,16 +729,17 @@ describe('LinkRpcConnection — bare bindings', () => {
         const pair = new TransportPair();
         const client = JsonRpcChannel.create(pair.a).sender;
         const server = LinkRpcConnection.fromTransport(pair.b);
-        server.register(language, {
+        server.register(bareInterfaceTarget(language, { prefix: 'text/' }), {
             hover: ({ value }) => `root:${value}`,
             changed: () => { },
         });
-        server.service('mounted').register(greeter, {
-            hello: ({ name }) => ({ greeting: `mounted:${name}` }),
-            shout: () => { },
-        });
-        server.bindBare(language, { prefix: 'text/' });
-        server.bindBare(greeter, { prefix: 'text/document/', serviceId: 'mounted' });
+        server.service('mounted').register(
+            bareInterfaceTarget(greeter, { prefix: 'text/document/' }),
+            {
+                hello: ({ name }) => ({ greeting: `mounted:${name}` }),
+                shout: () => { },
+            },
+        );
 
         await expect(client.sendRequest('text/hover', { value: 'x' })).resolves.toBe('root:x');
         await expect(client.sendRequest('text/document/hello', { name: 'x' }))
@@ -756,14 +750,50 @@ describe('LinkRpcConnection — bare bindings', () => {
         server.close();
     });
 
-    it('validates prefixes, registration targets, and duplicate prefixes', () => {
+    it('validates prefixes and duplicate prefixes atomically', () => {
         const { server, dispose } = makePair();
-        server.register(language, { hover: ({ value }) => value, changed: () => { } });
-        expect(() => server.bindBare(language, { prefix: '\n' })).toThrow(/printable ASCII/);
-        expect(() => server.bindBare(language, { prefix: 'a::b' })).toThrow(/must not contain/);
-        expect(() => server.bindBare(greeter, { prefix: 'x' })).toThrow(/not registered/);
-        server.bindBare(language, { prefix: 'x' });
-        expect(() => server.bindBare(language, { prefix: 'x' })).toThrow(/already bound/);
+        expect(() => bareInterfaceTarget(language, { prefix: '\n' })).toThrow(/printable ASCII/);
+        expect(() => bareInterfaceTarget(language, { prefix: 'a::b' })).toThrow(/must not contain/);
+        const invalidTarget = {
+            mode: 'bare' as const,
+            interface: greeter,
+            prefix: 'invalid::prefix',
+        };
+        expect(() => server.register(invalidTarget, {
+            hello: ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        }, {
+            serviceId: 'invalid-prefix',
+            serviceDescription: 'must not leak',
+        })).toThrow(/Bare interface prefix/);
+        expect(() => server.register(greeter, {
+            hello: ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        }, {
+            serviceId: 'invalid-prefix',
+            serviceDescription: 'different description proves no metadata leaked',
+        })).not.toThrow();
+
+        const first = server.register(bareInterfaceTarget(language, { prefix: 'x' }), {
+            hover: ({ value }) => value,
+            changed: () => { },
+        });
+        expect(() => server.register(bareInterfaceTarget(greeter, { prefix: 'x' }), {
+            hello: ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        }, {
+            serviceId: 'failed',
+            serviceDescription: 'must not leak',
+        })).toThrow(/already registered/);
+        expect(server.listRegisteredInterfaces().filter(item => item.serviceId === 'failed')).toEqual([]);
+        expect(() => server.register(greeter, {
+            hello: ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        }, {
+            serviceId: 'failed',
+            serviceDescription: 'different description proves no metadata leaked',
+        })).not.toThrow();
+        first.dispose();
         dispose();
     });
 
@@ -794,11 +824,11 @@ describe('LinkRpcConnection — bare bindings', () => {
                             member,
                         }),
                     ]));
-                    server.register(iface, handlers as never, { serviceId: binding.serviceId });
-                    server.bindBare(iface, {
-                        prefix: binding.prefix,
-                        serviceId: binding.serviceId,
-                    });
+                    server.register(
+                        bareInterfaceTarget(iface, { prefix: binding.prefix }),
+                        handlers as never,
+                        { serviceId: binding.serviceId },
+                    );
                 }
 
                 if (vector.expected.error === 'methodNotFound') {
@@ -815,97 +845,147 @@ describe('LinkRpcConnection — bare bindings', () => {
 
         it('rejects every invalid prefix', () => {
             const { server, dispose } = makePair();
-            server.register(language, { hover: ({ value }) => value, changed: () => { } });
             for (const prefix of bareBindingVectors.invalidPrefixes) {
-                expect(() => server.bindBare(language, { prefix })).toThrow(/prefix/);
+                expect(() => bareInterfaceTarget(language, { prefix })).toThrow(/prefix/i);
             }
             dispose();
         });
     });
 
-    it('removes bindings on either binding or interface disposal', async () => {
+    it('one disposal removes handlers and bare routing and permits re-registration', async () => {
         const pair = new TransportPair();
         const client = JsonRpcChannel.create(pair.a).sender;
         const server = LinkRpcConnection.fromTransport(pair.b);
-        const registration = server.register(language, {
+        const registration = server.register(bareInterfaceTarget(language, { prefix: 'a/' }), {
             hover: ({ value }) => value,
             changed: () => { },
         });
-        const first = server.bindBare(language, { prefix: 'a/' });
-        first.dispose();
+        await expect(client.sendRequest('a/hover', { value: 'x' })).resolves.toBe('x');
+        await expect(client.sendRequest('test.language::hover', { value: 'x' })).resolves.toBe('x');
+        registration.dispose();
         await expect(client.sendRequest('a/hover', { value: 'x' }))
             .rejects.toMatchObject({ data: { reason: 'no-preset' } });
-        server.bindBare(language, { prefix: 'b/' });
-        registration.dispose();
-        await expect(client.sendRequest('b/hover', { value: 'x' }))
-            .rejects.toMatchObject({ data: { reason: 'no-preset' } });
+        await expect(client.sendRequest('test.language::hover', { value: 'x' }))
+            .rejects.toMatchObject({ data: { reason: 'unknown-interface' } });
+        server.register(bareInterfaceTarget(language, { prefix: 'a/' }), {
+            hover: ({ value }) => `again:${value}`,
+            changed: () => { },
+        });
+        await expect(client.sendRequest('a/hover', { value: 'x' })).resolves.toBe('again:x');
         client.close();
         server.close();
     });
 
-    it('shares the empty slot with setPreset and reflects bindings deterministically', async () => {
+    it('does not replace the empty slot and reflects bindings deterministically', async () => {
         const { client, server, dispose } = makePair();
-        server.register(language, { hover: ({ value }) => value, changed: () => { } });
-        server.register(greeter, {
+        const empty = server.register(bareInterfaceTarget(language), {
+            hover: ({ value }) => value,
+            changed: () => { },
+        });
+        expect(() => server.register(bareInterfaceTarget(greeter), {
+            hello: ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        })).toThrow(/already registered/);
+        server.register(bareInterfaceTarget(greeter, { prefix: 'z/' }), {
             hello: ({ name }) => ({ greeting: name }),
             shout: () => { },
         });
-        const explicit = server.bindBare(language, { prefix: '' });
-        expect(() => server.bindBare(greeter, { prefix: '' })).toThrow(/already bound/);
-        server.setPreset(greeter);
-        explicit.dispose(); // Must not remove the replacement preset.
-        server.bindBare(language, { prefix: 'z/' });
-        server.bindBare(language, { prefix: 'a/' });
+        const aInterface = defineInterface(
+            { id: 'test.language.a' },
+            language.members,
+        );
+        server.register(bareInterfaceTarget(aInterface, { prefix: 'a/' }), {
+            hover: ({ value }) => value,
+            changed: () => { },
+        });
         server.enableReflection();
 
-        await expect(client.getBare(greeter).hello({ name: 'x' }))
-            .resolves.toEqual({ greeting: 'x' });
+        await expect(client.getBare(language).hover({ value: 'x' })).resolves.toBe('x');
         await expect(client.get(defaultsInterface).get({})).resolves.toMatchObject({
-            interfaceId: greeter.info.id,
-            interfaceHash: greeter.schemaHash,
+            interfaceId: language.info.id,
+            interfaceHash: language.schemaHash,
         });
         await expect(client.get(defaultsInterface).listBindings({})).resolves.toEqual({
             bindings: [
                 {
                     prefix: '',
                     serviceId: undefined,
-                    interfaceId: greeter.info.id,
-                    interfaceHash: greeter.schemaHash,
+                    interfaceId: language.info.id,
+                    interfaceHash: language.schemaHash,
                 },
                 {
                     prefix: 'a/',
                     serviceId: undefined,
-                    interfaceId: language.info.id,
-                    interfaceHash: language.schemaHash,
+                    interfaceId: aInterface.info.id,
+                    interfaceHash: aInterface.schemaHash,
                 },
                 {
                     prefix: 'z/',
                     serviceId: undefined,
-                    interfaceId: language.info.id,
-                    interfaceHash: language.schemaHash,
+                    interfaceId: greeter.info.id,
+                    interfaceHash: greeter.schemaHash,
                 },
             ],
         });
+        empty.dispose();
         dispose();
     });
 
     it('defaults get reports only the empty binding, including its mounted service', async () => {
         const { client, server, dispose } = makePair();
-        server.service('mounted').register(language, {
-            hover: ({ value }) => value,
-            changed: () => { },
-        });
-        server.bindBare(language, { prefix: 'nonempty/', serviceId: 'mounted' });
+        server.service('mounted').register(
+            bareInterfaceTarget(language, { prefix: 'nonempty/' }),
+            {
+                hover: ({ value }) => value,
+                changed: () => { },
+            },
+        );
         server.enableReflection();
         await expect(client.get(defaultsInterface).get({})).resolves.toEqual({});
 
-        server.bindBare(language, { prefix: '', serviceId: 'mounted' });
+        const mountedDefault = defineInterface({ id: 'test.mounted-default' }, language.members);
+        server.service('mounted').register(bareInterfaceTarget(mountedDefault), {
+            hover: ({ value }) => value,
+            changed: () => { },
+        });
         await expect(client.get(defaultsInterface).get({})).resolves.toEqual({
             serviceId: 'mounted',
-            interfaceId: language.info.id,
-            interfaceHash: language.schemaHash,
+            interfaceId: mountedDefault.info.id,
+            interfaceHash: mountedDefault.schemaHash,
         });
         dispose();
+    });
+
+    it('rolls back native registration, bare routing, and metadata when inspection setup fails', () => {
+        const connection = new LinkRpcConnection({
+            sendRequest: async () => null,
+            sendNotification: async () => { },
+            sendRequestWithStream: () => { throw new Error('unused'); },
+            close: () => { },
+        });
+        const inspection = connection.enableInspection();
+        const target = bareInterfaceTarget(language, { prefix: 'atomic/' });
+        expect(() => connection.register(target, {
+            hover: ({ value }) => value,
+            changed: () => { },
+        }, {
+            serviceId: 'atomic',
+            serviceDescription: 'first',
+            rootPrincipalSets: [[{ principal: 'root:first' }]],
+        })).toThrow(/observable wire channel/);
+        expect(connection.listRegisteredInterfaces().filter(item => item.serviceId === 'atomic'))
+            .toEqual([]);
+
+        inspection.dispose();
+        expect(() => connection.register(target, {
+            hover: ({ value }) => value,
+            changed: () => { },
+        }, {
+            serviceId: 'atomic',
+            serviceDescription: 'second',
+            rootPrincipalSets: [[{ principal: 'root:second' }]],
+        })).not.toThrow();
+        connection.close();
     });
 
     it('getBare sends exact method names without interface metadata and supports reverse calls', async () => {
@@ -913,16 +993,14 @@ describe('LinkRpcConnection — bare bindings', () => {
         const a = LinkRpcConnection.fromTransport(pair.a);
         const b = LinkRpcConnection.fromTransport(pair.b);
         const changes: string[] = [];
-        b.register(language, {
+        b.register(bareInterfaceTarget(language, { prefix: 'lsp/' }), {
             hover: ({ value }) => `b:${value}`,
             changed: ({ value }) => { changes.push(value); },
         });
-        b.bindBare(language, { prefix: 'lsp/' });
-        a.register(language, {
+        a.register(bareInterfaceTarget(language, { prefix: 'reverse/' }), {
             hover: ({ value }) => `a:${value}`,
             changed: () => { },
         });
-        a.bindBare(language, { prefix: 'reverse/' });
 
         const dynamicLanguage = interfaceFromSchema(language.toSchema());
         await expect(a.getBare(dynamicLanguage, { prefix: 'lsp/' }).hover({ value: 'x' }))
@@ -1013,13 +1091,12 @@ describe('LinkRpcConnection — bare bindings', () => {
             },
         );
         const { client, server, dispose } = makePair();
-        server.register(ordinary, {
+        server.register(bareInterfaceTarget(ordinary, { prefix: 'bare/' }), {
             optional: () => undefined,
             defaulted: () => undefined as never,
             nullable: () => null,
             nullish: () => null,
         });
-        server.bindBare(ordinary, { prefix: 'bare/' });
         server.register(streaming, {
             optional: () => undefined,
             defaulted: () => undefined as never,
@@ -1117,12 +1194,32 @@ describe('LinkRpcConnection — bare bindings', () => {
             connection.get(cdpRuntime, { serviceId: 'runtime' });
             // @ts-expect-error service-scoped get only accepts interface definitions
             connection.service('runtime').get(cdpRuntime);
+            connection.register(cdpRuntime, {
+                evaluate: async ({ expression }) => ({
+                    result: { value: expression.length },
+                }),
+            });
+            connection.service('runtime').register(cdpRuntime, {
+                evaluate: ({ expression }) => ({
+                    result: { value: expression.length },
+                }),
+            });
+            connection.register(cdpRuntime, {
+                evaluate: ({ expression }) => {
+                    expression satisfies string;
+                    // @ts-expect-error handler parameters retain their precise shape
+                    expression satisfies number;
+                    return { result: { value: expression.length } };
+                },
+            });
+            // @ts-expect-error bare registration preserves response types
+            connection.register(cdpRuntime, { evaluate: () => ({ result: { value: 'bad' } }) });
         }
         expect(() => (connection.service('runtime').get as (target: unknown) => unknown)(cdpRuntime))
             .toThrow(/bare interface targets do not accept/);
     });
 
-    it('bareInterfaceTarget and getBare reject the same invalid prefixes', () => {
+    it('bareInterfaceTarget and getBare reject invalid prefixes consistently', () => {
         const connection = new LinkRpcConnection({
             sendRequest: async () => null,
             sendNotification: async () => { },
@@ -1149,8 +1246,9 @@ describe('LinkRpcConnection — bare bindings', () => {
             },
         ));
         const server = LinkRpcConnection.fromTransport(pair.b);
-        server.register(noParams, { ping: () => 'pong' });
-        server.bindBare(noParams, { prefix: 'cdp.' });
+        server.register(bareInterfaceTarget(noParams, { prefix: 'cdp.' }), {
+            ping: () => 'pong',
+        });
 
         await expect(client.getBare(noParams, { prefix: 'cdp.' }).ping(undefined))
             .resolves.toBe('pong');
@@ -1192,13 +1290,12 @@ describe('LinkRpcConnection — bare bindings', () => {
 });
 
 describe('LinkRpcConnection — reflection', () => {
-    it('hubrpc.defaults reports the preset', async () => {
+    it('hubrpc.defaults reports the empty-prefix registration', async () => {
         const { client, server, dispose } = makePair();
-        server.register(greeter, {
+        server.register(bareInterfaceTarget(greeter), {
             hello: async ({ name }) => ({ greeting: name }),
             shout: () => { },
         });
-        server.setPreset(greeter);
         server.enableReflection();
         const r = await client.get(defaultsInterface).get({});
         expect(r).toEqual({
