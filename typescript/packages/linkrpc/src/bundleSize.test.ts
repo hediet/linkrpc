@@ -263,9 +263,11 @@ describe('bundle size', () => {
         // eslint-disable-next-line no-console
         console.log(`  written to ${outDir}`);
 
-        // Measured baseline: 228.0 KiB versus 215.0 KiB before typed errors.
-        // The ~13 KiB increase includes origin-aware calls and checked-error wire/schema
-        // validation in the shared connection path. Keep only ~2 KiB of headroom.
+        // Measured baseline: 239.4 KiB (240.3 KiB before registration-time routing),
+        // versus 228.0 KiB before shared inspection. The synchronous inspection API
+        // retains the shared host and connection source in this bundle; that feature
+        // accounts for the increase, not hub-only interfaces or new dependencies.
+        // Keep roughly 2 KiB of headroom without changing what this test measures.
         // The example authors with
         // `zod/mini` and linkrpc's internals do too, so only zod's shared *core*
         // (parsing + json-schema, ~75 KiB) is pulled — the classic schema
@@ -275,7 +277,7 @@ describe('bundle size', () => {
         // stack is lazy and tree-shaken out of the stdio path. This is a
         // regression guard, not a target — bump it deliberately when a
         // dependency genuinely grows, and investigate sudden jumps.
-        const BUDGET_KIB = 230;
+        const BUDGET_KIB = 242;
         expect(kib).toBeLessThanOrEqual(BUDGET_KIB);
     }, 60_000);
 });
