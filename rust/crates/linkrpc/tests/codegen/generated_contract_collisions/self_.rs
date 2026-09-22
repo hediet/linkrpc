@@ -5,6 +5,7 @@
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"self\",\"hash\":\"cb9496d7e72c9068\",\"description\":\"non-raw keyword\",\"methods\":{\"echo\":{\"params\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"}}}}",
+    omit_optional_params = true,
     client = "Self_Client",
     server = "Self_Server",
     module = "__linkrpc_interface",

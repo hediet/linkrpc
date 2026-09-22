@@ -5,6 +5,7 @@
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"mod\",\"hash\":\"32749adc3cbdee64\",\"description\":\"index collision\",\"methods\":{\"echo\":{\"params\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"}}}}",
+    omit_optional_params = true,
     client = "ModClient",
     server = "ModServer",
     module = "__linkrpc_interface",

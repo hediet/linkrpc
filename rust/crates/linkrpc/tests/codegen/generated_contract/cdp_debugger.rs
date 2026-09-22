@@ -5,6 +5,7 @@
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"cdp.debugger\",\"hash\":\"249318446cfe090d\",\"methods\":{\"inspect\":{\"params\":{\"$ref\":\"#/components/schemas/Runtime.RemoteObject\"},\"result\":{\"$ref\":\"#/components/schemas/Runtime.RemoteObject\"}}},\"components\":{\"schemas\":{\"Runtime.RemoteObject\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false},\"Shared.Node\":{\"type\":\"object\",\"properties\":{\"next\":{\"$ref\":\"#/components/schemas/Shared.Node\"}},\"additionalProperties\":false}}}}",
+    omit_optional_params = true,
     client = "CdpDebuggerClient",
     server = "CdpDebuggerServer",
     module = "__linkrpc_interface",

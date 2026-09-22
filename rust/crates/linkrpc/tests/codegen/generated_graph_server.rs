@@ -238,6 +238,7 @@ impl ResetParams {
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"com.example.graph\",\"hash\":\"\",\"description\":\"A demo interface exercising the full codegen surface.\",\"methods\":{\"configure\":{\"params\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"},\"label\":{\"type\":\"string\",\"description\":\"Optional display label.\"},\"payload\":true},\"required\":[\"id\"],\"additionalProperties\":false},\"result\":{\"type\":\"boolean\"},\"description\":\"A method whose params mix required and optional fields.\"},\"get_tree\":{\"params\":{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"],\"additionalProperties\":false},\"result\":{\"$ref\":\"#/components/schemas/TreeNode\"},\"description\":\"Fetch the tree rooted at an id.\",\"x-safety\":{\"readOnly\":true}},\"notify_changed\":{\"params\":{\"type\":\"object\",\"properties\":{\"node\":{\"$ref\":\"#/components/schemas/TreeNode\"}},\"required\":[\"node\"],\"additionalProperties\":false}},\"paint\":{\"params\":{\"type\":\"object\",\"properties\":{\"shape\":{\"$ref\":\"#/components/schemas/Shape\"},\"color\":{\"$ref\":\"#/components/schemas/Color\"}},\"required\":[\"shape\",\"color\"],\"additionalProperties\":false},\"result\":{\"type\":\"boolean\"}},\"raw_echo\":{\"params\":true,\"result\":true},\"reset\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"description\":\"A method with an empty (all-defaults) params object.\"},\"tree_changed\":{\"params\":{\"$ref\":\"#/components/schemas/TreeNode\"},\"description\":\"Server-emitted event fired whenever the tree changes.\",\"x-linkrpc-codegen\":{\"kind\":\"serverNotification\"}}},\"components\":{\"schemas\":{\"Bag\":{\"description\":\"An open object with a known field plus arbitrary extras.\",\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"],\"additionalProperties\":true},\"Color\":{\"enum\":[\"red\",\"green\",\"blue\",\"self\"]},\"JsonNode\":{\"description\":\"A recursive JSON value, recursing only through arrays and maps.\",\"anyOf\":[{\"type\":\"string\"},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/JsonNode\"}},{\"type\":\"object\",\"additionalProperties\":{\"$ref\":\"#/components/schemas/JsonNode\"}}]},\"Metadata\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},\"Ping\":{\"type\":\"object\",\"properties\":{\"pong\":{\"$ref\":\"#/components/schemas/Pong\"}},\"additionalProperties\":false},\"Point\":{\"type\":\"object\",\"properties\":{\"x\":{\"type\":\"number\"},\"y\":{\"type\":\"number\"}},\"required\":[\"x\",\"y\"],\"additionalProperties\":false},\"Pong\":{\"type\":\"object\",\"properties\":{\"ping\":{\"$ref\":\"#/components/schemas/Ping\"}},\"additionalProperties\":false},\"Shape\":{\"description\":\"A tagged union of shapes.\",\"oneOf\":[{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"circle\"},\"radius\":{\"type\":\"number\"}},\"required\":[\"kind\",\"radius\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"rectangle\"},\"width\":{\"type\":\"number\"},\"height\":{\"type\":\"number\"}},\"required\":[\"kind\",\"width\",\"height\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"kind\":{\"const\":\"point\"}},\"required\":[\"kind\"],\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}},\"Tags\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"TreeNode\":{\"description\":\"A recursive tree node.\",\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"},\"point\":{\"$ref\":\"#/components/schemas/Point\"},\"parent\":{\"$ref\":\"#/components/schemas/TreeNode\"},\"children\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/components/schemas/TreeNode\"}}},\"required\":[\"value\"],\"additionalProperties\":false}}},\"x-linkrpc-codegen\":{\"note\":\"identity-neutral codegen hint; stripped from the hash\"}}",
+    omit_optional_params = true,
     client = "ComExampleGraphClient",
     server = "ComExampleGraphServer",
     module = "__linkrpc_interface",
@@ -250,8 +251,8 @@ pub trait ComExampleGraphService {
     #[name("configure")]
     async fn configure(
         id: String,
-        #[serde(skip_serializing_if = "Option::is_none")] label: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
+        label: Option<String>,
+        payload: Option<serde_json::Value>,
     ) -> Result<bool, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, id, label, payload,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "configure"))
@@ -293,9 +294,9 @@ pub trait ComExampleGraphService {
     #[server_notification]
     async fn tree_changed(
         value: String,
-        #[serde(skip_serializing_if = "Option::is_none")] point: Option<Point>,
-        #[serde(skip_serializing_if = "Option::is_none")] parent: Option<Box<TreeNode>>,
-        #[serde(skip_serializing_if = "Option::is_none")] children: Option<Vec<TreeNode>>,
+        point: Option<Point>,
+        parent: Option<Box<TreeNode>>,
+        children: Option<Vec<TreeNode>>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, value, point, parent, children,);
         Ok(())

@@ -42,6 +42,7 @@ pub enum FallibleError {
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"cdp.runtime\",\"hash\":\"428079033d035d03\",\"methods\":{\"changed\":{\"params\":{\"$ref\":\"#/components/schemas/Runtime.RemoteObject\"},\"x-linkrpc-codegen\":{\"kind\":\"serverNotification\"}},\"evaluate\":{\"params\":{\"type\":\"object\",\"properties\":{\"expression\":{\"type\":\"string\"}},\"required\":[\"expression\"],\"additionalProperties\":false},\"result\":{\"type\":\"object\",\"properties\":{\"object\":{\"$ref\":\"#/components/schemas/Runtime.RemoteObject\"}},\"required\":[\"object\"],\"additionalProperties\":false}},\"fallible\":{\"params\":true,\"result\":true,\"errors\":[{\"code\":41,\"message\":\"failed\"}]},\"unsupported\":{\"params\":true,\"result\":true}},\"components\":{\"schemas\":{\"Runtime.RemoteObject\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"required\":[\"value\"],\"additionalProperties\":false},\"Shared.Node\":{\"type\":\"object\",\"properties\":{\"next\":{\"$ref\":\"#/components/schemas/Shared.Node\"}},\"additionalProperties\":false}}}}",
+    omit_optional_params = true,
     client = "CdpRuntimeClient",
     server = "CdpRuntimeServer",
     module = "__linkrpc_interface",

@@ -54,6 +54,7 @@ impl SendParams {
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"inline\",\"hash\":\"\",\"methods\":{\"disable\":{\"params\":{\"$ref\":\"#/components/schemas/EmptyPayload\"},\"result\":true},\"empty\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}},\"send\":{\"params\":{\"type\":\"object\",\"properties\":{\"camelCase\":{\"type\":\"string\"},\"optional\":{\"type\":\"boolean\"},\"payload\":true,\"type\":{\"type\":\"string\"},\"wire-key\":{\"type\":\"integer\"}},\"required\":[\"camelCase\",\"type\",\"wire-key\"],\"additionalProperties\":false},\"result\":true}},\"components\":{\"schemas\":{\"EmptyPayload\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}}",
+    omit_optional_params = true,
     client = "InlineClient",
     server = "InlineServer",
     module = "__linkrpc_interface",
@@ -69,8 +70,8 @@ pub trait InlineService {
     #[name("send")]
     async fn send(
         #[serde(rename = "camelCase")] camel_case: String,
-        #[serde(skip_serializing_if = "Option::is_none")] optional: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
+        optional: Option<bool>,
+        payload: Option<serde_json::Value>,
         r#type: String,
         #[serde(rename = "wire-key")] wire_key: i64,
     ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;

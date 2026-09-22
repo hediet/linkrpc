@@ -72,6 +72,7 @@ impl ServerSilentParams {
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"com.example.generated-streaming\",\"hash\":\"\",\"methods\":{\"exchange\":{\"params\":{\"type\":\"object\",\"properties\":{\"initial\":{\"type\":\"integer\",\"format\":\"uint32\"}},\"required\":[\"initial\"],\"additionalProperties\":false},\"result\":{\"type\":\"integer\",\"format\":\"uint32\"},\"clientStream\":{\"$ref\":\"#/components/schemas/Command\"},\"serverStream\":{\"$ref\":\"#/components/schemas/Event\"}},\"server_silent\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"null\"},\"serverStream\":false}},\"components\":{\"schemas\":{\"Command\":{\"type\":\"object\",\"properties\":{\"amount\":{\"type\":\"integer\",\"format\":\"uint32\"},\"next\":{\"$ref\":\"#/components/schemas/Command\"}},\"required\":[\"amount\"],\"additionalProperties\":false},\"Event\":{\"type\":\"object\",\"properties\":{\"kind\":{\"type\":\"string\",\"enum\":[\"progress\"]},\"total\":{\"type\":\"integer\",\"format\":\"uint32\"}},\"required\":[\"kind\",\"total\"],\"additionalProperties\":false}}}}",
+    omit_optional_params = true,
     client = "ComExampleGeneratedStreamingClient",
     server = "ComExampleGeneratedStreamingServer",
     module = "__linkrpc_interface",

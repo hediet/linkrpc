@@ -5,6 +5,7 @@
 
 #[linkrpc::prelude::link_rpc_interface(
     schema_json = "{\"id\":\"types\",\"hash\":\"e2c8f70c1b84fcbd\",\"description\":\"common types collision\",\"methods\":{\"echo\":{\"params\":{\"type\":\"string\"},\"result\":{\"type\":\"string\"}}}}",
+    omit_optional_params = true,
     client = "TypesClient",
     server = "TypesServer",
     module = "__linkrpc_interface",

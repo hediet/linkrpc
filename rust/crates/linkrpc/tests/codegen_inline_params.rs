@@ -29,7 +29,7 @@ fn default_inlining_and_opt_out() {
     assert!(!generated.code.contains("#[params(EmptyPayload)]"));
     assert!(!generated.code.contains("#[params("));
     assert!(generated.code.contains(
-        "async fn send(\n        #[serde(rename = \"camelCase\")] camel_case: String,\n        #[serde(skip_serializing_if = \"Option::is_none\")] optional: Option<bool>,\n        #[serde(skip_serializing_if = \"Option::is_none\")] payload: Option<serde_json::Value>,\n        r#type: String,\n        #[serde(rename = \"wire-key\")] wire_key: i64,\n    )"
+        "async fn send(\n        #[serde(rename = \"camelCase\")] camel_case: String,\n        optional: Option<bool>,\n        payload: Option<serde_json::Value>,\n        r#type: String,\n        #[serde(rename = \"wire-key\")] wire_key: i64,\n    )"
     ));
     let legacy = generate_rust_interface(
         &schema,
@@ -51,7 +51,7 @@ fn default_inlining_and_opt_out() {
 }
 
 #[test]
-fn renamed_optional_fields_use_one_attribute_without_redundant_default() {
+fn inline_optional_fields_only_need_rename_attributes() {
     let schema = serde_json::from_value(json!({
         "id": "compact", "hash": "",
         "methods": {"evaluate": {
@@ -67,7 +67,10 @@ fn renamed_optional_fields_use_one_attribute_without_redundant_default() {
     let generated = generate_rust_interface(&schema, &Default::default());
     let attribute =
         "#[serde(rename = \"returnByValue\", skip_serializing_if = \"Option::is_none\")]";
-    assert_eq!(generated.code.matches(attribute).count(), 2);
+    assert_eq!(generated.code.matches(attribute).count(), 1);
+    assert!(generated
+        .code
+        .contains("#[serde(rename = \"returnByValue\")] return_by_value: Option<bool>"));
     assert!(!generated.code.contains("#[serde(default"));
     assert!(!generated.code.contains(")] #[serde("));
 }
@@ -159,7 +162,7 @@ fn shared_params_use_mapped_types_and_preserve_recursive_boxing() {
     assert!(!generated.code.contains("pub struct"));
     assert!(!generated.code.contains("#[params(shared::RenamedNode)]"));
     assert!(generated.code.contains(
-        "async fn send(\n        #[serde(skip_serializing_if = \"Option::is_none\")] next: Option<Box<shared::RenamedNode>>,\n        value: shared::RenamedValue,\n    )"
+        "async fn send(\n        next: Option<Box<shared::RenamedNode>>,\n        value: shared::RenamedValue,\n    )"
     ));
 }
 

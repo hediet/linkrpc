@@ -20,6 +20,8 @@
 //! wire payload. Otherwise arguments become fields in an object, with
 //! parameter-level `#[serde(...)]` attributes forwarded to the private params
 //! struct. `#[param(name = "...")]` is shorthand for `#[serde(rename = "...")]`.
+//! Generated imports set `omit_optional_params = true` to omit absent optional
+//! schema properties in these wrappers, without repeating field attributes.
 //! Imported field names are literal; Rust-authored
 //! interfaces retain their default camelCase naming. Zero-argument methods
 //! encode an empty object. Methods may rename their wire member
@@ -517,6 +519,7 @@ struct InterfaceOptions {
     id: String,
     inline_schemas: bool,
     schema_json: Option<LitStr>,
+    omit_optional_params: bool,
     client: Option<Ident>,
     server: Option<Ident>,
     module: Option<Ident>,
@@ -532,6 +535,7 @@ fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
     let mut id = None;
     let mut inline_schemas = None;
     let mut schema_json = None;
+    let mut omit_optional_params = None;
     let mut client = None;
     let mut server = None;
     let mut module = None;
@@ -558,6 +562,12 @@ fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
             }
             Meta::NameValue(nv) if nv.path.is_ident("schema_json") && schema_json.is_none() => {
                 schema_json = Some(syn::parse2::<LitStr>(nv.value.to_token_stream())?);
+            }
+            Meta::NameValue(nv)
+                if nv.path.is_ident("omit_optional_params") && omit_optional_params.is_none() =>
+            {
+                omit_optional_params =
+                    Some(syn::parse2::<syn::LitBool>(nv.value.to_token_stream())?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("client") && client.is_none() => {
                 let lit: LitStr = syn::parse2(nv.value.to_token_stream())?;
@@ -611,10 +621,19 @@ fn parse_options(attr: TokenStream2) -> syn::Result<InterfaceOptions> {
         }
         id = Some(schema_id.to_string());
     }
+    if let Some(option) = &omit_optional_params {
+        if option.value && schema_json.is_none() {
+            return Err(syn::Error::new_spanned(
+                option,
+                "omit_optional_params requires schema_json",
+            ));
+        }
+    }
     Ok(InterfaceOptions {
         id: id.ok_or_else(|| syn::Error::new(Span::call_site(), "missing interface id"))?,
         inline_schemas: inline_schemas.unwrap_or(false),
         schema_json,
+        omit_optional_params: omit_optional_params.is_some_and(|value| value.value),
         client,
         server,
         module,
@@ -718,8 +737,8 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
             .and_then(serde_json::Value::as_object)
             .ok_or_else(|| syn::Error::new_spanned(json, "schema_json must contain methods"))?;
         let mut names = std::collections::BTreeSet::new();
-        for method in &methods {
-            if !names.insert(&method.wire_name) {
+        for method in &mut methods {
+            if !names.insert(method.wire_name.clone()) {
                 return Err(syn::Error::new_spanned(
                     &method.name,
                     "duplicate wire method name",
@@ -747,6 +766,9 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                     &method.name,
                     "Result error type does not match schema_json application errors",
                 ));
+            }
+            if options.omit_optional_params {
+                apply_imported_param_omission(method, &schema, wire)?;
             }
         }
         if names.len() != declared.len() {
@@ -1462,6 +1484,85 @@ fn is_unit(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(t) if t.elems.is_empty())
 }
 
+fn apply_imported_param_omission(
+    method: &mut MethodModel,
+    schema: &serde_json::Value,
+    wire: &serde_json::Value,
+) -> syn::Result<()> {
+    if method.passthrough_ty.is_some() || method.params.is_empty() {
+        return Ok(());
+    }
+    let mut params = &wire["params"];
+    let mut visited = std::collections::BTreeSet::new();
+    while let Some(reference) = params.get("$ref").and_then(serde_json::Value::as_str) {
+        if !visited.insert(reference) {
+            return Err(syn::Error::new_spanned(
+                &method.name,
+                "cyclic params reference in schema_json",
+            ));
+        }
+        params = reference
+            .strip_prefix('#')
+            .and_then(|pointer| schema.pointer(pointer))
+            .ok_or_else(|| {
+                syn::Error::new_spanned(&method.name, "unresolved params reference in schema_json")
+            })?;
+    }
+    for param in &mut method.params {
+        let Type::Path(ty) = &param.ty else { continue };
+        if !ty.path.segments.last().is_some_and(|s| s.ident == "Option") {
+            continue;
+        }
+        let mut name = param
+            .wire_name
+            .as_ref()
+            .map(LitStr::value)
+            .unwrap_or_else(|| param.name.to_string().trim_start_matches("r#").to_owned());
+        let mut explicit_skip = false;
+        for attr in &param.serde_attrs {
+            let metas = attr.parse_args_with(
+                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+            )?;
+            for meta in metas {
+                explicit_skip |= meta.path().is_ident("skip")
+                    || meta.path().is_ident("skip_serializing")
+                    || meta.path().is_ident("skip_serializing_if")
+                    || meta.path().is_ident("flatten");
+                if let Meta::List(list) = &meta {
+                    if list.path.is_ident("rename") {
+                        list.parse_nested_meta(|meta| {
+                            let value: LitStr = meta.value()?.parse()?;
+                            if meta.path.is_ident("serialize") {
+                                name = value.value();
+                            }
+                            Ok(())
+                        })?;
+                    }
+                }
+                if let Meta::NameValue(value) = meta {
+                    if value.path.is_ident("rename") {
+                        name = syn::parse2::<LitStr>(value.value.to_token_stream())?.value();
+                    }
+                }
+            }
+        }
+        let known = params
+            .get("properties")
+            .and_then(|p| p.get(&name))
+            .is_some();
+        let required = params
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|names| names.iter().any(|n| n.as_str() == Some(&name)));
+        if known && !required && !explicit_skip {
+            param.serde_attrs.push(syn::parse_quote!(
+                #[serde(skip_serializing_if = "Option::is_none")]
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn param_struct_ident(trait_ident: &Ident, method: &Ident) -> Ident {
     format_ident!("__linkrpc_{}_{}_Params", trait_ident, method)
 }
@@ -1936,6 +2037,10 @@ mod tests {
     #[test]
     fn imported_schema_options_validate_json_identity_and_layout() {
         for (args, diagnostic) in [
+            (
+                quote!(id = "a", omit_optional_params = true),
+                "requires schema_json",
+            ),
             (quote!(schema_json = "{"), "invalid schema_json"),
             (quote!(schema_json = "{}"), "interface id"),
             (
@@ -2018,6 +2123,28 @@ mod tests {
             .to_string()
             .contains("struct __linkrpc_Test_disable_Params"));
         syn::parse2::<syn::File>(expanded).unwrap();
+    }
+
+    #[test]
+    fn imported_param_omission_rejects_unresolvable_references() {
+        for reference in ["#/methods/send/params", "#/components/schemas/Missing"] {
+            let json = serde_json::json!({
+                "id": "a", "hash": "",
+                "methods": {"send": {"params": {"$ref": reference}, "result": true}}
+            })
+            .to_string();
+            let options =
+                parse_options(quote!(schema_json = #json, omit_optional_params = true)).unwrap();
+            let item = syn::parse_quote! {
+                trait Test {
+                    async fn send(value: Option<bool>) -> Result<bool, JsonRpcError>;
+                }
+            };
+            let error = expand(options, item).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("params reference in schema_json"));
+        }
     }
 
     #[test]

@@ -504,7 +504,7 @@ individual arguments on the generated trait, client, and provider:
 ```rust,ignore
 async fn evaluate(
     expression: String,
-    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue")]
     return_by_value: Option<bool>,
 ) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
 ```
@@ -517,12 +517,17 @@ as on an explicit params struct, including `default`, `alias`, `flatten`,
 can appear beside other Serde field attributes. Serde diagnoses conflicting
 attributes just as it would on a struct.
 
-An unannotated `Option<T>` keeps Serde's defaults: missing and null deserialize
+In Rust-authored interfaces, an unannotated `Option<T>` keeps Serde's defaults: missing and null deserialize
 to `None`, which serializes as null. Omission requires `skip_serializing_if`;
 rejecting null requires the same custom deserializer an explicit struct would
-use. There are no separate `optional` or `nonNull` parameter semantics. Codegen
-uses the same Serde attribute emitter for params-struct fields and inline
-arguments, preserving their wire behavior.
+use. There are no separate `optional` or `nonNull` parameter semantics.
+Generated imported interfaces set `omit_optional_params = true` alongside
+`schema_json` once per trait. The macro puts omission attributes on
+the private wrapper's `Option<T>` fields when the corresponding schema property
+is optional. Required nullable properties still serialize `None` as null.
+Explicit Serde skip settings take precedence. Whole-payload `#[params]`
+arguments are unchanged. This keeps generated signatures readable without
+changing their wire behavior.
 Generated fields combine their Serde settings into one attribute and omit
 redundant `default` on ordinary `Option<T>` fields.
 

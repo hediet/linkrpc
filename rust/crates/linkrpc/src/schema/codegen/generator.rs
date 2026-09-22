@@ -58,7 +58,7 @@ struct Field {
 }
 
 impl Field {
-    fn serde_attributes(&self) -> Vec<String> {
+    fn serde_attributes(&self, inline: bool) -> Vec<String> {
         if self.flatten {
             return vec!["#[serde(flatten)]".to_string()];
         }
@@ -66,7 +66,7 @@ impl Field {
         if strip_raw(&self.rust_name) != self.wire_name {
             attributes.push(format!("rename = {}", quote_str(&self.wire_name)));
         }
-        if self.optional {
+        if self.optional && !inline {
             attributes.push("skip_serializing_if = \"Option::is_none\"".to_string());
         }
         if attributes.is_empty() {
@@ -1094,7 +1094,7 @@ impl Renderer<'_> {
 
     fn write_field_in(&self, w: &mut CodeWriter, field: &Field, owner_scc: usize, with_vis: bool) {
         w.doc(field.doc.as_deref());
-        for attribute in field.serde_attributes() {
+        for attribute in field.serde_attributes(false) {
             w.line(&attribute);
         }
         w.line(&format!(
@@ -1406,6 +1406,9 @@ fn write_bindings(
     w.line(&format!("#[{hub}::prelude::link_rpc_interface("));
     w.indent();
     w.line(&format!("schema_json = {},", quote_str(&frozen_schema)));
+    if options.inline_params {
+        w.line("omit_optional_params = true,");
+    }
     w.line(&format!("client = {},", quote_str(&client)));
     w.line(&format!(
         "server = {},",
@@ -1458,7 +1461,7 @@ fn write_bindings(
             fields
                 .iter()
                 .map(|field| {
-                    let attributes = field.serde_attributes();
+                    let attributes = field.serde_attributes(true);
                     let annotation = if attributes.is_empty() {
                         String::new()
                     } else {

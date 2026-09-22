@@ -118,6 +118,88 @@ impl RpcCall for EchoCaller {
     }
 }
 
+#[link_rpc_interface(
+    omit_optional_params = true,
+    generate_server = false,
+    schema_json = r##"{
+        "id": "schema.omission", "hash": "",
+        "methods": {
+            "send": {"params": {"$ref": "#/components/schemas/Alias"}, "result": true},
+            "whole": {"params": {"$ref": "#/components/schemas/Alias"}, "result": true}
+        },
+        "components": {"schemas": {
+            "Alias": {"$ref": "#/components/schemas/Params"},
+            "Params": {
+                "type": "object",
+                "properties": {
+                    "optionalValue": {"type": "boolean"},
+                    "required": {"type": ["boolean", "null"]},
+                    "explicit": {"type": "boolean"},
+                    "customName": {"type": "boolean"}
+                },
+                "required": ["required"],
+                "additionalProperties": false
+            }
+        }}
+    }"##
+)]
+trait SchemaOmission {
+    async fn send(
+        #[param(name = "optionalValue")] optional: Option<bool>,
+        required: Option<bool>,
+        #[serde(skip_serializing_if = "never_skip")] explicit: Option<bool>,
+        #[serde(rename(serialize = "customName", deserialize = "readName"))] custom: Option<bool>,
+    ) -> Result<Value, JsonRpcError>;
+
+    async fn whole(#[params] params: Value) -> Result<Value, JsonRpcError>;
+}
+
+fn never_skip(_: &Option<bool>) -> bool {
+    false
+}
+
+#[link_rpc_interface(
+    generate_server = false,
+    schema_json = r#"{
+        "id": "schema.default", "hash": "",
+        "methods": {"send": {"params": {
+            "type": "object",
+            "properties": {"value": {"type": "boolean"}},
+            "additionalProperties": false
+        }, "result": true}}
+    }"#
+)]
+trait SchemaDefault {
+    async fn send(value: Option<bool>) -> Result<Value, JsonRpcError>;
+}
+
+#[tokio::test]
+async fn generated_omission_uses_requiredness_and_preserves_explicit_serde_and_defaults() {
+    let client = SchemaOmissionClient::root(EchoCaller);
+    assert_eq!(
+        client.send(None, None, None, None).await.unwrap(),
+        json!({"required": null, "explicit": null})
+    );
+    assert_eq!(
+        client
+            .send(Some(false), Some(true), Some(false), Some(true))
+            .await
+            .unwrap(),
+        json!({"optionalValue": false, "required": true, "explicit": false, "customName": true})
+    );
+    assert_eq!(
+        client.whole(json!({"optionalValue": null})).await.unwrap(),
+        json!({"optionalValue": null})
+    );
+    assert_eq!(
+        SchemaDefaultClient::root(EchoCaller)
+            .send(None)
+            .await
+            .unwrap(),
+        json!({"value": null})
+    );
+}
+
 #[tokio::test]
 async fn inline_serialization_matches_the_explicit_params_struct() {
     let client = SerdeParamsClient::root(EchoCaller);
