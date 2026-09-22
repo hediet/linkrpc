@@ -273,7 +273,6 @@ pub trait ComExampleGraphService {
     /// A method with an empty (all-defaults) params object.
     #[name("reset")]
     #[notification]
-    #[params(ResetParams)]
     async fn reset() -> Result<(), linkrpc::prelude::JsonRpcError>;
     /// Server-emitted event fired whenever the tree changes.
     #[name("tree_changed")]

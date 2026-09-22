@@ -442,8 +442,9 @@ async fn evaluate(expression: String, return_by_value: Option<bool>)
 
 The macro packs and unpacks the original struct, preserving its wire property
 names, optional-field omission, and embedded schema identity. Empty structs
-become zero-argument methods. Arguments follow the generated struct's field
-order. Open objects with flattened extra properties, non-struct payloads,
+become zero-argument methods without a `#[params(...)]` attribute; the macro
+encodes `{}` through its own empty wrapper. Arguments follow the generated
+struct's field order. Open objects with flattened extra properties, non-struct payloads,
 external fields without known type paths, and fields conflicting with injected
 arguments retain `#[params] params: ParamsType`. Set `inline_params: false` to keep the previous
 whole-object API for every method. Regeneration with the default is a Rust API

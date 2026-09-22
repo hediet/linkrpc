@@ -24,6 +24,9 @@ fn default_inlining_and_opt_out() {
     );
     assert_eq!(generated.code, include_str!("codegen/generated_inline.rs"));
     assert!(generated.code.contains("async fn empty()"));
+    assert!(generated.code.contains("async fn disable()"));
+    assert!(!generated.code.contains("#[params(EmptyParams)]"));
+    assert!(!generated.code.contains("#[params(EmptyPayload)]"));
     assert!(generated.code.contains(
         "async fn send(\n        camel_case: String,\n        optional: Option<bool>,\n        payload: Option<serde_json::Value>,\n        r#type: String,\n        wire_key: i64,\n    )"
     ));
@@ -41,6 +44,22 @@ fn default_inlining_and_opt_out() {
         .code
         .contains("async fn send(#[params] params: SendParams)"));
     assert!(!legacy.code.contains("#[params(SendParams)]"));
+    assert!(legacy
+        .code
+        .contains("async fn disable(#[params] params: EmptyPayload)"));
+}
+
+#[test]
+fn shared_empty_params_need_no_type_annotation() {
+    let generated = generate_rust_interface(
+        &fixture(),
+        &GenerateRustOptions {
+            external_components: [("EmptyPayload".into(), "shared::EmptyPayload".into())].into(),
+            ..Default::default()
+        },
+    );
+    assert!(generated.code.contains("async fn disable()"));
+    assert!(!generated.code.contains("#[params(shared::EmptyPayload)]"));
 }
 
 #[test]
@@ -125,6 +144,10 @@ struct Echo;
 
 #[async_trait::async_trait]
 impl InlineService for Echo {
+    async fn disable(&self, _ctx: &CallCtx) -> Result<Value, JsonRpcError> {
+        Ok(json!({}))
+    }
+
     async fn send(
         &self,
         _ctx: &CallCtx,
@@ -156,10 +179,14 @@ struct Loopback {
 
 #[async_trait::async_trait]
 impl RpcCall for Loopback {
-    async fn call(&self, _method: &str, params: Value) -> Result<Value, JsonRpcError> {
+    async fn call(&self, method: &str, params: Value) -> Result<Value, JsonRpcError> {
         self.sent.lock().unwrap().push(params.clone());
         self.server
-            .handle_request("send", params, CallCtx::default())
+            .handle_request(
+                method.strip_prefix("inline::").unwrap(),
+                params,
+                CallCtx::default(),
+            )
             .await
     }
 
@@ -207,6 +234,7 @@ async fn inline_arguments_preserve_wire_encoding_and_server_decoding() {
         .await
         .unwrap();
     assert_eq!(null_payload, without_optional);
+    assert_eq!(client.disable().await.unwrap(), json!({}));
     client.empty().await.unwrap();
     assert_eq!(
         *sent.lock().unwrap(),
@@ -214,6 +242,7 @@ async fn inline_arguments_preserve_wire_encoding_and_server_decoding() {
             without_optional,
             with_optional,
             json!({"camelCase": "value", "payload": null, "type": "kind", "wire-key": 42}),
+            json!({}),
             json!({})
         ]
     );

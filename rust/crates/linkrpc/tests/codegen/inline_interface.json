@@ -2,6 +2,10 @@
   "id": "inline",
   "hash": "",
   "methods": {
+    "disable": {
+      "params": { "$ref": "#/components/schemas/EmptyPayload" },
+      "result": true
+    },
     "send": {
       "params": {
         "type": "object",
@@ -19,6 +23,15 @@
     },
     "empty": {
       "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "EmptyPayload": {
         "type": "object",
         "properties": {},
         "additionalProperties": false

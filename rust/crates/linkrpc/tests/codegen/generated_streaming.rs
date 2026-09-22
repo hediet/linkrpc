@@ -86,7 +86,6 @@ pub trait ComExampleGeneratedStreamingService {
     async fn exchange(initial: u32) -> Result<u32, linkrpc::prelude::JsonRpcError>;
     #[name("server_silent")]
     #[output_stream(linkrpc::prelude::NoStream)]
-    #[params(ServerSilentParams)]
     async fn server_silent() -> Result<(), linkrpc::prelude::JsonRpcError>;
 }
 

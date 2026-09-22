@@ -4,6 +4,17 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EmptyPayload {}
+
+impl EmptyPayload {
+    /// Construct with all required fields; optional fields default to `None`
+    /// and any open-object extra map defaults to `Default::default()`.
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct EmptyParams {}
 
 impl EmptyParams {
@@ -42,7 +53,7 @@ impl SendParams {
 }
 
 #[linkrpc::prelude::link_rpc_interface(
-    schema_json = "{\"id\":\"inline\",\"hash\":\"\",\"methods\":{\"empty\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}},\"send\":{\"params\":{\"type\":\"object\",\"properties\":{\"camelCase\":{\"type\":\"string\"},\"optional\":{\"type\":\"boolean\"},\"payload\":true,\"type\":{\"type\":\"string\"},\"wire-key\":{\"type\":\"integer\"}},\"required\":[\"camelCase\",\"type\",\"wire-key\"],\"additionalProperties\":false},\"result\":true}}}",
+    schema_json = "{\"id\":\"inline\",\"hash\":\"\",\"methods\":{\"disable\":{\"params\":{\"$ref\":\"#/components/schemas/EmptyPayload\"},\"result\":true},\"empty\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}},\"send\":{\"params\":{\"type\":\"object\",\"properties\":{\"camelCase\":{\"type\":\"string\"},\"optional\":{\"type\":\"boolean\"},\"payload\":true,\"type\":{\"type\":\"string\"},\"wire-key\":{\"type\":\"integer\"}},\"required\":[\"camelCase\",\"type\",\"wire-key\"],\"additionalProperties\":false},\"result\":true}},\"components\":{\"schemas\":{\"EmptyPayload\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}}}}",
     client = "InlineClient",
     server = "InlineServer",
     module = "__linkrpc_interface",
@@ -50,9 +61,10 @@ impl SendParams {
     runtime = "linkrpc",
 )]
 pub trait InlineService {
+    #[name("disable")]
+    async fn disable() -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
     #[name("empty")]
     #[notification]
-    #[params(EmptyParams)]
     async fn empty() -> Result<(), linkrpc::prelude::JsonRpcError>;
     #[name("send")]
     #[params(SendParams)]

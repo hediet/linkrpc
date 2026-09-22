@@ -18,7 +18,8 @@
 //! `schema_json = "..."` imports a frozen interface contract (including its hash)
 //! instead of deriving schemas. Imported methods use a `#[params]` argument or
 //! `#[params(ExistingStruct)]` on the method to pack inline arguments using an
-//! existing struct's Serde representation. They may rename their wire member
+//! existing struct's Serde representation. Zero-argument methods need neither
+//! annotation and encode an empty object. They may rename their wire member
 //! with `#[name("...")]`. `client`, `server`, `module`, `runtime`,
 //! and `generate_server` configure names and client-only generation.
 //!
@@ -574,7 +575,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                     "Result error type does not match schema_json application errors",
                 ));
             }
-            if method.passthrough_ty.is_none() && method.inline_params_ty.is_none() {
+            if !method.params.is_empty()
+                && method.passthrough_ty.is_none()
+                && method.inline_params_ty.is_none()
+            {
                 return Err(syn::Error::new_spanned(
                     &method.name,
                     "schema_json methods require a #[params] parameter or #[params(Type)] method",
@@ -624,7 +628,9 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
     };
 
     // ── per-method param structs ──────────────────────────────────────────────
-    let param_structs = methods.iter().map(|m| param_struct(&trait_ident, m));
+    let param_structs = methods
+        .iter()
+        .map(|m| param_struct(&trait_ident, m, options.schema_json.is_none()));
 
     // ── interface() builder module ────────────────────────────────────────────
     let module_ident = options
@@ -1263,14 +1269,16 @@ fn params_ty(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
     }
 }
 
-fn param_struct(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
+fn param_struct(trait_ident: &Ident, m: &MethodModel, derive_schema: bool) -> TokenStream2 {
     if m.passthrough_ty.is_some() || m.inline_params_ty.is_some() {
         return quote!();
     }
     let pstruct = param_struct_ident(trait_ident, &m.name);
     let fields = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
+    let schema_derive = derive_schema.then(|| quote!(#[derive(::schemars::JsonSchema)]));
     quote! {
-        #[derive(::serde::Serialize, ::serde::Deserialize, ::schemars::JsonSchema)]
+        #[derive(::serde::Serialize, ::serde::Deserialize)]
+        #schema_derive
         #[serde(rename_all = "camelCase")]
         #[allow(non_camel_case_types, non_snake_case, dead_code)]
         struct #pstruct {
@@ -1714,6 +1722,35 @@ mod tests {
             let error = expand(options, syn::parse2(item).unwrap()).unwrap_err();
             assert!(error.to_string().contains(diagnostic), "{error}");
         }
+    }
+
+    #[test]
+    fn imported_zero_argument_methods_do_not_require_params_or_schemars() {
+        let json = r##"{
+            "id":"test.empty",
+            "hash":"frozen",
+            "methods":{
+                "disable":{"params":{"$ref":"#/components/schemas/Empty"},"result":true},
+                "changed":{"params":{"type":"object","properties":{},"additionalProperties":false}}
+            },
+            "components":{"schemas":{
+                "Empty":{"type":"object","properties":{},"additionalProperties":false}
+            }}
+        }"##;
+        let options = parse_options(quote!(schema_json = #json)).unwrap();
+        let item = syn::parse_quote! {
+            trait Test {
+                async fn disable() -> Result<serde_json::Value, JsonRpcError>;
+                #[notification]
+                async fn changed();
+            }
+        };
+        let expanded = expand(options, item).unwrap();
+        assert!(!expanded.to_string().contains("schemars"));
+        assert!(expanded
+            .to_string()
+            .contains("struct __linkrpc_Test_disable_Params"));
+        syn::parse2::<syn::File>(expanded).unwrap();
     }
 
     #[test]

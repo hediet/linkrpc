@@ -1443,7 +1443,9 @@ fn write_bindings(
             ));
         }
         let params = if let Some(fields) = fields {
-            w.line(&format!("#[params({params_ty})]"));
+            if !fields.is_empty() {
+                w.line(&format!("#[params({params_ty})]"));
+            }
             fields
                 .iter()
                 .map(|field| {

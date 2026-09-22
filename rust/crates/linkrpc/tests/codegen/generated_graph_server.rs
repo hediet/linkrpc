@@ -288,7 +288,6 @@ pub trait ComExampleGraphService {
     /// A method with an empty (all-defaults) params object.
     #[name("reset")]
     #[notification]
-    #[params(ResetParams)]
     async fn reset() -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx,);
         Ok(())
