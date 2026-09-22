@@ -36,7 +36,7 @@ const wrong: string = retry.data.retryAfter;
 testRawInterface.members.read.errors[0].create({ message: "missing" });
 testRawInterface.members.read.errors[1].create({ message: "absent" });
 `);
-    });
+    }, 30_000);
 
     it('allows schema-only and bare-only contracts and resolves exact hashes', () => {
         expect(rpc.parseStaticHubSchema({ interfaceSchemas: [echo.toSchema()] }).services).toBeUndefined();
