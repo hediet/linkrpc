@@ -18,8 +18,9 @@
 //! canonical TS `Record<string, MethodSchema>`.
 
 use crate::protocol::json_value::JsonValue;
+use crate::schema::normalize::normalize_json_schema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A name-keyed map of methods. Keys are sorted, which is irrelevant to
 /// identity (the interface hash JCS-sorts object keys, spec 04 §4) and keeps
@@ -109,6 +110,7 @@ impl LinkRpcInterfaceSchema {
 
     /// Validate cross-field rules which cannot be expressed by serde's data model.
     pub fn validate(&self) -> Result<(), InterfaceSchemaError> {
+        let mut raw_schemas = Vec::new();
         for (method_name, method) in &self.methods {
             let Some(errors) = &method.errors else {
                 continue;
@@ -118,16 +120,43 @@ impl LinkRpcInterfaceSchema {
                     "notification `{method_name}` must not declare errors"
                 )));
             }
-            let mut codes = std::collections::BTreeSet::new();
-            let mut names = std::collections::BTreeSet::new();
+            let mut codes = BTreeSet::new();
+            let mut raw_codes = BTreeSet::new();
+            let mut legacy_errors = BTreeSet::new();
+            let mut names = BTreeSet::new();
             for error in errors {
-                if (-32768..=-32000).contains(&error.code) || error.code == -32800 {
+                let previously_declared = !codes.insert(error.code);
+                if raw_codes.contains(&error.code)
+                    || (error.schema.is_some() && previously_declared)
+                {
                     return Err(InterfaceSchemaError(format!(
-                        "method `{method_name}` error code {} is protocol-reserved",
+                        "method `{method_name}` has duplicate raw error code {}",
                         error.code
                     )));
                 }
+                if let Some(schema) = &error.schema {
+                    raw_codes.insert(error.code);
+                    if error.r#type.is_some() || !error.message.is_empty() || error.data.is_some() {
+                        return Err(InterfaceSchemaError(format!(
+                            "method `{method_name}` raw error must not declare type, message, or data"
+                        )));
+                    }
+                    normalize_json_schema(schema).map_err(|reason| {
+                        InterfaceSchemaError(format!(
+                            "method `{method_name}` error code {}: {reason}",
+                            error.code
+                        ))
+                    })?;
+                    raw_schemas.push(schema.clone());
+                    continue;
+                }
                 if let Some(name) = &error.r#type {
+                    if (-32768..=-32000).contains(&error.code) || error.code == -32800 {
+                        return Err(InterfaceSchemaError(format!(
+                            "method `{method_name}` error code {} is protocol-reserved",
+                            error.code
+                        )));
+                    }
                     if name.is_empty() {
                         return Err(InterfaceSchemaError(format!(
                             "method `{method_name}` error type must not be empty"
@@ -138,13 +167,27 @@ impl LinkRpcInterfaceSchema {
                             "method `{method_name}` has duplicate error type `{name}`"
                         )));
                     }
-                } else if !codes.insert(error.code) {
+                } else if !legacy_errors.insert((error.code, &error.message)) {
                     return Err(InterfaceSchemaError(format!(
-                        "method `{method_name}` has duplicate error code {}",
-                        error.code
+                        "method `{method_name}` has duplicate legacy error code {} and message `{}`",
+                        error.code, error.message
                     )));
                 }
             }
+        }
+        if !raw_schemas.is_empty() {
+            super::schemars_subset::validate_guarded_references(
+                &raw_schemas,
+                self.components
+                    .as_ref()
+                    .and_then(|c| c.schemas.as_ref())
+                    .unwrap_or(&BTreeMap::new()),
+            )
+            .map_err(|error| InterfaceSchemaError(error.to_string()))?;
+            jsonschema::JSONSchema::compile(&serde_json::json!({
+                "allOf": raw_schemas, "components": self.components,
+            }))
+            .map_err(|error| InterfaceSchemaError(error.to_string()))?;
         }
         Ok(())
     }
@@ -184,7 +227,7 @@ pub struct MethodSchema {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub server_stream: Option<JsonValue>,
 
-    /// Application-level errors. Named types and unnamed codes must be unique.
+    /// Error declarations. Named types and raw codes must be unique.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub errors: Option<Vec<ErrorSchema>>,
 
@@ -275,16 +318,95 @@ pub struct MemberAnnotations {
 
 /// An application-level error declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ErrorSchemaRepr", into = "ErrorSchemaRepr")]
 pub struct ErrorSchema {
-    /// JSON-RPC error code. -32768..-32000 and LinkRPC -32800 are reserved.
+    /// JSON-RPC error code. Named errors must not use protocol-reserved codes.
     pub code: i32,
     /// Stable named-envelope discriminator; absent for legacy raw-data errors.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub r#type: Option<String>,
+    /// Literal message for named/legacy errors; empty for raw body schemas.
     pub message: String,
     /// Inner variant payload schema (legacy: the entire `error.data`).
-    #[serde(skip_serializing_if = "Option::is_none", default)]
     pub data: Option<JsonValue>,
+    /// Raw error body schema, describing `{ message, data? }` without `code`.
+    pub schema: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum ErrorSchemaRepr {
+    Raw {
+        code: i32,
+        schema: JsonValue,
+        #[serde(flatten)]
+        metadata: BTreeMap<String, JsonValue>,
+    },
+    Legacy {
+        code: i32,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        r#type: Option<String>,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        data: Option<JsonValue>,
+        #[serde(flatten)]
+        metadata: BTreeMap<String, JsonValue>,
+    },
+}
+
+impl TryFrom<ErrorSchemaRepr> for ErrorSchema {
+    type Error = String;
+
+    fn try_from(value: ErrorSchemaRepr) -> Result<Self, Self::Error> {
+        let (ErrorSchemaRepr::Raw { metadata, .. } | ErrorSchemaRepr::Legacy { metadata, .. }) =
+            &value;
+        if let Some(key) = metadata
+            .keys()
+            .find(|key| key.as_str() != "comment" && !key.starts_with("x-"))
+        {
+            return Err(format!("unexpected error declaration field `{key}`"));
+        }
+        Ok(match value {
+            ErrorSchemaRepr::Raw { code, schema, .. } => Self {
+                code,
+                r#type: None,
+                message: String::new(),
+                data: None,
+                schema: Some(schema),
+            },
+            ErrorSchemaRepr::Legacy {
+                code,
+                r#type,
+                message,
+                data,
+                ..
+            } => Self {
+                code,
+                r#type,
+                message,
+                data,
+                schema: None,
+            },
+        })
+    }
+}
+
+impl From<ErrorSchema> for ErrorSchemaRepr {
+    fn from(value: ErrorSchema) -> Self {
+        match value.schema {
+            Some(schema) => Self::Raw {
+                code: value.code,
+                schema,
+                metadata: BTreeMap::new(),
+            },
+            None => Self::Legacy {
+                code: value.code,
+                r#type: value.r#type,
+                message: value.message,
+                data: value.data,
+                metadata: BTreeMap::new(),
+            },
+        }
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +435,297 @@ mod tests {
 
     fn parse(doc: &str) -> LinkRpcInterfaceSchema {
         serde_json::from_str(doc).expect("valid schema")
+    }
+
+    fn raw_body() -> JsonValue {
+        json!({
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "data": true
+            },
+            "required": ["message"],
+            "additionalProperties": false
+        })
+    }
+
+    fn with_errors(errors: JsonValue) -> LinkRpcInterfaceSchema {
+        serde_json::from_value(json!({
+            "id": "test.errors",
+            "hash": "",
+            "methods": {
+                "request": {"params": true, "result": true, "errors": errors}
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn error_declarations_round_trip_as_exact_union() {
+        for value in [
+            json!({"code": -32001, "schema": raw_body()}),
+            json!({"code": 1, "schema": null}),
+            json!({"code": 1, "type": "Missing", "message": "Not found", "data": true}),
+            json!({"code": 2, "message": "Legacy"}),
+        ] {
+            let declaration: ErrorSchema = serde_json::from_value(value.clone()).unwrap();
+            if value.get("schema").is_some() {
+                assert!(declaration.schema.is_some());
+                assert_eq!(declaration.message, "");
+                assert_eq!(declaration.r#type, None);
+                assert_eq!(declaration.data, None);
+            } else {
+                assert_eq!(declaration.schema, None);
+            }
+            assert_eq!(serde_json::to_value(declaration).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn error_declarations_accept_non_normative_metadata() {
+        for canonical in [
+            json!({"code": -32001, "schema": raw_body()}),
+            json!({"code": 1, "type": "Missing", "message": "Not found", "data": true}),
+            json!({"code": 2, "message": "Legacy"}),
+        ] {
+            let mut extended = canonical.clone();
+            extended["comment"] = json!("Display metadata");
+            extended["x-display"] = json!({"icon": "warning"});
+            let declaration: ErrorSchema = serde_json::from_value(extended.clone()).unwrap();
+            assert_eq!(serde_json::to_value(declaration).unwrap(), canonical);
+            with_errors(json!([extended])).validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn error_declarations_reject_mixed_union_members_even_when_null() {
+        for schema in [raw_body(), JsonValue::Null] {
+            for sibling in ["type", "message", "data"] {
+                for value in [JsonValue::Null, json!("unexpected"), json!(true)] {
+                    let mut declaration = json!({"code": 1, "schema": schema});
+                    declaration[sibling] = value;
+                    assert!(
+                        serde_json::from_value::<ErrorSchema>(declaration.clone()).is_err(),
+                        "{declaration}"
+                    );
+                    let interface = json!({
+                        "id": "strict.raw.import", "hash": "",
+                        "methods": {
+                            "check": {"params": true, "result": true, "errors": [declaration]}
+                        }
+                    });
+                    assert!(serde_json::from_value::<LinkRpcInterfaceSchema>(interface).is_err());
+                }
+            }
+        }
+        for declaration in [
+            json!({"code": 1}),
+            json!({"code": 1, "type": "Missing"}),
+            json!({"schema": true}),
+            json!({"code": 1, "message": "Legacy", "unknown": true}),
+            json!({"code": 1, "schema": true, "unknown": true}),
+        ] {
+            assert!(
+                serde_json::from_value::<ErrorSchema>(declaration.clone()).is_err(),
+                "{declaration}"
+            );
+        }
+    }
+
+    #[test]
+    fn raw_codes_are_unique_across_all_declarations_in_either_order() {
+        let raw = json!({"code": 1, "schema": raw_body()});
+        for other in [
+            raw.clone(),
+            json!({"code": 1, "type": "Missing", "message": "Not found"}),
+            json!({"code": 1, "message": "Legacy"}),
+        ] {
+            for errors in [json!([raw, other]), json!([other, raw])] {
+                let error = with_errors(errors).validate().unwrap_err();
+                assert!(error.0.contains("duplicate raw error code 1"), "{error}");
+            }
+        }
+        with_errors(json!([
+            raw,
+            {"code": 2, "type": "Missing", "message": "Not found"},
+            {"code": 2, "type": "Denied", "message": "Denied"},
+            {"code": 2, "message": "Legacy"},
+            {"code": 2, "message": "Another legacy"}
+        ]))
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn named_types_and_legacy_code_message_pairs_are_unique() {
+        for errors in [
+            json!([
+                {"code": 1, "type": "Missing", "message": "Missing"},
+                {"code": 2, "type": "Missing", "message": "Different"}
+            ]),
+            json!([
+                {"code": 1, "message": "Missing"},
+                {"code": 1, "message": "Missing", "data": true}
+            ]),
+            json!([{"code": 1, "type": "", "message": "Missing"}]),
+        ] {
+            assert!(with_errors(errors).validate().is_err());
+        }
+        with_errors(json!([
+            {"code": 1, "message": "Missing"},
+            {"code": 2, "message": "Missing"}
+        ]))
+        .validate()
+        .unwrap();
+    }
+
+    #[test]
+    fn only_named_errors_reject_reserved_codes() {
+        for code in [-32800, -32768, -32603, -32099, -32000] {
+            with_errors(json!([{"code": code, "schema": raw_body()}]))
+                .validate()
+                .unwrap();
+            with_errors(json!([{"code": code, "message": "Imported foreign error"}]))
+                .validate()
+                .unwrap();
+            let error = with_errors(json!([{
+                "code": code, "type": "Named", "message": "Named error"
+            }]))
+            .validate()
+            .unwrap_err();
+            assert!(error.0.contains("protocol-reserved"));
+        }
+        for code in [-32801, -32769, -31999, 1] {
+            with_errors(json!([{"code": code, "type": "Named", "message": "Named error"}]))
+                .validate()
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn raw_errors_remain_forbidden_on_notifications() {
+        let mut interface = with_errors(json!([{"code": 1, "schema": raw_body()}]));
+        interface.methods.get_mut("request").unwrap().result = None;
+        assert!(interface.validate().unwrap_err().0.contains("notification"));
+    }
+
+    #[test]
+    fn raw_body_schema_supports_unions_and_component_references() {
+        for keyword in ["anyOf", "oneOf"] {
+            let mut interface = with_errors(json!([{
+                "code": -32001,
+                "schema": {
+                    keyword: [
+                        {"$ref": "#/components/schemas/Body~1failure"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "message": {"enum": ["Retry", "Later"]},
+                                "data": {"type": "null"}
+                            },
+                            "required": ["data", "message"]
+                        }
+                    ]
+                }
+            }]));
+            let mut body = raw_body();
+            body["properties"]["message"] = json!({"$ref": "#/components/schemas/Message"});
+            interface.components = Some(Components {
+                schemas: Some(BTreeMap::from([
+                    ("Body/failure".to_string(), body),
+                    (
+                        "Message".to_string(),
+                        json!({"anyOf": [
+                            {"const": "Failure"}, {"type": "string"}
+                        ]}),
+                    ),
+                ])),
+            });
+            interface.validate().unwrap();
+            let value = serde_json::to_value(&interface).unwrap();
+            assert_eq!(
+                value["methods"]["request"]["errors"][0]["schema"][keyword]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn raw_body_schema_accepts_general_constraints_without_proving_envelope_shape() {
+        for schema in [
+            json!(true),
+            json!(false),
+            json!({}),
+            json!({"type": "string"}),
+            json!({"type": "object", "properties": {"message": {"type": "string"}}}),
+            json!({"type": "object", "properties": {"message": {"type": "number"}}, "required": ["message"]}),
+            json!({"type": "object", "properties": {"message": {"anyOf": [{"type": "string"}, {"type": "number"}]}}, "required": ["message"]}),
+            json!({"type": "object", "properties": {"message": {"type": "string"}, "code": {"type": "number"}}, "required": ["message"]}),
+            json!({"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"], "additionalProperties": true}),
+            json!({"anyOf": [raw_body(), {"type": "string"}]}),
+            json!({"anyOf": [raw_body(), {"type": "object", "properties": {"message": {"type": "number"}}, "required": ["message"]}]}),
+            json!({"const": {"message": 1}}),
+            json!({"enum": [{"message": "Failure"}, {"message": "Failure", "code": 1}]}),
+        ] {
+            with_errors(json!([{"code": 1, "schema": schema}]))
+                .validate()
+                .unwrap_or_else(|error| panic!("{schema}: {error}"));
+        }
+    }
+
+    #[test]
+    fn raw_body_schema_rejects_malformed_schemas_and_references() {
+        for schema in [
+            JsonValue::Null,
+            json!([]),
+            json!({"type": "invalid-type"}),
+            json!({"anyOf": [true, null]}),
+            json!({"properties": {"data": 123}}),
+            json!({"$ref": "#/components/schemas/Missing"}),
+            json!({"type": "object", "properties": {"data": {"$ref": "#/components/schemas/Missing"}}}),
+        ] {
+            assert!(
+                with_errors(json!([{"code": 1, "schema": schema}]))
+                    .validate()
+                    .is_err(),
+                "{schema}"
+            );
+        }
+        let mut interface = with_errors(json!([{
+            "code": 1, "schema": {"$ref": "#/components/schemas/Cycle"}
+        }]));
+        interface.components = Some(Components {
+            schemas: Some(BTreeMap::from([(
+                "Cycle".to_string(),
+                json!({"$ref": "#/components/schemas/Cycle"}),
+            )])),
+        });
+        assert!(interface.validate().unwrap_err().0.contains("cycle"));
+    }
+
+    #[test]
+    fn raw_body_schema_supports_literal_bodies_and_recursive_data() {
+        for schema in [
+            json!(false),
+            json!({"const": {"message": "Failure"}}),
+            json!({"enum": [{"message": "Failure"}, {"message": "Retry", "data": null}]}),
+        ] {
+            with_errors(json!([{"code": 1, "schema": schema}]))
+                .validate()
+                .unwrap();
+        }
+        let mut body = raw_body();
+        body["properties"]["data"] = json!({"$ref": "#/components/schemas/Body"});
+        let mut interface = with_errors(json!([{
+            "code": 1, "schema": {"$ref": "#/components/schemas/Body"}
+        }]));
+        interface.components = Some(Components {
+            schemas: Some(BTreeMap::from([("Body".to_string(), body)])),
+        });
+        interface.validate().unwrap();
     }
 
     #[test]

@@ -61,12 +61,11 @@ function normalizeSchemaPositions(schema: LinkRpcInterfaceSchema): LinkRpcInterf
                 if (value !== undefined) {
                     normalized[field] = normalizeJsonSchema(value);
                 }
-                if (method.errors !== undefined) {
-                    normalized.errors = method.errors.map((error) => ({
-                        ...error,
-                        ...(error.data === undefined ? {} : { data: normalizeJsonSchema(error.data) }),
-                    }));
-                }
+            }
+            if (method.errors !== undefined) {
+                normalized.errors = method.errors.map((error) => error.schema !== undefined
+                    ? { ...error, schema: normalizeJsonSchema(error.schema) }
+                    : { ...error, ...(error.data === undefined ? {} : { data: normalizeJsonSchema(error.data) }) });
             }
             return [name, normalized];
         }),

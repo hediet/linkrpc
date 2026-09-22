@@ -18,6 +18,26 @@ const contract: rpc.StaticHubSchemaDocument = {
 };
 
 describe('static contracts', () => {
+    it('preserves raw descriptor tuples and body unions through generated namespaces', () => {
+        const raw = rpc.defineInterface({ id: 'test.raw' }, {
+            read: rpc.requestType(z.object({}), z.string()).withErrors([
+                rpc.rpcError(-32001, { message: z.string(), data: z.object({ retryAfter: z.number() }) }),
+                rpc.rpcError(-32002, { data: z.unknown().optional() }),
+            ]),
+        });
+        const source = generateTsContract({ interfaceSchemas: [raw.toSchema()] }, { linkRpcImport: '../../index' });
+        typecheck(`${source}
+const retry = testRawInterface.members.read.errors[0].create({ message: "later", data: { retryAfter: 2 } });
+const code: -32001 = retry.code;
+const delay: number = retry.data.retryAfter;
+// @ts-expect-error exact descriptor tuple must not erase data type
+const wrong: string = retry.data.retryAfter;
+// @ts-expect-error required data must not be erased
+testRawInterface.members.read.errors[0].create({ message: "missing" });
+testRawInterface.members.read.errors[1].create({ message: "absent" });
+`);
+    });
+
     it('allows schema-only and bare-only contracts and resolves exact hashes', () => {
         expect(rpc.parseStaticHubSchema({ interfaceSchemas: [echo.toSchema()] }).services).toBeUndefined();
         expect(rpc.parseStaticHubSchema({

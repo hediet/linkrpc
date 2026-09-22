@@ -38,7 +38,7 @@ use syn::{
 };
 
 /// Derive the wire conversion and schema metadata for an application-error enum.
-#[proc_macro_derive(ApplicationError, attributes(rpc_error))]
+#[proc_macro_derive(ApplicationError, attributes(rpc_error, serde))]
 pub fn derive_application_error(item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
     match expand_application_error(input) {
@@ -93,10 +93,13 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut from_arms = Vec::new();
     let mut display_arms = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
+    let mut codes = std::collections::BTreeMap::new();
+    let mut declarations = Vec::new();
     for variant in data.variants {
         let mut code = None;
         let mut message = None;
         let mut name = None;
+        let mut raw = false;
         for attr in &variant.attrs {
             if !attr.path().is_ident("rpc_error") {
                 continue;
@@ -113,23 +116,67 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                 } else if meta.path.is_ident("name") {
                     name = Some(meta.value()?.parse::<LitStr>()?.value());
                     Ok(())
+                } else if meta.path.is_ident("raw") {
+                    raw = true;
+                    Ok(())
                 } else {
-                    Err(meta.error("expected code, message, or name"))
+                    Err(meta.error("expected code, message, name, or raw"))
                 }
             })?;
         }
+        declarations.push((variant, code, message, name, raw));
+    }
+    // Raw tags are private to __Wire and must avoid even later named/legacy tags.
+    let mut private_tags: std::collections::BTreeSet<String> = declarations
+        .iter()
+        .filter(|(_, _, _, _, raw)| !raw)
+        .map(|(variant, _, _, name, _)| {
+            name.clone().unwrap_or_else(|| {
+                variant
+                    .ident
+                    .to_string()
+                    .trim_start_matches("r#")
+                    .to_owned()
+            })
+        })
+        .collect();
+    for (variant, code, message, name, raw) in declarations {
+        if raw && (code.is_none() || message.is_some() || name.is_some()) {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                "raw errors require an explicit code and cannot declare name or message",
+            ));
+        }
         let code = code.unwrap_or(1);
-        let name = name.unwrap_or_else(|| {
+        if codes
+            .get(&code)
+            .is_some_and(|previous_raw| raw || *previous_raw)
+        {
+            return Err(syn::Error::new_spanned(
+                &variant.ident,
+                "a raw error code must be unique across all error variants",
+            ));
+        }
+        codes.insert(code, raw);
+        let mut name = name.unwrap_or_else(|| {
             variant
                 .ident
                 .to_string()
                 .trim_start_matches("r#")
                 .to_owned()
         });
-        let message = message.ok_or_else(|| {
+        if raw {
+            let base = name.clone();
+            let mut suffix = 2;
+            while !private_tags.insert(name.clone()) {
+                name = format!("{base}{suffix}");
+                suffix += 1;
+            }
+        }
+        let message = if raw { Some(String::new()) } else { message }.ok_or_else(|| {
             syn::Error::new_spanned(&variant.ident, "missing rpc_error `message`")
         })?;
-        if (-32768..=-32000).contains(&code) || code == -32800 {
+        if !raw && imported.is_none() && ((-32768..=-32000).contains(&code) || code == -32800) {
             return Err(syn::Error::new_spanned(
                 &variant.ident,
                 "application error codes must not use protocol-reserved codes (-32768..=-32000 or -32800)",
@@ -149,6 +196,22 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
         let ident = &variant.ident;
         let fields = &variant.fields;
+        if raw {
+            match fields {
+                Fields::Unit => return Err(syn::Error::new_spanned(fields,
+                    "raw errors require a body with a string message; unit variants are not supported")),
+                Fields::Named(fields) => {
+                    let message = fields.named.iter().find(|field| field.ident.as_ref().is_some_and(|id| id == "message"));
+                    if !message.is_some_and(|field| matches!(&field.ty, Type::Path(ty) if ty.path.segments.last().is_some_and(|segment| segment.ident == "String")))
+                        || fields.named.iter().any(|field| field.ident.as_ref().is_some_and(|id| id != "message" && id != "data"))
+                    {
+                        return Err(syn::Error::new_spanned(fields,
+                            "raw error fields must be `message: String` and optionally `data`"));
+                    }
+                }
+                _ => {}
+            }
+        }
         helper_variants.push(quote! {
             #[serde(rename = #name)]
             #ident #fields
@@ -187,27 +250,95 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
             Fields::Named(_) => quote!({ .. }),
             Fields::Unnamed(_) => quote!((..)),
         };
-        display_arms.push(quote!(Self::#ident #display_pattern => f.write_str(#message)));
-        variants.push((variant.ident, code, message, payload, name));
+        if raw {
+            let display_name = ident.to_string();
+            display_arms.push(quote!(Self::#ident #display_pattern => f.write_str(#display_name)));
+        } else {
+            display_arms.push(quote!(Self::#ident #display_pattern => f.write_str(#message)));
+        }
+        let mut raw_schema_adjustments = Vec::new();
+        if raw && imported.is_none() {
+            if let Fields::Named(fields) = fields {
+                for field in &fields.named {
+                    let Type::Path(ty) = &field.ty else { continue };
+                    let Some(segment) = ty.path.segments.last().filter(|s| s.ident == "Option")
+                    else {
+                        continue;
+                    };
+                    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+                        continue;
+                    };
+                    let Some(syn::GenericArgument::Type(inner)) = args.args.first() else {
+                        continue;
+                    };
+                    let field_name = field.ident.as_ref().expect("named field").to_string();
+                    let mut skip_none = false;
+                    for attr in field
+                        .attrs
+                        .iter()
+                        .filter(|attr| attr.path().is_ident("serde"))
+                    {
+                        let metas = attr.parse_args_with(
+                            syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+                        )?;
+                        skip_none |= metas.iter().any(|meta| matches!(meta,
+                            Meta::NameValue(value) if value.path.is_ident("skip_serializing_if")
+                            && matches!(&value.value, syn::Expr::Lit(lit)
+                                if matches!(&lit.lit, syn::Lit::Str(value) if value.value() == "Option::is_none"))));
+                    }
+                    if skip_none {
+                        raw_schema_adjustments.push(quote! {
+                            let (__field_schema, __field_components) = ::linkrpc::schema::schemars_to_subset_with_components(
+                                &::serde_json::to_value(::schemars::schema_for!(#inner)).expect("schema serializes"),
+                            ).expect("raw error data is in the linkrpc schema subset");
+                            __schema["properties"][#field_name] = __field_schema;
+                            __schemas.extend(__field_components);
+                        });
+                    } else {
+                        raw_schema_adjustments.push(quote! {
+                            let __required = __schema.as_object_mut().expect("raw body object schema")
+                                .entry("required").or_insert_with(|| ::serde_json::json!([]));
+                            let __required = __required.as_array_mut().expect("required properties");
+                            if !__required.iter().any(|name| name.as_str() == Some(#field_name)) {
+                                __required.push(::serde_json::Value::String(#field_name.to_owned()));
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        variants.push((
+            variant.ident,
+            code,
+            message,
+            payload,
+            name,
+            raw,
+            raw_schema_adjustments,
+        ));
     }
 
-    let bindings = variants.iter().map(|(_, code, message, payload, name)| {
-        let has_payload = payload.is_some();
-        quote!((#name, #code, #message, #has_payload))
-    });
-    let schemas = variants.iter().map(|(_, code, message, payload, name)| {
+    let bindings = variants
+        .iter()
+        .map(|(_, code, message, payload, name, _, _)| {
+            let has_payload = payload.is_some();
+            quote!((#name, #code, #message, #has_payload))
+        });
+    let schemas = variants.iter().map(|(_, code, message, payload, name, raw, adjustments)| {
         let data = if let Some(ty) = payload {
             let scope = name;
             quote! {
                 {
-                    let (__schema, __schemas) = ::linkrpc::schema::schemars_to_subset_with_components(
+                    let (mut __schema, mut __schemas) = ::linkrpc::schema::schemars_to_subset_with_components(
                         &::serde_json::to_value(::schemars::schema_for!(#ty))
                             .expect("schema serializes"),
                     ).expect("application error payload is in the linkrpc schema subset");
+                    #(#adjustments)*
                     let mut __errors = ::std::vec![::linkrpc::prelude::ErrorSchema {
                         code: #code, message: #message.to_string(),
                         r#type: ::core::option::Option::Some(#name.to_owned()),
                         data: ::core::option::Option::Some(__schema),
+                        schema: ::core::option::Option::None,
                     }];
                     let mut __components = ::linkrpc::prelude::Components {
                         schemas: ::core::option::Option::Some(__schemas),
@@ -221,28 +352,38 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
             quote!(::core::option::Option::None)
         };
         quote! {
-            ::linkrpc::prelude::ErrorSchema {
+            {
+            let mut __error = ::linkrpc::prelude::ErrorSchema {
                 code: #code,
                 r#type: ::core::option::Option::Some(#name.to_owned()),
                 message: #message.to_string(),
                 data: #data,
+                schema: ::core::option::Option::None,
+            };
+            if #raw {
+                __error.schema = __error.data.take();
+                __error.r#type = ::core::option::Option::None;
+            }
+            __error
             }
         }
     });
     let error_components = variants
         .iter()
-        .filter_map(|(_, code, message, payload, name)| {
+        .filter_map(|(_, code, message, payload, name, _, adjustments)| {
             payload.as_ref().map(|ty| {
             let scope = name;
             quote! {
-                let (__schema, __schemas) = ::linkrpc::schema::schemars_to_subset_with_components(
+                let (mut __schema, mut __schemas) = ::linkrpc::schema::schemars_to_subset_with_components(
                     &::serde_json::to_value(::schemars::schema_for!(#ty))
                         .expect("schema serializes"),
                 ).expect("application error payload is in the linkrpc schema subset");
+                #(#adjustments)*
                 let mut __errors = ::std::vec![::linkrpc::prelude::ErrorSchema {
                     code: #code, message: #message.to_string(),
                     r#type: ::core::option::Option::Some(#name.to_owned()),
                     data: ::core::option::Option::Some(__schema),
+                    schema: ::core::option::Option::None,
                 }];
                 let mut __components = ::linkrpc::prelude::Components {
                     schemas: ::core::option::Option::Some(__schemas),
@@ -312,12 +453,37 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                 fn try_from_rpc_error(
                     __error: ::linkrpc::prelude::JsonRpcError,
                 ) -> ::core::result::Result<Self, ::linkrpc::prelude::JsonRpcError> {
-                    let Some(__tagged) = ::linkrpc::application_error::decode_application_error(
-                        &__error, &[#(#bindings),*], &Self::error_schemas(), &Self::error_components())
-                    else { return Err(__error); };
-                    let Ok(__wire) = ::serde_json::from_value::<__Wire>(__tagged)
-                    else { return Err(__error); };
-                    Ok(match __wire { #(#from_arms),* })
+                    Self::try_from_rpc_error_detailed(__error).map_err(|failure| match failure {
+                        ::linkrpc::application_error::ApplicationErrorDecodeError::Unhandled(original) => original,
+                        ::linkrpc::application_error::ApplicationErrorDecodeError::Invalid { original, .. } => *original,
+                    })
+                }
+                fn try_from_rpc_error_detailed(
+                    __error: ::linkrpc::prelude::JsonRpcError,
+                ) -> ::core::result::Result<Self, ::linkrpc::application_error::ApplicationErrorDecodeError> {
+                    let __schemas = Self::error_schemas();
+                    if !__schemas.iter().any(|schema| i64::from(schema.code) == __error.code) {
+                        return Err(::linkrpc::application_error::ApplicationErrorDecodeError::Unhandled(__error));
+                    }
+                    let __candidates = ::linkrpc::application_error::decode_application_error_candidates(
+                        &__error, &[#(#bindings),*], &__schemas);
+                    let __raw = __schemas.iter().any(|schema| i64::from(schema.code) == __error.code && schema.schema.is_some());
+                    let mut __issues = ::std::vec::Vec::new();
+                    match __candidates {
+                        Ok(__candidates) => for __tagged in __candidates {
+                            let __payload_path = if __raw { "" } else if __schemas.iter().any(|schema|
+                                schema.r#type.as_deref().is_some_and(|name| Some(name) == __tagged.get("type").and_then(::serde_json::Value::as_str))
+                            ) { "/data/data" } else { "/data" };
+                            match ::linkrpc::application_error::deserialize_application_error::<__Wire>(__tagged, __payload_path) {
+                                Ok(__wire) => return Ok(match __wire { #(#from_arms),* }),
+                                Err(issue) => __issues.push(issue),
+                            }
+                        },
+                        Err(issues) => __issues = issues,
+                    }
+                    Err(::linkrpc::application_error::ApplicationErrorDecodeError::Invalid {
+                        original: ::std::boxed::Box::new(__error), issues: __issues,
+                    })
                 }
                 fn error_schemas() -> ::std::vec::Vec<::linkrpc::prelude::ErrorSchema> {
                     #schemas_body
@@ -1713,6 +1879,59 @@ fn to_snake_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raw_error_declarations_reject_ambiguous_or_invalid_bodies() {
+        for (input, diagnostic) in [
+            (
+                quote! { enum Error {
+                    #[rpc_error(code = 1, raw)] Raw { message: String },
+                    #[rpc_error(message = "named")] Named,
+                } },
+                "raw error code must be unique",
+            ),
+            (
+                quote! { enum Error {
+                    #[rpc_error(message = "named")] Named,
+                    #[rpc_error(code = 1, raw)] Raw { message: String },
+                } },
+                "raw error code must be unique",
+            ),
+            (
+                quote! { enum Error {
+                    #[rpc_error(code = -32001, raw)] Unit,
+                } },
+                "unit variants are not supported",
+            ),
+            (
+                quote! { enum Error {
+                    #[rpc_error(code = -32001, raw)] Body { message: u32 },
+                } },
+                "message: String",
+            ),
+            (
+                quote! { enum Error {
+                    #[rpc_error(code = -32001, raw)] Body { data: String },
+                } },
+                "message: String",
+            ),
+            (
+                quote! { enum Error {
+                    #[rpc_error(code = -32001, raw, message = "bad")] Body(String),
+                } },
+                "cannot declare name or message",
+            ),
+            (
+                quote! { enum Error {
+                    #[rpc_error(raw)] Body(String),
+                } },
+                "explicit code",
+            ),
+        ] {
+            let error = expand_application_error(syn::parse2(input).unwrap()).unwrap_err();
+            assert!(error.to_string().contains(diagnostic), "{error}");
+        }
+    }
 
     #[test]
     fn imported_schema_options_validate_json_identity_and_layout() {

@@ -6,7 +6,7 @@
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Command {
     pub amount: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next: Option<Box<Command>>,
 }
 

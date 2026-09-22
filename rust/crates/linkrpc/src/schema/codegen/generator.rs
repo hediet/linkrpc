@@ -64,13 +64,16 @@ impl Field {
         }
         let mut attributes = Vec::new();
         if strip_raw(&self.rust_name) != self.wire_name {
-            attributes.push(format!("#[serde(rename = {})]", quote_str(&self.wire_name)));
+            attributes.push(format!("rename = {}", quote_str(&self.wire_name)));
         }
         if self.optional {
-            attributes
-                .push("#[serde(default, skip_serializing_if = \"Option::is_none\")]".to_string());
+            attributes.push("skip_serializing_if = \"Option::is_none\"".to_string());
         }
-        attributes
+        if attributes.is_empty() {
+            Vec::new()
+        } else {
+            vec![format!("#[serde({})]", attributes.join(", "))]
+        }
     }
 }
 
@@ -133,6 +136,7 @@ struct ErrorModel {
     variant: String,
     message: String,
     data: Option<TypeRef>,
+    raw: bool,
 }
 
 // ─────────────────────────────────────────────────────────── collection
@@ -221,6 +225,9 @@ impl<'a> Collector<'a> {
 
     /// Interpret every component as a named type, then lower each method.
     fn run(&mut self, schema: &LinkRpcInterfaceSchema) -> Vec<MethodModel> {
+        if let Err(error) = schema.validate() {
+            self.invalid.push(error.to_string());
+        }
         let component_list: Vec<(String, &JsonValue)> = self
             .components
             .iter()
@@ -279,8 +286,6 @@ impl<'a> Collector<'a> {
                 .map(|r| self.type_ref(r, &format!("{base}Result")))
         };
         let mut errors = Vec::new();
-        let mut codes = HashSet::new();
-        let mut names = HashSet::new();
         let mut variants = HashSet::new();
         // Legacy variants use private serde tags too; reserve every public wire
         // name before allocating those tags, including names declared later.
@@ -292,58 +297,48 @@ impl<'a> Collector<'a> {
             .filter_map(|error| error.r#type.clone())
             .collect();
         for error in method.errors.as_deref().unwrap_or_default() {
-            if method.result.is_none() {
-                self.invalid
-                    .push(format!("notification `{wire}` must not declare errors"));
-                break;
-            }
-            if (-32768..=-32000).contains(&error.code) || error.code == -32800 {
-                self.invalid.push(format!(
-                    "method `{wire}` error code {} is protocol-reserved",
-                    error.code
-                ));
-            }
-            if let Some(name) = &error.r#type {
-                if name.is_empty() {
-                    self.invalid
-                        .push(format!("method `{wire}` error type must not be empty"));
-                }
-                if !names.insert(name) {
-                    self.invalid
-                        .push(format!("method `{wire}` has duplicate error type `{name}`"));
-                }
-            } else if !codes.insert(error.code) {
-                self.invalid.push(format!(
-                    "method `{wire}` has duplicate error code {}",
-                    error.code
-                ));
-            }
+            let raw = error.schema.is_some();
             let variant = unique_name(
                 &error
                     .r#type
                     .as_ref()
                     .map(|name| to_pascal_case(name))
-                    .unwrap_or_else(|| format!("Code{}", code_name(error.code))),
+                    .unwrap_or_else(|| {
+                        if raw && error.code < 0 {
+                            format!("CodeNeg{}", error.code.unsigned_abs())
+                        } else {
+                            format!("Code{}", code_name(error.code))
+                        }
+                    }),
                 &mut variants,
             );
-            let data = error.data.as_ref().map(|schema| {
-                let suffix = error
-                    .r#type
-                    .as_ref()
-                    .map(|_| variant.clone())
-                    .unwrap_or_else(|| code_name(error.code));
-                self.error_type_ref(schema, &format!("{base}Error{suffix}Data"))
-            });
-            let wire_name = error.r#type.clone().or_else(|| {
-                let binding = unique_name(&variant, &mut binding_names);
-                (binding != variant).then_some(binding)
-            });
+            let data = if let Some(schema) = &error.schema {
+                Some(self.type_ref(schema, &format!("{base}Error{variant}Body")))
+            } else {
+                error.data.as_ref().map(|schema| {
+                    let suffix = error
+                        .r#type
+                        .as_ref()
+                        .map(|_| variant.clone())
+                        .unwrap_or_else(|| code_name(error.code));
+                    self.error_type_ref(schema, &format!("{base}Error{suffix}Data"))
+                })
+            };
+            let wire_name = if raw {
+                None
+            } else {
+                error.r#type.clone().or_else(|| {
+                    let binding = unique_name(&variant, &mut binding_names);
+                    (binding != variant).then_some(binding)
+                })
+            };
             errors.push(ErrorModel {
                 code: error.code,
                 wire_name,
                 variant,
                 message: error.message.clone(),
                 data,
+                raw,
             });
         }
         let error_name = (!errors.is_empty()).then(|| format!("{base}Error"));
@@ -407,8 +402,8 @@ impl<'a> Collector<'a> {
         match schema {
             JsonValue::Bool(true) => return TypeRef::Json,
             JsonValue::Bool(false) => {
-                self.note("`false`/never schema → serde_json::Value");
-                return TypeRef::Json;
+                self.build_named(name_hint.to_owned(), schema, None);
+                return TypeRef::Named(name_hint.to_owned());
             }
             JsonValue::Object(_) => {}
             _ => {
@@ -534,7 +529,11 @@ impl<'a> Collector<'a> {
             self.push_def(TypeDef {
                 name,
                 doc,
-                body: TypeBody::Alias(TypeRef::Json),
+                body: if schema == &JsonValue::Bool(false) {
+                    TypeBody::UntaggedUnion(Vec::new())
+                } else {
+                    TypeBody::Alias(TypeRef::Json)
+                },
             });
             return;
         };
@@ -1278,11 +1277,15 @@ pub(super) fn generate(
                 .as_ref()
                 .map(|name| format!(", name = {}", quote_str(name)))
                 .unwrap_or_default();
-            w.line(&format!(
-                "#[rpc_error(code = {}, message = {}{name_attr})]",
-                error.code,
-                quote_str(&error.message)
-            ));
+            if error.raw {
+                w.line(&format!("#[rpc_error(code = {}, raw)]", error.code));
+            } else {
+                w.line(&format!(
+                    "#[rpc_error(code = {}, message = {}{name_attr})]",
+                    error.code,
+                    quote_str(&error.message)
+                ));
+            }
             if let Some(data) = &error.data {
                 w.line(&format!(
                     "{variant}({}),",
@@ -1510,7 +1513,7 @@ fn write_bindings(
                 w.line(&format!(
                     "Err({})",
                     if method.error_name.is_some() {
-                        format!("{hub}::prelude::CallError::Generic({hub}::prelude::RpcCallError::Remote({error}))")
+                        format!("{hub}::prelude::CallError::Generic({hub}::prelude::RpcCallError::Local({error}))")
                     } else {
                         error
                     }

@@ -118,6 +118,16 @@ fn bless_golden() {
             "linkrpc",
         ),
         (
+            "raw_errors_interface.json",
+            "generated_raw_errors.rs",
+            "linkrpc",
+        ),
+        (
+            "raw_errors_interface.json",
+            "generated_raw_errors_renamed.rs",
+            "crate::renamed_runtime",
+        ),
+        (
             "typed_errors_interface.json",
             "generated_renamed_runtime.rs",
             "crate::renamed_runtime",

@@ -1,6 +1,41 @@
 import { describe, it, expect } from "vitest";
-import { isAssignable, matchesJsonSchema } from "./assignability";
+import { isAssignable, matchesJsonSchema, validateJsonSchema } from "./assignability";
 import type { LinkRpcJsonSchema } from "./linkRpcJsonSchema";
+
+describe("JSON schema diagnostics", () => {
+    it("reports nested union issues as JSON Pointers without leaking failed alternatives on success", () => {
+        const schema: LinkRpcJsonSchema = { anyOf: [
+            { type: "object", properties: { "a/b": { type: "number" } },
+                required: ["a/b"], additionalProperties: false },
+            { type: "null" },
+        ] };
+        expect(validateJsonSchema({ "a/b": false }, schema)).toEqual([
+            { path: "/a~1b", message: "Expected number" },
+            { path: "", message: "Expected null" },
+        ]);
+        expect(validateJsonSchema(null, schema)).toEqual([]);
+        expect(matchesJsonSchema(null, schema)).toBe(true);
+    });
+
+    it("supports escaped references, type arrays, and annotation-only schemas", () => {
+        expect(validateJsonSchema(3, { $ref: "#/components/schemas/a~1b~0c" },
+            { schemas: { "a/b~c": { type: "number" } } })).toEqual([]);
+        const nullable = { type: ["string", "null"] } as unknown as LinkRpcJsonSchema;
+        expect(validateJsonSchema(null, nullable)).toEqual([]);
+        expect(matchesJsonSchema(null, nullable)).toBe(true);
+        expect(validateJsonSchema(3, { description: "any JSON" } as LinkRpcJsonSchema)).toEqual([]);
+    });
+
+    it("requires tuple prefix items and explicitly required unknown object properties", () => {
+        const tuple: LinkRpcJsonSchema = { type: "array", prefixItems: [true], items: true };
+        expect(validateJsonSchema([], tuple)).toEqual([{ path: "", message: "Expected at least 1 items" }]);
+        expect(matchesJsonSchema([], tuple)).toBe(false);
+        const object: LinkRpcJsonSchema = { type: "object", properties: { data: true },
+            required: ["data"], additionalProperties: false };
+        expect(validateJsonSchema({}, object)).toEqual([{ path: "/data", message: "Required property is missing" }]);
+        expect(validateJsonSchema({ data: null }, object)).toEqual([]);
+    });
+});
 
 describe("isAssignable — primitives & top/bottom", () => {
     it("anything <: true", () => {

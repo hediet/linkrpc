@@ -63,7 +63,7 @@ pub trait RuntimeService {
     #[name("fallible")]
     async fn fallible(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::CallError<RuntimeFallibleError>> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::CallError::Generic(linkrpc::prelude::RpcCallError::Remote(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fallible"))))
+        Err(linkrpc::prelude::CallError::Generic(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fallible"))))
     }
     #[name("unsupported")]
     async fn unsupported(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {

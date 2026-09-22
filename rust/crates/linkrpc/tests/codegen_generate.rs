@@ -274,20 +274,20 @@ fn invalid_error_contracts_are_rejected() {
             "duplicate error type `Busy`",
         ),
         (
-            r#""bad":{"params":true,"result":true,"errors":[{"code":7,"message":"a"},{"code":7,"message":"b"}]}"#,
-            "duplicate error code 7",
-        ),
-        (
-            r#""bad":{"params":true,"result":true,"errors":[{"code":-32600,"message":"reserved"}]}"#,
-            "error code -32600 is protocol-reserved",
-        ),
-        (
-            r#""bad":{"params":true,"result":true,"errors":[{"code":-32800,"message":"cancelled"}]}"#,
-            "error code -32800 is protocol-reserved",
+            r#""bad":{"params":true,"result":true,"errors":[{"code":7,"message":"a"},{"code":7,"message":"a"}]}"#,
+            "duplicate legacy error code 7",
         ),
         (
             r#""bad":{"params":true,"errors":[{"code":7,"message":"notification"}]}"#,
             "notification `bad` must not declare errors",
+        ),
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":-32600,"type":"Named","message":"reserved"}]}"#,
+            "error code -32600 is protocol-reserved",
+        ),
+        (
+            r#""bad":{"params":true,"result":true,"errors":[{"code":-32800,"type":"Named","message":"cancelled"}]}"#,
+            "error code -32800 is protocol-reserved",
         ),
     ] {
         let schema = schema(&format!(
@@ -298,6 +298,72 @@ fn invalid_error_contracts_are_rejected() {
         let generated = generate_rust_interface(&schema, &GenerateRustOptions::default());
         assert!(generated.code.contains("compile_error!"));
     }
+}
+
+#[test]
+fn raw_error_codes_are_unique_across_all_descriptor_kinds() {
+    for other in [
+        serde_json::json!({"code": 42, "schema": {
+            "type": "object", "properties": {"message": {"type": "string"}},
+            "required": ["message"], "additionalProperties": false
+        }}),
+        serde_json::json!({"code": 42, "message": "Legacy"}),
+        serde_json::json!({"code": 42, "type": "Named", "message": "Named"}),
+    ] {
+        let raw = serde_json::json!({"code": 42, "schema": {
+            "type": "object", "properties": {"message": {"type": "string"}},
+            "required": ["message"], "additionalProperties": false
+        }});
+        for errors in [
+            vec![raw.clone(), other.clone()],
+            vec![other.clone(), raw.clone()],
+        ] {
+            let schema: LinkRpcInterfaceSchema = serde_json::from_value(serde_json::json!({
+                "id": "duplicate.raw", "hash": "",
+                "methods": {"check": {"params": true, "result": true, "errors": errors}}
+            }))
+            .unwrap();
+            assert!(schema
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate raw error code 42"));
+            let generated = generate_rust_interface(&schema, &GenerateRustOptions::default());
+            assert!(generated.code.contains("compile_error!"));
+        }
+    }
+}
+
+#[test]
+fn raw_errors_preserve_full_body_schemas_and_imported_foreign_codes() {
+    let schema: LinkRpcInterfaceSchema =
+        serde_json::from_str(include_str!("codegen/raw_errors_interface.json")).unwrap();
+    schema.validate().unwrap();
+    let generated = generate_rust_interface(
+        &schema,
+        &GenerateRustOptions {
+            generate_server: true,
+            ..Default::default()
+        },
+    );
+    assert!(
+        generated.unsupported.is_empty(),
+        "{:?}",
+        generated.unsupported
+    );
+    assert!(!generated.code.contains("compile_error!"));
+    assert!(generated
+        .code
+        .contains("#[rpc_error(code = -32001, raw)]\n    CodeNeg32001(RawBody)"));
+    assert!(generated
+        .code
+        .contains("#[rpc_error(code = -32600, message = \"Legacy\")]"));
+    assert_eq!(
+        generated.code.replace("\r\n", "\n"),
+        std::fs::read_to_string(codegen_dir().join("generated_raw_errors.rs"))
+            .unwrap()
+            .replace("\r\n", "\n")
+    );
 }
 
 #[test]
@@ -322,6 +388,39 @@ fn nullable_option_lowering_is_scoped_to_error_payloads() {
         !code.contains("Result<Option<String>,"),
         "error-only nullable lowering must not alter ordinary result APIs:\n{code}"
     );
+}
+
+#[test]
+fn inline_raw_body_type_names_are_stable() {
+    let schema: LinkRpcInterfaceSchema = serde_json::from_value(serde_json::json!({
+        "id": "interop.raw", "hash": "",
+        "methods": {"check": {"params": true, "result": true, "errors": [
+            {"code": -32001, "schema": {
+                "type": "object", "properties": {
+                    "message": {"type": "string"},
+                    "data": {"type": "object", "properties": {"retryAfter": {"type": "number"}}, "required": ["retryAfter"]}
+                }, "required": ["message", "data"]
+            }},
+            {"code": -32002, "schema": {
+                "type": "object", "properties": {"message": {"type": "string"}, "data": true},
+                "required": ["message"]
+            }}
+        ]}}
+    })).unwrap();
+    let code = generate_rust_interface(&schema, &GenerateRustOptions::default()).code;
+    for declaration in [
+        "CodeNeg32001(CheckErrorCodeNeg32001Body)",
+        "CodeNeg32002(CheckErrorCodeNeg32002Body)",
+        "pub struct CheckErrorCodeNeg32001BodyData",
+        "pub retry_after: f64",
+        "pub data: Option<serde_json::Value>",
+    ] {
+        assert!(
+            code.contains(declaration),
+            "{declaration} missing from:\n{code}"
+        );
+    }
+    assert!(!code.contains("__linkrpc_deserialize_present"));
 }
 
 #[test]

@@ -62,7 +62,7 @@ export interface MethodSchema {
      */
     serverStream?: LinkRpcJsonSchema;
 
-    /** Application errors. Named types must be unique; legacy errors have unique codes. */
+    /** Raw codes are exclusive; named and legacy declarations may form a union per code. */
     errors?: ErrorSchema[];
 
     summary?: string;
@@ -124,7 +124,19 @@ export interface MemberAnnotations {
     dangerous?: boolean;
 }
 
-export interface ErrorSchema {
+export type ErrorSchema = LegacyErrorSchema | RawErrorSchema;
+
+export interface RawErrorSchema {
+    code: number;
+    /** Schema of the wire body { message, data? }, excluding the outer code. */
+    schema: LinkRpcJsonSchema;
+    type?: never;
+    message?: never;
+    data?: never;
+}
+
+export interface LegacyErrorSchema {
+    schema?: never;
     /** Named error discriminator in `error.data.type`. Absent for legacy numeric errors. */
     type?: string;
     /** JSON-RPC error code. -32768..-32000 and LinkRPC cancellation code -32800 are reserved. */

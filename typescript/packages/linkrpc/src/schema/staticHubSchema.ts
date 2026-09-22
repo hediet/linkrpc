@@ -1,6 +1,7 @@
 import { computeInterfaceHash } from './hash';
 import type { LinkRpcInterfaceSchema } from './linkRpcInterfaceSchema';
 import { validateBarePrefix } from '../connection/bareInterfaceTarget';
+import { validateInterfaceErrors } from './validateInterfaceErrors';
 
 export interface InterfaceRef {
     interfaceId: string;
@@ -149,6 +150,7 @@ function parseInterfaceSchema(value: unknown, path: string): LinkRpcInterfaceSch
     }
 
     const typed = schema as unknown as LinkRpcInterfaceSchema;
+    validateInterfaceErrors(typed);
     const computedHash = computeInterfaceHash(typed);
     if (computedHash !== typed.hash) {
         throw new Error(

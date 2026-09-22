@@ -4,7 +4,7 @@ import ts from "typescript";
 import { fileURLToPath } from "node:url";
 import { computeInterfaceHash } from "../hash";
 import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
-import { applicationError, notificationType, requestType } from "../memberTypes";
+import { applicationError, notificationType, requestType, rpcError } from "../memberTypes";
 import type { LinkRpcInterfaceSchema } from "../linkRpcInterfaceSchema";
 import type { LinkRpcJsonSchema } from "../linkRpcJsonSchema";
 import {
@@ -43,10 +43,10 @@ async function _evalGenerated(source: string): Promise<{
 
     const fn = new Function(
         "z", "defineInterface", "InterfaceDefinition", "requestType", "notificationType",
-        "applicationError",
+        "applicationError", "rpcError",
         `${body}`,
     );
-    return fn(z, defineInterface, InterfaceDefinition, requestType, notificationType, applicationError);
+    return fn(z, defineInterface, InterfaceDefinition, requestType, notificationType, applicationError, rpcError);
 }
 
 async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash: string }): Promise<void> {
@@ -59,6 +59,78 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("round-trips raw body schemas and preserves exact code-discriminated types", async () => {
+        const definition = defineInterface({ id: "test.raw-codegen" }, {
+            read: requestType(z.object({}), z.string()).withErrors([
+                rpcError(-32001, { message: z.string(), data: z.object({ retryAfter: z.number() }) }),
+                rpcError(-32002, { message: z.string(), data: z.unknown().optional() }),
+                rpcError(-32003, { data: z.union([z.string(), z.number()]) }),
+                rpcError(-32004, z.union([
+                    z.object({ message: z.literal("retry"), data: z.number() }),
+                    z.object({ message: z.literal("stop"), data: z.null().optional() }),
+                ])),
+                applicationError("NotFound"),
+            ]),
+        });
+        await _roundTrip(definition);
+        const source = generateTsInterface(definition.toSchema(), { exportName: "generated", linkRpcImport: "../../index" });
+        expect(source).toContain("rpcError(-32001, z.object(");
+        _expectTypeChecks(`${source}
+import { isRpcFailure, type InterfaceClient } from "../../index";
+declare const client: InterfaceClient<typeof generated>;
+const raw = generated.members.read.errors[0].create({ message: "retry", data: { retryAfter: 3 } });
+const code: -32001 = raw.code;
+const delay: number = raw.data.retryAfter;
+// @ts-expect-error raw body is not any
+raw.data.missing;
+// @ts-expect-error required payload remains required
+generated.members.read.errors[0].create({ message: "retry" });
+generated.members.read.errors[1].create({ message: "absent" });
+generated.members.read.errors[1].create({ message: "null", data: null });
+// @ts-expect-error union data does not accept null
+generated.members.read.errors[2].create({ message: "x", data: null });
+const stopped = generated.members.read.errors[3].create({ message: "stop" });
+// @ts-expect-error body schema literal discriminators remain checked
+generated.members.read.errors[3].create({ message: "retry" });
+client.read({}).then((value) => {
+    if (!isRpcFailure(value)) return;
+    if (value.error.code === -32001) {
+        const delay: number = value.error.data.retryAfter;
+        // @ts-expect-error narrowing does not erase payload types
+        const wrong: string = value.error.data.retryAfter;
+    } else if (value.error.code === -32003) {
+        const data: string | number = value.error.data;
+    } else if (value.error.code === 1) {
+        const name: "NotFound" = value.error.type;
+    }
+});
+`);
+        const preserved = await _evalGenerated(generateTsInterface(definition.toSchema(), { preserveWireSchema: true }));
+        expect(preserved.toSchema()).toEqual(definition.toSchema());
+    }, TYPECHECK_TIMEOUT_MS);
+
+    it("preserves imported raw body unions and component references without legacy siblings", async () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.serde-raw-error", hash: "",
+            methods: { read: { params: true, result: true, errors: [{
+                code: -32001, schema: { oneOf: [
+                    { type: "object", properties: { message: { const: "retry" }, data: { $ref: "#/components/schemas/retry~1~0delay" } },
+                        required: ["message", "data"], additionalProperties: false },
+                    { type: "object", properties: { message: { const: "stop" } },
+                        required: ["message"], additionalProperties: false },
+                ] },
+            }] } },
+            components: { schemas: {
+                "retry/~delay": { type: "object", properties: { retryAfter: { type: "number" } },
+                    required: ["retryAfter"], additionalProperties: false },
+            } },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        const source = generateTsInterface(schema, { preserveWireSchema: true, linkRpcImport: "../../index" });
+        _expectTypeChecks(source);
+        expect((await _evalGenerated(source)).toSchema()).toEqual(schema);
+    }, TYPECHECK_TIMEOUT_MS);
+
     it("round-trips named errors with shared default codes and inner payload schemas", async () => {
         const definition = defineInterface({ id: "test.generated-named-errors" }, {
             read: requestType(z.object({}), z.string()).withErrors([
@@ -83,7 +155,7 @@ describe("generateInterface", () => {
                 { type: "Duplicate", code: 1, message: "a" },
                 { type: "Duplicate", code: 2, message: "b" },
             ] } },
-        })).toThrow(/duplicate/);
+        })).toThrow(/Duplicate/);
         expect(() => generateTsInterface({
             ...schema,
             methods: { read: { ...schema.methods.read,
@@ -150,7 +222,7 @@ describe("generateInterface", () => {
                     errors: [{ code: 1, message: "impossible" }],
                 },
             },
-        })).toThrow(/notification/);
+        })).toThrow(/Notification/);
         expect(() => generateTsInterface({
             ...base,
             methods: {

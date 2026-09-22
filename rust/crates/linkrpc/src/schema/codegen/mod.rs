@@ -23,6 +23,10 @@
 //! Application-error enums also reuse the `ApplicationError` derive, referencing
 //! the embedded contract for payload validation. The macros are re-exported by
 //! `linkrpc`; generated payload types need Serde, not Schemars.
+//! Raw error descriptors generate code-addressed variants whose payload represents
+//! the entire `{ message, data? }` body, using the same schema lowering as other
+//! generated types. Optional fields omit absent values when serialized. As with
+//! other generated types, serde may coalesce null and absence when both are legal.
 //!
 //! The generator is intentionally **generic**: it contains no CDP- or
 //! application-specific logic, and its output is deterministic (stable ordering,

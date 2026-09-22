@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { applicationError, isRpcFailure, RpcError, type InterfaceClient, type InterfaceHandlers } from '@hediet/linkrpc';
+import { applicationError, isRpcFailure, NonCompliantServerError, RpcError, type InterfaceClient, type InterfaceHandlers } from '@hediet/linkrpc';
 import { contract } from './contract';
 import { startRustPeer, within } from '../../rustPeer';
 
@@ -7,10 +7,13 @@ const [mode, binary, hash] = process.argv.slice(2);
 assert.equal(contract.schemaHash, hash);
 assert.ok(binary);
 
-const genericModes = [
-    'unknown', 'protocol', 'spoof-transport', 'unknown-type', 'missing-type', 'wrong-code', 'wrong-data', 'missing-data',
+const unhandledModes = ['unknown', 'protocol', 'spoof-transport', 'wrong-code', 'raw-unknown-code'] as const;
+const nonCompliantModes = [
+    'unknown-type', 'missing-type', 'wrong-data', 'missing-data', 'wrong-variant-code',
     'extra-data', 'missing-nullable', 'extra-property', 'extra-envelope', 'bad-recursion',
+    'raw-invalid', 'raw-missing-data', 'raw-null-required', 'raw-bad-union',
 ] as const;
+const rawModes = ['raw', 'raw-absent', 'raw-null', 'raw-value', 'raw-string', 'raw-number'] as const;
 
 function wireError(mode: string): RpcError {
     switch (mode) {
@@ -23,6 +26,7 @@ function wireError(mode: string): RpcError {
         case 'unknown-type': return new RpcError('Missing', __MISSING__, { type: 'Undeclared', data: { resource: 'file' } });
         case 'missing-type': return new RpcError('Missing', __MISSING__, { data: { resource: 'file' } });
         case 'wrong-code': return new RpcError('Missing', 9001, { type: 'Missing', data: { resource: 'file' } });
+        case 'wrong-variant-code': return new RpcError('Missing', __NUMERIC__, { type: 'Missing', data: { resource: 'file' } });
         case 'wrong-data': return new RpcError('Missing', __MISSING__, { type: 'Missing', data: { resource: 42 } });
         case 'missing-data': return new RpcError('Missing', __MISSING__, { type: 'Missing' });
         case 'extra-data': return new RpcError('Busy', __BUSY__, { type: 'Busy', data: null });
@@ -32,6 +36,17 @@ function wireError(mode: string): RpcError {
         case 'bad-recursion': return new RpcError('Recursive', __RECURSIVE__, {
             type: 'Recursive', data: { label: 'root', children: [{ label: 42, children: [] }] },
         });
+        case 'raw': return new RpcError('Retry after maintenance', -32001, { retryAfter: 5 });
+        case 'raw-absent': return new RpcError('Optional diagnostic', -32002);
+        case 'raw-null': return new RpcError('Optional diagnostic', -32002, null);
+        case 'raw-value': return new RpcError('Optional diagnostic', -32002, { arbitrary: ['data'] });
+        case 'raw-string': return new RpcError('Union diagnostic', -32003, 'file');
+        case 'raw-number': return new RpcError('Union diagnostic', -32003, 5);
+        case 'raw-unknown-code': return new RpcError('Retry after maintenance', -32004, { retryAfter: 5 });
+        case 'raw-invalid': return new RpcError('Retry after maintenance', -32001, { retryAfter: 'soon' });
+        case 'raw-missing-data': return new RpcError('Retry after maintenance', -32001);
+        case 'raw-null-required': return new RpcError('Retry after maintenance', -32001, null);
+        case 'raw-bad-union': return new RpcError('Union diagnostic', -32003, false);
         default: throw new Error(`Unexpected fixture mode: ${mode}`);
     }
 }
@@ -43,6 +58,8 @@ function checkStaticTypes(client: InterfaceClient<typeof contract>): void {
     contract.members.check.errors[0].create({ resource: 123 });
     // @ts-expect-error a data-less error does not accept data
     contract.members.check.errors[1].create({});
+    // @ts-expect-error the raw error body requires a numeric retry delay
+    contract.members.check.errors[5].create({ message: 'Retry', data: { retryAfter: 'soon' } });
     const wrongErrorHandler: InterfaceHandlers<typeof contract> = {
         // @ts-expect-error an undeclared application error cannot be returned by a typed handler
         check: () => applicationError(9001, 'Undeclared').create(),
@@ -67,7 +84,7 @@ try {
         const missing = await client.check({ mode: 'missing' });
         if (!isRpcFailure(missing)) throw new Error('expected Missing');
         assert.equal(missing.error.code, __MISSING__);
-        if (missing.error.type !== 'Missing') throw new Error('expected Missing type');
+        if (missing.error.code !== __MISSING__ || missing.error.type !== 'Missing') throw new Error('expected Missing type');
         const resource: string = missing.error.data.resource;
         assert.equal(resource, 'file');
         // @ts-expect-error a narrowed Missing payload has no unexpected property
@@ -76,7 +93,7 @@ try {
         if (!isRpcFailure(safeMissing) || safeMissing.error.kind !== 'application') {
             throw new Error('expected checked application failure');
         }
-        if (safeMissing.error.error.type !== 'Missing') throw new Error('expected checked Missing');
+        if (safeMissing.error.error.code !== __MISSING__ || safeMissing.error.error.type !== 'Missing') throw new Error('expected checked Missing');
         assert.equal(safeMissing.error.error.data.resource, 'file');
 
         for (const [mode, code, data] of [
@@ -95,7 +112,23 @@ try {
             throw new Error('expected Missing despite dynamic message');
         }
         assert.equal(changedMessage.error.data.resource, 'file');
-        for (const mode of genericModes) {
+        for (const mode of rawModes) {
+            const result = await client.check({ mode });
+            if (!isRpcFailure(result)) throw new Error(`expected handled ${mode}`);
+            const expected = wireError(mode);
+            assert.equal(result.error.code, expected.code);
+            assert.equal(result.error.message, expected.message);
+            assert.deepEqual(result.error.data, expected.data);
+            assert.equal(Object.hasOwn(result.error, 'data'), expected.hasData);
+            assert.equal(Object.hasOwn(result.error, 'type'), false);
+            if (result.error.code === -32001) {
+                const retryAfter: number = result.error.data.retryAfter;
+                assert.equal(retryAfter, 5);
+                // @ts-expect-error a code-narrowed retry payload has no resource
+                void result.error.data.resource;
+            }
+        }
+        for (const mode of unhandledModes) {
             const result = await resultClient.check({ mode });
             if (!isRpcFailure(result) || result.error.kind !== 'generic' || result.error.error.kind !== 'remote') {
                 throw new Error(`${mode}: expected generic remote`);
@@ -104,6 +137,32 @@ try {
             assert.equal(result.error.error.code, expected.code);
             assert.equal(result.error.error.message, expected.message);
             assert.deepEqual(result.error.error.data, expected.data);
+        }
+        for (const mode of nonCompliantModes) {
+            const result = await resultClient.check({ mode });
+            if (mode === 'extra-property') {
+                if (!isRpcFailure(result) || result.error.kind !== 'application'
+                    || result.error.error.code !== 1 || result.error.error.type !== 'Missing') {
+                    throw new Error('expected Missing after the generated decoder strips extra fields');
+                }
+                assert.deepEqual(result.error.error.data, { resource: 'file' });
+                continue;
+            }
+            if (!isRpcFailure(result) || result.error.kind !== 'generic'
+                || !(result.error.error instanceof NonCompliantServerError)) {
+                throw new Error(`${mode}: expected noncompliant server`);
+            }
+            const expected = wireError(mode);
+            assert.deepEqual(result.error.error.original, {
+                code: expected.code, message: expected.message,
+                ...(expected.hasData ? { data: expected.data } : {}),
+            });
+            assert.ok(result.error.error.issues.length > 0);
+            assert.ok(result.error.error.issues.every((issue) => typeof issue.path === 'string' && issue.message.length > 0));
+            if (mode === 'raw-invalid') {
+                assert.ok(result.error.error.issues.some((issue) => issue.path === '/data/retryAfter'));
+            }
+            await assert.rejects(client.check({ mode }), NonCompliantServerError);
         }
         const invalidEncoding = await resultClient.check({ mode: 'invalid-encoding' });
         if (!isRpcFailure(invalidEncoding) || invalidEncoding.error.kind !== 'generic' || invalidEncoding.error.error.kind !== 'remote') {
@@ -130,6 +189,14 @@ try {
                     });
                     case 'numeric': return contract.members.check.errors[4].create(42.5);
                     case 'invalid-encoding': return contract.members.check.errors[4].create(NaN);
+                    case 'raw': return contract.members.check.errors[5].create({
+                        message: 'Retry after maintenance', data: { retryAfter: 5 },
+                    });
+                    case 'raw-absent': return contract.members.check.errors[6].create({ message: 'Optional diagnostic' });
+                    case 'raw-null': return contract.members.check.errors[6].create({ message: 'Optional diagnostic', data: null });
+                    case 'raw-value': return contract.members.check.errors[6].create({ message: 'Optional diagnostic', data: { arbitrary: ['data'] } });
+                    case 'raw-string': return contract.members.check.errors[7].create({ message: 'Union diagnostic', data: 'file' });
+                    case 'raw-number': return contract.members.check.errors[7].create({ message: 'Union diagnostic', data: 5 });
                     case 'disconnect':
                         peer.disconnect();
                         return new Promise<never>(() => {});
@@ -142,7 +209,7 @@ try {
         assert.deepEqual({ code, signal }, { code: 0, signal: null }, peer.stderr());
         assert.deepEqual(called, [
             'success', 'missing', 'busy', 'nullable', 'recursive', 'numeric',
-            'changed-message', ...genericModes, 'invalid-encoding', 'disconnect',
+            'changed-message', ...rawModes, ...unhandledModes, ...nonCompliantModes, 'invalid-encoding', 'disconnect',
         ]);
     }
     console.log('typed errors verified');

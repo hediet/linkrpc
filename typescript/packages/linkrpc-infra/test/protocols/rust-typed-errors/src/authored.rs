@@ -14,6 +14,42 @@ pub struct Detail {
     pub children: Vec<Detail>,
 }
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetryBody {
+    pub message: String,
+    pub data: RetryData,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetryData {
+    #[serde(rename = "retryAfter")]
+    pub retry_after: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OptionalBody {
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnionBody {
+    pub message: String,
+    pub data: UnionData,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum UnionData {
+    Text(String),
+    Number(f64),
+}
+
 #[derive(Debug, linkrpc::ApplicationError)]
 pub enum FixtureError {
     #[rpc_error(message = "Missing")]
@@ -26,6 +62,12 @@ pub enum FixtureError {
     Recursive(Detail),
     #[rpc_error(code = 1005, message = "Numeric")]
     Numeric(f64),
+    #[rpc_error(code = -32001, raw)]
+    Retry(RetryBody),
+    #[rpc_error(code = -32002, raw)]
+    Optional(OptionalBody),
+    #[rpc_error(code = -32003, raw)]
+    Union(UnionBody),
 }
 
 #[link_rpc_interface(id = "dev.linkrpc.rust-errors")]
@@ -53,6 +95,10 @@ impl RustErrors for Service {
                     label: "leaf".into(),
                     children: vec![],
                 }],
+            }))),
+            "raw" => Err(CallError::Application(FixtureError::Retry(RetryBody {
+                message: "Retry after maintenance".into(),
+                data: RetryData { retry_after: 5.0 },
             }))),
             mode => Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
                 common::remote_error(mode, 1000),
@@ -91,27 +137,40 @@ async fn client(connection: LinkRpcConnection) {
         CallError::Application(FixtureError::Missing { resource }) => assert_eq!(resource, "file"),
         error => panic!("expected Missing despite dynamic message, got {error:?}"),
     }
-    for mode in [
-        "unknown",
-        "protocol",
-        "spoof-transport",
-        "unknown-type",
-        "missing-type",
-        "wrong-code",
-        "wrong-data",
-        "missing-data",
-        "extra-data",
-        "missing-nullable",
-        "extra-property",
-        "extra-envelope",
-        "bad-recursion",
-    ] {
+    for mode in common::RAW_MODES {
         match client.check(mode.into()).await.unwrap_err() {
-            CallError::Generic(linkrpc::client::RpcCallError::Remote(error)) => {
-                assert_eq!(error, common::remote_error(mode, 1000))
+            CallError::Application(FixtureError::Retry(body)) => {
+                assert_eq!(mode, "raw");
+                assert_eq!(body.message, "Retry after maintenance");
+                assert_eq!(body.data.retry_after, 5.0);
             }
-            error => panic!("{mode}: expected original generic error, got {error:?}"),
+            CallError::Application(FixtureError::Optional(body)) => {
+                assert_eq!(body.message, "Optional diagnostic");
+                assert_eq!(
+                    body.data,
+                    match mode {
+                        "raw-absent" | "raw-null" => None,
+                        "raw-value" => Some(serde_json::json!({"arbitrary": ["data"]})),
+                        _ => panic!("unexpected optional mode {mode}"),
+                    }
+                );
+            }
+            CallError::Application(FixtureError::Union(body)) => {
+                assert_eq!(body.message, "Union diagnostic");
+                match (mode, body.data) {
+                    ("raw-string", UnionData::Text(value)) => assert_eq!(value, "file"),
+                    ("raw-number", UnionData::Number(value)) => assert_eq!(value, 5.0),
+                    (mode, data) => panic!("{mode}: unexpected union data {data:?}"),
+                }
+            }
+            error => panic!("{mode}: expected typed plain JSON-RPC error, got {error:?}"),
         }
+    }
+    for mode in common::UNHANDLED_MODES
+        .into_iter()
+        .chain(common::NONCOMPLIANT_MODES)
+    {
+        common::assert_generic_error(client.check(mode.into()).await.unwrap_err(), mode, 1000);
     }
     assert!(matches!(
         client.check("invalid-encoding".into()).await,

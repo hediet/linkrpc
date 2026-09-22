@@ -29,9 +29,9 @@ impl EmptyParams {
 pub struct SendParams {
     #[serde(rename = "camelCase")]
     pub camel_case: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub optional: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     pub r#type: String,
     #[serde(rename = "wire-key")]
@@ -69,8 +69,8 @@ pub trait InlineService {
     #[name("send")]
     async fn send(
         #[serde(rename = "camelCase")] camel_case: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] optional: Option<bool>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")] optional: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
         r#type: String,
         #[serde(rename = "wire-key")] wire_key: i64,
     ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;

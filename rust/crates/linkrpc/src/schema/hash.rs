@@ -5,7 +5,7 @@
 //! form** before hashing, so one interface document can carry richer,
 //! un-normalized material without changing identity:
 //!   1. **Normalize** every JSON-Schema position — each method's `params`,
-//!      `result`, `clientStream`, `serverStream`, and every entry under
+//!      `result`, `clientStream`, `serverStream`, error `data` / `schema`, and every entry under
 //!      `components.schemas` — through [`normalize_json_schema`]. This collapses
 //!      a raw schema onto the decidable linkrpc subset: incidental keys are
 //!      dropped, object closure is defaulted, `required` is sorted, `{}` becomes
@@ -70,7 +70,7 @@ pub fn compute_interface_hash(schema: &LinkRpcInterfaceSchema) -> String {
 ///
 /// The normalized positions are exactly the schema-bearing fields of the
 /// interface contract: each method's `params` / `result` / `clientStream` /
-/// `serverStream`, and every named schema under `components.schemas`. This
+/// `serverStream`, error `data` / `schema`, and every named schema under `components.schemas`. This
 /// mirrors the normalize-then-hash projection a producer applies before
 /// embedding a hash, so a rich, un-normalized document hashes identically to its
 /// simple normalized projection.
@@ -101,9 +101,11 @@ fn normalize_schema_positions(schema: &JsonValue) -> JsonValue {
             }
             if let Some(errors) = method.get_mut("errors").and_then(JsonValue::as_array_mut) {
                 for error in errors {
-                    if let Some(data) = error.get_mut("data") {
-                        if let Ok(normalized) = normalize_json_schema(data) {
-                            *data = normalized;
+                    for field in ["data", "schema"] {
+                        if let Some(schema) = error.get_mut(field) {
+                            if let Ok(normalized) = normalize_json_schema(schema) {
+                                *schema = normalized;
+                            }
                         }
                     }
                 }
@@ -218,6 +220,64 @@ mod tests {
         assert_eq!(
             compute_interface_hash_value(&a),
             compute_interface_hash(&original)
+        );
+    }
+
+    #[test]
+    fn raw_error_body_schemas_are_normalized_without_inventing_legacy_fields() {
+        let mut rich = iface(json!({}));
+        rich["methods"]["ping"]["errors"] = json!([{
+            "code": -32001,
+            "schema": {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string", "minLength": 1},
+                            "data": {}
+                        },
+                        "required": ["message", "data"],
+                        "examples": [{"message": "Failure"}]
+                    },
+                    {"$ref": "#/components/schemas/Body", "x-codegen": "Body"}
+                ]
+            }
+        }]);
+        let mut normalized = rich.clone();
+        normalized["methods"]["ping"]["errors"][0]["schema"] = json!({
+            "anyOf": [
+                {
+                    "type": "object",
+                    "properties": {"message": {"type": "string"}, "data": true},
+                    "required": ["data", "message"],
+                    "additionalProperties": false
+                },
+                {"$ref": "#/components/schemas/Body"}
+            ]
+        });
+        assert_eq!(
+            compute_interface_hash_value(&rich),
+            compute_interface_hash_value(&normalized)
+        );
+        let typed: LinkRpcInterfaceSchema = serde_json::from_value(rich.clone()).unwrap();
+        assert_eq!(
+            compute_interface_hash(&typed),
+            compute_interface_hash_value(&rich)
+        );
+        assert_eq!(serde_json::to_value(&typed).unwrap(), rich);
+
+        let mut changed = normalized.clone();
+        changed["methods"]["ping"]["errors"][0]["schema"]["anyOf"][0]["properties"]["data"] =
+            json!({"type": "null"});
+        assert_ne!(
+            compute_interface_hash_value(&changed),
+            compute_interface_hash_value(&normalized)
+        );
+        changed = normalized.clone();
+        changed["methods"]["ping"]["errors"][0]["code"] = json!(-32002);
+        assert_ne!(
+            compute_interface_hash_value(&changed),
+            compute_interface_hash_value(&normalized)
         );
     }
 

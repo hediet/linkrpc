@@ -291,7 +291,7 @@ connection.register(documents, {
 
 Calls are real promises of `Result<T, E>`, an alias for `T | RpcFailure<E>`. The branded
 library wrapper cannot collide with an ordinary successful object. Generic RPC errors
-(undeclared/malformed peer errors, validation failures, transport failures) still throw:
+(undeclared codes, noncompliant peer errors, local validation failures, transport failures) still throw:
 
 ```ts
 const client = connection.get(documents);
@@ -319,6 +319,8 @@ if (isRpcFailure(result)) {
         console.log(failure.error.type); // 'NotFound' | 'Conflict'
     } else if (failure.error.kind === 'remote') {
         console.error(failure.error.code, failure.error.message);
+    } else if (failure.error.kind === 'nonCompliantServer') {
+        console.error(failure.error.original, failure.error.issues);
     } else {
         console.error(failure.error.cause); // local or explicitly identified transport failure
     }
@@ -344,20 +346,76 @@ different names may share a code. Names must be nonempty. Unit errors omit the i
 valid JSON data (including `null` only when their schema allows it).
 
 Legacy `applicationError(404, 'Not found', optionalDataSchema)` and schemas without `type`
-retain their old untagged wire format and exact code/message matching. Legacy numeric
+retain their old untagged wire format and literal message constraint. Legacy numeric
 codes must be unique independently of named errors; named and legacy errors may share
 a code, with named recognition attempted first. All codes must fit a signed 32-bit integer and avoid `-32768..-32000`
 and LinkRPC's `-32800` cancellation code. The legacy third `requestType` error-schema
 argument remains accepted, but does not declare checked errors. Generic origin is based
 on explicit channel metadata, never inferred from a numeric code. Unclassified exceptions
 are local; senders can identify transport errors with `RpcError`'s `transport` origin.
-When a declared name and code match, malformed envelopes or payloads stay generic;
-they never fall back to a permissive legacy declaration sharing the code. Legacy
-matching runs only when no named declaration matches the envelope's name and code.
+The numeric code decides handledness first. All declarations sharing that code form
+an explicit schema union. Named branches are tried before legacy branches, and any
+valid branch returns a declared error. Thus, a permissive legacy payload may accept an
+envelope that fails a named branch: this is an inherently ambiguous legacy contract.
+If no branch validates, the normal client throws `NonCompliantServerError`, not the
+original `RpcError`. Its `kind` is `nonCompliantServer`, `original` retains the wire
+`{ code, message, data? }` including data presence, and `issues` contains
+`{ path, message }` diagnostics. Paths are JSON Pointers relative to the original
+error, for example `/data/type` or `/data/data/resource`. Safe clients return this
+error instance under the `generic` case. An undeclared code remains a `remote` error.
 
-Payload validation does not silently strip properties, insert defaults, or turn missing
-data into `null`. Exported `ErrorSchema` includes `type` for named errors, a required
+Each candidate is parsed once by its declared decoder, and the client uses that
+parsed result directly. Defaults, coercions, and unknown-field handling follow
+that decoder; there is no separate, stricter JSON Schema validation pass.
+Exported `ErrorSchema` includes `type` for named errors, a required
 resolved numeric `code`, and a `data` schema describing the inner payload.
+
+### Raw JSON-RPC error bodies
+
+Use `rpcError` for foreign protocols or errors without LinkRPC's named envelope:
+
+```ts
+import { rpcError } from '@hediet/linkrpc';
+
+const retry = rpcError(-32001, {
+    message: z.string(),
+    data: z.object({ retryAfter: z.number() }),
+});
+const opaque = rpcError(-32002, { data: z.unknown().optional() });
+const detail = rpcError(-32003, { data: z.union([z.string(), z.number()]) });
+
+const requests = defineInterface({ id: 'acme.foreign' }, {
+    read: requestType(z.object({}), z.string()).withErrors([retry, opaque, detail]),
+});
+
+connection.register(requests, {
+    read: () => retry.create({ message: 'Retry in 3 seconds', data: { retryAfter: 3 } }),
+});
+const value = await connection.get(requests).read({});
+if (isRpcFailure(value) && value.error.code === -32001) {
+    console.log(value.error.data.retryAfter); // number, narrowed by code
+}
+```
+
+The message schema defaults to `z.string()`; the wire message is diagnostic, not a
+discriminator, unless the schema explicitly uses a literal. The body-schema overload,
+`rpcError(code, z.union([...bodySchemas]))`, supports imported body unions as well.
+`.create({ message, data? })` and `.is(...)` produce and match nominal handled errors,
+without inserting a wire `type` field. Missing and null data follow the declared
+decoder's semantics. Present `undefined` and other non-JSON values are rejected
+before serialization.
+
+Raw codes can use the JSON-RPC reserved range (including `-32001`), but must be signed
+32-bit integers. A raw declaration must have a unique code and cannot share it with
+named or legacy declarations. The named `applicationError` guard and default code `1`
+are unchanged.
+
+The canonical schema representation is exactly `{ code, schema }`, where `schema`
+describes the wire body `{ message: string, data?: JsonValue }`, **excluding code**.
+Raw declarations have no sibling `type`, `message`, or `data` properties. Their body
+schemas are normalized and hashed like other schema positions. Existing named and
+legacy schema representations are unchanged. Import/export and generated contracts
+preserve the raw representation and its typed descriptor tuple.
 
 Interface JSON includes these declarations and their referenced data schemas in the hash.
 CLI-generated definitions expose the same typed constructors through

@@ -21,6 +21,10 @@ use crate::transport::message::TransportError;
 #[derive(Clone, Debug, PartialEq)]
 pub enum RpcCallError {
     Remote(JsonRpcError),
+    NonCompliantServer {
+        original: Box<JsonRpcError>,
+        issues: Vec<crate::application_error::ValidationIssue>,
+    },
     Local(JsonRpcError),
     Transport(TransportError),
 }

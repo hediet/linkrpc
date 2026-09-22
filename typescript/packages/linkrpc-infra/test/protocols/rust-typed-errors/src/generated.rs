@@ -31,6 +31,9 @@ impl DevLinkrpcTsErrorsService for Service {
                     vec![MethodCheckSchemaError3D2004Root::new("leaf".into(), vec![])],
                 ),
             ))),
+            "raw" => Err(CallError::Application(CheckError::CodeNeg32001(
+                serde_json::from_value(common::raw_body("raw")).unwrap(),
+            ))),
             mode => Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
                 common::remote_error(mode, 2000),
             ))),
@@ -86,30 +89,50 @@ async fn client(connection: LinkRpcConnection) {
         CallError::Application(CheckError::Missing(data)) => assert_eq!(data.resource, "file"),
         error => panic!("expected Missing despite dynamic message, got {error:?}"),
     }
-    for mode in [
-        "unknown",
-        "protocol",
-        "spoof-transport",
-        "unknown-type",
-        "missing-type",
-        "wrong-code",
-        "wrong-data",
-        "missing-data",
-        "extra-data",
-        "missing-nullable",
-        "extra-property",
-        "extra-envelope",
-        "bad-recursion",
-    ] {
-        match client
+    for mode in common::RAW_MODES {
+        let body = match (
+            mode,
+            client
+                .check(CheckParams::new(mode.into()))
+                .await
+                .unwrap_err(),
+        ) {
+            ("raw", CallError::Application(CheckError::CodeNeg32001(body))) => {
+                serde_json::to_value(body).unwrap()
+            }
+            (
+                "raw-absent" | "raw-null" | "raw-value",
+                CallError::Application(CheckError::CodeNeg32002(body)),
+            ) => serde_json::to_value(body).unwrap(),
+            (
+                "raw-string" | "raw-number",
+                CallError::Application(CheckError::CodeNeg32003(body)),
+            ) => serde_json::to_value(body).unwrap(),
+            (mode, error) => panic!("{mode}: expected typed plain JSON-RPC error, got {error:?}"),
+        };
+        assert_eq!(body["message"], common::raw_body(mode)["message"]);
+        match mode {
+            "raw" => assert_eq!(body["data"]["retryAfter"].as_f64(), Some(5.0)),
+            "raw-number" => assert_eq!(body["data"].as_f64(), Some(5.0)),
+            "raw-absent" | "raw-null" => assert!(body["data"].is_null()),
+            _ => assert_eq!(body["data"], common::raw_body(mode)["data"]),
+        }
+    }
+    for mode in common::UNHANDLED_MODES
+        .into_iter()
+        .chain(common::NONCOMPLIANT_MODES)
+    {
+        let error = client
             .check(CheckParams::new(mode.into()))
             .await
-            .unwrap_err()
-        {
-            CallError::Generic(linkrpc::client::RpcCallError::Remote(error)) => {
-                assert_eq!(error, common::remote_error(mode, 2000))
-            }
-            error => panic!("{mode}: expected original generic error, got {error:?}"),
+            .unwrap_err();
+        if mode == "extra-property" {
+            assert!(matches!(
+                error,
+                CallError::Application(CheckError::Missing(data)) if data.resource == "file"
+            ));
+        } else {
+            common::assert_generic_error(error, mode, 2000);
         }
     }
     assert!(matches!(

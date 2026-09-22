@@ -32,7 +32,7 @@ MethodSchema = {
   result?:       JsonSchema,       // omit ⇒ notification-only member
   clientStream?: JsonSchema,       // caller→provider stream payload schema (03)
   serverStream?: JsonSchema,       // provider→caller stream payload schema (03)
-  errors?:       ErrorSchema[],    // application errors; named variants MAY share a code
+  errors?:       ErrorSchema[],    // handled error codes and their response schemas
   summary?:      string,
   description?:  string,           // NORMATIVE; part of the hash
   comment?:      string,           // non-normative; stripped
@@ -40,7 +40,9 @@ MethodSchema = {
   annotations?:  MemberAnnotations
 }
 
-ErrorSchema = { type?: string, code: number, message: string, data?: JsonSchema }
+ErrorSchema =
+  | { code: number, schema: JsonSchema }
+  | { type?: string, code: number, message: string, data?: JsonSchema }
 
 MemberAnnotations = {             // every flag defaults to false; NORMATIVE
   readOnly?:   boolean,           // no observable state change; implies idempotent, reversible
@@ -57,11 +59,82 @@ Each key of `methods` MUST conform to the `member` production in chapter 01 §2.
 
 **Normative vs. non-normative schema fields.** `description` and `annotations` are part of the interface's identity (§4): changing them is a contract change. `comment`, `summary`, and `deprecated` are not part of identity. In addition, any field whose key begins with `x-` is a **specification extension** (§4.1): it is carried in the document but is non-normative and never affects identity.
 
-### 2.1 Declared application errors
+### 2.1 Code-first error handling
 
-Only request members MAY declare `errors`. Each application error code MUST be a signed
-32-bit integer outside the reserved JSON-RPC range `-32768` through `-32000`
-(inclusive) and the LinkRPC cancellation code `-32800`.
+Only request members MAY declare `errors`. Error codes MUST be signed 32-bit
+integers. Handledness is determined by the numeric code within the called method:
+
+1. If the method has no declaration for the received code, retain the original
+   error as a generic remote error.
+2. Otherwise, decode the response using the declared decoder for that code.
+3. A successfully decoded response is a typed handled error. A decoding failure
+   is a generic **noncompliant-server** failure, not an unhandled remote error.
+
+The decoder performs validation as part of decoding; implementations SHOULD NOT
+run a separate schema-validation pass over the same payload first. Compliance
+detection need not be exhaustive: native decoder semantics, such as Serde
+coalescing missing and null optional fields, are permitted. A schema declaration
+does not require a second, stricter validator alongside the decoder.
+
+Compliance failures MUST retain the original error, including whether `data` was
+absent or present, and actionable validation issues. Issue paths use JSON Pointers
+relative to the JSON-RPC error object, such as `/data/retryAfter` or
+`/data/data/resource`. This is a client-side diagnosis; it does not assign a new
+wire error code. A remote numeric code can never establish local transport origin.
+
+### 2.2 Plain JSON-RPC errors
+
+The `{ code, schema }` form describes ordinary JSON-RPC errors without a LinkRPC
+envelope. The schema describes the error **body** `{ message, data? }`, excluding
+the numeric `code` already used for dispatch. `message` is always a JSON-RPC
+string; its schema may be a general string or a more restrictive declared value.
+The body schema controls whether `data` is required, optional, or forbidden and
+whether explicit JSON `null` is allowed.
+Protocol requirements apply independently of this schema: even a permissive
+`true` schema cannot admit a non-string message or a non-JSON value. Body schemas
+may otherwise use the same supported unions and component references as other
+schema positions.
+
+For example:
+
+```json
+{
+  "code": -32001,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "message": { "type": "string" },
+      "data": {
+        "type": "object",
+        "properties": { "retryAfter": { "type": "number" } },
+        "required": ["retryAfter"],
+        "additionalProperties": false
+      }
+    },
+    "required": ["message", "data"],
+    "additionalProperties": false
+  }
+}
+```
+
+This handles `{"code":-32001,"message":"Try again later","data":{"retryAfter":5}}`.
+It requires no `type` field. A string-valued `retryAfter` is a compliance failure.
+Foreign protocol declarations MAY use documented JSON-RPC reserved codes,
+including the implementation-defined server-error range `-32099` through `-32000`.
+Declaring such a code does not change its protocol semantics.
+
+A plain declaration MUST NOT also contain the named/legacy `type`, `message`, or
+`data` schema fields, and its code MUST NOT occur in another declaration for the
+same method. Multiple payload alternatives belong in its body schema as a union,
+not in competing decoders. Consumers MUST NOT invent semantic distinctions when
+the foreign wire representation is ambiguous. Unspecified data can be described
+by an optional property with a `true` schema.
+
+### 2.3 Named and legacy application errors
+
+The `{ type?, code, message, data? }` form is shorthand for schemas of LinkRPC
+application errors. Its codes MUST be outside the reserved JSON-RPC range
+`-32768` through `-32000` (inclusive) and the LinkRPC cancellation code `-32800`.
 LinkRPC defines `1` as its default application error code; JSON-RPC itself does not
 assign a standard application error code. Authoring APIs SHOULD default to `1`
 and MAY allow an explicit code. Exported schemas MUST include the resolved code.
@@ -89,29 +162,30 @@ be present and match it. In particular, absent data and JSON `null` are distinct
 Data schemas support the same local component references and guarded recursion as
 other schema positions.
 
-Consumers recognize named errors by the declared `type`, code, data presence, and
-data schema. The wire `message` is diagnostic and MUST NOT be used to select the
-variant. The schema's `message` is the producer's default diagnostic message.
-Numeric code alone never establishes a declared variant or a local failure.
+Declarations sharing a code describe a union of possible error responses. After
+code selection, the named envelope's `type`, data presence, and data schema select
+and validate a variant. The wire `message` is diagnostic and MUST NOT be used to
+select a named variant. The schema's `message` is the producer's default diagnostic
+message. An unknown or missing tag under a handled code is a compliance failure
+unless another explicitly declared branch of that code's union accepts it.
 
 For compatibility, declarations without `type` retain the legacy representation:
 their codes MUST be unique among the method's legacy errors, their wire `message`
 MUST exactly match the declaration, and their schema describes the outer wire
-`data` directly (including presence or absence). Consumers MUST attempt named
-recognition before legacy recognition when both use the same code.
-Once a named declaration matches the wire code and envelope type, an invalid
-envelope or payload MUST remain a generic remote error; consumers MUST NOT retry
-that error against a permissive legacy declaration.
+`data` directly (including presence or absence). Named branches are attempted before
+legacy branches when both use the same code. A permissive legacy branch is an
+explicit part of that union and may accept values a named branch rejects; avoid
+such overlaps when reliable variant discrimination matters.
 
-Unknown variants, wrong codes, and malformed payloads MUST NOT be coerced into a
-named variant. Errors not recognized by either representation MUST remain generic
-remote errors, including the original wire payload.
-Protocol errors and local transport failures are not declared application errors.
+Failure of every branch for a handled code MUST yield a compliance failure.
+Consumers MUST NOT reclassify that response as an unhandled remote error.
+Local transport failures are never declared application errors.
 Typed application-error producers MUST validate their error before encoding it;
 invalid application values are local implementation failures, not valid instances
 of the declared error.
 
-The declarations, including their types, codes, messages, and normalized data schemas, are
+The declarations, including their types, codes, messages, normalized data schemas,
+and plain body schemas, are
 normative and participate in the interface hash. Declaration order is preserved.
 Clients MUST still support undeclared remote errors: the list is not a closed set of
 all possible failures of a call. In languages without checked exceptions, typed
@@ -123,6 +197,9 @@ throwing generic failures, with a separate result client returning both categori
 Rust clients may return `Result<T, CallError<E>>`, where `CallError` distinguishes
 `Application(E)` from `Generic(...)`. Generic failures retain remote, local, and
 transport provenance instead of interpreting a remote code as a local transport event.
+The generic category also includes noncompliant-server failures. The normal
+TypeScript client throws that diagnosis, rather than the original wire error;
+its result client returns the same diagnosis as a generic failure value.
 
 Adding a `type` to a legacy declaration changes both its wire representation and
 interface hash. It is a contract change, not a wire-compatible optional annotation.

@@ -6,6 +6,7 @@ import {
     type DeclaredApplicationErrorOf,
     type PublicApplicationErrorOf,
     applicationError,
+    rpcError,
     type MemberType,
     NotificationType,
     RequestType,
@@ -16,6 +17,8 @@ import { schemaToZod } from '../schema/schemaToZod';
 import type { MethodSchema, LinkRpcInterfaceSchema } from '../schema/linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
 import type { Result } from './rpcFailure';
+import type { NonCompliantServerError } from './nonCompliantServerError';
+import { validateInterfaceErrors } from '../schema/validateInterfaceErrors';
 
 /**
  * Per-call stream API handed to a request handler as its third argument.
@@ -151,7 +154,7 @@ export interface TransportRpcError {
     readonly cause: unknown;
 }
 
-export type GenericRpcError = RemoteRpcError | LocalRpcError | TransportRpcError;
+export type GenericRpcError = RemoteRpcError | LocalRpcError | TransportRpcError | NonCompliantServerError;
 export type RpcCallError<E = never> =
     | { readonly kind: 'application'; readonly error: E }
     | { readonly kind: 'generic'; readonly error: GenericRpcError };
@@ -376,9 +379,15 @@ function toMethodSchema(
         }
         if (member.applicationErrors.length > 0) {
             m.errors = member.applicationErrors.map((error: ApplicationErrorDescriptorBase) => {
+                if (error.bodySchema !== undefined) {
+                    return {
+                        code: error.code,
+                        schema: convertMemberSchema(name, `error=${error.code}`, error.bodySchema, components),
+                    };
+                }
                 const result: NonNullable<MethodSchema['errors']>[number] = {
                     code: error.code,
-                    message: error.message,
+                    message: error.message!,
                     ...(error.type === undefined ? {} : { type: error.type }),
                 };
                 if (error.dataSchema !== undefined) {
@@ -405,35 +414,6 @@ function toMethodSchema(
     if (docs.comment !== undefined) m.comment = docs.comment;
     if (docs.annotations !== undefined) m.annotations = docs.annotations;
     return m;
-}
-
-function validateInterfaceErrors(schema: LinkRpcInterfaceSchema | undefined): void {
-    if (schema === undefined) return;
-    for (const [methodName, method] of Object.entries(schema.methods)) {
-        if (method.result === undefined && method.errors !== undefined) {
-            throw new Error(`Notification "${methodName}" cannot declare application errors.`);
-        }
-        const seen = new Set<string>();
-        for (const error of method.errors ?? []) {
-            if (typeof error.message !== 'string') {
-                throw new Error(`Application error message on "${methodName}" must be a string.`);
-            }
-            if (!Number.isInteger(error.code) || error.code < -2147483648 || error.code > 2147483647) {
-                throw new Error(`Application error code ${error.code} on "${methodName}" must be a signed 32-bit integer.`);
-            }
-            if ((error.code >= -32768 && error.code <= -32000) || error.code === -32800) {
-                throw new Error(`Application error code ${error.code} on "${methodName}" is reserved by JSON-RPC or LinkRPC.`);
-            }
-            if (error.type !== undefined && (typeof error.type !== 'string' || error.type.length === 0)) {
-                throw new Error(`Application error type on "${methodName}" must be a nonempty string.`);
-            }
-            const key = error.type === undefined ? `code:${error.code}` : `type:${error.type}`;
-            if (seen.has(key)) {
-                throw new Error(`Duplicate application error ${key} on "${methodName}".`);
-            }
-            seen.add(key);
-        }
-    }
 }
 
 function convertMemberSchema(
@@ -483,14 +463,15 @@ export function defineInterface<TMembers extends MemberMap>(
  * streams use `z.any()` because no zod source is available — call-site
  * validation is therefore a no-op and the caller is responsible for
  * shape-checking inputs and outputs. Declared application-error payloads
- * are materialized and validated because recognizing a typed error must
- * never rely on its code alone.
+ * are materialized and validated after code selection. A known code whose
+ * body fails all declared branches is a noncompliant-server failure.
  *
  * Methods with no `result` descriptor become notifications; methods with
  * `clientStream` / `serverStream` get pass-through stream payload
  * schemas attached.
  */
 export function interfaceFromSchema(schema: LinkRpcInterfaceSchema): InterfaceDefinition<MemberMap> {
+    validateInterfaceErrors(schema);
     const members: MemberMap = {};
     for (const [name, method] of Object.entries(schema.methods)) {
         if (method.result === undefined) {
@@ -498,7 +479,9 @@ export function interfaceFromSchema(schema: LinkRpcInterfaceSchema): InterfaceDe
             continue;
         }
         const base = new RequestType<unknown, unknown, void>(zAny(), zAny(), zVoid())
-            .withErrors((method.errors ?? []).map((error) => error.type !== undefined
+            .withErrors((method.errors ?? []).map((error) => error.schema !== undefined
+                ? rpcError(error.code, schemaToZod(error.schema, schema.components?.schemas))
+                : error.type !== undefined
                 ? error.data === undefined
                     ? applicationError(error.type, { code: error.code, message: error.message })
                     : applicationError(error.type, {

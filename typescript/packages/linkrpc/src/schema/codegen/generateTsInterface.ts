@@ -7,6 +7,8 @@ import type {
 import type { LinkRpcJsonSchema } from '../linkRpcJsonSchema';
 import { validateBarePrefix } from '../../connection/bareInterfaceTarget';
 import { CodeWriter } from './utils/codeWriter';
+import { validateInterfaceErrors } from '../validateInterfaceErrors';
+import { componentSchemaName } from '../assertSchemaReferences';
 
 export interface GenerateInterfaceOptions {
     /** Omit imports when composing definitions inside a generated module. */
@@ -51,7 +53,7 @@ export function generateTsInterface(
     schema: LinkRpcInterfaceSchema,
     options: GenerateInterfaceOptions = {},
 ): string {
-    _validateErrors(schema.methods);
+    validateInterfaceErrors(schema);
     const linkRpcImport = options.linkRpcImport ?? '@hediet/linkrpc';
     const exportName = options.exportName ?? _deriveExportName(schema.id);
     const preserveWireSchema = options.preserveWireSchema ?? false;
@@ -64,11 +66,13 @@ export function generateTsInterface(
     const errorImport = Object.values(schema.methods).some((method) => (method.errors?.length ?? 0) > 0)
         ? 'applicationError, '
         : '';
+    const rawErrorImport = Object.values(schema.methods).some((method) =>
+        method.errors?.some((error) => error.schema !== undefined)) ? 'rpcError, ' : '';
     const definitionImport = preserveWireSchema ?
         `${errorImport}${bareTargetImport}InterfaceDefinition, notificationType, requestType, type LinkRpcInterfaceSchema` :
         `${errorImport}${bareTargetImport}defineInterface, notificationType, requestType`;
     if (!options.omitImports) {
-        w.writeLine(`import { ${definitionImport} } from "${linkRpcImport}";`);
+        w.writeLine(`import { ${rawErrorImport}${definitionImport} } from "${linkRpcImport}";`);
         w.writeLine(`import { z } from "zod";`);
         w.writeLine();
     }
@@ -299,6 +303,12 @@ function _writeMethod(
         w.append('.withErrors([').newline();
         w.indent();
         for (const error of method.errors!) {
+            if (error.schema !== undefined) {
+                w.append(`rpcError(${error.code}, `);
+                _writeSchema(w, error.schema, components, preserveWireSchema);
+                w.append('),').newline();
+                continue;
+            }
             w.append(error.type === undefined
                 ? `applicationError(${error.code}, ${JSON.stringify(error.message)}`
                 : `applicationError(${JSON.stringify(error.type)}, { code: ${error.code}, message: ${JSON.stringify(error.message)}`);
@@ -330,34 +340,6 @@ function _writeMethod(
         }
         w.dedent();
         w.append('})');
-    }
-}
-
-function _validateErrors(methods: Record<string, MethodSchema>): void {
-    for (const [name, method] of Object.entries(methods)) {
-        if (method.result === undefined && method.errors !== undefined) {
-            throw new Error(`generateInterface: notification "${name}" cannot declare errors`);
-        }
-        const seen = new Set<string>();
-        for (const error of method.errors ?? []) {
-            if (typeof error.message !== 'string') {
-                throw new Error(`generateInterface: error message on "${name}" is not a string`);
-            }
-            if (!Number.isInteger(error.code) || error.code < -2147483648 || error.code > 2147483647) {
-                throw new Error(`generateInterface: error code ${error.code} on "${name}" is not a signed i32`);
-            }
-            if ((error.code >= -32768 && error.code <= -32000) || error.code === -32800) {
-                throw new Error(`generateInterface: error code ${error.code} on "${name}" is reserved`);
-            }
-            if (error.type !== undefined && (typeof error.type !== 'string' || error.type.length === 0)) {
-                throw new Error(`generateInterface: error type on "${name}" must be a nonempty string`);
-            }
-            const key = error.type === undefined ? `code:${error.code}` : `type:${error.type}`;
-            if (seen.has(key)) {
-                throw new Error(`generateInterface: duplicate error ${key} on "${name}"`);
-            }
-            seen.add(key);
-        }
     }
 }
 
@@ -902,11 +884,7 @@ function _jsonLiteral(value: JsonValue): string {
 }
 
 function _parseRef(ref: string): string {
-    const prefix = '#/components/schemas/';
-    if (!ref.startsWith(prefix)) {
-        throw new Error(`generateInterface: unsupported $ref "${ref}"`);
-    }
-    return ref.slice(prefix.length);
+    return componentSchemaName(ref);
 }
 
 function _toComponentVar(name: string): string {

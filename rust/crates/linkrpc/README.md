@@ -72,9 +72,22 @@ trait Lookup {
 The server trait may return either `LookupError` directly or
 `CallError<LookupError>` when it also needs to forward a raw remote error. The client returns
 `Result<String, CallError<LookupError>>`. `CallError::Application` is produced
-only when code, declared type, data presence, and payload schema all match;
-the message is descriptive, not a discriminator. Otherwise
-`CallError::Generic(RpcCallError::Remote(error))` retains the original error.
+only when the numeric code is declared and its decoder succeeds.
+For named errors, the message is descriptive, not a discriminator. Unknown codes
+produce `CallError::Generic(RpcCallError::Remote(error))`. A known code with an
+body that the decoder rejects produces
+`Generic(RpcCallError::NonCompliantServer { original, issues })`.
+Both this variant and `ApplicationErrorDecodeError::Invalid` retain the original
+as `Box<JsonRpcError>` to keep the error enums compact. Pattern matching still
+exposes `original` and `issues` directly; use `original.as_ref()` to borrow the
+wire error or `*original` to recover ownership. The original error, including
+absent versus null data, is retained. Each
+`ValidationIssue { path, message }` uses a JSON Pointer relative to the wire
+error object, such as `/data/type`, `/data/data/resource`, or `/data/resource`.
+Decoding runs once per candidate, without a separate JSON Schema validation pass.
+Serde is authoritative, including its normal treatment of missing and null
+`Option<T>` fields and unknown struct fields. Compliance detection is limited
+to what the decoder rejects; it does not enforce stricter schema semantics.
 `Generic(RpcCallError::Local(error))` reports local serialization/decoding failures,
 while `Generic(RpcCallError::Transport(error))` reports connection failures without inferring their
 origin from a peer-controlled error code.
@@ -85,8 +98,9 @@ use named envelopes. The reserved `-32768..=-32000` range and LinkRPC cancellati
 code `-32800`, duplicate names within a method, and errors on notifications are
 rejected. Names must be nonempty. Named variants may share a code, including
 with a legacy unnamed declaration; named recognition is attempted first.
-A matching code/type owns validation: malformed named envelopes or payloads
-remain generic rather than falling back to a permissive legacy declaration.
+All declarations for a code form an explicit union: named branches are tried
+before legacy branches, and any valid branch succeeds. If none match, the
+result is a server compliance error, never an unhandled remote error.
 
 The wire shape is `{ "code": 1, "message": "Not found", "data": {
 "type": "NotFound", "data": { "resource": "widget" } } }`. Unit variants omit
@@ -100,6 +114,59 @@ enum itself need not derive serde traits.
 resolved numeric value, and `data` describes the inner payload. Imported
 schemas without `type` retain legacy raw-data encoding and code/message
 validation; generated legacy variants remain `Code1001` or `CodeMinus7`.
+
+### Raw JSON-RPC errors
+
+Use a raw variant for a foreign JSON-RPC error without a tagged envelope:
+
+```rust
+#[derive(linkrpc::ApplicationError)]
+enum ForeignError {
+    #[rpc_error(code = -32001, raw)]
+    Busy { message: String, data: BusyData },
+    #[rpc_error(code = -32002, raw)]
+    Retry {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+    },
+}
+```
+
+Raw variants require an explicit code and a body with a string `message`;
+they cannot specify a literal `message` or `name` attribute. Named fields
+(`message` and optional `data`) and a single serde/JsonSchema body struct are
+supported; unit variants are rejected. Reserved foreign server codes are
+allowed for raw bindings and imported legacy descriptors. A raw code cannot
+be shared with any other variant. Named application errors retain the reserved-code guard.
+
+The raw wire error is `{ "code": -32001, "message": "...", "data": ... }`.
+Its canonical descriptor is `{ "code": -32001, "schema": BODY_SCHEMA }`, with
+no `message`, `type`, or `data` siblings. `BODY_SCHEMA` is a general supported
+JSON Schema applied to the body, excluding the code: it may be `true`, `false`,
+a union, a reference, or a broad object schema. It is an additional constraint,
+not a static proof of the JSON-RPC envelope shape. Actual raw bodies must still
+contain a string `message`, optional JSON `data`, and no other fields.
+The serializer enforces that protocol shape even for a permissive schema;
+incoming `JsonRpcError` values already have typed protocol fields. In Rust,
+`ErrorSchema.schema: Option<JsonValue>` selects that representation; existing
+named and legacy descriptors use `schema: None`.
+
+For authored named-field raw variants, `Option<T>` without a skip attribute
+means required nullable data; `skip_serializing_if = "Option::is_none"` makes
+the field optional with schema `T`. To represent optional **and** nullable data,
+use `Option<Option<T>>` with a presence-preserving serde deserializer and skip
+only the outer `None` if the application needs to distinguish these values.
+Body newtypes use their declared `JsonSchema`. When both null and absence are
+legal, ordinary serde `Option<T>` coalescing is allowed, including in generated
+raw bodies. Validation runs before deserialization, and compliance errors always
+retain the exact original wire data presence.
+
+`ApplicationError::try_from_rpc_error_detailed` returns
+`ApplicationErrorDecodeError::Unhandled(original)` or
+`ApplicationErrorDecodeError::Invalid { original, issues }`. Its default
+implementation preserves source compatibility for existing manual trait
+implementers. The original `try_from_rpc_error` method remains available.
 | `pizza_service::interface()` / `::ID` | the interface descriptor and its content hash |
 
 ## Why content-hashed interfaces?
@@ -437,8 +504,7 @@ individual arguments on the generated trait, client, and provider:
 ```rust,ignore
 async fn evaluate(
     expression: String,
-    #[serde(rename = "returnByValue")]
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "returnByValue", skip_serializing_if = "Option::is_none")]
     return_by_value: Option<bool>,
 ) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
 ```
@@ -457,6 +523,8 @@ rejecting null requires the same custom deserializer an explicit struct would
 use. There are no separate `optional` or `nonNull` parameter semantics. Codegen
 uses the same Serde attribute emitter for params-struct fields and inline
 arguments, preserving their wire behavior.
+Generated fields combine their Serde settings into one attribute and omit
+redundant `default` on ordinary `Option<T>` fields.
 
 Imported field names are literal unless renamed; Rust-authored interfaces keep
 their default camelCase naming. The embedded schema identity is unchanged.

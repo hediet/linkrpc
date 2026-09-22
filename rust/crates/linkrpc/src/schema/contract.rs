@@ -106,6 +106,7 @@ impl LinkRpcContract {
                 fragments.extend(method.server_stream.iter().cloned());
                 for error in method.errors.as_deref().unwrap_or_default() {
                     fragments.extend(error.data.iter().cloned());
+                    fragments.extend(error.schema.iter().cloned());
                 }
             }
             if let Some(components) = schema.components.as_ref().and_then(|c| c.schemas.as_ref()) {

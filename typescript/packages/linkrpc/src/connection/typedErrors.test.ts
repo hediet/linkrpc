@@ -141,7 +141,7 @@ describe('typed application errors', () => {
         pair.close();
     });
 
-    it('does not promote unknown, wrong-message, or malformed errors', async () => {
+    it('keeps unknown codes remote and reports malformed declared codes as noncompliant', async () => {
         const peer = (error: RpcError): IRequestSender => ({
             sendRequest: async () => { throw error; },
             sendNotification: async () => {},
@@ -157,13 +157,6 @@ describe('typed application errors', () => {
         for (const error of [
             new RpcError('Different', 404, undefined, 'remote', false),
             new RpcError('Invalid state', 409, { expected: 1, actual: null }, 'remote', true),
-            new RpcError(
-                'Invalid state',
-                409,
-                { expected: 'new', actual: null, extra: true },
-                'remote',
-                true,
-            ),
             new RpcError('Not found', 404, null, 'remote', true),
             new RpcError('Other', 777, { preserved: true }, 'remote', true),
         ]) {
@@ -171,34 +164,46 @@ describe('typed application errors', () => {
                 .get(typedErrorsInterface).read({ id: 'x' }).result();
             expect(result).toMatchObject({
                 ok: false,
-                error: { kind: 'remote', code: error.code, message: error.message },
+                error: error.code === 777
+                    ? { kind: 'remote', code: error.code, message: error.message }
+                    : { kind: 'nonCompliantServer', original: {
+                        code: error.code, message: error.message,
+                        ...(error.hasData ? { data: error.data } : {}),
+                    } },
             });
         }
+        const extra = new RpcError('Invalid state', 409, { expected: 'new', actual: null, extra: true }, 'remote');
+        expect(await new LinkRpcConnection(peer(extra)).get(typedErrorsInterface).read({ id: 'x' }).result())
+            .toEqual({
+                ok: false,
+                error: { kind: 'application', code: 409, message: 'Invalid state',
+                    data: { expected: 'new', actual: null } },
+            });
     });
 
-    it('recognizes a later closed union branch without stripping its data', async () => {
+    it('uses the first accepting union branch and its stripped output', async () => {
         const failure = applicationError(412, 'Union', z.union([
             z.object({ a: z.string() }),
             z.object({ a: z.string(), b: z.string() }),
         ]));
         const definition = defineInterface({ id: 'test.union-errors' }, {
-            read: requestType(z.object({ malformed: z.boolean() }), z.string()).withErrors([failure]),
+            read: requestType(z.object({ extra: z.boolean() }), z.string()).withErrors([failure]),
         });
         const pair = makePair();
         pair.server.register(definition, {
-            read: ({ malformed }) => {
-                const data = malformed ? { a: 'a', b: 'b', extra: true } : { a: 'a', b: 'b' };
+            read: ({ extra }) => {
+                const data = extra ? { a: 'a', b: 'b', extra: true } : { a: 'a', b: 'b' };
                 return failure.create(data);
             },
         });
         const client = pair.client.get(definition);
-        expect(await client.read({ malformed: false }).result()).toEqual({
+        expect(await client.read({ extra: false }).result()).toEqual({
             ok: false,
-            error: { kind: 'application', code: 412, message: 'Union', data: { a: 'a', b: 'b' } },
+            error: { kind: 'application', code: 412, message: 'Union', data: { a: 'a' } },
         });
-        expect(await client.read({ malformed: true }).result()).toMatchObject({
+        expect(await client.read({ extra: true }).result()).toEqual({
             ok: false,
-            error: { kind: 'remote', code: -32603 },
+            error: { kind: 'application', code: 412, message: 'Union', data: { a: 'a' } },
         });
         pair.close();
     });

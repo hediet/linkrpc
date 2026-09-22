@@ -218,6 +218,8 @@ export class RpcError extends Error {
         hasData = data !== undefined,
     ) {
         super(message);
+        // Preserve invalid wire messages for schema diagnostics instead of Error's string coercion.
+        this.message = message;
         this.name = 'RpcError';
         this.hasData = hasData;
         if (hasData) this.data = data;

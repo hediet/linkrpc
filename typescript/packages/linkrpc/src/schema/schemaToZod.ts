@@ -4,6 +4,7 @@ import {
     componentSchemaName,
 } from "./assertSchemaReferences";
 import type { LinkRpcJsonSchema } from "./linkRpcJsonSchema";
+import { schemaSources } from "./schemaSource";
 
 export interface SchemaToZodContext {
     readonly toZod: (schema: LinkRpcJsonSchema) => z.ZodType<unknown>;
@@ -97,6 +98,13 @@ export function createSchemaToZod(
                     } else {
                         base = object.catchall(compile(schema.additionalProperties));
                     }
+                    base = base.superRefine((value, context) => {
+                        for (const name of required) {
+                            if (typeof value === 'object' && value !== null && !Object.hasOwn(value, name)) {
+                                context.addIssue({ code: 'custom', path: [name], message: 'Required property is missing' });
+                            }
+                        }
+                    });
                     break;
                 }
             }
@@ -106,7 +114,9 @@ export function createSchemaToZod(
     return {
         toZod(schema): z.ZodType<unknown> {
             assertSchemaReferences([schema], components);
-            return compile(schema);
+            const result = compile(schema);
+            schemaSources.set(result, { schema, components });
+            return result;
         },
     };
 }

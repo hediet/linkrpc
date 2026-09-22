@@ -103,4 +103,6 @@ A node MUST use the listed code for the listed condition. Application interfaces
 LinkRPC uses `1` (`applicationError`) as the default code for declared application
 errors. This is a LinkRPC convention, not a standard JSON-RPC error code. Named
 variants share this code and are distinguished by a tagged `error.data` envelope;
-interfaces MAY override the numeric code for individual variants (chapter 04 §2.1).
+interfaces MAY override the numeric code for individual variants (chapter 04 §2.3).
+Bindings for foreign JSON-RPC errors can instead declare a schema for an unwrapped
+error body, including documented server-error codes (chapter 04 §2.2).

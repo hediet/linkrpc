@@ -10,6 +10,8 @@ import type {
     EnumSchema,
     RefSchema,
 } from "./linkRpcJsonSchema";
+import { jsonPointerSegment, type JsonSchemaValidationIssue } from './validationIssue';
+import { componentSchemaName } from './assertSchemaReferences';
 
 /**
  * Structural subtype check: returns `true` iff every JSON value matching
@@ -34,6 +36,14 @@ export interface Components {
 /** Match one JSON value against the structural LinkRPC subset without transforming it. */
 export function matchesJsonSchema(value: JsonValue, schema: LinkRpcJsonSchema, components: Components = {}): boolean {
     return _matches(value, schema, components, new Set());
+}
+
+export function validateJsonSchema(
+    value: JsonValue, schema: LinkRpcJsonSchema, components: Components = {},
+): readonly JsonSchemaValidationIssue[] {
+    const issues: JsonSchemaValidationIssue[] = [];
+    _matches(value, schema, components, new Set(), issues);
+    return issues;
 }
 
 function _check(sub: LinkRpcJsonSchema, sup: LinkRpcJsonSchema, c: Components, seen: Set<string>): boolean {
@@ -230,30 +240,53 @@ function _matches(
     sup: LinkRpcJsonSchema,
     c: Components,
     seen: Set<string>,
+    issues?: JsonSchemaValidationIssue[],
+    path = '',
 ): boolean {
+    const mismatch = (message: string): false => {
+        issues?.push({ path, message });
+        return false;
+    };
     if (sup === true) return true;
-    if (sup === false) return false;
+    if (sup === false) return mismatch('No value is allowed');
     if (_isRef(sup)) {
-        if (seen.has(sup.$ref)) return false;
+        if (seen.has(sup.$ref)) return mismatch(`Unguarded recursive reference ${sup.$ref}`);
         const r = _resolveRef(sup, c);
-        return r ? _matches(v, r, c, new Set(seen).add(sup.$ref)) : false;
+        return r === undefined ? mismatch(`Unresolved reference ${sup.$ref}`)
+            : _matches(v, r, c, new Set(seen).add(sup.$ref), issues, path);
     }
-    if (_isUnion(sup)) return _branches(sup).some((b) => _matches(v, b, c, seen));
-    if (_isConst(sup)) return _jsonEq(v, sup.const);
-    if (_isEnum(sup)) return sup.enum.some((e) => _jsonEq(v, e));
+    const rawType: unknown = (sup as { type?: unknown }).type;
+    if (Array.isArray(rawType)) {
+        return _matches(v, { anyOf: rawType.map((type) => ({ ...sup, type }) as LinkRpcJsonSchema) },
+            c, seen, issues, path);
+    }
+    if (_isUnion(sup)) {
+        const failures: JsonSchemaValidationIssue[] | undefined = issues === undefined ? undefined : [];
+        if (_branches(sup).some((branch) => _matches(v, branch, c, seen, failures, path))) return true;
+        if (failures?.length) issues?.push(...failures);
+        else mismatch('No union branch accepts this value');
+        return false;
+    }
+    if (_isConst(sup)) return _jsonEq(v, sup.const) || mismatch(`Expected ${JSON.stringify(sup.const)}`);
+    if (_isEnum(sup)) return sup.enum.some((e) => _jsonEq(v, e))
+        || mismatch(`Expected one of ${JSON.stringify(sup.enum)}`);
 
     const t = (sup as { type?: string }).type;
     switch (t) {
-        case "null": return v === null;
-        case "boolean": return typeof v === "boolean";
-        case "number": return typeof v === "number";
-        case "integer": return typeof v === "number" && Number.isInteger(v);
-        case "string": return typeof v === "string";
-        case "array": return Array.isArray(v) && _matchesArray(v, sup as ArrayLike, c);
+        case "null": return v === null || mismatch('Expected null');
+        case "boolean": return typeof v === "boolean" || mismatch('Expected boolean');
+        case "number": return typeof v === "number" || mismatch('Expected number');
+        case "integer": return (typeof v === "number" && Number.isInteger(v)) || mismatch('Expected integer');
+        case "string": return typeof v === "string" || mismatch('Expected string');
+        case "array": return Array.isArray(v)
+            ? _matchesArray(v, sup as ArrayLike, c, issues, path) : mismatch('Expected array');
         case "object":
             return v !== null && typeof v === "object" && !Array.isArray(v)
-                && _matchesObject(v as Record<string, JsonValue>, sup as ObjectSchema, c);
-        default: return false;
+                ? _matchesObject(v as Record<string, JsonValue>, sup as ObjectSchema, c, issues, path)
+                : mismatch('Expected object');
+        default:
+            return Object.keys(sup).every((key) => key === 'title' || key === 'description' || key.startsWith('x-'))
+                || mismatch('Unsupported schema shape');
     }
 }
 
@@ -261,34 +294,43 @@ function _matchesArray(
     v: JsonValue[],
     sup: ArrayLike,
     c: Components,
+    issues?: JsonSchemaValidationIssue[],
+    path = '',
 ): boolean {
     const prefix = (sup as TupleSchema).prefixItems ?? [];
     const rest = _restOf(sup);
-    if (rest === false && v.length !== prefix.length) {
-        if (v.length > prefix.length) return false;
+    if (v.length < prefix.length || (rest === false && v.length > prefix.length)) {
+        issues?.push({ path, message: rest === false
+            ? `Expected ${prefix.length} items` : `Expected at least ${prefix.length} items` });
+        return false;
     }
+    let valid = true;
     for (let i = 0; i < v.length; i++) {
         const s = prefix[i] ?? (rest === false ? false : rest);
-        if (s === false) return false;
-        if (!_matches(v[i], s, c, new Set())) return false;
+        if (!_matches(v[i], s, c, new Set(), issues, `${path}/${i}`)) valid = false;
     }
-    return true;
+    return valid;
 }
 
 function _matchesObject(
     v: Record<string, JsonValue>,
     sup: ObjectSchema,
     c: Components,
+    issues?: JsonSchemaValidationIssue[],
+    path = '',
 ): boolean {
+    let valid = true;
     for (const k of sup.required ?? []) {
-        if (!Object.hasOwn(v, k)) return false;
+        if (!Object.hasOwn(v, k)) {
+            issues?.push({ path: path + jsonPointerSegment(k), message: 'Required property is missing' });
+            valid = false;
+        }
     }
     for (const [k, val] of Object.entries(v)) {
         const s = Object.hasOwn(sup.properties, k) ? sup.properties[k] : sup.additionalProperties;
-        if (s === false) return false;
-        if (!_matches(val, s, c, new Set())) return false;
+        if (!_matches(val, s, c, new Set(), issues, path + jsonPointerSegment(k))) valid = false;
     }
-    return true;
+    return valid;
 }
 
 // ---- bottom check ----
@@ -332,7 +374,7 @@ function _isEnum(s: LinkRpcJsonSchema): s is EnumSchema {
 function _resolveRef(r: RefSchema, c: Components): LinkRpcJsonSchema | undefined {
     const prefix = "#/components/schemas/";
     if (!r.$ref.startsWith(prefix)) return undefined;
-    const name = r.$ref.slice(prefix.length);
+    const name = componentSchemaName(r.$ref);
     return c.schemas?.[name];
 }
 

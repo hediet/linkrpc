@@ -6,6 +6,28 @@ import { computeInterfaceHash, EXTENSION_PREFIX } from "./hash";
 import type { LinkRpcInterfaceSchema } from "./linkRpcInterfaceSchema";
 
 describe("computeInterfaceHash", () => {
+    it("normalizes and hashes raw error body schemas without changing the legacy projection", () => {
+        const data = { type: "number" as const, minimum: 0 };
+        const source: LinkRpcInterfaceSchema = {
+            id: "test.raw-hash", hash: "", methods: { read: { params: true, result: true, errors: [{
+                code: -32001, schema: { type: "object", additionalProperties: false, properties: {
+                    message: { type: "string" }, data,
+                }, required: ["message", "data"] },
+            }] } },
+        };
+        const normalized: LinkRpcInterfaceSchema = {
+            ...source, methods: { read: { params: true, result: true, errors: [{
+                code: -32001, schema: { type: "object", additionalProperties: false,
+                    properties: { message: { type: "string" }, data: { type: "number" } },
+                    required: ["data", "message"] },
+            }] } },
+        };
+        expect(computeInterfaceHash(source)).toBe(computeInterfaceHash(normalized));
+        const changed = structuredClone(normalized);
+        changed.methods.read.errors = [{ code: -32001, schema: true }];
+        expect(computeInterfaceHash(source)).not.toBe(computeInterfaceHash(changed));
+    });
+
     it("normalizes inner error payload schemas and retains named error identity", () => {
         const schema: LinkRpcInterfaceSchema = {
             id: "test.error-hash", hash: "", methods: {

@@ -10,17 +10,50 @@ use crate::protocol::jsonrpc::JsonRpcError;
 use crate::schema::interface_schema::{component_ref, component_ref_name};
 use crate::schema::{Components, ErrorSchema};
 
+/// A validation failure, located by a JSON Pointer relative to the wire error object.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ValidationIssue {
+    pub path: String,
+    pub message: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ApplicationErrorDecodeError {
+    Unhandled(JsonRpcError),
+    Invalid {
+        original: Box<JsonRpcError>,
+        issues: Vec<ValidationIssue>,
+    },
+}
+
 /// LinkRPC's default application-error code (not a JSON-RPC standard code).
 pub const DEFAULT_APPLICATION_ERROR_CODE: i32 = 1;
 
 /// A closed set of application errors declared by an RPC method.
 ///
-/// Named errors match code, type, data presence, and data shape, not message.
-/// Legacy unnamed errors additionally match the declared message. Failed recognition
-/// returns the original wire error unchanged.
+/// Codes select the handled set. The decoder decides which values are accepted;
+/// a decoding failure for a handled code is never an unhandled error.
 pub trait ApplicationError: Sized {
     fn into_rpc_error(self) -> JsonRpcError;
     fn try_from_rpc_error(error: JsonRpcError) -> Result<Self, JsonRpcError>;
+    fn try_from_rpc_error_detailed(
+        error: JsonRpcError,
+    ) -> Result<Self, ApplicationErrorDecodeError> {
+        let schemas = Self::error_schemas();
+        if !schemas
+            .iter()
+            .any(|schema| i64::from(schema.code) == error.code)
+        {
+            return Err(ApplicationErrorDecodeError::Unhandled(error));
+        }
+        Self::try_from_rpc_error(error).map_err(|original| ApplicationErrorDecodeError::Invalid {
+            original: Box::new(original),
+            issues: vec![ValidationIssue {
+                path: String::new(),
+                message: "declared error could not be decoded by its Rust binding".into(),
+            }],
+        })
+    }
     fn error_schemas() -> Vec<ErrorSchema>;
     fn error_components() -> Components {
         Components { schemas: None }
@@ -30,9 +63,9 @@ pub trait ApplicationError: Sized {
 /// Failure from a typed RPC call.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallError<E> {
-    /// A declared, fully validated application error.
+    /// A declared, successfully decoded application error.
     Application(E),
-    /// An undeclared remote error, local codec failure, or transport failure.
+    /// An undeclared or invalid remote error, local codec failure, or transport failure.
     Generic(RpcCallError),
 }
 
@@ -41,9 +74,14 @@ impl<E> CallError<E> {
     where
         E: ApplicationError,
     {
-        match E::try_from_rpc_error(error) {
+        match E::try_from_rpc_error_detailed(error) {
             Ok(error) => Self::Application(error),
-            Err(original) => Self::Generic(RpcCallError::Remote(original)),
+            Err(ApplicationErrorDecodeError::Unhandled(original)) => {
+                Self::Generic(RpcCallError::Remote(original))
+            }
+            Err(ApplicationErrorDecodeError::Invalid { original, issues }) => {
+                Self::Generic(RpcCallError::NonCompliantServer { original, issues })
+            }
         }
     }
 
@@ -64,6 +102,7 @@ impl<E> CallError<E> {
         match self {
             Self::Application(error) => error.into_rpc_error(),
             Self::Generic(RpcCallError::Remote(error) | RpcCallError::Local(error)) => error,
+            Self::Generic(RpcCallError::NonCompliantServer { original, .. }) => *original,
             Self::Generic(RpcCallError::Transport(error)) => JsonRpcError::new(
                 crate::protocol::jsonrpc::error_codes::INTERNAL_ERROR,
                 error.to_string(),
@@ -82,6 +121,13 @@ impl<E: fmt::Display> fmt::Display for CallError<E> {
             Self::Generic(RpcCallError::Local(error)) => {
                 write!(f, "local error {}: {}", error.code, error.message)
             }
+            Self::Generic(RpcCallError::NonCompliantServer { original, issues }) => {
+                write!(
+                    f,
+                    "non-compliant server error {}: {} ({issues:?})",
+                    original.code, original.message
+                )
+            }
             Self::Generic(RpcCallError::Transport(error)) => error.fmt(f),
         }
     }
@@ -98,6 +144,29 @@ pub fn encode_application_error(
     schemas: &[ErrorSchema],
     components: &Components,
 ) -> JsonRpcError {
+    if let Some(schema) = schemas
+        .iter()
+        .find(|s| s.code == code && s.schema.is_some())
+        .and_then(|s| s.schema.as_ref())
+    {
+        let body = tagged.get("data").cloned().unwrap_or(Value::Null);
+        let Some(message) = body.get("message").and_then(Value::as_str) else {
+            return JsonRpcError::new(-32603, "raw error body requires a string message");
+        };
+        let error = JsonRpcError {
+            code: i64::from(code),
+            message: message.to_owned(),
+            data: body.get("data").cloned(),
+        };
+        if body
+            .as_object()
+            .is_some_and(|body| body.keys().all(|key| key == "message" || key == "data"))
+            && validate_json_schema(&body, schema, Some(components))
+        {
+            return error;
+        }
+        return JsonRpcError::new(-32603, "raw error body does not match its declared schema");
+    }
     let name = tagged.get("type").and_then(Value::as_str);
     let payload = tagged.get("data");
     let named = schemas
@@ -107,9 +176,9 @@ pub fn encode_application_error(
         if named.is_some() {
             return None;
         }
-        schemas
-            .iter()
-            .find(|s| s.r#type.is_none() && s.code == code && s.message == message)
+        schemas.iter().find(|s| {
+            s.schema.is_none() && s.r#type.is_none() && s.code == code && s.message == message
+        })
     });
     let Some(declaration) = declaration.filter(|s| valid_payload(payload, s, components)) else {
         return JsonRpcError::new(
@@ -133,66 +202,167 @@ pub fn decode_application_error(
     error: &JsonRpcError,
     bindings: &[(&str, i32, &str, bool)],
     schemas: &[ErrorSchema],
-    components: &Components,
+    _components: &Components,
 ) -> Option<Value> {
-    let wire_name = error
-        .data
-        .as_ref()
-        .and_then(|data| data.get("type"))
-        .and_then(Value::as_str);
-    let named = schemas.iter().find(|schema| {
-        i64::from(schema.code) == error.code
-            && schema
-                .r#type
-                .as_deref()
-                .is_some_and(|name| Some(name) == wire_name)
-    });
-    // A matching named declaration owns validation, even when malformed.
-    // Do not let a permissive legacy payload bypass its envelope or payload checks.
-    for declaration in named.into_iter().chain(
-        schemas
-            .iter()
-            .filter(|schema| named.is_none() && schema.r#type.is_none()),
-    ) {
-        if i64::from(declaration.code) != error.code {
+    decode_application_error_candidates(error, bindings, schemas)
+        .ok()?
+        .into_iter()
+        .next()
+}
+
+#[doc(hidden)]
+pub fn decode_application_error_candidates(
+    error: &JsonRpcError,
+    bindings: &[(&str, i32, &str, bool)],
+    schemas: &[ErrorSchema],
+) -> Result<Vec<Value>, Vec<ValidationIssue>> {
+    let mut candidates = Vec::new();
+    let mut issues = Vec::new();
+    for declaration in schemas
+        .iter()
+        .filter(|s| s.r#type.is_some())
+        .chain(schemas.iter().filter(|s| s.r#type.is_none()))
+        .filter(|s| i64::from(s.code) == error.code)
+    {
+        let branch_issues = validate_error_envelope(error, declaration);
+        if !branch_issues.is_empty() {
+            issues.extend(branch_issues);
             continue;
         }
-        let (name, payload) = if let Some(name) = &declaration.r#type {
-            let Some(envelope) = error.data.as_ref().and_then(Value::as_object) else {
-                continue;
-            };
-            if envelope.get("type").and_then(Value::as_str) != Some(name)
-                || envelope.keys().any(|k| k != "type" && k != "data")
-            {
-                continue;
-            }
-            (name.as_str(), envelope.get("data"))
+        let raw_body = error_body(error);
+        let (binding, payload) = if declaration.schema.is_some() {
+            (
+                bindings
+                    .iter()
+                    .find(|(_, code, _, _)| *code == declaration.code),
+                Some(&raw_body),
+            )
+        } else if let Some(name) = &declaration.r#type {
+            (
+                bindings
+                    .iter()
+                    .find(|(n, code, _, _)| *n == name && *code == declaration.code),
+                error.data.as_ref().and_then(|v| v.get("data")),
+            )
         } else {
-            if error.message != declaration.message {
-                continue;
-            }
-            let Some(binding) = bindings.iter().find(|(name, code, message, _)| {
-                *code == declaration.code
-                    && *message == declaration.message
-                    && !schemas.iter().any(|s| s.r#type.as_deref() == Some(*name))
-            }) else {
-                continue;
-            };
-            (binding.0, error.data.as_ref())
+            (
+                bindings.iter().find(|(name, code, message, _)| {
+                    *code == declaration.code
+                        && *message == declaration.message
+                        && !schemas.iter().any(|s| s.r#type.as_deref() == Some(*name))
+                }),
+                error.data.as_ref(),
+            )
         };
-        if !bindings.iter().any(|(n, code, _, has_payload)| {
-            *n == name && *code == declaration.code && *has_payload == payload.is_some()
-        }) || !valid_payload(payload, declaration, components)
-        {
+        let Some((name, _, _, has_payload)) =
+            binding.filter(|(_, _, _, has_payload)| *has_payload == payload.is_some())
+        else {
+            issues.push(ValidationIssue {
+                path: String::new(),
+                message: "no Rust binding matches the declared error body".into(),
+            });
             continue;
-        }
+        };
         let mut tagged = serde_json::json!({ "type": name });
-        if let Some(payload) = payload {
-            tagged["data"] = payload.clone();
+        if *has_payload {
+            tagged["data"] = payload.cloned().expect("payload presence checked");
         }
-        return Some(tagged);
+        candidates.push(tagged);
     }
-    None
+    if candidates.is_empty() {
+        Err(issues)
+    } else {
+        Ok(candidates)
+    }
+}
+
+#[doc(hidden)]
+pub fn deserialize_application_error<T: serde::de::DeserializeOwned>(
+    tagged: Value,
+    payload_path: &str,
+) -> Result<T, ValidationIssue> {
+    serde_path_to_error::deserialize(tagged).map_err(|error| {
+        let mut path = String::new();
+        for segment in error.path() {
+            match segment {
+                serde_path_to_error::Segment::Seq { index } => {
+                    path = pointer_child(&path, &index.to_string());
+                }
+                serde_path_to_error::Segment::Map { key } => {
+                    path = pointer_child(&path, key);
+                }
+                serde_path_to_error::Segment::Enum { .. }
+                | serde_path_to_error::Segment::Unknown => {}
+            }
+        }
+        ValidationIssue {
+            path: format!(
+                "{payload_path}{}",
+                path.strip_prefix("/data").unwrap_or(&path)
+            ),
+            message: error.inner().to_string(),
+        }
+    })
+}
+
+fn error_body(error: &JsonRpcError) -> Value {
+    let mut body = serde_json::json!({ "message": error.message });
+    if let Some(data) = &error.data {
+        body["data"] = data.clone();
+    }
+    body
+}
+
+fn validate_error_envelope(error: &JsonRpcError, schema: &ErrorSchema) -> Vec<ValidationIssue> {
+    if schema.schema.is_some() {
+        return Vec::new();
+    }
+    let mut issues = Vec::new();
+    let (payload, path) = if let Some(name) = &schema.r#type {
+        let Some(envelope) = error.data.as_ref().and_then(Value::as_object) else {
+            return vec![ValidationIssue {
+                path: "/data".into(),
+                message: "expected a tagged error object".into(),
+            }];
+        };
+        if envelope.get("type").and_then(Value::as_str) != Some(name) {
+            issues.push(ValidationIssue {
+                path: "/data/type".into(),
+                message: format!("expected error type {name:?}"),
+            });
+        }
+        for key in envelope
+            .keys()
+            .filter(|key| *key != "type" && *key != "data")
+        {
+            issues.push(ValidationIssue {
+                path: pointer_child("/data", key),
+                message: "unexpected property".into(),
+            });
+        }
+        (envelope.get("data"), "/data/data")
+    } else {
+        if error.message != schema.message {
+            issues.push(ValidationIssue {
+                path: "/message".into(),
+                message: format!("expected message {:?}", schema.message),
+            });
+        }
+        (error.data.as_ref(), "/data")
+    };
+    match (payload, &schema.data) {
+        (None, None) => {}
+        (Some(_), Some(_)) => {}
+        (None, Some(_)) => issues.push(ValidationIssue {
+            path: path.into(),
+            message: "required property is missing".into(),
+        }),
+        (Some(_), None) => issues.push(ValidationIssue {
+            path: path.into(),
+            message: "unexpected property".into(),
+        }),
+    }
+    issues
 }
 
 fn valid_payload(payload: Option<&Value>, schema: &ErrorSchema, components: &Components) -> bool {
@@ -213,157 +383,236 @@ pub fn validate_json_schema(
     schema: &Value,
     components: Option<&Components>,
 ) -> bool {
-    validate(value, schema, components, &mut HashSet::new())
+    validate_json_schema_issues(value, schema, components).is_empty()
+}
+
+pub fn validate_json_schema_issues(
+    value: &Value,
+    schema: &Value,
+    components: Option<&Components>,
+) -> Vec<ValidationIssue> {
+    validate(value, schema, components)
+}
+
+fn pointer_child(path: &str, key: &str) -> String {
+    format!("{path}/{}", key.replace('~', "~0").replace('/', "~1"))
 }
 
 fn validate(
     value: &Value,
     schema: &Value,
     components: Option<&Components>,
-    active_refs: &mut HashSet<(usize, String)>,
-) -> bool {
-    match schema {
-        Value::Bool(valid) => *valid,
-        Value::Object(obj) => {
-            if let Some(reference) = obj.get("$ref").and_then(Value::as_str) {
-                let Some(name) = component_ref_name(reference) else {
-                    return false;
-                };
-                let Some(target) = components
-                    .and_then(|c| c.schemas.as_ref())
-                    .and_then(|schemas| schemas.get(&name))
-                else {
-                    return false;
-                };
-                let key = (value as *const Value as usize, name);
-                if !active_refs.insert(key.clone()) {
-                    return false;
-                }
-                let result = validate(value, target, components, active_refs);
-                active_refs.remove(&key);
-                return result;
-            }
-
-            if let Some(constant) = obj.get("const") {
-                if value != constant {
-                    return false;
-                }
-            }
-            if let Some(values) = obj.get("enum").and_then(Value::as_array) {
-                if !values.iter().any(|candidate| candidate == value) {
-                    return false;
-                }
-            }
-            if let Some(branches) = obj.get("allOf").and_then(Value::as_array) {
-                if !branches
-                    .iter()
-                    .all(|branch| validate(value, branch, components, active_refs))
-                {
-                    return false;
-                }
-            }
-            if let Some(branches) = obj.get("anyOf").and_then(Value::as_array) {
-                if !branches
-                    .iter()
-                    .any(|branch| validate(value, branch, components, active_refs))
-                {
-                    return false;
-                }
-            }
-            if let Some(branches) = obj.get("oneOf").and_then(Value::as_array) {
-                if !branches
-                    .iter()
-                    .any(|branch| validate(value, branch, components, active_refs))
-                {
-                    return false;
-                }
-            }
-
-            if let Some(kind) = obj.get("type") {
-                let type_matches = |kind: &str| match kind {
-                    "null" => value.is_null(),
-                    "boolean" => value.is_boolean(),
-                    "string" => value.is_string(),
-                    "number" => value.is_number(),
-                    "integer" => {
-                        value.as_i64().is_some()
-                            || value.as_u64().is_some()
-                            || value
-                                .as_f64()
-                                .is_some_and(|number| number.is_finite() && number.fract() == 0.0)
-                    }
-                    "array" => value.is_array(),
-                    "object" => value.is_object(),
-                    _ => false,
-                };
-                let valid = match kind {
-                    Value::String(kind) => type_matches(kind),
-                    Value::Array(kinds) => kinds.iter().filter_map(Value::as_str).any(type_matches),
-                    _ => false,
-                };
-                if !valid {
-                    return false;
-                }
-            }
-
-            if let Some(items) = value.as_array() {
-                let prefix_len = obj
-                    .get("prefixItems")
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                if let Some(prefix) = obj.get("prefixItems").and_then(Value::as_array) {
-                    if items.len() < prefix.len()
-                        || prefix
-                            .iter()
-                            .zip(items)
-                            .any(|(schema, item)| !validate(item, schema, components, active_refs))
-                    {
-                        return false;
-                    }
-                }
-                if let Some(item_schema) = obj.get("items") {
-                    if !items
-                        .iter()
-                        .skip(prefix_len)
-                        .all(|item| validate(item, item_schema, components, active_refs))
-                    {
-                        return false;
-                    }
-                }
-            }
-
-            if let Some(instance) = value.as_object() {
-                let properties = obj.get("properties").and_then(Value::as_object);
-                if let Some(required) = obj.get("required").and_then(Value::as_array) {
-                    if required
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .any(|name| !instance.contains_key(name))
-                    {
-                        return false;
-                    }
-                }
-                for (name, member) in instance {
-                    if let Some(member_schema) = properties.and_then(|p| p.get(name)) {
-                        if !validate(member, member_schema, components, active_refs) {
-                            return false;
-                        }
-                    } else {
-                        match obj.get("additionalProperties") {
-                            Some(Value::Bool(false)) => return false,
-                            Some(schema) if !validate(member, schema, components, active_refs) => {
-                                return false;
-                            }
-
-                            _ => {}
-                        }
-                    }
-                }
-            }
-            true
-        }
-        _ => false,
+) -> Vec<ValidationIssue> {
+    enum Step<'a> {
+        Check(&'a Value, &'a Value, String),
+        Merge(usize),
+        Union(usize, String, &'static str),
+        ExitRef((usize, String)),
     }
+    let mut pending = vec![Step::Check(value, schema, String::new())];
+    let mut results: Vec<Vec<ValidationIssue>> = Vec::new();
+    let mut active_refs = HashSet::new();
+    while let Some(step) = pending.pop() {
+        let (value, schema, path) = match step {
+            Step::Check(value, schema, path) => (value, schema, path),
+            Step::ExitRef(key) => {
+                active_refs.remove(&key);
+                continue;
+            }
+            Step::Merge(count) => {
+                let children = results.split_off(results.len() - count);
+                results.push(children.into_iter().flatten().collect());
+                continue;
+            }
+            Step::Union(count, path, keyword) => {
+                let children = results.split_off(results.len() - count);
+                if children.iter().any(Vec::is_empty) {
+                    results.push(Vec::new());
+                } else {
+                    let mut issues = vec![ValidationIssue {
+                        path,
+                        message: format!("value does not match any {keyword} branch"),
+                    }];
+                    issues.extend(children.into_iter().flatten());
+                    results.push(issues);
+                }
+                continue;
+            }
+        };
+        let mut issues = Vec::new();
+        let mut children = Vec::new();
+        let mut child_count = 0;
+        let issue = |message: String| ValidationIssue {
+            path: path.clone(),
+            message,
+        };
+        match schema {
+            Value::Bool(true) => {}
+            Value::Bool(false) => issues.push(issue("value is forbidden by schema".into())),
+            Value::Object(obj) => {
+                if let Some(reference) = obj.get("$ref").and_then(Value::as_str) {
+                    if let Some((name, target)) = component_ref_name(reference).and_then(|name| {
+                        components
+                            .and_then(|c| c.schemas.as_ref())
+                            .and_then(|schemas| schemas.get(&name))
+                            .map(|target| (name, target))
+                    }) {
+                        let key = (value as *const Value as usize, name);
+                        if active_refs.insert(key.clone()) {
+                            pending.push(Step::ExitRef(key));
+                            pending.push(Step::Check(value, target, path));
+                            continue;
+                        }
+                        issues.push(issue(format!(
+                            "unguarded recursive schema reference {reference:?}"
+                        )));
+                    } else {
+                        issues.push(issue(format!("unresolved schema reference {reference:?}")));
+                    }
+                    results.push(issues);
+                    continue;
+                }
+
+                if let Some(constant) = obj.get("const") {
+                    if value != constant {
+                        issues.push(issue(format!("expected constant {constant}")));
+                    }
+                }
+                if let Some(values) = obj.get("enum").and_then(Value::as_array) {
+                    if !values.iter().any(|candidate| candidate == value) {
+                        issues.push(issue("value does not match any enum member".into()));
+                    }
+                }
+                if let Some(branches) = obj.get("allOf").and_then(Value::as_array) {
+                    for branch in branches {
+                        children.push(Step::Check(value, branch, path.clone()));
+                        child_count += 1;
+                    }
+                }
+                for keyword in ["anyOf", "oneOf"] {
+                    if let Some(branches) = obj.get(keyword).and_then(Value::as_array) {
+                        children.push(Step::Union(branches.len(), path.clone(), keyword));
+                        for branch in branches {
+                            children.push(Step::Check(value, branch, path.clone()));
+                        }
+                        child_count += 1;
+                    }
+                }
+
+                if let Some(kind) = obj.get("type") {
+                    let type_matches = |kind: &str| match kind {
+                        "null" => value.is_null(),
+                        "boolean" => value.is_boolean(),
+                        "string" => value.is_string(),
+                        "number" => value.is_number(),
+                        "integer" => {
+                            value.as_i64().is_some()
+                                || value.as_u64().is_some()
+                                || value.as_f64().is_some_and(|number| {
+                                    number.is_finite() && number.fract() == 0.0
+                                })
+                        }
+                        "array" => value.is_array(),
+                        "object" => value.is_object(),
+                        _ => false,
+                    };
+                    let valid = match kind {
+                        Value::String(kind) => type_matches(kind),
+                        Value::Array(kinds) => {
+                            kinds.iter().filter_map(Value::as_str).any(type_matches)
+                        }
+                        _ => false,
+                    };
+                    if !valid {
+                        issues.push(issue(format!("expected type {kind}")));
+                        results.push(issues);
+                        continue;
+                    }
+                }
+
+                if let Some(items) = value.as_array() {
+                    let prefix_len = obj
+                        .get("prefixItems")
+                        .and_then(Value::as_array)
+                        .map_or(0, Vec::len);
+                    if let Some(prefix) = obj.get("prefixItems").and_then(Value::as_array) {
+                        if items.len() < prefix.len() {
+                            issues.push(issue(format!(
+                                "expected at least {} tuple items",
+                                prefix.len()
+                            )));
+                        }
+                        for (index, (schema, item)) in prefix.iter().zip(items).enumerate() {
+                            children.push(Step::Check(
+                                item,
+                                schema,
+                                pointer_child(&path, &index.to_string()),
+                            ));
+                            child_count += 1;
+                        }
+                    }
+                    if let Some(item_schema) = obj.get("items") {
+                        for (index, item) in items.iter().enumerate().skip(prefix_len) {
+                            children.push(Step::Check(
+                                item,
+                                item_schema,
+                                pointer_child(&path, &index.to_string()),
+                            ));
+                            child_count += 1;
+                        }
+                    }
+                }
+
+                if let Some(instance) = value.as_object() {
+                    let properties = obj.get("properties").and_then(Value::as_object);
+                    if let Some(required) = obj.get("required").and_then(Value::as_array) {
+                        for name in required
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .filter(|name| !instance.contains_key(*name))
+                        {
+                            issues.push(ValidationIssue {
+                                path: pointer_child(&path, name),
+                                message: "required property is missing".into(),
+                            });
+                        }
+                    }
+                    for (name, member) in instance {
+                        if let Some(member_schema) = properties.and_then(|p| p.get(name)) {
+                            children.push(Step::Check(
+                                member,
+                                member_schema,
+                                pointer_child(&path, name),
+                            ));
+                            child_count += 1;
+                        } else {
+                            match obj.get("additionalProperties") {
+                                Some(Value::Bool(false)) => issues.push(ValidationIssue {
+                                    path: pointer_child(&path, name),
+                                    message: "unexpected property".into(),
+                                }),
+                                Some(schema) => {
+                                    children.push(Step::Check(
+                                        member,
+                                        schema,
+                                        pointer_child(&path, name),
+                                    ));
+                                    child_count += 1;
+                                }
+
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            _ => issues.push(issue("invalid JSON schema".into())),
+        }
+        results.push(issues);
+        pending.push(Step::Merge(child_count + 1));
+        pending.extend(children);
+    }
+    results.pop().expect("root validation result")
 }
 
 /// Prefix component names and schema-position references for a method-local
@@ -383,6 +632,9 @@ pub fn scope_error_contract(scope: &str, errors: &mut [ErrorSchema], components:
     }
     for error in errors {
         if let Some(schema) = &mut error.data {
+            rewrite_schema_refs(schema, &names);
+        }
+        if let Some(schema) = &mut error.schema {
             rewrite_schema_refs(schema, &names);
         }
     }
@@ -492,6 +744,7 @@ mod tests {
     fn scoping_rewrites_only_schema_refs() {
         let mut errors = vec![ErrorSchema {
             code: 1,
+            schema: None,
             r#type: None,
             message: "x".into(),
             data: Some(json!({

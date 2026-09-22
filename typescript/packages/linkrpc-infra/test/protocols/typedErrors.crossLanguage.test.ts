@@ -48,6 +48,11 @@ beforeAll(async () => {
         ['TypeScript', tsSchema, 'generated-errors'],
     ] as const) {
         expect(schema.hash).toBe(computeInterfaceHash(schema));
+        for (const code of [-32001, -32002, -32003]) {
+            const raw = schema.methods.check.errors?.find((error) => error.code === code);
+            expect(raw).toMatchObject({ code, schema: expect.anything() });
+            expect(Object.keys(raw!).sort()).toEqual(['code', 'schema']);
+        }
         const directory = join(scratch, author.toLowerCase());
         await mkdir(directory);
         const bundle = join(directory, 'bundle.json');

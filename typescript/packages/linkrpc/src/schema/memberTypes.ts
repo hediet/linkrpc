@@ -1,11 +1,13 @@
-import { void as zVoid } from 'zod/mini';
-import { safeParse, toJSONSchema, type $ZodType } from 'zod/v4/core';
+import { object as zObject, string as zString, void as zVoid } from 'zod/mini';
+import { toJSONSchema, type $ZodType, type output } from 'zod/v4/core';
 import { normalizeJsonSchema } from './normalize';
 import type { MemberAnnotations } from './linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from './linkRpcJsonSchema';
 import { isRpcFailure, type RpcFailure } from '../connection/rpcFailure';
 import { ErrorCode } from '../protocol/jsonRpc';
-import { applicationErrorBrand } from './applicationErrorBrand';
+import { applicationErrorBrand, brandApplicationError } from './applicationErrorBrand';
+import { schemaSources } from './schemaSource';
+import { parseDeclaredErrorBody, parseErrorBody } from './errorValidation';
 
 /**
  * The schema type linkrpc accepts everywhere: the zod *core* base shared by
@@ -68,7 +70,8 @@ export interface ApplicationErrorDescriptor<
 export interface ApplicationErrorDescriptorBase {
     readonly type?: string;
     readonly code: number;
-    readonly message: string;
+    readonly message?: string;
+    readonly bodySchema?: Schema;
     readonly dataSchema?: Schema<any>;
     readonly create: (...args: any[]) => {
         readonly kind: 'application';
@@ -81,14 +84,18 @@ export interface ApplicationErrorDescriptorBase {
 }
 
 export type ApplicationErrorOf<T> =
-    T extends ApplicationErrorDescriptor<infer C, infer M, infer D, infer N>
+    T extends RpcErrorDescriptor<infer C, infer B>
+        ? CreatedRpcErrorValue<C, B>
+        : T extends ApplicationErrorDescriptor<infer C, infer M, infer D, infer N>
         ? CreatedApplicationErrorValue<C, M, D, N>
         : never;
 
 // Legacy schemas can infer `any`; they must neither declare checked errors nor erase result types.
 export type PublicApplicationErrorOf<T> =
     0 extends (1 & T) ? never :
-    T extends CreatedApplicationErrorValue<infer C, infer M, infer D, infer N>
+    T extends { readonly [rawErrorBrand]: true }
+        ? Omit<T, typeof applicationErrorBrand | typeof rawErrorBrand>
+        : T extends CreatedApplicationErrorValue<infer C, infer M, infer D, infer N>
         ? ApplicationErrorValue<C, N extends string ? string : M, D, N>
         : never;
 
@@ -98,6 +105,67 @@ export type DeclaredApplicationErrorOf<T> = 0 extends (1 & T)
 
 export type ApplicationErrorsOf<T extends readonly ApplicationErrorDescriptorBase[]> =
     ApplicationErrorOf<T[number]>;
+
+declare const rawErrorBrand: unique symbol;
+
+export type RpcErrorBody = { readonly message: string; readonly data?: unknown };
+export type RpcErrorValue<C extends number, B extends RpcErrorBody> =
+    B & { readonly kind: 'application'; readonly code: C; readonly type?: never };
+export type CreatedRpcErrorValue<C extends number, B extends RpcErrorBody> =
+    RpcErrorValue<C, B> & { readonly [applicationErrorBrand]: true; readonly [rawErrorBrand]: true };
+
+export interface RpcErrorDescriptor<C extends number = number, B extends RpcErrorBody = RpcErrorBody> {
+    readonly code: C;
+    readonly bodySchema: Schema<B>;
+    readonly type?: never;
+    readonly message?: never;
+    readonly dataSchema?: never;
+    create(body: B): CreatedRpcErrorValue<C, B>;
+    is(value: RpcFailure<unknown>): value is RpcFailure<RpcErrorValue<C, B>>;
+    is(value: { readonly kind: 'application' }): value is RpcErrorValue<C, B>;
+    is(value: unknown): value is RpcErrorValue<C, B> | RpcFailure<RpcErrorValue<C, B>>;
+}
+
+type RawBody<M extends string, D extends Schema> = { message: M }
+    & (D['_zod']['optout'] extends 'optional' ? { data?: output<D> } : { data: output<D> });
+
+/** Declare an error selected by numeric code; its schema validates the body afterwards. */
+export function rpcError<const C extends number, B>(
+    code: C, schema: Schema<B>,
+): RpcErrorDescriptor<C, unknown extends B ? RpcErrorBody : B & RpcErrorBody>;
+export function rpcError<const C extends number, M extends string = string, D extends Schema = Schema>(
+    code: C, shape: { message?: Schema<M>; data: D },
+): RpcErrorDescriptor<C, RawBody<M, D>>;
+export function rpcError<const C extends number, M extends string = string>(
+    code: C, shape: { message?: Schema<M> },
+): RpcErrorDescriptor<C, { message: M; data?: never }>;
+export function rpcError(
+    code: number, schemaOrShape: Schema | { message?: Schema<string>; data?: Schema },
+): ApplicationErrorDescriptorBase {
+    assertErrorCode(code);
+    const bodySchema = '_zod' in schemaOrShape ? schemaOrShape : zObject({
+        message: schemaOrShape.message ?? zString(),
+        ...(schemaOrShape.data === undefined ? {} : { data: schemaOrShape.data }),
+    });
+    return Object.freeze({
+        code,
+        bodySchema,
+        create(body: RpcErrorBody) {
+            return brandApplicationError({
+                kind: 'application' as const, code, message: body.message,
+                ...(Object.hasOwn(body, 'data') ? { data: body.data } : {}),
+            });
+        },
+        is(value: unknown): boolean {
+            const payload = isRpcFailure(value) ? value.error : value;
+            if (!isApplicationErrorValue(payload) || payload.code !== code || payload.type !== undefined) return false;
+            return parseErrorBody(bodySchema, {
+                message: payload.message,
+                ...(Object.hasOwn(payload, 'data') ? { data: payload.data } : {}),
+            }).success;
+        },
+    });
+}
 
 /** Declare one checked application error for use with {@link RequestType.withErrors}. */
 export function applicationError<const TType extends string, TData, const TCode extends number = typeof ErrorCode.applicationError>(
@@ -156,27 +224,24 @@ export function applicationError(
                 data,
             });
         };
-    return Object.freeze({
+    const descriptor = Object.freeze({
         type,
         code,
         message,
         ...(dataSchema === undefined ? {} : { dataSchema }),
         create,
         is(value: unknown): boolean {
-            if (!isRpcFailure(value) && !isApplicationErrorValue(value)) return false;
             const payload = isRpcFailure(value) ? value.error : value;
-            return typeof payload === 'object' && payload !== null
-                && (payload as { kind?: unknown }).kind === 'application'
-                && (payload as { code?: unknown }).code === code
-                && typeof (payload as { message?: unknown }).message === 'string'
-                && (dataSchema === undefined ? !Object.hasOwn(payload, 'data')
-                    : Object.hasOwn(payload, 'data') && safeParse(dataSchema, (payload as { data: unknown }).data).success)
-                && (type === undefined
-                    ? (payload as { type?: unknown }).type === undefined
-                        && (payload as { message?: unknown }).message === message
-                    : (payload as { type?: unknown }).type === type);
+            if (!isApplicationErrorValue(payload)) return false;
+            if (payload.kind !== 'application' || payload.code !== code || payload.type !== type) return false;
+            const data = Object.hasOwn(payload, 'data') ? { data: payload.data } : {};
+            return parseDeclaredErrorBody(descriptor, {
+                message: payload.message,
+                ...(type === undefined ? data : { data: { type, ...data } }),
+            }).success;
         },
-    }) as ApplicationErrorDescriptorBase;
+    });
+    return descriptor;
 }
 
 /** Runtime nominal check for values produced by an application-error descriptor. */
@@ -188,11 +253,15 @@ export function isApplicationErrorValue(
 }
 
 function assertApplicationErrorCode(code: number): void {
-    if (!Number.isInteger(code) || code < -2147483648 || code > 2147483647) {
-        throw new Error(`Application error code ${code} must be a signed 32-bit integer.`);
-    }
+    assertErrorCode(code);
     if ((code >= -32768 && code <= -32000) || code === -32800) {
         throw new Error(`Application error code ${code} is reserved by JSON-RPC or LinkRPC.`);
+    }
+}
+
+function assertErrorCode(code: number): void {
+    if (!Number.isInteger(code) || code < -2147483648 || code > 2147483647) {
+        throw new Error(`Application error code ${code} must be a signed 32-bit integer.`);
     }
 }
 
@@ -244,6 +313,17 @@ export class RequestType<
     ) {
         const seen = new Set<string>();
         for (const error of applicationErrors) {
+            if (applicationErrors.some((other) => other !== error && other.code === error.code
+                && (other.bodySchema !== undefined || error.bodySchema !== undefined))) {
+                throw new Error(`Raw error code ${error.code} cannot be shared.`);
+            }
+            if (error.bodySchema !== undefined) {
+                assertErrorCode(error.code);
+                const key = `code:${error.code}`;
+                if (seen.has(key)) throw new Error(`Duplicate application error ${key}.`);
+                seen.add(key);
+                continue;
+            }
             assertApplicationErrorCode(error.code);
             if (typeof error.message !== 'string') {
                 throw new Error('Application error message must be a string.');
@@ -386,6 +466,14 @@ export function zodToSvcJsonSchema(
     schema: Schema,
     options?: ZodToSvcJsonSchemaOptions,
 ): LinkRpcJsonSchema {
+    const source = schemaSources.get(schema);
+    if (source !== undefined) {
+        for (const [name, component] of Object.entries(source.components)) {
+            if (options === undefined) throw new Error('Imported schema references require a component destination');
+            addComponent(options.components, name, normalizeJsonSchema(component));
+        }
+        return normalizeJsonSchema(source.schema);
+    }
     // `z.void()` / `z.undefined()` have no JSON-Schema representation —
     // `toJSONSchema` throws on them. Treat them as the trivially-true
     // schema (matches anything); JSON-RPC drops `undefined` from the wire

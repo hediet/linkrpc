@@ -65,7 +65,7 @@ impl Metadata {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Ping {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pong: Option<Box<Pong>>,
 }
 
@@ -98,7 +98,7 @@ impl Point {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Pong {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ping: Option<Box<Ping>>,
 }
 
@@ -135,11 +135,11 @@ pub type Tags = Vec<String>;
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TreeNode {
     pub value: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub point: Option<Point>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<Box<TreeNode>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub children: Option<Vec<TreeNode>>,
 }
 
@@ -160,9 +160,9 @@ impl TreeNode {
 pub struct ConfigureParams {
     pub id: String,
     /// Optional display label.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
 }
 
@@ -250,8 +250,8 @@ pub trait ComExampleGraphService {
     #[name("configure")]
     async fn configure(
         id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] label: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")] label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
     ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
@@ -275,9 +275,9 @@ pub trait ComExampleGraphService {
     #[server_notification]
     async fn tree_changed(
         value: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] point: Option<Point>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] parent: Option<Box<TreeNode>>,
-        #[serde(default, skip_serializing_if = "Option::is_none")] children: Option<Vec<TreeNode>>,
+        #[serde(skip_serializing_if = "Option::is_none")] point: Option<Point>,
+        #[serde(skip_serializing_if = "Option::is_none")] parent: Option<Box<TreeNode>>,
+        #[serde(skip_serializing_if = "Option::is_none")] children: Option<Vec<TreeNode>>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError>;
 }
 

@@ -40,7 +40,7 @@ type CheckError = PublicApplicationErrorOf<
 >;
 
 const outcome = await connection.get(contract).check({ mode: 'missing' });
-if (isRpcFailure(outcome) && outcome.error.type === 'Missing') {
+if (isRpcFailure(outcome) && outcome.error.code === 1 && outcome.error.type === 'Missing') {
     const resource: string = outcome.error.data.resource;
 }
 ```
@@ -52,6 +52,28 @@ Rust, 2003 through 2005 in TypeScript). Generated Rust exposes named enum varian
 JSON-RPC `error.data` contains `{ type, data? }`, with the variant payload in the
 inner `data`. Human-readable messages do not select named variants.
 Unknown or malformed wire errors do not enter these application-error unions.
+
+The same fixtures also declare plain JSON-RPC errors with codes `-32001`,
+`-32002`, and `-32003`. These have no `type` envelope:
+
+```ts
+rpcError(-32001, {
+    message: z.string(),
+    data: z.object({ retryAfter: z.number() }),
+});
+```
+
+They exercise dynamic diagnostics, structured data, optional arbitrary data
+(absent, explicit null, and an object), and a string-or-number payload union.
+Clients discriminate these errors by numeric code. Generated bindings preserve
+the foreign wire representation rather than inserting a LinkRPC discriminator.
+
+Handledness is code-first: unknown codes remain generic remote errors, while a
+response failing the schema for a declared code becomes a noncompliant-server
+failure. Tests verify the original error and validation issues are preserved.
+The normal TypeScript client throws `NonCompliantServerError`; its result client
+returns the same error class under `generic`. Rust exposes
+`RpcCallError::NonCompliantServer { original, issues }`.
 
 Both directions check success, structured and data-less variants, explicit nullable
 data, numeric and recursive error data, invalid producer values (`NaN`), unknown and
@@ -83,14 +105,19 @@ other language. The full generated-protocol suite remains available with
 - Rust derives typed trait errors from `Result<T, E>` or `Result<T, CallError<E>>`,
   where `E` implements `ApplicationError`; no method error annotation is needed.
   Clients separate `CallError::Application(E)` from `CallError::Generic(...)`;
-  generic failures preserve remote, local, and transport provenance.
+  generic failures preserve remote, local, and transport provenance and identify
+  server compliance failures separately.
   Existing generic `JsonRpcError` methods retain their API. `RequestMember` struct literals now need
   the error declarations and error-component fields (empty for untyped methods).
-- Error types, codes, default messages, data presence, and normalized data schemas
+- Error types, codes, default messages, data presence, and normalized payload/body schemas
   are part of the contract hash. Absent data is not interchangeable with `null`.
   Legacy declarations without a type retain code/message-based wire recognition.
   Adding a type changes the wire representation and hash, so requires migrating
   both ends of that interface contract.
+- Plain JSON-RPC declarations export as `{ code, schema }`, where `schema`
+  describes `{ message, data? }` without the code. They allow documented
+  reserved JSON-RPC codes and do not treat diagnostic messages as discriminators
+  unless the body schema explicitly restricts them.
 - Error components are merged with shared parameter, result, and streaming schema
   components rather than replacing them.
 

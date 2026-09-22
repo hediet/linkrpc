@@ -314,6 +314,7 @@ impl RawStreamingCall {
 fn rpc_call_error_into_json(error: RpcCallError) -> JsonRpcError {
     match error {
         RpcCallError::Remote(error) | RpcCallError::Local(error) => error,
+        RpcCallError::NonCompliantServer { original, .. } => *original,
         RpcCallError::Transport(error) => {
             JsonRpcError::new(error_codes::PEER_DISCONNECTED, error.to_string())
         }

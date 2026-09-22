@@ -17,11 +17,14 @@ pub mod protocol;
 pub mod schema;
 pub mod transport;
 
-pub use application_error::{ApplicationError, CallError, DEFAULT_APPLICATION_ERROR_CODE};
+pub use application_error::{
+    ApplicationError, ApplicationErrorDecodeError, CallError, ValidationIssue,
+    DEFAULT_APPLICATION_ERROR_CODE,
+};
 pub mod prelude {
     pub use crate::application_error::{
-        scope_error_contract, validate_json_schema, ApplicationError, CallError,
-        DEFAULT_APPLICATION_ERROR_CODE,
+        scope_error_contract, validate_json_schema, validate_json_schema_issues, ApplicationError,
+        ApplicationErrorDecodeError, CallError, ValidationIssue, DEFAULT_APPLICATION_ERROR_CODE,
     };
     pub use crate::binding::{
         BindingAddress, BindingRegistrar, InterfaceBinding, InterfaceBindingDescriptor,

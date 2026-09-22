@@ -2,6 +2,7 @@ export * from "./schema/linkRpcJsonSchema";
 export * from "./schema/linkRpcInterfaceSchema";
 export * from "./schema/memberTypes";
 export * from "./connection/interfaceDefinition";
+export * from "./connection/nonCompliantServerError";
 export * from "./schema/hash";
 export * from "./schema/normalize";
 export * from "./schema/assignability";

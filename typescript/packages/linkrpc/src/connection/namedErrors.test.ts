@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import {
     applicationError, bareInterfaceTarget, defaultInterfaceTarget, defineInterface, ErrorCode, interfaceFromSchema, interfaceTarget, isRpcFailure, LinkRpcConnection,
-    requestType, RpcError, RpcFailure, TransportPair,
+    requestType, RpcError, RpcFailure, TransportPair, NonCompliantServerError,
     type InterfaceClient, type InterfaceHandlers,
     type InterfaceResultClient, type IRequestSender, type Result, type ApplicationErrorValue,
 } from '../index';
@@ -131,9 +131,15 @@ describe('named application errors and result clients', () => {
             new RpcError('Invalid request', -32600, undefined, 'remote'),
         ]) {
             const connection = new LinkRpcConnection(sender(error));
-            await expect(connection.get(contract).read({ id: 'x' })).rejects.toBe(error);
+            if (error.code === -32600) {
+                await expect(connection.get(contract).read({ id: 'x' })).rejects.toBe(error);
+            } else {
+                await expect(connection.get(contract).read({ id: 'x' })).rejects.toBeInstanceOf(NonCompliantServerError);
+            }
             const safe = await connection.getResultClient(contract).read({ id: 'x' });
-            expect(safe).toMatchObject({ error: { kind: 'generic', error: { kind: 'remote', code: error.code } } });
+            expect(safe).toMatchObject({ error: { kind: 'generic', error: error.code === -32600
+                ? { kind: 'remote', code: error.code }
+                : { kind: 'nonCompliantServer', original: { code: error.code } } } });
             expect(await connection.getResultClient(contract).plain({}))
                 .toMatchObject({ error: { kind: 'generic', error: { kind: 'remote' } } });
         }
@@ -153,9 +159,9 @@ describe('named application errors and result clients', () => {
         for (const data of [{ type: 'State', data: {} }, { type: 'State', data: null }, { type: 'State' }]) {
             const invalid = new RpcError('State', 1, data, 'remote');
             const connection = new LinkRpcConnection(sender(invalid));
-            await expect(connection.get(definition).read({})).rejects.toBe(invalid);
+            await expect(connection.get(definition).read({})).rejects.toBeInstanceOf(NonCompliantServerError);
             expect(await connection.getResultClient(definition).read({}))
-                .toMatchObject({ error: { kind: 'generic', error: { kind: 'remote' } } });
+                .toMatchObject({ error: { kind: 'generic', error: { kind: 'nonCompliantServer' } } });
         }
     });
 
@@ -314,9 +320,11 @@ describe('named application errors and result clients', () => {
         ]) {
             const malformed = new RpcError('Not found', 1, data, 'remote');
             const connection = new LinkRpcConnection(sender(malformed));
-            await expect(connection.get(mixed).read({})).rejects.toBe(malformed);
+            expect(await connection.get(mixed).read({})).toEqual(new RpcFailure({
+                kind: 'application', code: 1, message: 'Not found', data,
+            }));
             expect(await connection.getResultClient(mixed).read({}))
-                .toMatchObject({ error: { kind: 'generic', error: { kind: 'remote', data } } });
+                .toMatchObject({ error: { kind: 'application', error: { kind: 'application', data } } });
         }
         const unknownType = { type: 'Other', data: { id: 'x' } };
         expect(await new LinkRpcConnection(sender(new RpcError('Not found', 1, unknownType, 'remote')))

@@ -130,6 +130,7 @@ impl Channel {
             .map_err(|error| match error {
                 RpcCallError::Remote(error) => error,
                 RpcCallError::Local(error) => error,
+                RpcCallError::NonCompliantServer { original, .. } => *original,
                 RpcCallError::Transport(error) => {
                     JsonRpcError::new(error_codes::PEER_DISCONNECTED, error.to_string())
                 }
@@ -175,6 +176,7 @@ impl Channel {
             .await
             .map_err(|error| match error {
                 RpcCallError::Remote(error) | RpcCallError::Local(error) => error,
+                RpcCallError::NonCompliantServer { original, .. } => *original,
                 RpcCallError::Transport(error) => {
                     JsonRpcError::new(error_codes::PEER_DISCONNECTED, error.to_string())
                 }

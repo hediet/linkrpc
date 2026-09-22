@@ -17,12 +17,12 @@ export function generateTsContract(
     const contract = parseStaticHubSchema(document);
     const imports = options.linkRpcImport ?? '@hediet/linkrpc';
     const chunks = [
-        `import { applicationError, bareInterfaceTarget, defaultInterfaceTarget, interfaceTarget, InterfaceDefinition, notificationType, requestType, type BareInterfaceTarget, type DefaultInterfaceTarget, type QualifiedInterfaceTarget, type LinkRpcInterfaceSchema } from ${JSON.stringify(imports)};`,
+        `import { applicationError, rpcError, bareInterfaceTarget, defaultInterfaceTarget, interfaceTarget, InterfaceDefinition, notificationType, requestType, type BareInterfaceTarget, type DefaultInterfaceTarget, type QualifiedInterfaceTarget, type LinkRpcInterfaceSchema } from ${JSON.stringify(imports)};`,
         'import { z } from "zod";',
         '',
     ];
     const names = new Set<string>([
-        'applicationError', 'bareInterfaceTarget', 'defaultInterfaceTarget', 'interfaceTarget',
+        'applicationError', 'rpcError', 'bareInterfaceTarget', 'defaultInterfaceTarget', 'interfaceTarget',
         'InterfaceDefinition', 'notificationType', 'requestType', 'LinkRpcInterfaceSchema', 'z',
         'BareInterfaceTarget', 'DefaultInterfaceTarget', 'QualifiedInterfaceTarget',
     ]);

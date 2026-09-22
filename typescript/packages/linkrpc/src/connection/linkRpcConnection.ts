@@ -26,19 +26,18 @@ import type {
     StreamApi,
 } from './interfaceDefinition';
 import { RpcFailure } from './rpcFailure';
+import { NonCompliantServerError } from './nonCompliantServerError';
+import { jsonIssues, parseDeclaredErrorBody } from '../schema/errorValidation';
 import { brandApplicationError } from '../schema/applicationErrorBrand';
 import {
     type ApplicationErrorDescriptorBase,
-    type ApplicationErrorValue,
+    type RpcErrorBody,
     isApplicationErrorValue,
     type MemberType,
     NotificationType,
     RequestType,
     type Schema,
-    zodToSvcJsonSchema,
 } from '../schema/memberTypes';
-import { matchesJsonSchema } from '../schema/assignability';
-import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
 import { safeParse } from 'zod/v4/core';
 import type { IMessageTransport } from '../transport/messageTransport';
 import {
@@ -1133,8 +1132,11 @@ interface BareBinding {
     readonly entry: RegisteredInterface;
 }
 
-type DecodedApplicationError = ApplicationErrorValue<number, string, never, string | undefined>
-    | ApplicationErrorValue<number, string, JsonValue, string | undefined>;
+type DecodedApplicationError = RpcErrorBody & {
+    readonly kind: 'application';
+    readonly code: number;
+    readonly type?: string;
+};
 
 function addCheckedResult<TResult>(
     promise: Promise<TResult>,
@@ -1153,7 +1155,7 @@ function addCheckedResult<TResult>(
                 : { kind: 'generic' as const, error: outcome.error });
         }
         if (outcome.error.kind === 'application') return new RpcFailure(outcome.error);
-        throw outcome.cause;
+        throw outcome.error.kind === 'nonCompliantServer' ? outcome.error : outcome.cause;
     });
     return Object.assign(result, {
         result: async (): Promise<CheckedCallResult<TResult, DecodedApplicationError>> => {
@@ -1170,49 +1172,43 @@ function decodeCheckedError(
     cause: unknown,
     descriptors: readonly ApplicationErrorDescriptorBase[],
 ): DecodedApplicationError | GenericRpcError {
+    if (cause instanceof NonCompliantServerError) return cause;
     if (!(cause instanceof RpcError) || cause.origin !== 'remote') {
         return { kind: cause instanceof RpcError && cause.origin === 'transport' ? 'transport' : 'local', cause };
     }
 
-    const envelopeType = typeof cause.data === 'object' && cause.data !== null && !Array.isArray(cause.data)
-        ? cause.data.type : undefined;
-    const descriptor = descriptors.find(
-        (candidate) => candidate.type !== undefined && candidate.code === cause.code
-            && envelopeType === candidate.type,
-    ) ?? descriptors.find(
-        (candidate) => candidate.type === undefined && candidate.code === cause.code
-            && candidate.message === cause.message,
-    );
-    if (descriptor !== undefined && (descriptor.type === undefined || isNamedErrorEnvelope(cause.data))) {
-        const data = descriptor.type === undefined ? cause.data : (cause.data as { data?: JsonValue }).data;
-        const hasData = descriptor.type === undefined ? cause.hasData : Object.hasOwn(cause.data as object, 'data');
-        const value = {
-            kind: 'application' as const, code: descriptor.code, message: cause.message,
-            ...(descriptor.type === undefined ? {} : { type: descriptor.type }),
-        };
-        if (descriptor.dataSchema === undefined && !hasData) {
-            return brandApplicationError(value) as DecodedApplicationError;
+    const original = {
+        code: cause.code, message: cause.message,
+        ...(cause.hasData ? { data: cause.data } : {}),
+    };
+    const candidates = descriptors.filter((candidate) => candidate.code === cause.code)
+        .sort((a, b) => Number(b.type !== undefined) - Number(a.type !== undefined));
+    const body = { message: cause.message, ...(cause.hasData ? { data: cause.data } : {}) };
+    const issues = [];
+    for (const descriptor of candidates) {
+        const parsed = parseDeclaredErrorBody(descriptor, body);
+        if (!parsed.success) {
+            issues.push(...parsed.issues);
+            continue;
         }
-        if (descriptor.dataSchema !== undefined && hasData
-            && matchesApplicationData(descriptor.dataSchema, data)) {
-            const parsed = safeParse(descriptor.dataSchema, data);
-            if (parsed.success) {
-                return brandApplicationError({ ...value, data }) as DecodedApplicationError;
-            }
+        if (descriptor.type === undefined) {
+            return brandApplicationError({
+                ...parsed.data, kind: 'application' as const, code: descriptor.code,
+            });
         }
+        const envelope = parsed.data.data;
+        return brandApplicationError({
+            kind: 'application' as const, code: descriptor.code, message: parsed.data.message,
+            type: descriptor.type,
+            ...(typeof envelope === 'object' && envelope !== null && 'data' in envelope
+                ? { data: envelope.data } : {}),
+        });
     }
-
-    function isNamedErrorEnvelope(value: unknown): value is { type: string; data?: JsonValue } {
-        return typeof value === 'object' && value !== null && !Array.isArray(value)
-            && typeof (value as { type?: unknown }).type === 'string'
-            && Object.keys(value).every((key) => key === 'type' || key === 'data');
-    }
+    if (candidates.length > 0) return new NonCompliantServerError(original, issues);
 
     return {
         kind: 'remote',
-        code: cause.code,
-        message: cause.message,
-        ...(cause.hasData ? { data: cause.data } : {}),
+        ...original,
     };
 }
 
@@ -1230,7 +1226,7 @@ function encodeApplicationError(
     const descriptor = member.applicationErrors.find(
         (error: ApplicationErrorDescriptorBase) =>
             error.code === candidate.code && error.type === candidate.type
-                && (error.type !== undefined || error.message === candidate.message),
+                && (error.bodySchema !== undefined || error.type !== undefined || error.message === candidate.message),
     );
     if (descriptor === undefined) {
         throw new RpcError(
@@ -1239,84 +1235,18 @@ function encodeApplicationError(
         );
     }
 
-    const hasData = Object.hasOwn(candidate, 'data');
-    if (descriptor.dataSchema === undefined) {
-        if (hasData) {
-            throw new RpcError(
-                `Application error ${descriptor.code} must not contain data`,
-                ErrorCode.internalError,
-            );
-        }
-        return {
-            code: descriptor.code, message: String(candidate.message),
-            ...(descriptor.type === undefined ? {} : { data: { type: descriptor.type } }),
-        };
-    }
-    if (!hasData) {
-        throw new RpcError(
-            `Application error ${descriptor.code} requires data`,
-            ErrorCode.internalError,
-        );
-    }
-    if (!matchesApplicationData(descriptor.dataSchema, candidate.data)) {
-        throw new RpcError(
-            `Invalid data for application error ${descriptor.code}`,
-            ErrorCode.internalError,
-            { issues: [{ message: 'Data must be JSON matching the declared wire schema' }] },
-        );
-    }
-    const parsed = safeParse(descriptor.dataSchema, candidate.data);
-    if (!parsed.success) {
-        throw new RpcError(
-            `Invalid data for application error ${descriptor.code}`,
-            ErrorCode.internalError,
-            { issues: parsed.error.issues as unknown as JsonValue },
-        );
-    }
-    return {
-        code: descriptor.code,
-        message: String(candidate.message),
-        data: descriptor.type === undefined ? candidate.data : { type: descriptor.type, data: candidate.data },
+    const data = Object.hasOwn(value, 'data') ? { data: value.data } : {};
+    const body = {
+        message: value.message,
+        ...(descriptor.type === undefined ? data : { data: { type: descriptor.type, ...data } }),
     };
-}
-
-/** Reject values JSON serialization would silently omit, coerce, or replace via toJSON. */
-function isWireJsonValue(value: unknown, ancestors = new Set<object>()): value is JsonValue {
-    if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-    if (typeof value === 'number') return Number.isFinite(value);
-    if (typeof value !== 'object' || ancestors.has(value)) return false;
-    if (!Array.isArray(value)
-        && Object.getPrototypeOf(value) !== Object.prototype
-        && Object.getPrototypeOf(value) !== null) return false;
-    ancestors.add(value);
-    const children = Array.isArray(value) ? value.values() : Object.values(value);
-    for (const child of children) {
-        if (!isWireJsonValue(child, ancestors)) return false;
+    const parsed = parseDeclaredErrorBody(descriptor, body);
+    const issues = parsed.success ? jsonIssues(body) : parsed.issues;
+    if (issues.length > 0) {
+        throw new RpcError(`Invalid data for application error ${descriptor.code}`,
+            ErrorCode.internalError, { issues: issues.map((issue) => ({ ...issue })) });
     }
-    ancestors.delete(value);
-    return true;
-}
-
-const applicationDataSchemas = new WeakMap<Schema, {
-    schema: LinkRpcJsonSchema;
-    components: Record<string, LinkRpcJsonSchema>;
-}>();
-
-function matchesApplicationData(schema: Schema, value: unknown): value is JsonValue {
-    if (!isWireJsonValue(value)) return false;
-    let wire = applicationDataSchemas.get(schema);
-    if (wire === undefined) {
-        const components: Record<string, LinkRpcJsonSchema> = {};
-        wire = {
-            schema: zodToSvcJsonSchema(schema, {
-                methodName: 'applicationError', schemaPosition: 'data', components,
-            }),
-            components,
-        };
-        applicationDataSchemas.set(schema, wire);
-    }
-    // Preserve the wire value instead of Zod's possibly stripped/defaulted parse output.
-    return matchesJsonSchema(value, wire.schema, { schemas: wire.components });
+    return { code: descriptor.code, ...body } as { code: number; message: string; data?: JsonValue };
 }
 
 function validateWireResult(schema: Schema, raw: JsonValue, wireMethod: string): JsonValue | undefined {
