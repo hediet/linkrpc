@@ -1443,14 +1443,23 @@ fn write_bindings(
             ));
         }
         let params = if let Some(fields) = fields {
-            if !fields.is_empty() {
-                w.line(&format!("#[params({params_ty})]"));
-            }
             fields
                 .iter()
                 .map(|field| {
+                    let mut attributes = Vec::new();
+                    if field.wire_name != strip_raw(&field.rust_name) {
+                        attributes.push(format!("name = {}", quote_str(&field.wire_name)));
+                    }
+                    if field.optional {
+                        attributes.push("optional".to_string());
+                    }
+                    let annotation = if attributes.is_empty() {
+                        String::new()
+                    } else {
+                        format!("#[param({})] ", attributes.join(", "))
+                    };
                     format!(
-                        "{}: {}",
+                        "{annotation}{}: {}",
                         field.rust_name,
                         renderer.field_type(field, renderer.scc[&params_ty])
                     )

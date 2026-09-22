@@ -435,18 +435,22 @@ By default, `GenerateRustOptions::inline_params` exposes params-struct fields as
 individual arguments on the generated trait, client, and provider:
 
 ```rust,ignore
-#[params(RuntimeEvaluateParams)]
-async fn evaluate(expression: String, return_by_value: Option<bool>)
-    -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
+async fn evaluate(
+    expression: String,
+    #[param(name = "returnByValue", optional)] return_by_value: Option<bool>,
+) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
 ```
 
-The macro packs and unpacks the original struct, preserving its wire property
-names, optional-field omission, and embedded schema identity. Empty structs
-become zero-argument methods without a `#[params(...)]` attribute; the macro
-encodes `{}` through its own empty wrapper. Arguments follow the generated
+The macro generates a private serialization wrapper. `#[param(name = "...")]`
+renames one field and `#[param(optional)]` omits an absent `Option` field.
+Imported field names are literal unless renamed; Rust-authored interfaces keep
+their default camelCase naming. The embedded schema identity is unchanged.
+Empty structs become zero-argument methods that encode `{}`. Arguments follow the generated
 struct's field order. Open objects with flattened extra properties, non-struct payloads,
 external fields without known type paths, and fields conflicting with injected
-arguments retain `#[params] params: ParamsType`. Set `inline_params: false` to keep the previous
+arguments retain `#[params] params: ParamsType`. `#[params]` means the argument
+is the entire wire payload and must be the sole parameter; it cannot be combined
+with `#[param(...)]`. Set `inline_params: false` to keep the previous
 whole-object API for every method. Regeneration with the default is a Rust API
 change: callers and providers must pass/receive individual fields instead.
 

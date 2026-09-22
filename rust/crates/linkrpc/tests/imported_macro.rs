@@ -91,6 +91,35 @@ struct Caller {
     methods: Arc<Mutex<Vec<String>>>,
 }
 
+#[link_rpc_interface(id = "parameter.fields")]
+trait ParameterFields {
+    async fn compile_script(
+        #[param(name = "sourceURL")] source_url: String,
+        #[param(optional)] execution_context: Option<String>,
+    ) -> Result<JsonValue, JsonRpcError>;
+}
+
+#[tokio::test]
+async fn field_annotations_control_serialization_and_derived_schemas() {
+    let client = ParameterFieldsClient::new(Caller::default());
+    assert_eq!(
+        client.compile_script("source.js".into(), None).await.unwrap(),
+        serde_json::json!({"sourceURL": "source.js"})
+    );
+    assert_eq!(
+        client
+            .compile_script("source.js".into(), Some("context".into()))
+            .await
+            .unwrap(),
+        serde_json::json!({"sourceURL": "source.js", "executionContext": "context"})
+    );
+    let schema = parameter_fields::interface().to_schema();
+    assert_eq!(
+        schema.methods["compile_script"].params["required"],
+        serde_json::json!(["sourceURL"])
+    );
+}
+
 #[async_trait]
 impl RpcCall for Caller {
     async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {

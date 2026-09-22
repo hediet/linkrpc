@@ -248,22 +248,18 @@ impl ResetParams {
 pub trait ComExampleGraphService {
     /// A method whose params mix required and optional fields.
     #[name("configure")]
-    #[params(ConfigureParams)]
     async fn configure(
         id: String,
-        label: Option<String>,
-        payload: Option<serde_json::Value>,
+        #[param(optional)] label: Option<String>,
+        #[param(optional)] payload: Option<serde_json::Value>,
     ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
-    #[params(GetTreeParams)]
     async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::JsonRpcError>;
     #[name("notify_changed")]
     #[notification]
-    #[params(NotifyChangedParams)]
     async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError>;
     #[name("paint")]
-    #[params(PaintParams)]
     async fn paint(
         shape: Shape,
         color: Color,
@@ -277,12 +273,11 @@ pub trait ComExampleGraphService {
     /// Server-emitted event fired whenever the tree changes.
     #[name("tree_changed")]
     #[server_notification]
-    #[params(TreeNode)]
     async fn tree_changed(
         value: String,
-        point: Option<Point>,
-        parent: Option<Box<TreeNode>>,
-        children: Option<Vec<TreeNode>>,
+        #[param(optional)] point: Option<Point>,
+        #[param(optional)] parent: Option<Box<TreeNode>>,
+        #[param(optional)] children: Option<Vec<TreeNode>>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError>;
 }
 

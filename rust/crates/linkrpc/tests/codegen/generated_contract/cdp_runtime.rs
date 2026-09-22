@@ -51,13 +51,11 @@ pub enum FallibleError {
 pub trait CdpRuntimeService {
     #[name("changed")]
     #[server_notification]
-    #[params(super::types::RuntimeRemoteObject)]
     async fn changed(value: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, value,);
         Ok(())
     }
     #[name("evaluate")]
-    #[params(EvaluateParams)]
     async fn evaluate(expression: String) -> Result<EvaluateResult, linkrpc::prelude::JsonRpcError> {
         let _ = (ctx, expression,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate"))

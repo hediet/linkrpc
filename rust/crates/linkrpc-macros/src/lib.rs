@@ -16,10 +16,12 @@
 //! `#[annotations(dangerous, read_only, ...)]` attach member annotations.
 //!
 //! `schema_json = "..."` imports a frozen interface contract (including its hash)
-//! instead of deriving schemas. Imported methods use a `#[params]` argument or
-//! `#[params(ExistingStruct)]` on the method to pack inline arguments using an
-//! existing struct's Serde representation. Zero-argument methods need neither
-//! annotation and encode an empty object. They may rename their wire member
+//! instead of deriving schemas. `#[params]` marks the sole argument as the whole
+//! wire payload. Otherwise arguments become fields in an object, with
+//! `#[param(name = "...")]` for exact wire names and `#[param(optional)]` to omit
+//! absent `Option` fields. Imported field names are literal; Rust-authored
+//! interfaces retain their default camelCase naming. Zero-argument methods
+//! encode an empty object. Methods may rename their wire member
 //! with `#[name("...")]`. `client`, `server`, `module`, `runtime`,
 //! and `generate_server` configure names and client-only generation.
 //!
@@ -486,13 +488,10 @@ struct MethodModel {
     /// Wire member name (the method's identifier as a string).
     wire_name: String,
     is_notification: bool,
-    /// `(ident, type)` for each inline parameter, in order.
-    params: Vec<(Ident, Type)>,
+    params: Vec<ParamModel>,
     /// When set, the single parameter is the params object itself (via `#[params]`); its type is
     /// used directly as the wire param schema instead of synthesizing a wrapper struct.
     passthrough_ty: Option<Type>,
-    /// Existing struct used to pack inline arguments without re-deriving its wire shape.
-    inline_params_ty: Option<syn::TypePath>,
     /// The success/result type for a request (None for notifications).
     result_ty: Option<Type>,
     /// Application error enum inferred from the request's return type.
@@ -511,6 +510,13 @@ struct MethodModel {
     fallible_notification: bool,
     server_notification: bool,
     default_body: Option<syn::Block>,
+}
+
+struct ParamModel {
+    name: Ident,
+    ty: Type,
+    wire_name: Option<LitStr>,
+    optional: bool,
 }
 
 fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream2> {
@@ -575,15 +581,6 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                     "Result error type does not match schema_json application errors",
                 ));
             }
-            if !method.params.is_empty()
-                && method.passthrough_ty.is_none()
-                && method.inline_params_ty.is_none()
-            {
-                return Err(syn::Error::new_spanned(
-                    &method.name,
-                    "schema_json methods require a #[params] parameter or #[params(Type)] method",
-                ));
-            }
         }
         if names.len() != declared.len() {
             return Err(syn::Error::new_spanned(
@@ -598,7 +595,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
     // ── rewritten server trait ────────────────────────────────────────────────
     let trait_methods = methods.iter().map(|m| {
         let name = &m.name;
-        let args = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
+        let args = m.params.iter().map(|param| {
+            let ParamModel { name, ty, .. } = param;
+            quote!(#name: #ty)
+        });
         let receiver = m
             .input_stream_ty
             .as_ref()
@@ -630,7 +630,7 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
     // ── per-method param structs ──────────────────────────────────────────────
     let param_structs = methods
         .iter()
-        .map(|m| param_struct(&trait_ident, m, options.schema_json.is_none()));
+        .map(|m| param_struct(&trait_ident, m, options.schema_json.is_some()));
 
     // ── interface() builder module ────────────────────────────────────────────
     let module_ident = options
@@ -645,7 +645,7 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         .flat_map(|m| {
             m.params
                 .iter()
-                .map(|(_, ty)| ty)
+                .map(|param| &param.ty)
                 .chain(m.result_ty.iter())
                 .chain(m.input_stream_ty.iter())
                 .chain(m.output_stream_ty.iter())
@@ -780,7 +780,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         let call_args = if m.passthrough_ty.is_some() {
             vec![quote!(__p)]
         } else {
-            m.params.iter().map(|(id, _)| quote!(__p.#id)).collect()
+            m.params.iter().map(|param| {
+                let id = &param.name;
+                quote!(__p.#id)
+            }).collect()
         };
         let map_error = if m.server_returns_call_error {
             quote!(.map_err(::linkrpc::prelude::CallError::into_rpc_error)?)
@@ -833,7 +836,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         let call_args = if m.passthrough_ty.is_some() {
             vec![quote!(__p)]
         } else {
-            m.params.iter().map(|(id, _)| quote!(__p.#id)).collect()
+            m.params.iter().map(|param| {
+                let id = &param.name;
+                quote!(__p.#id)
+            }).collect()
         };
         let check_result = m.fallible_notification.then(|| quote!(?));
         quote! {
@@ -1058,15 +1064,15 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
     }
     let doc = extract_doc(&f.attrs);
     let annotations = extract_annotations(&f.attrs)?;
-    let mut inline_params_ty = None;
-    for attr in f.attrs.iter().filter(|attr| attr.path().is_ident("params")) {
-        if inline_params_ty.is_some() {
-            return Err(syn::Error::new_spanned(
-                attr,
-                "duplicate #[params(Type)] attribute",
-            ));
-        }
-        inline_params_ty = Some(attr.parse_args::<syn::TypePath>()?);
+    if let Some(attr) = f
+        .attrs
+        .iter()
+        .find(|attr| attr.path().is_ident("params") || attr.path().is_ident("param"))
+    {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[params] and #[param(...)] annotate parameters, not methods",
+        ));
     }
 
     let mut params = Vec::new();
@@ -1089,10 +1095,60 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
                         ))
                     }
                 };
-                if pt.attrs.iter().any(|a| a.path().is_ident("params")) {
+                let mut whole_params = false;
+                let mut wire_name = None;
+                let mut optional = false;
+                for attr in &pt.attrs {
+                    if attr.path().is_ident("params") {
+                        if whole_params || !matches!(attr.meta, Meta::Path(_)) {
+                            return Err(syn::Error::new_spanned(
+                                attr,
+                                "use a single bare #[params] attribute",
+                            ));
+                        }
+                        whole_params = true;
+                    } else if attr.path().is_ident("param") {
+                        if matches!(&attr.meta, Meta::List(list) if list.tokens.is_empty()) {
+                            return Err(syn::Error::new_spanned(
+                                attr,
+                                "expected name = \"...\" or optional",
+                            ));
+                        }
+                        attr.parse_nested_meta(|meta| {
+                            if meta.path.is_ident("name") && wire_name.is_none() {
+                                wire_name = Some(meta.value()?.parse::<LitStr>()?);
+                            } else if meta.path.is_ident("optional") && !optional {
+                                optional = true;
+                            } else {
+                                return Err(meta.error("expected a unique name = \"...\" or optional"));
+                            }
+                            Ok(())
+                        })?;
+                    }
+                }
+                if whole_params && (wire_name.is_some() || optional) {
+                    return Err(syn::Error::new_spanned(
+                        pt,
+                        "#[params] cannot be combined with #[param(...)]",
+                    ));
+                }
+                if optional && !matches!(&*pt.ty, Type::Path(path)
+                    if path.path.segments.last().is_some_and(|segment| segment.ident == "Option"))
+                {
+                    return Err(syn::Error::new_spanned(
+                        &pt.ty,
+                        "#[param(optional)] requires an Option field",
+                    ));
+                }
+                if whole_params {
                     passthrough_ty = Some((*pt.ty).clone());
                 }
-                params.push((ident, (*pt.ty).clone()));
+                params.push(ParamModel {
+                    name: ident,
+                    ty: (*pt.ty).clone(),
+                    wire_name,
+                    optional,
+                });
             }
         }
     }
@@ -1101,12 +1157,6 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         return Err(syn::Error::new_spanned(
             &sig.inputs,
             "#[params] requires the method to take exactly one parameter (the whole params object)",
-        ));
-    }
-    if passthrough_ty.is_some() && inline_params_ty.is_some() {
-        return Err(syn::Error::new_spanned(
-            &sig.inputs,
-            "#[params(Type)] cannot be combined with a #[params] parameter",
         ));
     }
 
@@ -1133,7 +1183,6 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         is_notification,
         params,
         passthrough_ty,
-        inline_params_ty,
         result_ty,
         error_ty,
         server_returns_call_error,
@@ -1260,26 +1309,35 @@ fn params_ty(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
     match &m.passthrough_ty {
         Some(ty) => quote!(#ty),
         None => {
-            if let Some(ty) = &m.inline_params_ty {
-                return quote!(#ty);
-            }
             let pstruct = param_struct_ident(trait_ident, &m.name);
             quote!(#pstruct)
         }
     }
 }
 
-fn param_struct(trait_ident: &Ident, m: &MethodModel, derive_schema: bool) -> TokenStream2 {
-    if m.passthrough_ty.is_some() || m.inline_params_ty.is_some() {
+fn param_struct(trait_ident: &Ident, m: &MethodModel, imported: bool) -> TokenStream2 {
+    if m.passthrough_ty.is_some() {
         return quote!();
     }
     let pstruct = param_struct_ident(trait_ident, &m.name);
-    let fields = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
-    let schema_derive = derive_schema.then(|| quote!(#[derive(::schemars::JsonSchema)]));
+    let fields = m.params.iter().map(|param| {
+        let ParamModel {
+            name,
+            ty,
+            wire_name,
+            optional,
+        } = param;
+        let rename = wire_name.as_ref().map(|name| quote!(#[serde(rename = #name)]));
+        let optional =
+            optional.then(|| quote!(#[serde(default, skip_serializing_if = "Option::is_none")]));
+        quote!(#rename #optional #name: #ty)
+    });
+    let schema_derive = (!imported).then(|| quote!(#[derive(::schemars::JsonSchema)]));
+    let rename_all = (!imported).then(|| quote!(#[serde(rename_all = "camelCase")]));
     quote! {
         #[derive(::serde::Serialize, ::serde::Deserialize)]
         #schema_derive
-        #[serde(rename_all = "camelCase")]
+        #rename_all
         #[allow(non_camel_case_types, non_snake_case, dead_code)]
         struct #pstruct {
             #(#fields,)*
@@ -1430,7 +1488,10 @@ fn client_method(
 ) -> TokenStream2 {
     let name = &m.name;
     let wire = &m.wire_name;
-    let args = m.params.iter().map(|(id, ty)| quote!(#id: #ty));
+    let args = m.params.iter().map(|param| {
+        let ParamModel { name, ty, .. } = param;
+        quote!(#name: #ty)
+    });
     let doc = m.doc.as_ref().map(|d| quote!(#[doc = #d]));
     let event_name = m.server_notification.then(|| {
         let name = format_ident!("{}_event_name", name.to_string().trim_start_matches("r#"));
@@ -1458,7 +1519,7 @@ fn client_method(
         }
     };
     let build_params = if m.passthrough_ty.is_some() {
-        let arg = &m.params[0].0;
+        let arg = &m.params[0].name;
         quote! {
             let __params = ::serde_json::to_value(#arg).map_err(|e| {
                 #serialization_error
@@ -1466,7 +1527,7 @@ fn client_method(
         }
     } else {
         let pstruct = params_ty(trait_ident, m);
-        let field_idents = m.params.iter().map(|(id, _)| id).collect::<Vec<_>>();
+        let field_idents = m.params.iter().map(|param| &param.name).collect::<Vec<_>>();
         quote! {
             let __params = ::serde_json::to_value(#pstruct { #(#field_idents),* }).map_err(|e| {
                 #serialization_error
@@ -1708,15 +1769,6 @@ mod tests {
                 ),
                 "streams do not match",
             ),
-            (
-                quote!(
-                    trait Test {
-                        #[output_stream(NoStream)]
-                        async fn lookup(value: String) -> Result<String, JsonRpcError>;
-                    }
-                ),
-                "#[params] parameter",
-            ),
         ] {
             let options = parse_options(quote!(schema_json = #json)).unwrap();
             let error = expand(options, syn::parse2(item).unwrap()).unwrap_err();
@@ -1885,29 +1937,82 @@ mod tests {
     }
 
     #[test]
-    fn rejects_conflicting_params_attributes() {
+    fn rejects_invalid_parameter_annotations() {
         for (method, expected) in [
             (
                 parse_quote! {
                     #[params(Payload)]
-                    #[params(Payload)]
-                    async fn duplicate(value: String) -> String;
+                    async fn method_annotation(value: String) -> String;
                 },
-                "duplicate #[params(Type)]",
+                "annotate parameters, not methods",
             ),
             (
                 parse_quote! {
-                    #[params(Payload)]
-                    async fn mixed(#[params] value: Payload) -> String;
+                    async fn multiple(#[params] value: Payload, other: String) -> String;
+                },
+                "exactly one parameter",
+            ),
+            (
+                parse_quote! {
+                    async fn two_payloads(#[params] first: Payload, #[params] second: Payload) -> String;
+                },
+                "exactly one parameter",
+            ),
+            (
+                parse_quote! {
+                    async fn arguments(#[params(inline = true)] value: Payload) -> String;
+                },
+                "single bare #[params]",
+            ),
+            (
+                parse_quote! {
+                    async fn duplicate(#[params] #[params] value: Payload) -> String;
+                },
+                "single bare #[params]",
+            ),
+            (
+                parse_quote! {
+                    async fn mixed(#[params] #[param(name = "value")] value: Payload) -> String;
                 },
                 "cannot be combined",
             ),
+            (
+                parse_quote! {
+                    async fn duplicate_name(#[param(name = "a", name = "b")] value: String) -> String;
+                },
+                "unique name",
+            ),
+            (
+                parse_quote! {
+                    async fn not_optional(#[param(optional)] value: String) -> String;
+                },
+                "requires an Option field",
+            ),
+            (
+                parse_quote! {
+                    async fn empty(#[param()] value: String) -> String;
+                },
+                "expected name",
+            ),
         ] {
-            assert!(parse_method(&method)
-                .err()
-                .unwrap()
-                .to_string()
-                .contains(expected));
+            let error = parse_method(&method).err().unwrap().to_string();
+            assert!(error.contains(expected), "{error}");
         }
+    }
+
+    #[test]
+    fn parses_field_names_and_optional_fields() {
+        let method: TraitItemFn = parse_quote! {
+            async fn compile_script(
+                #[param(name = "sourceURL")] source_url: String,
+                #[param(name = "executionContextId", optional)] context: Option<u32>,
+            ) -> String;
+        };
+        let method = parse_method(&method).unwrap();
+        assert!(method.passthrough_ty.is_none());
+        assert_eq!(method.params[0].wire_name.as_ref().unwrap().value(), "sourceURL");
+        assert!(!method.params[0].optional);
+        assert_eq!(method.params[1].wire_name.as_ref().unwrap().value(), "executionContextId");
+        assert!(method.params[1].optional);
     }
 }

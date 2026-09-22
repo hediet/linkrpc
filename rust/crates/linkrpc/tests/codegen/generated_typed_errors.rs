@@ -111,11 +111,9 @@ pub enum StreamCheckError {
 )]
 pub trait DevLinkrpcTsErrorsService {
     #[name("check")]
-    #[params(CheckParams)]
     async fn check(mode: String) -> Result<String, linkrpc::prelude::CallError<CheckError>>;
     #[name("streamCheck")]
     #[output_stream(String)]
-    #[params(StreamCheckParams)]
     async fn stream_check(mode: String) -> Result<String, linkrpc::prelude::CallError<StreamCheckError>>;
 }
 
