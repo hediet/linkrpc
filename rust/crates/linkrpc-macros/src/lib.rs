@@ -884,6 +884,15 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         where
             T: #trait_ident + 'static,
         {
+            async fn dispatch_notification(
+                &self,
+                member: &str,
+                params: ::linkrpc::prelude::JsonValue,
+                ctx: ::linkrpc::prelude::CallCtx,
+            ) -> ::core::result::Result<bool, ::linkrpc::prelude::JsonRpcError> {
+                self.dispatch_notification_with_ctx(member, params, ctx).await
+            }
+
             async fn handle_request(
                 &self,
                 member: &str,
@@ -918,15 +927,37 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         .client
         .clone()
         .unwrap_or_else(|| format_ident!("{}Client", trait_ident));
+    let provider_binding = options.generate_server.then(|| quote! {
+        impl<T: #trait_ident + 'static> ::linkrpc::binding::InterfaceProvider<#client_ident> for #server_ident<T> {}
+    });
     let client_methods = methods
         .iter()
         .map(|m| client_method(&trait_ident, &module_ident, m, &options));
+    let has_streams = methods
+        .iter()
+        .any(|m| m.input_stream_ty.is_some() || m.output_stream_ty.is_some());
     let client = quote! {
         /// Typed client proxy over a `LinkRpcConnection`.
         #[derive(::core::clone::Clone)]
         #vis struct #client_ident<C = ::linkrpc::prelude::LinkRpcConnection> {
             conn: C,
             prefix: ::std::string::String,
+        }
+
+        impl ::linkrpc::binding::InterfaceContract for #client_ident {
+            type Client<C: ::linkrpc::prelude::RpcCall> = #client_ident<C>;
+
+            fn has_streams() -> bool {
+                #has_streams
+            }
+
+            fn interface() -> ::linkrpc::prelude::InterfaceDefinition {
+                #module_ident::interface()
+            }
+
+            fn client<C: ::linkrpc::prelude::RpcCall>(caller: C, prefix: ::std::string::String) -> Self::Client<C> {
+                #client_ident::with_prefix(caller, prefix)
+            }
         }
 
         impl<C: ::linkrpc::prelude::RpcCall> #client_ident<C> {
@@ -941,7 +972,12 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                 conn: C,
                 service_id: impl ::core::convert::Into<::std::string::String>,
             ) -> Self {
-                Self::with_prefix(conn, ::std::format!("{}::{}::", service_id.into(), Self::INTERFACE_ID))
+                let service_id = service_id.into();
+                if service_id.is_empty() {
+                    Self::new(conn)
+                } else {
+                    Self::with_prefix(conn, ::std::format!("{}::{}::", service_id, Self::INTERFACE_ID))
+                }
             }
 
             pub fn root(conn: C) -> Self {
@@ -968,6 +1004,7 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
             #(#param_structs)*
             #interface_mod
             #server
+            #provider_binding
             #client
         },
         &options.runtime,

@@ -11,7 +11,7 @@ use crate::schema::interface_schema::{component_ref_name, LinkRpcInterfaceSchema
 
 use super::code_writer::CodeWriter;
 use super::ident::{strip_raw, to_pascal_case, to_snake_case};
-use super::{GenerateRustOptions, GeneratedRust};
+use super::{GenerateRustOptions, GeneratedRust, GeneratedRustComponents, InterfaceAddress};
 
 /// A Rust type in field / parameter / return position.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,10 +132,12 @@ struct Collector<'a> {
     def_names: HashSet<String>,
     unsupported: Vec<String>,
     invalid: Vec<String>,
+    external_components: HashSet<String>,
+    method_type_prefix: String,
 }
 
 impl<'a> Collector<'a> {
-    fn new(schema: &'a LinkRpcInterfaceSchema) -> Self {
+    fn new(schema: &'a LinkRpcInterfaceSchema, options: &GenerateRustOptions) -> Self {
         let mut components: BTreeMap<String, &JsonValue> = BTreeMap::new();
         if let Some(bag) = schema.components.as_ref().and_then(|c| c.schemas.as_ref()) {
             for (k, v) in bag {
@@ -144,10 +146,15 @@ impl<'a> Collector<'a> {
         }
 
         // Assign Rust names up front so `$ref`s can resolve during lowering.
-        let mut used_names = HashSet::new();
+        let mut used_names: HashSet<String> =
+            options.external_components.values().cloned().collect();
         let mut component_names = HashMap::new();
         for name in components.keys() {
-            let rust = unique_name(&to_pascal_case(name), &mut used_names);
+            let rust = if let Some(external) = options.external_components.get(name) {
+                external.clone()
+            } else {
+                unique_name(&to_pascal_case(name), &mut used_names)
+            };
             component_names.insert(name.clone(), rust);
         }
 
@@ -159,6 +166,8 @@ impl<'a> Collector<'a> {
             def_names: HashSet::new(),
             unsupported: Vec::new(),
             invalid: Vec::new(),
+            external_components: options.external_components.keys().cloned().collect(),
+            method_type_prefix: options.method_type_prefix.clone().unwrap_or_default(),
         }
     }
 
@@ -195,6 +204,9 @@ impl<'a> Collector<'a> {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
         for (wire, sub) in component_list {
+            if self.external_components.contains(&wire) {
+                continue;
+            }
             let rust = self.component_names[&wire].clone();
             let doc = schema_doc(sub);
             self.build_named(rust, sub, doc);
@@ -208,7 +220,7 @@ impl<'a> Collector<'a> {
     }
 
     fn lower_method(&mut self, wire: &str, method: &MethodSchema) -> MethodModel {
-        let base = to_pascal_case(wire);
+        let base = format!("{}{}", self.method_type_prefix, to_pascal_case(wire));
         let params = self.type_ref(&method.params, &format!("{base}Params"));
         let server_notification = codegen_kind(method) == Some("serverNotification");
         // A server event carries no result. If one is present the annotation is
@@ -1175,7 +1187,7 @@ pub(super) fn generate(
     schema: &LinkRpcInterfaceSchema,
     options: &GenerateRustOptions,
 ) -> GeneratedRust {
-    let mut collector = Collector::new(schema);
+    let mut collector = Collector::new(schema, options);
     let methods = collector.run(schema);
 
     let scc = compute_sccs(&collector.defs);
@@ -1253,6 +1265,42 @@ pub(super) fn generate(
     GeneratedRust {
         code: w.finish(),
         unsupported: collector.unsupported.clone(),
+    }
+}
+
+pub(super) fn generate_components(
+    components: &crate::schema::Components,
+    options: &GenerateRustOptions,
+) -> GeneratedRustComponents {
+    let schema = LinkRpcInterfaceSchema {
+        id: "shared components".to_string(),
+        hash: String::new(),
+        description: None,
+        comment: None,
+        methods: Default::default(),
+        components: Some(components.clone()),
+        extensions: Default::default(),
+    };
+    let mut collector = Collector::new(&schema, options);
+    collector.run(&schema);
+    let scc = compute_sccs(&collector.defs);
+    let renderer = Renderer {
+        scc: &scc,
+        hub: &options.linkrpc_path,
+    };
+    let mut w = CodeWriter::new();
+    write_header(&mut w, &schema, &collector.unsupported, options);
+    for invalid in &collector.invalid {
+        w.line(&format!("compile_error!({});", quote_str(invalid)));
+    }
+    for def in &collector.defs {
+        w.blank();
+        renderer.write_def(&mut w, def);
+    }
+    GeneratedRustComponents {
+        code: w.finish(),
+        names: collector.component_names.into_iter().collect(),
+        unsupported: collector.unsupported,
     }
 }
 
@@ -1365,7 +1413,7 @@ fn write_bindings(
             "async fn {}(#[params] params: {params_ty}) -> Result<{result_ty}, {error_ty}>",
             method.rust_name,
         );
-        if options.default_server_methods && method.error_name.is_none() {
+        if options.default_server_methods {
             w.line(&format!("{signature} {{"));
             w.indent();
             let mut unused = vec!["ctx", "params"];
@@ -1377,9 +1425,16 @@ fn write_bindings(
             }
             w.line(&format!("let _ = ({});", unused.join(", ")));
             if method.result.is_some() {
+                let error = format!(
+                    "{hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::METHOD_NOT_FOUND, {})",
+                    quote_str(&method.wire_name));
                 w.line(&format!(
-                    "Err({hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::METHOD_NOT_FOUND, {}))",
-                    quote_str(&method.wire_name)
+                    "Err({})",
+                    if method.error_name.is_some() {
+                        format!("{hub}::prelude::CallError::Generic({hub}::prelude::RpcCallError::Remote({error}))")
+                    } else {
+                        error
+                    }
                 ));
             } else {
                 w.line("Ok(())");
@@ -1395,6 +1450,25 @@ fn write_bindings(
     w.blank();
     w.line("#[allow(unused_imports)]");
     w.line(&format!("pub use {module}::interface;"));
+    for binding in &options.bindings {
+        let address = match &binding.address {
+            InterfaceAddress::Root => format!("{hub}::binding::BindingAddress::Root"),
+            InterfaceAddress::Service(service) => format!(
+                "{hub}::binding::BindingAddress::Service({})",
+                quote_str(service)
+            ),
+            InterfaceAddress::Default => format!("{hub}::binding::BindingAddress::Default"),
+            InterfaceAddress::Bare(prefix) => format!(
+                "{hub}::binding::BindingAddress::Bare({})",
+                quote_str(prefix)
+            ),
+        };
+        w.blank();
+        w.line(&format!(
+            "pub const {}: {hub}::binding::InterfaceBinding<{client}> = {hub}::binding::InterfaceBinding::new({address});",
+            binding.name
+        ));
+    }
 }
 
 /// Read `x-linkrpc-codegen.kind` from a method's preserved extensions, if present.

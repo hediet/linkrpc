@@ -17,6 +17,7 @@ import {
 import { parseDuration } from './duration';
 import { checkCompatCommand, formatVerdict } from './commands/checkCompat';
 import { codegenCommand } from './commands/codegen';
+import { exportContractCommand } from './commands/contract';
 import { completionsCommand } from './commands/completions';
 import { defaultsCommand } from './commands/defaults';
 import { hashCommand } from './commands/hash';
@@ -470,10 +471,11 @@ export async function main(
 
     program
         .command('codegen')
-        .description('Generate a TypeScript interface definition from an offline schema bundle.')
+        .description('Generate reusable TypeScript interfaces and bindings from an offline contract.')
         .requiredOption('--input <bundle>', 'local static hub schema bundle')
-        .requiredOption('--interface <id>', 'interface id to generate')
-        .requiredOption('--name <name>', 'exported TypeScript const name')
+        .option('--interface <id>', 'generate only this interface (requires --name)')
+        .option('--name <name>', 'single-interface exported TypeScript const name')
+        .option('--names <file>', 'whole-contract JSON interfaceNames/bindingNames overrides')
         .requiredOption('--output <file>', 'generated TypeScript output file')
         .option(
             '--preserve-wire-schema',
@@ -488,7 +490,27 @@ export async function main(
                 output: opts.output,
                 preserveWireSchema: opts.preserveWireSchema === true,
                 check: opts.check === true,
+                names: opts.names,
             });
+        });
+
+    program.command('contract')
+        .description('Export reusable static interface and binding contracts.')
+        .command('export')
+        .requiredOption('--output <file>', 'contract JSON destination, or - for stdout')
+        .option('--service <id>', 'reflection scope (defaults to the endpoint root)')
+        .option('--max-depth <depth>', 'maximum directory referral depth', (value) => {
+            if (!/^\d+$/.test(value)) throw new InvalidArgumentError('depth must be a non-negative integer');
+            return Number(value);
+        })
+        .action(async (opts) => {
+            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                await exportContractCommand(channel, {
+                    output: opts.output,
+                    serviceId: opts.service,
+                    maxDepth: opts.maxDepth,
+                });
+            }, { requestReflectionAccess: true });
         });
 
     const schema = program

@@ -293,3 +293,154 @@ provider-to-caller payloads. Identity (Ed25519) and capabilities are specified a
 ## License
 
 MIT.
+## Static contracts, typed bindings, and shared generated types
+
+`schema::LinkRpcContract` describes an endpoint without coupling interface
+definitions to exposure:
+
+```json
+{
+  "interfaceSchemas": [],
+  "services": [{ "serviceId": "", "interfaces": [] }],
+  "bareInterfaces": []
+}
+```
+
+`services`, `defaultInterface`, and `bareInterfaces` are optional. Every interface
+reference is `{ "interfaceId": "...", "interfaceHash": "..." }` and resolves by **both** fields.
+Call `contract.validate()` to check schema hashes, exact references, duplicate
+services/interface routes, and conflicting bare prefixes. Nested prefixes are
+allowed; dispatch selects the longest matching prefix. The default preset and
+an empty bare prefix may reference the same exact interface, but conflicting
+identities are rejected.
+
+The macro-generated client type is also an `InterfaceContract` type witness:
+
+```rust,ignore
+use linkrpc::binding::{BindingAddress, InterfaceBinding};
+
+const TARGET: InterfaceBinding<RuntimeClient> =
+    InterfaceBinding::new(BindingAddress::Bare("Runtime."));
+
+let client = TARGET.client(session_caller); // Any RpcCall, including a Channel.
+let registration =
+    TARGET.register(&connection, Arc::new(RuntimeServer::new(provider)))?;
+```
+
+Descriptors are immutable and transport-independent. Their private state pairs
+the interface type with an address; `interface()`, `reference()`, `address()`,
+and `prefix()` expose read-only views. Provider registration accepts only an
+adapter implementing `InterfaceProvider` for that interface.
+
+`target.descriptor()` returns a type-erased `InterfaceBindingDescriptor` with
+read-only `schema()`, `prefix()`, and `address()` accessors. Heterogeneous
+catalogues can therefore derive all metadata from their generated targets:
+
+```rust,ignore
+let interfaces = [runtime::TARGET.descriptor(), debugger::TARGET.descriptor()];
+```
+
+The schema comes from the generated interface's embedded contract. No schema
+files, importer, package installation, or independent prefix table is needed at
+runtime.
+
+| Address | Wire method | Registration |
+| --- | --- | --- |
+| `Root` | `interface::member` | Root interface and reflection metadata |
+| `Service("id")` | `id::interface::member` | Named service and reflection metadata |
+| `Service("")` | `interface::member` | Same as root; no empty wire segment |
+| `Default` | `member` | Root interface, reflection metadata, and default preset |
+| `Bare("")` | `member` | Root interface, reflection metadata, and empty-prefix route |
+| `Bare("Domain.")` | `Domain.member` | Root interface, reflection metadata, and exact-prefix route |
+
+Bare descriptors reuse the existing `RegisterOptions::bare_prefix` semantics:
+an additional prefix route on a reflected qualified registration. “Metadata-free”
+describes their foreign-protocol calls, not hidden provider registrations.
+`Default` retains native streaming support; `Bare` clients reject streaming
+interfaces before sending any protocol frames. Use `try_client` for a fallible
+constructor; `client` panics for an invalid streaming/bare combination.
+Legacy client constructors retain their behavior. Register a `Default` or `Bare`
+target once to expose its qualified and prefix routes; a second `Root`
+registration would duplicate its root route.
+
+### Standalone provider and event routing
+
+`InterfaceRouter` exposes the connection's existing dispatcher without requiring
+a transport. The same descriptors register into either runtime:
+
+```rust,ignore
+use linkrpc::binding::InterfaceRouter;
+use linkrpc::prelude::{CallCtx, InterfaceHandler};
+
+let router = InterfaceRouter::new();
+runtime::TARGET.register(
+    &router, Arc::new(runtime::RuntimeServer::new(runtime_provider)),
+)?;
+debugger::TARGET.register(
+    &router, Arc::new(debugger::DebuggerServer::new(debugger_provider)),
+)?;
+
+// Full wire name; returns false for unknown methods, or INVALID_PARAMS for
+// malformed known event payloads. Uses the generated adapter's typed decoder.
+let handled = router.dispatch_notification("Runtime.changed", event_params).await?;
+let result = InterfaceHandler::handle_request(
+    &router, "Runtime.evaluate", request_params, CallCtx::default(),
+).await?;
+```
+
+The router implements both `InterfaceHandler` and `RequestHandler`, so it can
+also be passed directly to `Channel::new`. `connection.router()` returns a clone
+sharing that connection's live registry, registrations, and disposal. There is
+no second routing algorithm or manually implemented event decoder.
+
+### Generating common types and reusable interfaces
+
+Generate common components once, then use the returned exact name map for each
+interface. The original schema and hash remain embedded in each interface; the
+external map affects only Rust type emission.
+
+```rust,ignore
+use linkrpc::schema::codegen::{
+    generate_rust_components, generate_rust_interface, GenerateRustBinding,
+    GenerateRustOptions, InterfaceAddress,
+};
+
+let shared = generate_rust_components(&components, &GenerateRustOptions::default());
+// Write shared.code to types.rs.
+let generated = generate_rust_interface(&runtime_schema, &GenerateRustOptions {
+    client_name: Some("RuntimeClient".into()),
+    generate_server: true,
+    default_server_methods: true,
+    method_type_prefix: Some("Runtime".into()),
+    external_components: shared.names.iter()
+        .map(|(wire, rust)| (wire.clone(), format!("super::types::{rust}")))
+        .collect(),
+    bindings: vec![GenerateRustBinding {
+        name: "TARGET".into(),
+        address: InterfaceAddress::Bare("Runtime.".into()),
+    }],
+    ..Default::default()
+});
+// Write generated.code to runtime.rs, a sibling module of types.rs.
+```
+
+A local method `evaluate` now produces `RuntimeEvaluateParams` and
+`RuntimeEvaluateResult`, while calls still use the local method name plus the
+binding's exact prefix. Different domain clients/providers use the **same** Rust
+component types. Recursive components retain the existing generator's boxing.
+Default provider methods return method-not-found, including methods with typed
+application errors; notification defaults are no-ops.
+
+For a complete endpoint, `generate_rust_contract(&contract, &options)` validates
+the contract and returns `GeneratedRustContract { files, modules, unsupported }`.
+Write `files` into one directory: it contains `mod.rs`, `types.rs`, and a reusable
+module for each exact interface identity. `modules` maps `{id, hash}` to its module
+name (Rust fields `id`/`hash`, serialized as `interfaceId`/`interfaceHash`).
+Bindings are named `ROOT`, `DEFAULT`, `SERVICE_<service-array-index>`, and
+`BARE_<bare-array-index>` within the corresponding module. Schemas with no
+exposure produce no targets. Shared component names must have identical schemas;
+conflicting definitions are rejected rather than generating incompatible types.
+
+All entry points use the existing type lowerer and trait macro. Every output has
+a generated header. The original single-interface API and its default generated
+source remain unchanged.

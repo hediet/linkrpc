@@ -15,6 +15,7 @@ export {
 } from './channel';
 export { RpcFailure, isRpcFailure, type Result } from './rpcFailure';
 export * from './linkRpcConnection';
+export * from './interfaceTarget';
 export {
     bareInterfaceTarget,
     type BareInterfaceTarget,

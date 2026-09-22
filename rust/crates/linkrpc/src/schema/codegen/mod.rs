@@ -49,10 +49,22 @@
 //! ```
 
 mod code_writer;
+mod contract;
 mod generator;
 mod ident;
 
 use crate::schema::interface_schema::LinkRpcInterfaceSchema;
+use std::collections::BTreeMap;
+
+pub use crate::schema::contract::InterfaceAddress;
+pub use contract::{generate_rust_contract, GeneratedRustContract};
+
+/// A named immutable, typed target emitted alongside the reusable interface.
+#[derive(Debug, Clone)]
+pub struct GenerateRustBinding {
+    pub name: String,
+    pub address: InterfaceAddress,
+}
 
 /// Options controlling [`generate_rust_interface`].
 #[derive(Debug, Clone)]
@@ -78,6 +90,16 @@ pub struct GenerateRustOptions {
     /// large interface while the server adapter still validates every
     /// recognized notification payload before invoking the default.
     pub default_server_methods: bool,
+
+    /// Component wire names mapped to existing Rust type paths. These components
+    /// are referenced but not emitted, so interfaces can share one set of types.
+    pub external_components: BTreeMap<String, String>,
+
+    /// Prefix for method payload type names, independent of local wire names.
+    pub method_type_prefix: Option<String>,
+
+    /// Named typed binding constants. Empty by default.
+    pub bindings: Vec<GenerateRustBinding>,
 }
 
 impl Default for GenerateRustOptions {
@@ -87,6 +109,9 @@ impl Default for GenerateRustOptions {
             client_name: None,
             generate_server: false,
             default_server_methods: false,
+            external_components: BTreeMap::new(),
+            method_type_prefix: None,
+            bindings: Vec::new(),
         }
     }
 }
@@ -101,6 +126,23 @@ pub struct GeneratedRust {
     /// represented natively and was lowered to a fallback (`serde_json::Value`).
     /// Empty when the whole interface lowered cleanly.
     pub unsupported: Vec<String>,
+}
+
+/// Shared component source and the exact names chosen by the type generator.
+#[derive(Debug, Clone)]
+pub struct GeneratedRustComponents {
+    pub code: String,
+    pub names: BTreeMap<String, String>,
+    pub unsupported: Vec<String>,
+}
+
+/// Generate a common types module once, then pass its [`GeneratedRustComponents::names`]
+/// (qualified with the module path) as [`GenerateRustOptions::external_components`].
+pub fn generate_rust_components(
+    components: &crate::schema::Components,
+    options: &GenerateRustOptions,
+) -> GeneratedRustComponents {
+    generator::generate_components(components, options)
 }
 
 /// Render `schema` as a self-contained Rust source module.

@@ -61,25 +61,30 @@ produces publication artifacts.
 
 ## Versions and immutable reservations
 
-The five npm packages share the committed base version **0.0.2**. The Rust
-crates `linkrpc-macros`, `linkrpc`, and `linkrpc-tokio` share **0.2.1**.
+The five npm packages share the committed base version **0.0.3**. The Rust
+crates `linkrpc-macros`, `linkrpc`, and `linkrpc-tokio` share **0.3.0**.
 The examples remain unpublished and are not packaged.
+
+These bases add static endpoint contracts, typed root/service/default/bare
+bindings, contract export and generation in the CLI, and shared Rust component
+generation. Consumers of generated bindings must upgrade the runtime library
+alongside their generator.
 
 Every source CI run reserves one annotated tag `next-builds/YYYYMMDD/N`. The
 date is the source run's UTC creation date, not the retry date. Its message
 records the run ID, commit, both bases and suffix. Atomic reference creation
 resolves contention; a retry of the same run reuses its reservation. Both
 ecosystems use the **same** `next.YYYYMMDD.N` suffix, e.g.
-`0.0.2-next.20260920.1` and `0.2.1-next.20260920.1`.
+`0.0.3-next.20260920.1` and `0.3.0-next.20260920.1`.
 
 Stable candidates are independently reserved at
-`release-candidates/npm/v0.0.2` and `release-candidates/cargo/{crate}/v0.2.1`.
+`release-candidates/npm/v0.0.3` and `release-candidates/cargo/{crate}/v0.3.0`.
 Cargo reservations are per crate so adding an unpublished crate cannot change
 the recorded source identity of an already-published stable version.
 Reservations are created before packing and never moved. Until all artifact
 uploads succeed, a retry or later run can recover the original candidate's
 artifacts and revalidate its successful trusted CI run. After upload, immutable
-completion tags `npm/v0.0.2` and `cargo/{crate}/v0.2.1` suppress future stable
+completion tags `npm/v0.0.3` and `cargo/{crate}/v0.3.0` suppress future stable
 generation for those package/base combinations. These tags mean **artifacts generated**, not registry
 publication confirmed. Registry availability/retries remain ArtifactGate's
 responsibility. Bump committed bases intentionally for a new stable release.
@@ -125,7 +130,7 @@ Release repacking retains the original Cargo file set, `Cargo.toml.orig`, and
 change. Archive timestamps and owner metadata are normalized so retries of a
 reserved release produce identical bytes. The normalized manifest has no workspace/path dependencies and pins
 all generated prerelease internal requirements exactly, e.g.
-`=0.2.1-next.20260920.1`, including target-specific, renamed, build, and dev
+`=0.3.0-next.20260920.1`, including target-specific, renamed, build, and dev
 dependencies. ArtifactGate must wait for dependencies to be available in the
 Cargo registry index: `linkrpc-macros` before `linkrpc`, and `linkrpc` before
 `linkrpc-tokio` (for both channels). Upload order is not itself a dependency gate.

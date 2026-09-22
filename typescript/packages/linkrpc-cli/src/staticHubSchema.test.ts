@@ -53,7 +53,7 @@ describe('parseStaticHubSchema', () => {
 
     it('rejects unresolved service interface references', () => {
         const document = validDocument();
-        document.services.push({
+        document.services!.push({
             serviceId: 'nested',
             interfaces: [{
                 interfaceId: 'missing.interface',

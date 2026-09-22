@@ -10,6 +10,7 @@
 extern crate self as linkrpc;
 
 pub mod application_error;
+pub mod binding;
 pub mod client;
 pub mod connection;
 pub mod protocol;
@@ -21,6 +22,10 @@ pub mod prelude {
     pub use crate::application_error::{
         scope_error_contract, validate_json_schema, ApplicationError, CallError,
         DEFAULT_APPLICATION_ERROR_CODE,
+    };
+    pub use crate::binding::{
+        BindingAddress, BindingRegistrar, InterfaceBinding, InterfaceBindingDescriptor,
+        InterfaceContract, InterfaceProvider, InterfaceRouter,
     };
     pub use crate::client::{RpcCall, RpcCallError};
     pub use crate::connection::channel::{Channel, RequestHandler};
@@ -42,6 +47,10 @@ pub mod prelude {
         CallControl, CallResult, NoStream, RawStreamingCall, StreamReceiver, StreamSender,
         StreamingCall, TypedCallResult, TypedStreamingCall,
     };
+    pub use crate::schema::contract::{
+        BareInterfaceContract, ContractError, InterfaceAddress, InterfaceRef, LinkRpcContract,
+        ServiceContract,
+    };
     pub use async_trait::async_trait;
     // Typed clients (+ their result types) for the built-in reflection interfaces, so consumers
     // can introspect an endpoint without hand-rolling `call_member` calls.
@@ -59,9 +68,11 @@ pub mod prelude {
         format_method_name, parse_method_name, ParsedMethodName,
     };
     pub use crate::schema::{
-        compute_interface_hash, compute_interface_hash_value, generate_rust_interface,
-        normalize_json_schema, Components, ErrorSchema, GenerateRustOptions, GeneratedRust,
-        InterfaceSchemaError, LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
+        compute_interface_hash, compute_interface_hash_value, generate_rust_components,
+        generate_rust_contract, generate_rust_interface, normalize_json_schema, Components,
+        ErrorSchema, GenerateRustBinding, GenerateRustOptions, GeneratedRust,
+        GeneratedRustComponents, GeneratedRustContract, InterfaceSchemaError,
+        LinkRpcInterfaceSchema, MemberAnnotations, MethodMap, MethodSchema,
     };
     pub use crate::transport::memory::transport_pair;
     pub use crate::transport::message::{MessageTransport, TransportError};

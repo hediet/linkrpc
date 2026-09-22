@@ -44,3 +44,11 @@ path = "missing_imported_member.rs"
 [[bin]]
 name = "client_only_event"
 path = "client_only_event.rs"
+
+[[bin]]
+name = "wrong_binding_provider"
+path = "wrong_binding_provider.rs"
+
+[[bin]]
+name = "immutable_binding"
+path = "immutable_binding.rs"

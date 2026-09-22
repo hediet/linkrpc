@@ -1,7 +1,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import {
-    applicationError, bareInterfaceTarget, defineInterface, ErrorCode, interfaceFromSchema, isRpcFailure, LinkRpcConnection,
+    applicationError, bareInterfaceTarget, defaultInterfaceTarget, defineInterface, ErrorCode, interfaceFromSchema, interfaceTarget, isRpcFailure, LinkRpcConnection,
     requestType, RpcError, RpcFailure, TransportPair,
     type InterfaceClient, type InterfaceHandlers,
     type InterfaceResultClient, type IRequestSender, type Result, type ApplicationErrorValue,
@@ -30,6 +30,33 @@ function sender(error: unknown, synchronous = false): IRequestSender {
 }
 
 describe('named application errors and result clients', () => {
+    it('preserves qualified and default routing in both client error policies', async () => {
+        const pair = new TransportPair();
+        const server = LinkRpcConnection.fromTransport(pair.a);
+        const connection = LinkRpcConnection.fromTransport(pair.b);
+        const target = interfaceTarget(contract, { serviceId: 'documents' });
+        server.register(defaultInterfaceTarget(contract), {
+            read: () => notFound.create({ id: 'missing' }),
+            plain: () => 'ok',
+            stream: () => denied.create(),
+        }, { serviceId: 'documents' });
+        for (const route of [target, defaultInterfaceTarget(contract)]) {
+            const regular = connection.get(route);
+            const safe = connection.getResultClient(route);
+            expect(await regular.plain({})).toBe('ok');
+            expect(await safe.plain({})).toBe('ok');
+            expect(notFound.is(await regular.read({ id: 'missing' }))).toBe(true);
+            expect(await safe.read({ id: 'missing' })).toMatchObject({
+                error: { kind: 'application', error: { type: 'NotFound' } },
+            });
+            expect(await safe.stream({})).toMatchObject({
+                error: { kind: 'application', error: { type: 'Denied' } },
+            });
+        }
+        server.close();
+        connection.close();
+    });
+
     it('uses code 1 with tagged inner payloads and omits unit data', async () => {
         const pair = new TransportPair();
         const server = LinkRpcConnection.fromTransport(pair.a);

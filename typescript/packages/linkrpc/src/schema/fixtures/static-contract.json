@@ -1,0 +1,45 @@
+{
+  "interfaceSchemas": [
+    {
+      "id": "fixture.echo",
+      "hash": "3f5ed133dd85203a",
+      "methods": {
+        "echo": {
+          "params": { "type": "string" },
+          "result": { "type": "string" }
+        },
+        "changed": {
+          "params": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "services": [
+    {
+      "serviceId": "",
+      "interfaces": [
+        { "interfaceId": "fixture.echo", "interfaceHash": "3f5ed133dd85203a" }
+      ]
+    },
+    {
+      "serviceId": "worker",
+      "interfaces": [
+        { "interfaceId": "fixture.echo", "interfaceHash": "3f5ed133dd85203a" }
+      ]
+    }
+  ],
+  "defaultInterface": {
+    "interfaceId": "fixture.echo",
+    "interfaceHash": "3f5ed133dd85203a"
+  },
+  "bareInterfaces": [
+    {
+      "interface": { "interfaceId": "fixture.echo", "interfaceHash": "3f5ed133dd85203a" },
+      "prefix": ""
+    },
+    {
+      "interface": { "interfaceId": "fixture.echo", "interfaceHash": "3f5ed133dd85203a" },
+      "prefix": "Runtime."
+    }
+  ]
+}

@@ -34,7 +34,7 @@ export class StaticHubReflection {
     private readonly _hashesByServiceInterface = new Map<string, Set<string>>();
 
     constructor(private readonly _schema: StaticHubSchema) {
-        this._directory = _schema.services.flatMap((service) =>
+        this._directory = (_schema.services ?? []).flatMap((service) =>
             service.interfaces.map((ref) => ({
                 serviceId: service.serviceId,
                 interfaceId: ref.interfaceId,
@@ -58,6 +58,11 @@ export class StaticHubReflection {
             hashes.add(ref.interfaceHash);
             this._activeHashesById.set(ref.interfaceId, hashes);
         }
+        for (const { interface: ref } of _schema.bareInterfaces ?? []) {
+            const hashes = this._activeHashesById.get(ref.interfaceId) ?? new Set<string>();
+            hashes.add(ref.interfaceHash);
+            this._activeHashesById.set(ref.interfaceId, hashes);
+        }
     }
 
     public tryHandleRequest(call: IncomingCall): Promise<Result> | undefined {
@@ -74,6 +79,13 @@ export class StaticHubReflection {
             return undefined;
         }
         switch (reflectionCall.method) {
+            case `${DEFAULTS_INTERFACE_ID}::listBindings`:
+                return Promise.resolve({
+                    result: { bindings: (this._schema.bareInterfaces ?? []).map((binding) => ({
+                        prefix: binding.prefix,
+                        ...binding.interface,
+                    })) },
+                });
             case DIRECTORY_LIST_METHOD:
                 return Promise.resolve(this._listDirectory(params));
             case DIRECTORY_WATCH_METHOD:
