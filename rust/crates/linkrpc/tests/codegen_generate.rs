@@ -126,7 +126,7 @@ fn server_notification_emits_no_client_send_method() {
     let code = generate().code;
     assert!(code.contains("generate_server = false"));
     assert!(code.contains("#[name(\"tree_changed\")]\n    #[server_notification]"));
-    assert!(code.contains("async fn get_tree(#[params]"));
+    assert!(code.contains("async fn get_tree(id:"));
     assert!(code.contains("#[name(\"notify_changed\")]\n    #[notification]"));
 }
 

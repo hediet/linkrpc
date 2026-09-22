@@ -14,12 +14,12 @@ impl ComExampleGeneratedStreamingService for Provider {
     async fn exchange(
         &self,
         _ctx: &CallCtx,
-        params: ExchangeParams,
+        initial: u32,
         mut commands: StreamReceiver<Command>,
         events: StreamSender<Event>,
     ) -> Result<u32, JsonRpcError> {
         let command = commands.recv().await.expect("one command");
-        let total = params.initial + command.amount;
+        let total = initial + command.amount;
         events.send(Event::new(EventKind::Progress, total)).await?;
         Ok(total)
     }
@@ -27,7 +27,6 @@ impl ComExampleGeneratedStreamingService for Provider {
     async fn server_silent(
         &self,
         _ctx: &CallCtx,
-        _params: ServerSilentParams,
         _events: StreamSender<NoStream>,
     ) -> Result<(), JsonRpcError> {
         Ok(())
@@ -94,7 +93,7 @@ async fn generated_duplex_binding_runs_end_to_end() {
 
     let client = ComExampleGeneratedStreamingClient::new(client_connection);
     let (result, commands, mut events, _control) = client
-        .exchange(ExchangeParams::new(10))
+        .exchange(10)
         .await
         .unwrap()
         .into_parts();
@@ -128,7 +127,7 @@ async fn generated_client_validates_literal_and_closed_stream_schemas() {
 
     let client = ComExampleGeneratedStreamingClient::new(client_connection);
     let (result, _, mut events, _) = client
-        .exchange(ExchangeParams::new(0))
+        .exchange(0)
         .await
         .unwrap()
         .into_parts();
@@ -138,7 +137,7 @@ async fn generated_client_validates_literal_and_closed_stream_schemas() {
     assert_eq!(result.await.unwrap(), 7);
 
     let (result, _, _never, _) = client
-        .server_silent(ServerSilentParams::new())
+        .server_silent()
         .await
         .unwrap()
         .into_parts();

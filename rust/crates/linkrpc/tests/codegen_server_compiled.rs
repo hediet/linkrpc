@@ -18,26 +18,28 @@ impl ComExampleGraphService for GraphProvider {
     async fn get_tree(
         &self,
         _ctx: &CallCtx,
-        params: GetTreeParams,
+        id: String,
     ) -> Result<TreeNode, JsonRpcError> {
-        Ok(TreeNode::new(params.id))
+        Ok(TreeNode::new(id))
     }
 
     async fn notify_changed(
         &self,
         _ctx: &CallCtx,
-        params: NotifyChangedParams,
+        node: TreeNode,
     ) -> Result<(), JsonRpcError> {
-        self.notifications.lock().unwrap().push(params.node.value);
+        self.notifications.lock().unwrap().push(node.value);
         Ok(())
     }
 
     async fn configure(
         &self,
         _ctx: &CallCtx,
-        params: ConfigureParams,
+        _id: String,
+        _label: Option<String>,
+        payload: Option<serde_json::Value>,
     ) -> Result<bool, JsonRpcError> {
-        self.configured.lock().unwrap().push(params.payload);
+        self.configured.lock().unwrap().push(payload);
         Ok(true)
     }
 }
@@ -49,8 +51,15 @@ struct EventProvider {
 
 #[async_trait]
 impl ComExampleGraphService for EventProvider {
-    async fn tree_changed(&self, _ctx: &CallCtx, params: TreeNode) -> Result<(), JsonRpcError> {
-        self.events.lock().unwrap().push(params.value);
+    async fn tree_changed(
+        &self,
+        _ctx: &CallCtx,
+        value: String,
+        _point: Option<Point>,
+        _parent: Option<Box<TreeNode>>,
+        _children: Option<Vec<TreeNode>>,
+    ) -> Result<(), JsonRpcError> {
+        self.events.lock().unwrap().push(value);
         Ok(())
     }
 }
@@ -62,7 +71,7 @@ impl ComExampleGraphService for FailingProvider {
     async fn notify_changed(
         &self,
         _ctx: &CallCtx,
-        _params: NotifyChangedParams,
+        _node: TreeNode,
     ) -> Result<(), JsonRpcError> {
         Err(JsonRpcError::new(-32_001, "notification failed"))
     }
@@ -103,13 +112,13 @@ async fn generated_client_provider_and_event_round_trip() {
 
     let client = ComExampleGraphClient::root(client_connection);
     let tree = client
-        .get_tree(GetTreeParams::new("root".into()))
+        .get_tree("root".into())
         .await
         .unwrap();
     assert_eq!(tree.value, "root");
 
     client
-        .notify_changed(NotifyChangedParams::new(TreeNode::new("changed".into())))
+        .notify_changed(TreeNode::new("changed".into()))
         .await
         .unwrap();
     wait_for(|| !provider.notifications.lock().unwrap().is_empty()).await;
@@ -120,19 +129,24 @@ async fn generated_client_provider_and_event_round_trip() {
 
     let event_client = ComExampleGraphClient::root(server_connection);
     event_client
-        .tree_changed(TreeNode::new("event".into()))
+        .tree_changed("event".into(), None, None, None)
         .await
         .unwrap();
     wait_for(|| !event_provider.events.lock().unwrap().is_empty()).await;
     assert_eq!(event_provider.events.lock().unwrap().as_slice(), ["event"]);
 
     assert!(client
-        .configure(ConfigureParams::new("optional-field-omitted".into()))
+        .configure("optional-field-omitted".into(), None, None)
         .await
         .unwrap());
-    let mut with_payload = ConfigureParams::new("optional-field-present".into());
-    with_payload.payload = Some(serde_json::json!({ "unknown": [1, true, null] }));
-    assert!(client.configure(with_payload).await.unwrap());
+    assert!(client
+        .configure(
+            "optional-field-present".into(),
+            None,
+            Some(serde_json::json!({ "unknown": [1, true, null] })),
+        )
+        .await
+        .unwrap());
     assert_eq!(
         *provider.configured.lock().unwrap(),
         vec![
@@ -142,7 +156,7 @@ async fn generated_client_provider_and_event_round_trip() {
     );
 
     let error = client
-        .paint(PaintParams::new(Shape::Point, Color::Red))
+        .paint(Shape::Point, Color::Red)
         .await
         .unwrap_err();
     assert_eq!(error.code, error_codes::METHOD_NOT_FOUND);

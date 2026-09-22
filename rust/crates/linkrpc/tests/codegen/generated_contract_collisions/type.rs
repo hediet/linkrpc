@@ -15,7 +15,7 @@
 pub trait TypeService {
     #[name("echo")]
     async fn echo(#[params] params: String) -> Result<String, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "echo"))
     }
 }

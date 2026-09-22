@@ -12,7 +12,7 @@ impl DevLinkrpcTsErrorsService for Provider {
     async fn check(
         &self,
         _ctx: &CallCtx,
-        _params: CheckParams,
+        _mode: String,
     ) -> Result<String, CallError<CheckError>> {
         Err(CallError::Application(CheckError::NotFound(
             MissingData::new("gone".into()),
@@ -22,11 +22,11 @@ impl DevLinkrpcTsErrorsService for Provider {
     async fn stream_check(
         &self,
         _ctx: &CallCtx,
-        params: StreamCheckParams,
+        mode: String,
         stream_sender: StreamSender<String>,
     ) -> Result<String, CallError<StreamCheckError>> {
         stream_sender.send("checking".into()).await.unwrap();
-        match params.mode.as_str() {
+        match mode.as_str() {
             "missing" => Err(CallError::Application(StreamCheckError::Code2001(
                 MissingData::new("streamed".into()),
             ))),
@@ -46,7 +46,7 @@ impl DevLinkrpcTsErrorsService for RawErrorProvider {
     async fn check(
         &self,
         _ctx: &CallCtx,
-        _params: CheckParams,
+        _mode: String,
     ) -> Result<String, CallError<CheckError>> {
         Err(CallError::Generic(RpcCallError::Remote(JsonRpcError {
             code: 29_999,
@@ -58,7 +58,7 @@ impl DevLinkrpcTsErrorsService for RawErrorProvider {
     async fn stream_check(
         &self,
         _ctx: &CallCtx,
-        _params: StreamCheckParams,
+        _mode: String,
         _stream_sender: StreamSender<String>,
     ) -> Result<String, CallError<StreamCheckError>> {
         unreachable!()
@@ -95,7 +95,7 @@ async fn generated_typed_error_round_trips_and_rejects_malformed_data() {
     tokio::spawn(async move { server_run.run().await });
 
     let error = DevLinkrpcTsErrorsClient::new(client_connection)
-        .check(CheckParams::new("missing".into()))
+        .check("missing".into())
         .await
         .unwrap_err();
     match error {
@@ -235,7 +235,7 @@ async fn generated_typed_stream_preserves_payloads_and_final_application_errors(
     let client = DevLinkrpcTsErrorsClient::new(client_connection);
 
     let call = client
-        .stream_check(StreamCheckParams::new("ok".into()))
+        .stream_check("ok".into())
         .await
         .unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
@@ -245,7 +245,7 @@ async fn generated_typed_stream_preserves_payloads_and_final_application_errors(
     assert_eq!(payloads.recv().await, None);
 
     let call = client
-        .stream_check(StreamCheckParams::new("missing".into()))
+        .stream_check("missing".into())
         .await
         .unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
@@ -259,7 +259,7 @@ async fn generated_typed_stream_preserves_payloads_and_final_application_errors(
     assert_eq!(payloads.recv().await, None);
 
     let call = client
-        .stream_check(StreamCheckParams::new("busy".into()))
+        .stream_check("busy".into())
         .await
         .unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
@@ -294,7 +294,7 @@ async fn generated_server_preserves_raw_remote_error() {
 #[tokio::test]
 async fn generated_client_marks_response_decode_failures_local() {
     let error = DevLinkrpcTsErrorsClient::new(WrongResultCaller)
-        .check(CheckParams::new("decode".into()))
+        .check("decode".into())
         .await
         .unwrap_err();
     assert!(matches!(

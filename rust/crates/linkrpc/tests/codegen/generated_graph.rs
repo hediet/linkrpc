@@ -248,25 +248,43 @@ impl ResetParams {
 pub trait ComExampleGraphService {
     /// A method whose params mix required and optional fields.
     #[name("configure")]
-    async fn configure(#[params] params: ConfigureParams) -> Result<bool, linkrpc::prelude::JsonRpcError>;
+    #[params(ConfigureParams)]
+    async fn configure(
+        id: String,
+        label: Option<String>,
+        payload: Option<serde_json::Value>,
+    ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
-    async fn get_tree(#[params] params: GetTreeParams) -> Result<TreeNode, linkrpc::prelude::JsonRpcError>;
+    #[params(GetTreeParams)]
+    async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::JsonRpcError>;
     #[name("notify_changed")]
     #[notification]
-    async fn notify_changed(#[params] params: NotifyChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError>;
+    #[params(NotifyChangedParams)]
+    async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError>;
     #[name("paint")]
-    async fn paint(#[params] params: PaintParams) -> Result<bool, linkrpc::prelude::JsonRpcError>;
+    #[params(PaintParams)]
+    async fn paint(
+        shape: Shape,
+        color: Color,
+    ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
     #[name("raw_echo")]
     async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
     /// A method with an empty (all-defaults) params object.
     #[name("reset")]
     #[notification]
-    async fn reset(#[params] params: ResetParams) -> Result<(), linkrpc::prelude::JsonRpcError>;
+    #[params(ResetParams)]
+    async fn reset() -> Result<(), linkrpc::prelude::JsonRpcError>;
     /// Server-emitted event fired whenever the tree changes.
     #[name("tree_changed")]
     #[server_notification]
-    async fn tree_changed(#[params] params: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError>;
+    #[params(TreeNode)]
+    async fn tree_changed(
+        value: String,
+        point: Option<Point>,
+        parent: Option<Box<TreeNode>>,
+        children: Option<Vec<TreeNode>>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError>;
 }
 
 #[allow(unused_imports)]

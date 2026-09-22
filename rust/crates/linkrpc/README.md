@@ -431,6 +431,24 @@ component types. Recursive components retain the existing generator's boxing.
 Default provider methods return method-not-found, including methods with typed
 application errors; notification defaults are no-ops.
 
+By default, `GenerateRustOptions::inline_params` exposes params-struct fields as
+individual arguments on the generated trait, client, and provider:
+
+```rust,ignore
+#[params(RuntimeEvaluateParams)]
+async fn evaluate(expression: String, return_by_value: Option<bool>)
+    -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
+```
+
+The macro packs and unpacks the original struct, preserving its wire property
+names, optional-field omission, and embedded schema identity. Empty structs
+become zero-argument methods. Arguments follow the generated struct's field
+order. Open objects with flattened extra properties, non-struct payloads,
+external fields without known type paths, and fields conflicting with injected
+arguments retain `#[params] params: ParamsType`. Set `inline_params: false` to keep the previous
+whole-object API for every method. Regeneration with the default is a Rust API
+change: callers and providers must pass/receive individual fields instead.
+
 For a complete endpoint, `generate_rust_contract(&contract, &options)` validates
 the contract and returns `GeneratedRustContract { files, modules, unsupported }`.
 Write `files` into one directory: it contains `mod.rs`, `types.rs`, and a reusable
@@ -441,6 +459,5 @@ Bindings are named `ROOT`, `DEFAULT`, `SERVICE_<service-array-index>`, and
 exposure produce no targets. Shared component names must have identical schemas;
 conflicting definitions are rejected rather than generating incompatible types.
 
-All entry points use the existing type lowerer and trait macro. Every output has
-a generated header. The original single-interface API and its default generated
-source remain unchanged.
+All entry points use the same type lowerer and trait macro. Every output has a
+generated header.

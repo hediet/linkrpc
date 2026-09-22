@@ -106,6 +106,7 @@ fn bless_golden() {
     eprintln!("unsupported constructs: {:#?}", generated.unsupported);
 
     for (input, output, runtime) in [
+        ("inline_interface.json", "generated_inline.rs", "linkrpc"),
         (
             "typed_errors_interface.json",
             "generated_typed_errors.rs",

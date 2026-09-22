@@ -91,6 +91,12 @@ pub struct GenerateRustOptions {
     /// recognized notification payload before invoking the default.
     pub default_server_methods: bool,
 
+    /// Expose representable params structs as individual method arguments.
+    /// Enabled by default. Set to `false` to always take one `#[params]` object.
+    /// Open objects, non-struct payloads, external fields without known type
+    /// paths, and fields conflicting with injected arguments keep the object form.
+    pub inline_params: bool,
+
     /// Component wire names mapped to existing Rust type paths. These components
     /// are referenced but not emitted, so interfaces can share one set of types.
     pub external_components: BTreeMap<String, String>,
@@ -109,6 +115,7 @@ impl Default for GenerateRustOptions {
             client_name: None,
             generate_server: false,
             default_server_methods: false,
+            inline_params: true,
             external_components: BTreeMap::new(),
             method_type_prefix: None,
             bindings: Vec::new(),
@@ -544,7 +551,7 @@ mod tests {
             "Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, \"echo\"))"
         ));
         assert!(generated_with_defaults.code.contains(
-            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::JsonRpcError> {\n        let _ = (ctx, params);\n        Ok(())"
+            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::JsonRpcError> {\n        let _ = (ctx, params,);\n        Ok(())"
         ));
     }
 

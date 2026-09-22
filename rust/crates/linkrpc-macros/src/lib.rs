@@ -16,8 +16,10 @@
 //! `#[annotations(dangerous, read_only, ...)]` attach member annotations.
 //!
 //! `schema_json = "..."` imports a frozen interface contract (including its hash)
-//! instead of deriving schemas. Imported methods use `#[params]` and may rename
-//! their wire member with `#[name("...")]`. `client`, `server`, `module`, `runtime`,
+//! instead of deriving schemas. Imported methods use a `#[params]` argument or
+//! `#[params(ExistingStruct)]` on the method to pack inline arguments using an
+//! existing struct's Serde representation. They may rename their wire member
+//! with `#[name("...")]`. `client`, `server`, `module`, `runtime`,
 //! and `generate_server` configure names and client-only generation.
 //!
 //! Generated code references `::linkrpc`, `::serde`, and `::serde_json`.
@@ -488,6 +490,8 @@ struct MethodModel {
     /// When set, the single parameter is the params object itself (via `#[params]`); its type is
     /// used directly as the wire param schema instead of synthesizing a wrapper struct.
     passthrough_ty: Option<Type>,
+    /// Existing struct used to pack inline arguments without re-deriving its wire shape.
+    inline_params_ty: Option<syn::TypePath>,
     /// The success/result type for a request (None for notifications).
     result_ty: Option<Type>,
     /// Application error enum inferred from the request's return type.
@@ -570,10 +574,10 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
                     "Result error type does not match schema_json application errors",
                 ));
             }
-            if method.passthrough_ty.is_none() {
+            if method.passthrough_ty.is_none() && method.inline_params_ty.is_none() {
                 return Err(syn::Error::new_spanned(
                     &method.name,
-                    "schema_json methods require a #[params] parameter",
+                    "schema_json methods require a #[params] parameter or #[params(Type)] method",
                 ));
             }
         }
@@ -1048,6 +1052,16 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
     }
     let doc = extract_doc(&f.attrs);
     let annotations = extract_annotations(&f.attrs)?;
+    let mut inline_params_ty = None;
+    for attr in f.attrs.iter().filter(|attr| attr.path().is_ident("params")) {
+        if inline_params_ty.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "duplicate #[params(Type)] attribute",
+            ));
+        }
+        inline_params_ty = Some(attr.parse_args::<syn::TypePath>()?);
+    }
 
     let mut params = Vec::new();
     let mut passthrough_ty = None;
@@ -1083,6 +1097,12 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
             "#[params] requires the method to take exactly one parameter (the whole params object)",
         ));
     }
+    if passthrough_ty.is_some() && inline_params_ty.is_some() {
+        return Err(syn::Error::new_spanned(
+            &sig.inputs,
+            "#[params(Type)] cannot be combined with a #[params] parameter",
+        ));
+    }
 
     let (result_ty, return_error_ty) = parse_output(&sig.output, is_notification)?;
     if let Some(attr) = f.attrs.iter().find(|attr| attr.path().is_ident("errors")) {
@@ -1107,6 +1127,7 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
         is_notification,
         params,
         passthrough_ty,
+        inline_params_ty,
         result_ty,
         error_ty,
         server_returns_call_error,
@@ -1228,12 +1249,14 @@ fn param_struct_ident(trait_ident: &Ident, method: &Ident) -> Ident {
     format_ident!("__linkrpc_{}_{}_Params", trait_ident, method)
 }
 
-/// The type used as the wire params object: the `#[params]` type directly, else the synthesized
-/// wrapper struct.
+/// The explicit wire params type, or the synthesized wrapper for inline arguments.
 fn params_ty(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
     match &m.passthrough_ty {
         Some(ty) => quote!(#ty),
         None => {
+            if let Some(ty) = &m.inline_params_ty {
+                return quote!(#ty);
+            }
             let pstruct = param_struct_ident(trait_ident, &m.name);
             quote!(#pstruct)
         }
@@ -1241,7 +1264,7 @@ fn params_ty(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
 }
 
 fn param_struct(trait_ident: &Ident, m: &MethodModel) -> TokenStream2 {
-    if m.passthrough_ty.is_some() {
+    if m.passthrough_ty.is_some() || m.inline_params_ty.is_some() {
         return quote!();
     }
     let pstruct = param_struct_ident(trait_ident, &m.name);
@@ -1434,7 +1457,7 @@ fn client_method(
             })?;
         }
     } else {
-        let pstruct = param_struct_ident(trait_ident, &m.name);
+        let pstruct = params_ty(trait_ident, m);
         let field_idents = m.params.iter().map(|(id, _)| id).collect::<Vec<_>>();
         quote! {
             let __params = ::serde_json::to_value(#pstruct { #(#field_idents),* }).map_err(|e| {
@@ -1822,5 +1845,32 @@ mod tests {
             .unwrap()
             .to_string()
             .contains("not #[notification]"));
+    }
+
+    #[test]
+    fn rejects_conflicting_params_attributes() {
+        for (method, expected) in [
+            (
+                parse_quote! {
+                    #[params(Payload)]
+                    #[params(Payload)]
+                    async fn duplicate(value: String) -> String;
+                },
+                "duplicate #[params(Type)]",
+            ),
+            (
+                parse_quote! {
+                    #[params(Payload)]
+                    async fn mixed(#[params] value: Payload) -> String;
+                },
+                "cannot be combined",
+            ),
+        ] {
+            assert!(parse_method(&method)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains(expected));
+        }
     }
 }

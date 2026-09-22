@@ -19,6 +19,7 @@ fn main() {
             client_name: Some("GeneratedSharedClient".into()),
             generate_server: true,
             default_server_methods: true,
+            inline_params: false,
             ..GenerateRustOptions::default()
         },
     );

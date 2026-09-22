@@ -13,8 +13,9 @@
 )]
 pub trait CdpDebuggerService {
     #[name("inspect")]
-    async fn inspect(#[params] params: super::types::RuntimeRemoteObject) -> Result<super::types::RuntimeRemoteObject, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(super::types::RuntimeRemoteObject)]
+    async fn inspect(value: String) -> Result<super::types::RuntimeRemoteObject, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, value,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "inspect"))
     }
 }

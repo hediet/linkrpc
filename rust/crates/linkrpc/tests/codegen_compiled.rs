@@ -77,7 +77,7 @@ async fn explicit_prefix_is_used_as_a_raw_wire_prefix() {
         .raw_echo(serde_json::json!({ "expression": "1 + 1" }))
         .await
         .unwrap();
-    client.reset(ResetParams::new()).await.unwrap();
+    client.reset().await.unwrap();
     assert_eq!(
         *methods.lock().unwrap(),
         ["Runtime.raw_echo", "Runtime.reset"]
@@ -198,25 +198,20 @@ async fn client_drives_transport() {
     // `root()` addresses members by bare method name (CDP-style channels).
     let client = ComExampleGraphClient::root(StubCaller);
     let tree = client
-        .get_tree(GetTreeParams::new("abc".into()))
+        .get_tree("abc".into())
         .await
         .unwrap();
     assert_eq!(tree.value, "root");
 
     // Notifications resolve without a result.
     client
-        .notify_changed(NotifyChangedParams {
-            node: TreeNode::new("n".into()),
-        })
+        .notify_changed(TreeNode::new("n".into()))
         .await
         .unwrap();
 
     // Typed params + typed bool result.
     let painted = client
-        .paint(PaintParams {
-            shape: Shape::Point,
-            color: Color::Red,
-        })
+        .paint(Shape::Point, Color::Red)
         .await
         .unwrap();
     assert!(painted);
@@ -228,16 +223,15 @@ async fn client_drives_transport() {
         .unwrap();
     assert_eq!(v["hi"], true);
 
-    // A params object with required + optional fields, built via its
-    // generated `new` constructor (optional `label` defaults to `None`).
+    // Required and optional fields are passed in the params struct's order.
     let configured = client
-        .configure(ConfigureParams::new("widget".into()))
+        .configure("widget".into(), None, None)
         .await
         .unwrap();
     assert!(configured);
 
-    // An empty params object, built via its niladic generated `new()`.
-    client.reset(ResetParams::new()).await.unwrap();
+    // An empty params object becomes a niladic method.
+    client.reset().await.unwrap();
 
     // Server notification: only an addressed-name accessor is generated (no
     // send method), and it respects the addressing prefix.

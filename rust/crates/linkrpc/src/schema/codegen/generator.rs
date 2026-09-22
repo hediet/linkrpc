@@ -133,6 +133,9 @@ struct Collector<'a> {
     unsupported: Vec<String>,
     invalid: Vec<String>,
     external_components: HashSet<String>,
+    external_defs: HashSet<String>,
+    external_synthetic_defs: HashSet<String>,
+    inline_params: bool,
     method_type_prefix: String,
 }
 
@@ -167,6 +170,9 @@ impl<'a> Collector<'a> {
             unsupported: Vec::new(),
             invalid: Vec::new(),
             external_components: options.external_components.keys().cloned().collect(),
+            external_defs: HashSet::new(),
+            external_synthetic_defs: HashSet::new(),
+            inline_params: options.inline_params,
             method_type_prefix: options.method_type_prefix.clone().unwrap_or_default(),
         }
     }
@@ -204,12 +210,28 @@ impl<'a> Collector<'a> {
             .map(|(k, v)| (k.clone(), *v))
             .collect();
         for (wire, sub) in component_list {
-            if self.external_components.contains(&wire) {
+            let external = self.external_components.contains(&wire);
+            if external && !self.inline_params {
                 continue;
             }
             let rust = self.component_names[&wire].clone();
             let doc = schema_doc(sub);
+            let start = self.defs.len();
+            let unsupported = self.unsupported.len();
+            let invalid = self.invalid.len();
             self.build_named(rust, sub, doc);
+            if external {
+                // Model external structs for field types and recursive boxing, but
+                // leave emission and diagnostics to their owning types module.
+                for def in &self.defs[start..] {
+                    self.external_defs.insert(def.name.clone());
+                    if !self.component_names.values().any(|name| name == &def.name) {
+                        self.external_synthetic_defs.insert(def.name.clone());
+                    }
+                }
+                self.unsupported.truncate(unsupported);
+                self.invalid.truncate(invalid);
+            }
         }
 
         let mut methods = Vec::new();
@@ -1203,6 +1225,9 @@ pub(super) fn generate(
     }
 
     for def in &collector.defs {
+        if collector.external_defs.contains(&def.name) {
+            continue;
+        }
         w.blank();
         renderer.write_def(&mut w, def);
     }
@@ -1215,7 +1240,7 @@ pub(super) fn generate(
     }
 
     w.blank();
-    write_bindings(&mut w, schema, &methods, &renderer, options);
+    write_bindings(&mut w, schema, &methods, &collector, &renderer, options);
 
     fn write_error_enum(
         w: &mut CodeWriter,
@@ -1294,6 +1319,9 @@ pub(super) fn generate_components(
         w.line(&format!("compile_error!({});", quote_str(invalid)));
     }
     for def in &collector.defs {
+        if collector.external_defs.contains(&def.name) {
+            continue;
+        }
         w.blank();
         renderer.write_def(&mut w, def);
     }
@@ -1355,6 +1383,7 @@ fn write_bindings(
     w: &mut CodeWriter,
     schema: &LinkRpcInterfaceSchema,
     methods: &[MethodModel],
+    collector: &Collector<'_>,
     renderer: &Renderer,
     options: &GenerateRustOptions,
 ) {
@@ -1381,6 +1410,10 @@ fn write_bindings(
     for method in methods {
         w.doc(method.doc.as_deref());
         let params_ty = renderer.ty(&method.params, usize::MAX, true);
+        let fields = options
+            .inline_params
+            .then(|| inline_param_fields(&method.params, collector))
+            .flatten();
         let result_ty = method
             .result
             .as_ref()
@@ -1409,21 +1442,49 @@ fn write_bindings(
                 renderer.ty(ty, usize::MAX, true)
             ));
         }
-        let signature = format!(
-            "async fn {}(#[params] params: {params_ty}) -> Result<{result_ty}, {error_ty}>",
-            method.rust_name,
-        );
+        let params = if let Some(fields) = fields {
+            w.line(&format!("#[params({params_ty})]"));
+            fields
+                .iter()
+                .map(|field| {
+                    format!(
+                        "{}: {}",
+                        field.rust_name,
+                        renderer.field_type(field, renderer.scc[&params_ty])
+                    )
+                })
+                .collect::<Vec<_>>()
+        } else {
+            vec![format!("#[params] params: {params_ty}")]
+        };
+        let output = format!("-> Result<{result_ty}, {error_ty}>");
+        let signature = if params.len() > 1 {
+            w.line(&format!("async fn {}(", method.rust_name));
+            w.indent();
+            for param in params {
+                w.line(&format!("{param},"));
+            }
+            w.dedent();
+            format!(") {output}")
+        } else {
+            format!("async fn {}({}) {output}", method.rust_name, params.join(", "))
+        };
         if options.default_server_methods {
             w.line(&format!("{signature} {{"));
             w.indent();
-            let mut unused = vec!["ctx", "params"];
+            let mut unused = vec!["ctx"];
+            if let Some(fields) = fields {
+                unused.extend(fields.iter().map(|field| field.rust_name.as_str()));
+            } else {
+                unused.push("params");
+            }
             if method.client_stream.is_some() {
                 unused.push("stream_receiver");
             }
             if method.server_stream.is_some() {
                 unused.push("stream_sender");
             }
-            w.line(&format!("let _ = ({});", unused.join(", ")));
+            w.line(&format!("let _ = ({},);", unused.join(", ")));
             if method.result.is_some() {
                 let error = format!(
                     "{hub}::prelude::JsonRpcError::new({hub}::prelude::error_codes::METHOD_NOT_FOUND, {})",
@@ -1469,6 +1530,31 @@ fn write_bindings(
             binding.name
         ));
     }
+}
+
+fn inline_param_fields<'a>(params: &TypeRef, collector: &'a Collector<'_>) -> Option<&'a [Field]> {
+    let TypeRef::Named(name) = params else {
+        return None;
+    };
+    let def = collector.defs.iter().find(|def| &def.name == name)?;
+    let TypeBody::Struct(fields) = &def.body else {
+        return None;
+    };
+    (Renderer::struct_ctor_is_safe(fields)
+        && fields.iter().all(|field| {
+            let mut named = Vec::new();
+            field.ty.collect_named(&mut named);
+            // Only mapped external types have authoritative exported paths.
+            !field.flatten
+                && !named
+                    .iter()
+                    .any(|name| collector.external_synthetic_defs.contains(name))
+                && !matches!(
+                    field.rust_name.as_str(),
+                    "_" | "ctx" | "stream_receiver" | "stream_sender"
+                )
+        }))
+    .then_some(fields)
 }
 
 /// Read `x-linkrpc-codegen.kind` from a method's preserved extensions, if present.

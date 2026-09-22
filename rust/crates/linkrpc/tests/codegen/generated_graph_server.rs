@@ -248,44 +248,62 @@ impl ResetParams {
 pub trait ComExampleGraphService {
     /// A method whose params mix required and optional fields.
     #[name("configure")]
-    async fn configure(#[params] params: ConfigureParams) -> Result<bool, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(ConfigureParams)]
+    async fn configure(
+        id: String,
+        label: Option<String>,
+        payload: Option<serde_json::Value>,
+    ) -> Result<bool, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id, label, payload,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "configure"))
     }
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
-    async fn get_tree(#[params] params: GetTreeParams) -> Result<TreeNode, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(GetTreeParams)]
+    async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, id,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "get_tree"))
     }
     #[name("notify_changed")]
     #[notification]
-    async fn notify_changed(#[params] params: NotifyChangedParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(NotifyChangedParams)]
+    async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, node,);
         Ok(())
     }
     #[name("paint")]
-    async fn paint(#[params] params: PaintParams) -> Result<bool, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(PaintParams)]
+    async fn paint(
+        shape: Shape,
+        color: Color,
+    ) -> Result<bool, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, shape, color,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "paint"))
     }
     #[name("raw_echo")]
     async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "raw_echo"))
     }
     /// A method with an empty (all-defaults) params object.
     #[name("reset")]
     #[notification]
-    async fn reset(#[params] params: ResetParams) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(ResetParams)]
+    async fn reset() -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx,);
         Ok(())
     }
     /// Server-emitted event fired whenever the tree changes.
     #[name("tree_changed")]
     #[server_notification]
-    async fn tree_changed(#[params] params: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(TreeNode)]
+    async fn tree_changed(
+        value: String,
+        point: Option<Point>,
+        parent: Option<Box<TreeNode>>,
+        children: Option<Vec<TreeNode>>,
+    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, value, point, parent, children,);
         Ok(())
     }
 }

@@ -51,23 +51,25 @@ pub enum RuntimeFallibleError {
 pub trait RuntimeService {
     #[name("changed")]
     #[server_notification]
-    async fn changed(#[params] params: super::shared::RuntimeRemoteObject) -> Result<(), linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(super::shared::RuntimeRemoteObject)]
+    async fn changed(value: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, value,);
         Ok(())
     }
     #[name("evaluate")]
-    async fn evaluate(#[params] params: RuntimeEvaluateParams) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+    #[params(RuntimeEvaluateParams)]
+    async fn evaluate(expression: String) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError> {
+        let _ = (ctx, expression,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate"))
     }
     #[name("fallible")]
     async fn fallible(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::CallError<RuntimeFallibleError>> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::CallError::Generic(linkrpc::prelude::RpcCallError::Remote(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fallible"))))
     }
     #[name("unsupported")]
     async fn unsupported(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
-        let _ = (ctx, params);
+        let _ = (ctx, params,);
         Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unsupported"))
     }
 }

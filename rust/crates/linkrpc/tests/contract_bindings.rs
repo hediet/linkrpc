@@ -26,11 +26,11 @@ impl runtime::RuntimeService for Provider {
     async fn evaluate(
         &self,
         _ctx: &CallCtx,
-        params: runtime::RuntimeEvaluateParams,
+        expression: String,
     ) -> Result<runtime::RuntimeEvaluateResult, JsonRpcError> {
         Ok(runtime::RuntimeEvaluateResult {
             object: shared::RuntimeRemoteObject {
-                value: params.expression,
+                value: expression,
             },
         })
     }
@@ -41,9 +41,9 @@ impl debugger::DebuggerService for Provider {
     async fn inspect(
         &self,
         _ctx: &CallCtx,
-        params: shared::RuntimeRemoteObject,
+        value: String,
     ) -> Result<shared::RuntimeRemoteObject, JsonRpcError> {
-        Ok(params)
+        Ok(shared::RuntimeRemoteObject { value })
     }
 }
 
@@ -101,9 +101,7 @@ async fn all_address_modes_register_call_and_dispose() {
         }
         let client = target.client(caller.clone());
         let result = client
-            .evaluate(runtime::RuntimeEvaluateParams {
-                expression: "value".into(),
-            })
+            .evaluate("value".into())
             .await
             .unwrap();
         assert_eq!(result.object.value, "value");
@@ -148,9 +146,7 @@ async fn all_address_modes_register_call_and_dispose() {
         assert!(!registration.dispose());
         assert_eq!(
             client
-                .evaluate(runtime::RuntimeEvaluateParams {
-                    expression: "x".into()
-                })
+                .evaluate("x".into())
                 .await
                 .unwrap_err()
                 .code,
@@ -176,15 +172,14 @@ async fn shared_types_retain_identity_across_domain_clients_and_providers() {
         .unwrap();
     let value = runtime::TARGET
         .client(&caller)
-        .evaluate(runtime::RuntimeEvaluateParams {
-            expression: "shared".into(),
-        })
+        .evaluate("shared".into())
         .await
         .unwrap();
     // This is a Rust type-identity check: no serialization or conversions between domains.
+    let shared::RuntimeRemoteObject { value } = value.object;
     let inspected = debugger::TARGET
         .client(&caller)
-        .inspect(value.object)
+        .inspect(value)
         .await
         .unwrap();
     let _: shared::RuntimeRemoteObject = inspected;
@@ -221,23 +216,17 @@ async fn descriptors_reuse_generic_callers_and_exact_raw_prefixes() {
     ] {
         target
             .client(&caller)
-            .evaluate(runtime::RuntimeEvaluateParams {
-                expression: "".into(),
-            })
+            .evaluate("".into())
             .await
             .unwrap();
     }
     let raw = InterfaceBinding::<runtime::RuntimeClient>::new(BindingAddress::Bare("raw/"));
     raw.client(caller.clone())
-        .evaluate(runtime::RuntimeEvaluateParams {
-            expression: "".into(),
-        })
+        .evaluate("".into())
         .await
         .unwrap();
     runtime::RuntimeClient::with_service(&caller, "")
-        .evaluate(runtime::RuntimeEvaluateParams {
-            expression: "".into(),
-        })
+        .evaluate("".into())
         .await
         .unwrap();
     assert_eq!(
@@ -285,9 +274,7 @@ async fn bare_bindings_preserve_qualified_registration_and_atomic_prefix_conflic
     ));
     let result = second
         .client(caller)
-        .inspect(shared::RuntimeRemoteObject {
-            value: "second".into(),
-        })
+        .inspect("second".into())
         .await
         .unwrap();
     assert_eq!(result.value, "second");
@@ -754,9 +741,9 @@ impl runtime::RuntimeService for Events {
     async fn changed(
         &self,
         _ctx: &CallCtx,
-        params: shared::RuntimeRemoteObject,
+        value: String,
     ) -> Result<(), JsonRpcError> {
-        self.0.lock().unwrap().push(params.value);
+        self.0.lock().unwrap().push(value);
         Ok(())
     }
 }
@@ -882,9 +869,7 @@ async fn standalone_router_handles_requests_and_can_drive_an_existing_channel() 
     tokio::spawn(async move { server_channel.run().await });
     let result = runtime::TARGET
         .client(client_channel)
-        .evaluate(runtime::RuntimeEvaluateParams {
-            expression: "channel".into(),
-        })
+        .evaluate("channel".into())
         .await
         .unwrap();
     assert_eq!(result.object.value, "channel");
@@ -910,9 +895,7 @@ async fn connection_router_shares_registration_and_disposal() {
     assert_eq!(
         runtime::TARGET
             .client(&caller)
-            .evaluate(runtime::RuntimeEvaluateParams {
-                expression: "shared registry".into()
-            })
+            .evaluate("shared registry".into())
             .await
             .unwrap()
             .object
@@ -923,9 +906,7 @@ async fn connection_router_shares_registration_and_disposal() {
     assert_eq!(
         runtime::TARGET
             .client(caller)
-            .evaluate(runtime::RuntimeEvaluateParams {
-                expression: "".into()
-            })
+            .evaluate("".into())
             .await
             .unwrap_err()
             .code,

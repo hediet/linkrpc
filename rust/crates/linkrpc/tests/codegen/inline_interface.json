@@ -1,0 +1,28 @@
+{
+  "id": "inline",
+  "hash": "",
+  "methods": {
+    "send": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "camelCase": { "type": "string" },
+          "optional": { "type": "boolean" },
+          "payload": true,
+          "type": { "type": "string" },
+          "wire-key": { "type": "integer" }
+        },
+        "required": ["camelCase", "type", "wire-key"],
+        "additionalProperties": false
+      },
+      "result": true
+    },
+    "empty": {
+      "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    }
+  }
+}

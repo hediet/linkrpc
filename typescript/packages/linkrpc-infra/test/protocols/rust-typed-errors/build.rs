@@ -23,6 +23,7 @@ fn main() {
         &schema,
         &GenerateRustOptions {
             generate_server: true,
+            inline_params: false,
             ..GenerateRustOptions::default()
         },
     );
