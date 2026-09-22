@@ -437,12 +437,27 @@ individual arguments on the generated trait, client, and provider:
 ```rust,ignore
 async fn evaluate(
     expression: String,
-    #[param(name = "returnByValue", optional)] return_by_value: Option<bool>,
+    #[serde(rename = "returnByValue")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    return_by_value: Option<bool>,
 ) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
 ```
 
-The macro generates a private serialization wrapper. `#[param(name = "...")]`
-renames one field and `#[param(optional)]` omits an absent `Option` field.
+The macro generates a private serialization wrapper and forwards parameter-level
+`#[serde(...)]` attributes unchanged to its fields. These have the same behavior
+as on an explicit params struct, including `default`, `alias`, `flatten`,
+`skip_serializing_if`, `serialize_with`, `deserialize_with`, and `with`.
+`#[param(name = "...")]` is only shorthand for `#[serde(rename = "...")]` and
+can appear beside other Serde field attributes. Serde diagnoses conflicting
+attributes just as it would on a struct.
+
+An unannotated `Option<T>` keeps Serde's defaults: missing and null deserialize
+to `None`, which serializes as null. Omission requires `skip_serializing_if`;
+rejecting null requires the same custom deserializer an explicit struct would
+use. There are no separate `optional` or `nonNull` parameter semantics. Codegen
+uses the same Serde attribute emitter for params-struct fields and inline
+arguments, preserving their wire behavior.
+
 Imported field names are literal unless renamed; Rust-authored interfaces keep
 their default camelCase naming. The embedded schema identity is unchanged.
 Empty structs become zero-argument methods that encode `{}`. Arguments follow the generated
@@ -450,7 +465,8 @@ struct's field order. Open objects with flattened extra properties, non-struct p
 external fields without known type paths, and fields conflicting with injected
 arguments retain `#[params] params: ParamsType`. `#[params]` means the argument
 is the entire wire payload and must be the sole parameter; it cannot be combined
-with `#[param(...)]`. Set `inline_params: false` to keep the previous
+with `#[param(...)]` or field-level `#[serde(...)]` on that argument. Put Serde
+attributes on the payload type's fields instead. Set `inline_params: false` to keep the previous
 whole-object API for every method. Regeneration with the default is a Rust API
 change: callers and providers must pass/receive individual fields instead.
 

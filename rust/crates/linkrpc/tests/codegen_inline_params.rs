@@ -29,7 +29,7 @@ fn default_inlining_and_opt_out() {
     assert!(!generated.code.contains("#[params(EmptyPayload)]"));
     assert!(!generated.code.contains("#[params("));
     assert!(generated.code.contains(
-        "async fn send(\n        #[param(name = \"camelCase\")] camel_case: String,\n        #[param(optional)] optional: Option<bool>,\n        #[param(optional)] payload: Option<serde_json::Value>,\n        r#type: String,\n        #[param(name = \"wire-key\")] wire_key: i64,\n    )"
+        "async fn send(\n        #[serde(rename = \"camelCase\")] camel_case: String,\n        #[serde(default, skip_serializing_if = \"Option::is_none\")] optional: Option<bool>,\n        #[serde(default, skip_serializing_if = \"Option::is_none\")] payload: Option<serde_json::Value>,\n        r#type: String,\n        #[serde(rename = \"wire-key\")] wire_key: i64,\n    )"
     ));
     let legacy = generate_rust_interface(
         &schema,
@@ -137,7 +137,7 @@ fn shared_params_use_mapped_types_and_preserve_recursive_boxing() {
     assert!(!generated.code.contains("pub struct"));
     assert!(!generated.code.contains("#[params(shared::RenamedNode)]"));
     assert!(generated.code.contains(
-        "async fn send(\n        #[param(optional)] next: Option<Box<shared::RenamedNode>>,\n        value: shared::RenamedValue,\n    )"
+        "async fn send(\n        #[serde(default, skip_serializing_if = \"Option::is_none\")] next: Option<Box<shared::RenamedNode>>,\n        value: shared::RenamedValue,\n    )"
     ));
 }
 

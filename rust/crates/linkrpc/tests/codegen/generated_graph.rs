@@ -250,8 +250,8 @@ pub trait ComExampleGraphService {
     #[name("configure")]
     async fn configure(
         id: String,
-        #[param(optional)] label: Option<String>,
-        #[param(optional)] payload: Option<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
     ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
@@ -275,9 +275,9 @@ pub trait ComExampleGraphService {
     #[server_notification]
     async fn tree_changed(
         value: String,
-        #[param(optional)] point: Option<Point>,
-        #[param(optional)] parent: Option<Box<TreeNode>>,
-        #[param(optional)] children: Option<Vec<TreeNode>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] point: Option<Point>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] parent: Option<Box<TreeNode>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] children: Option<Vec<TreeNode>>,
     ) -> Result<(), linkrpc::prelude::JsonRpcError>;
 }
 

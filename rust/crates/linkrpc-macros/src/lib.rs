@@ -18,8 +18,9 @@
 //! `schema_json = "..."` imports a frozen interface contract (including its hash)
 //! instead of deriving schemas. `#[params]` marks the sole argument as the whole
 //! wire payload. Otherwise arguments become fields in an object, with
-//! `#[param(name = "...")]` for exact wire names and `#[param(optional)]` to omit
-//! absent `Option` fields. Imported field names are literal; Rust-authored
+//! parameter-level `#[serde(...)]` attributes forwarded to the private params
+//! struct. `#[param(name = "...")]` is shorthand for `#[serde(rename = "...")]`.
+//! Imported field names are literal; Rust-authored
 //! interfaces retain their default camelCase naming. Zero-argument methods
 //! encode an empty object. Methods may rename their wire member
 //! with `#[name("...")]`. `client`, `server`, `module`, `runtime`,
@@ -516,7 +517,7 @@ struct ParamModel {
     name: Ident,
     ty: Type,
     wire_name: Option<LitStr>,
-    optional: bool,
+    serde_attrs: Vec<syn::Attribute>,
 }
 
 fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream2> {
@@ -1097,7 +1098,7 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
                 };
                 let mut whole_params = false;
                 let mut wire_name = None;
-                let mut optional = false;
+                let mut serde_attrs = Vec::new();
                 for attr in &pt.attrs {
                     if attr.path().is_ident("params") {
                         if whole_params || !matches!(attr.meta, Meta::Path(_)) {
@@ -1111,33 +1112,25 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
                         if matches!(&attr.meta, Meta::List(list) if list.tokens.is_empty()) {
                             return Err(syn::Error::new_spanned(
                                 attr,
-                                "expected name = \"...\" or optional",
+                                "expected name = \"...\"",
                             ));
                         }
                         attr.parse_nested_meta(|meta| {
                             if meta.path.is_ident("name") && wire_name.is_none() {
                                 wire_name = Some(meta.value()?.parse::<LitStr>()?);
-                            } else if meta.path.is_ident("optional") && !optional {
-                                optional = true;
                             } else {
-                                return Err(meta.error("expected a unique name = \"...\" or optional"));
+                                return Err(meta.error("expected a unique name = \"...\"; use #[serde(...)] for field serialization"));
                             }
                             Ok(())
                         })?;
+                    } else if attr.path().is_ident("serde") {
+                        serde_attrs.push(attr.clone());
                     }
                 }
-                if whole_params && (wire_name.is_some() || optional) {
+                if whole_params && (wire_name.is_some() || !serde_attrs.is_empty()) {
                     return Err(syn::Error::new_spanned(
                         pt,
-                        "#[params] cannot be combined with #[param(...)]",
-                    ));
-                }
-                if optional && !matches!(&*pt.ty, Type::Path(path)
-                    if path.path.segments.last().is_some_and(|segment| segment.ident == "Option"))
-                {
-                    return Err(syn::Error::new_spanned(
-                        &pt.ty,
-                        "#[param(optional)] requires an Option field",
+                        "#[params] cannot be combined with field attributes; put them on the payload type's fields",
                     ));
                 }
                 if whole_params {
@@ -1147,7 +1140,7 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
                     name: ident,
                     ty: (*pt.ty).clone(),
                     wire_name,
-                    optional,
+                    serde_attrs,
                 });
             }
         }
@@ -1325,12 +1318,10 @@ fn param_struct(trait_ident: &Ident, m: &MethodModel, imported: bool) -> TokenSt
             name,
             ty,
             wire_name,
-            optional,
+            serde_attrs,
         } = param;
         let rename = wire_name.as_ref().map(|name| quote!(#[serde(rename = #name)]));
-        let optional =
-            optional.then(|| quote!(#[serde(default, skip_serializing_if = "Option::is_none")]));
-        quote!(#rename #optional #name: #ty)
+        quote!(#rename #(#serde_attrs)* #name: #ty)
     });
     let schema_derive = (!imported).then(|| quote!(#[derive(::schemars::JsonSchema)]));
     let rename_all = (!imported).then(|| quote!(#[serde(rename_all = "camelCase")]));
@@ -1984,9 +1975,15 @@ mod tests {
             ),
             (
                 parse_quote! {
-                    async fn not_optional(#[param(optional)] value: String) -> String;
+                    async fn optional(#[param(optional)] value: Option<String>) -> String;
                 },
-                "requires an Option field",
+                "use #[serde(...)]",
+            ),
+            (
+                parse_quote! {
+                    async fn whole_with_field_attr(#[params] #[serde(default)] value: Payload) -> String;
+                },
+                "put them on the payload type's fields",
             ),
             (
                 parse_quote! {
@@ -2001,18 +1998,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_field_names_and_optional_fields() {
+    fn preserves_serde_field_attributes() {
         let method: TraitItemFn = parse_quote! {
             async fn compile_script(
                 #[param(name = "sourceURL")] source_url: String,
-                #[param(name = "executionContextId", optional)] context: Option<u32>,
+                #[param(name = "executionContextId")]
+                #[serde(default, skip_serializing_if = "Option::is_none")]
+                #[serde(alias = "legacyContext")]
+                context: Option<u32>,
             ) -> String;
         };
         let method = parse_method(&method).unwrap();
         assert!(method.passthrough_ty.is_none());
         assert_eq!(method.params[0].wire_name.as_ref().unwrap().value(), "sourceURL");
-        assert!(!method.params[0].optional);
+        assert!(method.params[0].serde_attrs.is_empty());
         assert_eq!(method.params[1].wire_name.as_ref().unwrap().value(), "executionContextId");
-        assert!(method.params[1].optional);
+        let expected: Vec<syn::Attribute> = vec![
+            parse_quote!(#[serde(default, skip_serializing_if = "Option::is_none")]),
+            parse_quote!(#[serde(alias = "legacyContext")]),
+        ];
+        assert_eq!(
+            quote!(#(#expected)*).to_string(),
+            {
+                let attrs = &method.params[1].serde_attrs;
+                quote!(#(#attrs)*).to_string()
+            }
+        );
     }
 }

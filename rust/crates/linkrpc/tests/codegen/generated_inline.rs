@@ -68,11 +68,11 @@ pub trait InlineService {
     async fn empty() -> Result<(), linkrpc::prelude::JsonRpcError>;
     #[name("send")]
     async fn send(
-        #[param(name = "camelCase")] camel_case: String,
-        #[param(optional)] optional: Option<bool>,
-        #[param(optional)] payload: Option<serde_json::Value>,
+        #[serde(rename = "camelCase")] camel_case: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")] optional: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] payload: Option<serde_json::Value>,
         r#type: String,
-        #[param(name = "wire-key")] wire_key: i64,
+        #[serde(rename = "wire-key")] wire_key: i64,
     ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
 }
 

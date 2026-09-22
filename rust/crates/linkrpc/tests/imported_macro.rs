@@ -95,7 +95,7 @@ struct Caller {
 trait ParameterFields {
     async fn compile_script(
         #[param(name = "sourceURL")] source_url: String,
-        #[param(optional)] execution_context: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] execution_context: Option<String>,
     ) -> Result<JsonValue, JsonRpcError>;
 }
 

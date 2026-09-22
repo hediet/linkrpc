@@ -57,6 +57,22 @@ struct Field {
     flatten: bool,
 }
 
+impl Field {
+    fn serde_attributes(&self) -> Vec<String> {
+        if self.flatten {
+            return vec!["#[serde(flatten)]".to_string()];
+        }
+        let mut attributes = Vec::new();
+        if strip_raw(&self.rust_name) != self.wire_name {
+            attributes.push(format!("#[serde(rename = {})]", quote_str(&self.wire_name)));
+        }
+        if self.optional {
+            attributes.push("#[serde(default, skip_serializing_if = \"Option::is_none\")]".to_string());
+        }
+        attributes
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TaggedVariant {
     rust_name: String,
@@ -1078,16 +1094,8 @@ impl Renderer<'_> {
 
     fn write_field_in(&self, w: &mut CodeWriter, field: &Field, owner_scc: usize, with_vis: bool) {
         w.doc(field.doc.as_deref());
-        if field.flatten {
-            w.line("#[serde(flatten)]");
-        } else {
-            let wire = &field.wire_name;
-            if strip_raw(&field.rust_name) != wire {
-                w.line(&format!("#[serde(rename = {})]", quote_str(wire)));
-            }
-            if field.optional {
-                w.line("#[serde(default, skip_serializing_if = \"Option::is_none\")]");
-            }
+        for attribute in field.serde_attributes() {
+            w.line(&attribute);
         }
         w.line(&format!(
             "{}{}: {},",
@@ -1446,17 +1454,11 @@ fn write_bindings(
             fields
                 .iter()
                 .map(|field| {
-                    let mut attributes = Vec::new();
-                    if field.wire_name != strip_raw(&field.rust_name) {
-                        attributes.push(format!("name = {}", quote_str(&field.wire_name)));
-                    }
-                    if field.optional {
-                        attributes.push("optional".to_string());
-                    }
+                    let attributes = field.serde_attributes();
                     let annotation = if attributes.is_empty() {
                         String::new()
                     } else {
-                        format!("#[param({})] ", attributes.join(", "))
+                        format!("{} ", attributes.join(" "))
                     };
                     format!(
                         "{annotation}{}: {}",
