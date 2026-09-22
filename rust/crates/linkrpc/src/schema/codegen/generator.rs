@@ -67,7 +67,8 @@ impl Field {
             attributes.push(format!("#[serde(rename = {})]", quote_str(&self.wire_name)));
         }
         if self.optional {
-            attributes.push("#[serde(default, skip_serializing_if = \"Option::is_none\")]".to_string());
+            attributes
+                .push("#[serde(default, skip_serializing_if = \"Option::is_none\")]".to_string());
         }
         attributes
     }
@@ -1480,7 +1481,11 @@ fn write_bindings(
             w.dedent();
             format!(") {output}")
         } else {
-            format!("async fn {}({}) {output}", method.rust_name, params.join(", "))
+            format!(
+                "async fn {}({}) {output}",
+                method.rust_name,
+                params.join(", ")
+            )
         };
         if options.default_server_methods {
             w.line(&format!("{signature} {{"));

@@ -781,10 +781,13 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         let call_args = if m.passthrough_ty.is_some() {
             vec![quote!(__p)]
         } else {
-            m.params.iter().map(|param| {
-                let id = &param.name;
-                quote!(__p.#id)
-            }).collect()
+            m.params
+                .iter()
+                .map(|param| {
+                    let id = &param.name;
+                    quote!(__p.#id)
+                })
+                .collect()
         };
         let map_error = if m.server_returns_call_error {
             quote!(.map_err(::linkrpc::prelude::CallError::into_rpc_error)?)
@@ -837,10 +840,13 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         let call_args = if m.passthrough_ty.is_some() {
             vec![quote!(__p)]
         } else {
-            m.params.iter().map(|param| {
-                let id = &param.name;
-                quote!(__p.#id)
-            }).collect()
+            m.params
+                .iter()
+                .map(|param| {
+                    let id = &param.name;
+                    quote!(__p.#id)
+                })
+                .collect()
         };
         let check_result = m.fallible_notification.then(|| quote!(?));
         quote! {
@@ -1110,10 +1116,7 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
                         whole_params = true;
                     } else if attr.path().is_ident("param") {
                         if matches!(&attr.meta, Meta::List(list) if list.tokens.is_empty()) {
-                            return Err(syn::Error::new_spanned(
-                                attr,
-                                "expected name = \"...\"",
-                            ));
+                            return Err(syn::Error::new_spanned(attr, "expected name = \"...\""));
                         }
                         attr.parse_nested_meta(|meta| {
                             if meta.path.is_ident("name") && wire_name.is_none() {
@@ -1320,7 +1323,9 @@ fn param_struct(trait_ident: &Ident, m: &MethodModel, imported: bool) -> TokenSt
             wire_name,
             serde_attrs,
         } = param;
-        let rename = wire_name.as_ref().map(|name| quote!(#[serde(rename = #name)]));
+        let rename = wire_name
+            .as_ref()
+            .map(|name| quote!(#[serde(rename = #name)]));
         quote!(#rename #(#serde_attrs)* #name: #ty)
     });
     let schema_derive = (!imported).then(|| quote!(#[derive(::schemars::JsonSchema)]));
@@ -2010,19 +2015,22 @@ mod tests {
         };
         let method = parse_method(&method).unwrap();
         assert!(method.passthrough_ty.is_none());
-        assert_eq!(method.params[0].wire_name.as_ref().unwrap().value(), "sourceURL");
+        assert_eq!(
+            method.params[0].wire_name.as_ref().unwrap().value(),
+            "sourceURL"
+        );
         assert!(method.params[0].serde_attrs.is_empty());
-        assert_eq!(method.params[1].wire_name.as_ref().unwrap().value(), "executionContextId");
+        assert_eq!(
+            method.params[1].wire_name.as_ref().unwrap().value(),
+            "executionContextId"
+        );
         let expected: Vec<syn::Attribute> = vec![
             parse_quote!(#[serde(default, skip_serializing_if = "Option::is_none")]),
             parse_quote!(#[serde(alias = "legacyContext")]),
         ];
-        assert_eq!(
-            quote!(#(#expected)*).to_string(),
-            {
-                let attrs = &method.params[1].serde_attrs;
-                quote!(#(#attrs)*).to_string()
-            }
-        );
+        assert_eq!(quote!(#(#expected)*).to_string(), {
+            let attrs = &method.params[1].serde_attrs;
+            quote!(#(#attrs)*).to_string()
+        });
     }
 }

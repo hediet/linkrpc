@@ -29,9 +29,7 @@ impl runtime::RuntimeService for Provider {
         expression: String,
     ) -> Result<runtime::RuntimeEvaluateResult, JsonRpcError> {
         Ok(runtime::RuntimeEvaluateResult {
-            object: shared::RuntimeRemoteObject {
-                value: expression,
-            },
+            object: shared::RuntimeRemoteObject { value: expression },
         })
     }
 }
@@ -100,10 +98,7 @@ async fn all_address_modes_register_call_and_dispose() {
                 .unwrap();
         }
         let client = target.client(caller.clone());
-        let result = client
-            .evaluate("value".into())
-            .await
-            .unwrap();
+        let result = client.evaluate("value".into()).await.unwrap();
         assert_eq!(result.object.value, "value");
         assert_eq!(
             client.unsupported(json!({})).await.unwrap_err().code,
@@ -145,11 +140,7 @@ async fn all_address_modes_register_call_and_dispose() {
         assert!(registration.dispose());
         assert!(!registration.dispose());
         assert_eq!(
-            client
-                .evaluate("x".into())
-                .await
-                .unwrap_err()
-                .code,
+            client.evaluate("x".into()).await.unwrap_err().code,
             error_codes::METHOD_NOT_FOUND
         );
     }
@@ -214,11 +205,7 @@ async fn descriptors_reuse_generic_callers_and_exact_raw_prefixes() {
         runtime::BARE,
         runtime::TARGET,
     ] {
-        target
-            .client(&caller)
-            .evaluate("".into())
-            .await
-            .unwrap();
+        target.client(&caller).evaluate("".into()).await.unwrap();
     }
     let raw = InterfaceBinding::<runtime::RuntimeClient>::new(BindingAddress::Bare("raw/"));
     raw.client(caller.clone())
@@ -738,11 +725,7 @@ fn bare_clients_reject_streaming_while_default_clients_keep_native_support() {
 
 #[async_trait]
 impl runtime::RuntimeService for Events {
-    async fn changed(
-        &self,
-        _ctx: &CallCtx,
-        value: String,
-    ) -> Result<(), JsonRpcError> {
+    async fn changed(&self, _ctx: &CallCtx, value: String) -> Result<(), JsonRpcError> {
         self.0.lock().unwrap().push(value);
         Ok(())
     }

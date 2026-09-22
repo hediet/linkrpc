@@ -92,11 +92,7 @@ async fn generated_duplex_binding_runs_end_to_end() {
     tokio::spawn(async move { server_driver.run().await });
 
     let client = ComExampleGeneratedStreamingClient::new(client_connection);
-    let (result, commands, mut events, _control) = client
-        .exchange(10)
-        .await
-        .unwrap()
-        .into_parts();
+    let (result, commands, mut events, _control) = client.exchange(10).await.unwrap().into_parts();
     commands.send(Command::new(5)).await.unwrap();
     assert_eq!(events.recv().await.unwrap().total, 15);
     assert_eq!(result.await.unwrap(), 15);
@@ -126,21 +122,13 @@ async fn generated_client_validates_literal_and_closed_stream_schemas() {
     tokio::spawn(async move { server_driver.run().await });
 
     let client = ComExampleGeneratedStreamingClient::new(client_connection);
-    let (result, _, mut events, _) = client
-        .exchange(0)
-        .await
-        .unwrap()
-        .into_parts();
+    let (result, _, mut events, _) = client.exchange(0).await.unwrap().into_parts();
     let event = events.recv().await.unwrap();
     assert!(matches!(event.kind, EventKind::Progress));
     assert_eq!(event.total, 7);
     assert_eq!(result.await.unwrap(), 7);
 
-    let (result, _, _never, _) = client
-        .server_silent()
-        .await
-        .unwrap()
-        .into_parts();
+    let (result, _, _never, _) = client.server_silent().await.unwrap().into_parts();
     result.await.unwrap();
 }
 

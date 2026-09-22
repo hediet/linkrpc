@@ -9,11 +9,7 @@ struct Provider;
 
 #[async_trait]
 impl DevLinkrpcTsErrorsService for Provider {
-    async fn check(
-        &self,
-        _ctx: &CallCtx,
-        _mode: String,
-    ) -> Result<String, CallError<CheckError>> {
+    async fn check(&self, _ctx: &CallCtx, _mode: String) -> Result<String, CallError<CheckError>> {
         Err(CallError::Application(CheckError::NotFound(
             MissingData::new("gone".into()),
         )))
@@ -43,11 +39,7 @@ struct RawErrorProvider;
 
 #[async_trait]
 impl DevLinkrpcTsErrorsService for RawErrorProvider {
-    async fn check(
-        &self,
-        _ctx: &CallCtx,
-        _mode: String,
-    ) -> Result<String, CallError<CheckError>> {
+    async fn check(&self, _ctx: &CallCtx, _mode: String) -> Result<String, CallError<CheckError>> {
         Err(CallError::Generic(RpcCallError::Remote(JsonRpcError {
             code: 29_999,
             message: "Undeclared".into(),
@@ -234,20 +226,14 @@ async fn generated_typed_stream_preserves_payloads_and_final_application_errors(
     tokio::spawn(async move { server_run.run().await });
     let client = DevLinkrpcTsErrorsClient::new(client_connection);
 
-    let call = client
-        .stream_check("ok".into())
-        .await
-        .unwrap();
+    let call = client.stream_check("ok".into()).await.unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
     assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
     assert_eq!(payloads.recv().await.as_deref(), Some("complete"));
     assert_eq!(result.await.unwrap(), "found");
     assert_eq!(payloads.recv().await, None);
 
-    let call = client
-        .stream_check("missing".into())
-        .await
-        .unwrap();
+    let call = client.stream_check("missing".into()).await.unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
     assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
     assert!(matches!(
@@ -258,10 +244,7 @@ async fn generated_typed_stream_preserves_payloads_and_final_application_errors(
     ));
     assert_eq!(payloads.recv().await, None);
 
-    let call = client
-        .stream_check("busy".into())
-        .await
-        .unwrap();
+    let call = client.stream_check("busy".into()).await.unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
     assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
     assert!(matches!(

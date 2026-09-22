@@ -95,7 +95,9 @@ struct Caller {
 trait ParameterFields {
     async fn compile_script(
         #[param(name = "sourceURL")] source_url: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")] execution_context: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] execution_context: Option<
+            String,
+        >,
     ) -> Result<JsonValue, JsonRpcError>;
 }
 
@@ -103,7 +105,10 @@ trait ParameterFields {
 async fn field_annotations_control_serialization_and_derived_schemas() {
     let client = ParameterFieldsClient::new(Caller::default());
     assert_eq!(
-        client.compile_script("source.js".into(), None).await.unwrap(),
+        client
+            .compile_script("source.js".into(), None)
+            .await
+            .unwrap(),
         serde_json::json!({"sourceURL": "source.js"})
     );
     assert_eq!(

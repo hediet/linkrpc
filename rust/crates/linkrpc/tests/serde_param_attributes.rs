@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use linkrpc::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

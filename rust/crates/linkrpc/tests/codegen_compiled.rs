@@ -197,10 +197,7 @@ fn generated_constructors_build_valid_structs() {
 async fn client_drives_transport() {
     // `root()` addresses members by bare method name (CDP-style channels).
     let client = ComExampleGraphClient::root(StubCaller);
-    let tree = client
-        .get_tree("abc".into())
-        .await
-        .unwrap();
+    let tree = client.get_tree("abc".into()).await.unwrap();
     assert_eq!(tree.value, "root");
 
     // Notifications resolve without a result.
@@ -210,10 +207,7 @@ async fn client_drives_transport() {
         .unwrap();
 
     // Typed params + typed bool result.
-    let painted = client
-        .paint(Shape::Point, Color::Red)
-        .await
-        .unwrap();
+    let painted = client.paint(Shape::Point, Color::Red).await.unwrap();
     assert!(painted);
 
     // `raw_echo` uses the any/any fallback.
@@ -224,10 +218,7 @@ async fn client_drives_transport() {
     assert_eq!(v["hi"], true);
 
     // Required and optional fields are passed in the params struct's order.
-    let configured = client
-        .configure("widget".into(), None, None)
-        .await
-        .unwrap();
+    let configured = client.configure("widget".into(), None, None).await.unwrap();
     assert!(configured);
 
     // An empty params object becomes a niladic method.

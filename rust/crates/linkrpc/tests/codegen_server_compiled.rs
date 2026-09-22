@@ -15,19 +15,11 @@ struct GraphProvider {
 
 #[async_trait]
 impl ComExampleGraphService for GraphProvider {
-    async fn get_tree(
-        &self,
-        _ctx: &CallCtx,
-        id: String,
-    ) -> Result<TreeNode, JsonRpcError> {
+    async fn get_tree(&self, _ctx: &CallCtx, id: String) -> Result<TreeNode, JsonRpcError> {
         Ok(TreeNode::new(id))
     }
 
-    async fn notify_changed(
-        &self,
-        _ctx: &CallCtx,
-        node: TreeNode,
-    ) -> Result<(), JsonRpcError> {
+    async fn notify_changed(&self, _ctx: &CallCtx, node: TreeNode) -> Result<(), JsonRpcError> {
         self.notifications.lock().unwrap().push(node.value);
         Ok(())
     }
@@ -68,11 +60,7 @@ struct FailingProvider;
 
 #[async_trait]
 impl ComExampleGraphService for FailingProvider {
-    async fn notify_changed(
-        &self,
-        _ctx: &CallCtx,
-        _node: TreeNode,
-    ) -> Result<(), JsonRpcError> {
+    async fn notify_changed(&self, _ctx: &CallCtx, _node: TreeNode) -> Result<(), JsonRpcError> {
         Err(JsonRpcError::new(-32_001, "notification failed"))
     }
 }
@@ -111,10 +99,7 @@ async fn generated_client_provider_and_event_round_trip() {
     tokio::spawn(async move { server_run.run().await });
 
     let client = ComExampleGraphClient::root(client_connection);
-    let tree = client
-        .get_tree("root".into())
-        .await
-        .unwrap();
+    let tree = client.get_tree("root".into()).await.unwrap();
     assert_eq!(tree.value, "root");
 
     client
@@ -155,10 +140,7 @@ async fn generated_client_provider_and_event_round_trip() {
         ]
     );
 
-    let error = client
-        .paint(Shape::Point, Color::Red)
-        .await
-        .unwrap_err();
+    let error = client.paint(Shape::Point, Color::Red).await.unwrap_err();
     assert_eq!(error.code, error_codes::METHOD_NOT_FOUND);
 }
 
