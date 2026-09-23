@@ -9,10 +9,8 @@ struct Provider;
 
 #[async_trait]
 impl DevLinkrpcTsErrorsService for Provider {
-    async fn check(&self, _ctx: &CallCtx, _mode: String) -> Result<String, CallError<CheckError>> {
-        Err(CallError::Application(CheckError::NotFound(
-            MissingData::new("gone".into()),
-        )))
+    async fn check(&self, _ctx: &CallCtx, _mode: String) -> Result<String, CheckError> {
+        Err(CheckError::NotFound(MissingData::new("gone".into())))
     }
 
     async fn stream_check(
@@ -20,13 +18,13 @@ impl DevLinkrpcTsErrorsService for Provider {
         _ctx: &CallCtx,
         mode: String,
         stream_sender: StreamSender<String>,
-    ) -> Result<String, CallError<StreamCheckError>> {
+    ) -> Result<String, StreamCheckError> {
         stream_sender.send("checking".into()).await.unwrap();
         match mode.as_str() {
-            "missing" => Err(CallError::Application(StreamCheckError::Code2001(
-                MissingData::new("streamed".into()),
+            "missing" => Err(StreamCheckError::Code2001(MissingData::new(
+                "streamed".into(),
             ))),
-            "busy" => Err(CallError::Application(StreamCheckError::Code2002)),
+            "busy" => Err(StreamCheckError::Code2002),
             _ => {
                 stream_sender.send("complete".into()).await.unwrap();
                 Ok("found".into())
@@ -39,8 +37,8 @@ struct RawErrorProvider;
 
 #[async_trait]
 impl DevLinkrpcTsErrorsService for RawErrorProvider {
-    async fn check(&self, _ctx: &CallCtx, _mode: String) -> Result<String, CallError<CheckError>> {
-        Err(CallError::Generic(RpcCallError::Remote(JsonRpcError {
+    async fn check(&self, _ctx: &CallCtx, _mode: String) -> Result<String, CheckError> {
+        Err(CheckError::Generic(RpcCallError::Remote(JsonRpcError {
             code: 29_999,
             message: "Undeclared".into(),
             data: Some(serde_json::json!({ "kept": true })),
@@ -52,7 +50,7 @@ impl DevLinkrpcTsErrorsService for RawErrorProvider {
         _ctx: &CallCtx,
         _mode: String,
         _stream_sender: StreamSender<String>,
-    ) -> Result<String, CallError<StreamCheckError>> {
+    ) -> Result<String, StreamCheckError> {
         unreachable!()
     }
 }
@@ -91,7 +89,7 @@ async fn generated_typed_error_round_trips_and_rejects_malformed_data() {
         .await
         .unwrap_err();
     match error {
-        CallError::Application(CheckError::NotFound(missing)) => {
+        CheckError::NotFound(missing) => {
             assert_eq!(missing.resource, "gone");
         }
 
@@ -238,19 +236,16 @@ async fn generated_typed_stream_preserves_payloads_and_final_application_errors(
     assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
     assert!(matches!(
         result.await,
-        Err(CallError::Application(StreamCheckError::Code2001(
+        Err(StreamCheckError::Code2001(
             MissingData { resource }
-        ))) if resource == "streamed"
+        )) if resource == "streamed"
     ));
     assert_eq!(payloads.recv().await, None);
 
     let call = client.stream_check("busy".into()).await.unwrap();
     let (result, _, mut payloads, _) = call.into_parts();
     assert_eq!(payloads.recv().await.as_deref(), Some("checking"));
-    assert!(matches!(
-        result.await,
-        Err(CallError::Application(StreamCheckError::Code2002))
-    ));
+    assert!(matches!(result.await, Err(StreamCheckError::Code2002)));
 }
 
 #[tokio::test]
@@ -282,7 +277,7 @@ async fn generated_client_marks_response_decode_failures_local() {
         .unwrap_err();
     assert!(matches!(
         error,
-        CallError::Generic(RpcCallError::Local(JsonRpcError {
+        CheckError::Generic(RpcCallError::Local(JsonRpcError {
             code: error_codes::INTERNAL_ERROR,
             ..
         }))

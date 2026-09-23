@@ -51,16 +51,21 @@ From that one trait you get:
 
 ## Typed application errors
 
-Application errors are inferred from the method's `Result` error type; existing
-`Result<T, JsonRpcError>` methods are unchanged. No error annotation is needed.
+Application errors are inferred from the method's `Result` error type. Authored
+server signatures such as `Result<T, JsonRpcError>` remain unchanged, but their
+generated clients return `Result<T, RpcCallError>` so error origins are retained.
+No method-level error annotation is needed.
 
 ```rust
-#[derive(linkrpc::ApplicationError)]
+#[derive(Debug, linkrpc::ApplicationError)]
+#[rpc_error(display)]
 enum LookupError {
-    #[rpc_error(message = "Not found")]
+    #[rpc_error(message = "Resource {resource} not found")]
     NotFound { resource: String },
-    #[rpc_error(code = -7, message = "Offline")]
+    #[rpc_error(message = "Offline")]
     Offline,
+    #[rpc_error(generic)]
+    Generic(RpcCallError),
 }
 
 #[link_rpc_interface(id = "example.lookup")]
@@ -69,12 +74,28 @@ trait Lookup {
 }
 ```
 
-The server trait may return either `LookupError` directly or
-`CallError<LookupError>` when it also needs to forward a raw remote error. The client returns
-`Result<String, CallError<LookupError>>`. `CallError::Application` is produced
-only when the numeric code is declared and its decoder succeeds.
+With `#[rpc_error(generic)]`, both server and client return `LookupError` directly.
+The single-field fallback variant is not a wire variant and is excluded from schema
+reflection. `From<RpcCallError>` decodes a remote error once and places every other
+origin directly in the fallback. `From<CallError<LookupError>>` unwraps already
+classified errors without decoding again, allowing `?` to forward failures.
+The fallback's `into_rpc_error` converts back to the wire error only at the server
+boundary; remote and noncompliant originals are preserved.
+
+Enums without a generic variant retain `Result<T, CallError<E>>` clients, with
+`CallError::Application` for declared errors and `CallError::Generic` for other
+failures. An explicitly authored `Result<T, CallError<E>>` server signature
+also retains that client surface, including for handwritten `ApplicationError`
+implementations. The derive implements `ClientApplicationError` to select its
+client surface. Handwritten codecs used directly as a method's error type can
+implement this separate trait with `type ClientError = CallError<Self>` and
+delegate `from_call_error` to `CallError::from_call_error`; the existing
+`ApplicationError` trait itself requires no new members.
+
+Application variants are produced only when the numeric code is declared and
+its decoder succeeds.
 For named errors, the message is descriptive, not a discriminator. Unknown codes
-produce `CallError::Generic(RpcCallError::Remote(error))`. A known code with an
+produce `Generic(RpcCallError::Remote(error))`. A known code with a
 body that the decoder rejects produces
 `Generic(RpcCallError::NonCompliantServer { original, issues })`.
 Both this variant and `ApplicationErrorDecodeError::Invalid` retain the original
@@ -91,6 +112,24 @@ to what the decoder rejects; it does not enforce stricter schema semantics.
 `Generic(RpcCallError::Local(error))` reports local serialization/decoding failures,
 while `Generic(RpcCallError::Transport(error))` reports connection failures without inferring their
 origin from a peer-controlled error code.
+
+With `#[rpc_error(display)]`, named-field message templates use Rust formatting, including `{resource}` and
+`{field:?}`; a single-payload variant can use `{0}` or `{}`. Escaped `{{` and `}}`
+produce literal braces. The wire message and opt-in `#[rpc_error(display)]`
+implementation use the same rendered text. Reflection retains the template,
+not a particular instance's message. Without this opt-in, authored messages remain
+literal strings for compatibility. Imported templates are opaque diagnostic
+metadata, not Rust format strings or equality checks; generated foreign bindings
+must accept any string message for a valid named envelope.
+
+Methods without declared application errors return `RpcCallError` directly on
+clients, including notification failures and streaming startup/final responses.
+`StreamingCall<R, C, S, E = RpcCallError>` carries the selected final error type.
+`StreamSender::send_detailed` retains local/transport origins; legacy `send` and
+stream controls still expose wire errors. Low-level `RpcCall::call`, `notify`,
+and `call_stream` remain wire-error compatibility APIs. Custom transports should
+override their `_detailed` counterparts to preserve origins; defaults cannot
+recover transport identity already lost by a legacy implementation.
 
 Codes are signed 32-bit integers and default to `DEFAULT_APPLICATION_ERROR_CODE`
 (`1`, a LinkRPC convention, not a JSON-RPC standard code). Explicit codes still
@@ -252,7 +291,7 @@ the JSON's constraints and component references, including explicit `false`.
 Both authored and imported traits now use generic `RpcCall` clients (defaulting
 to `LinkRpcConnection`). `new`, `root`, `with_service`, and `with_prefix` select
 addressing without changing wire method names. Notifications may return either
-`()`, as before, or `Result<(), JsonRpcError>`; `Server::dispatch_notification`
+`()`, as before, `Result<(), JsonRpcError>`, or `Result<(), RpcCallError>`; `Server::dispatch_notification`
 exposes decode and handler failures. Default trait method bodies are preserved.
 
 Generated application-error enums use the same `ApplicationError` derive with
@@ -261,6 +300,11 @@ The referenced function exposes the one embedded contract: codecs validate its
 original error payload schemas, not approximations inferred from Rust types.
 Unknown or malformed remote errors remain generic, and invalid outgoing payloads
 become internal errors.
+Generated error enums include `#[rpc_error(generic)] Generic(RpcCallError)`.
+Their generated traits and clients return the enum directly. Without declared
+application errors, generated traits use `RpcCallError`, including notifications;
+the server adapter converts failures to wire `JsonRpcError` at dispatch.
+This differs from authored traits, whose server signatures are preserved.
 
 The generator retains its existing public client/server/type names and
 `generate_server`, `default_server_methods`, and `linkrpc_path` options. Its macro
@@ -268,11 +312,11 @@ options `client`, `server`, `module`, `runtime`, and `generate_server` carry tho
 choices; `#[server_notification]` retains event-only client generation.
 Regenerated Rust bindings require a LinkRPC release with the `schema_json` macro
 mode; the macros are included and re-exported by the `linkrpc` crate.
-Source goldens change, but the shared JSON, hashes, and public call signatures do not.
+Regenerating changes Rust error signatures, but not shared JSON or hashes.
 
 The standalone `schema::schemars_to_subset` function retains its inline behavior for
 callers that need the original Zod-compatible representation; it still rejects recursion.
-Runtime message shapes and the generated trait client/server APIs are unchanged.
+Runtime message shapes are unchanged.
 
 The [shared-schema interoperability fixture](../../../interop/shared-schemas) measures
 the reduction and exercises the CLI-generated TypeScript and JSON-generated Rust peers.
@@ -506,7 +550,7 @@ async fn evaluate(
     expression: String,
     #[serde(rename = "returnByValue")]
     return_by_value: Option<bool>,
-) -> Result<RuntimeEvaluateResult, linkrpc::prelude::JsonRpcError>;
+) -> Result<RuntimeEvaluateResult, linkrpc::prelude::RpcCallError>;
 ```
 
 The macro generates a private serialization wrapper and forwards parameter-level

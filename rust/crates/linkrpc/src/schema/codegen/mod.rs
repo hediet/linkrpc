@@ -530,13 +530,13 @@ mod tests {
             .code
             .contains("pub use __linkrpc_interface::interface;"));
         assert!(generated.code.contains(
-            "async fn echo(#[params] params: String) -> Result<String, linkrpc::prelude::JsonRpcError>;"
+            "async fn echo(#[params] params: String) -> Result<String, linkrpc::prelude::RpcCallError>;"
         ));
         assert!(generated.code.contains(
-            "async fn stop(#[params] params: serde_json::Value) -> Result<(), linkrpc::prelude::JsonRpcError>;"
+            "async fn stop(#[params] params: serde_json::Value) -> Result<(), linkrpc::prelude::RpcCallError>;"
         ));
         assert!(generated.code.contains(
-            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::JsonRpcError>;"
+            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::RpcCallError>;"
         ));
         assert!(generated.code.contains("#[server_notification]"));
         assert!(!generated.code.contains("impl<C"));
@@ -552,10 +552,10 @@ mod tests {
             },
         );
         assert!(generated_with_defaults.code.contains(
-            "Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, \"echo\"))"
+            "Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, \"echo\")))"
         ));
         assert!(generated_with_defaults.code.contains(
-            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::JsonRpcError> {\n        let _ = (ctx, params,);\n        Ok(())"
+            "async fn changed(#[params] params: String) -> Result<(), linkrpc::prelude::RpcCallError> {\n        let _ = (ctx, params,);\n        Ok(())"
         ));
     }
 

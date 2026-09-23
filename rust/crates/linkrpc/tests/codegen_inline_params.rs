@@ -2,7 +2,7 @@
 mod generated;
 
 use generated::*;
-use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, RpcCall};
+use linkrpc::prelude::{CallCtx, InterfaceHandler, JsonRpcError, RpcCall, RpcCallError};
 use linkrpc::schema::codegen::{generate_rust_interface, GenerateRustOptions};
 use linkrpc::schema::LinkRpcInterfaceSchema;
 use serde_json::{json, Value};
@@ -170,7 +170,7 @@ struct Echo;
 
 #[async_trait::async_trait]
 impl InlineService for Echo {
-    async fn disable(&self, _ctx: &CallCtx) -> Result<Value, JsonRpcError> {
+    async fn disable(&self, _ctx: &CallCtx) -> Result<Value, RpcCallError> {
         Ok(json!({}))
     }
 
@@ -182,7 +182,7 @@ impl InlineService for Echo {
         payload: Option<Value>,
         r#type: String,
         wire_key: i64,
-    ) -> Result<Value, JsonRpcError> {
+    ) -> Result<Value, RpcCallError> {
         Ok(serde_json::to_value(SendParams {
             camel_case,
             optional,
@@ -193,7 +193,7 @@ impl InlineService for Echo {
         .unwrap())
     }
 
-    async fn empty(&self, _ctx: &CallCtx) -> Result<(), JsonRpcError> {
+    async fn empty(&self, _ctx: &CallCtx) -> Result<(), RpcCallError> {
         Ok(())
     }
 }

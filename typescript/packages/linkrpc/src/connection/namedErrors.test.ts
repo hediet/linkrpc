@@ -30,6 +30,31 @@ function sender(error: unknown, synchronous = false): IRequestSender {
 }
 
 describe('named application errors and result clients', () => {
+    it('treats imported Rust format templates as metadata, preserving rendered remote messages', async () => {
+        const imported = interfaceFromSchema({
+            id: 'test.rust-frame-errors', hash: '',
+            methods: {
+                read: { params: true, result: { type: 'string' }, errors: [{
+                    code: 1, type: 'Missing', message: 'Frame {frame_index} not found',
+                    data: { type: 'object', properties: { frame_index: { type: 'integer' } },
+                        required: ['frame_index'], additionalProperties: false },
+                }] },
+            },
+        });
+        const error = new RpcError('Frame 17 not found', 1,
+            { type: 'Missing', data: { frame_index: 17 } }, 'remote');
+        const connection = new LinkRpcConnection(sender(error));
+        const result = await connection.get(imported).read({});
+        expect(result).toEqual(new RpcFailure({
+            kind: 'application', code: 1, type: 'Missing',
+            message: 'Frame 17 not found', data: { frame_index: 17 },
+        }));
+        const read = imported.members.read;
+        if (read.kind !== 'request') throw new Error('request expected');
+        expect(read.errors[0].is(result)).toBe(true);
+        expect(imported.toSchema().methods.read.errors![0].message).toBe('Frame {frame_index} not found');
+    });
+
     it('preserves qualified and default routing in both client error policies', async () => {
         const pair = new TransportPair();
         const server = LinkRpcConnection.fromTransport(pair.a);

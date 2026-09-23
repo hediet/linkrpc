@@ -15,11 +15,11 @@ struct GraphProvider {
 
 #[async_trait]
 impl ComExampleGraphService for GraphProvider {
-    async fn get_tree(&self, _ctx: &CallCtx, id: String) -> Result<TreeNode, JsonRpcError> {
+    async fn get_tree(&self, _ctx: &CallCtx, id: String) -> Result<TreeNode, RpcCallError> {
         Ok(TreeNode::new(id))
     }
 
-    async fn notify_changed(&self, _ctx: &CallCtx, node: TreeNode) -> Result<(), JsonRpcError> {
+    async fn notify_changed(&self, _ctx: &CallCtx, node: TreeNode) -> Result<(), RpcCallError> {
         self.notifications.lock().unwrap().push(node.value);
         Ok(())
     }
@@ -30,7 +30,7 @@ impl ComExampleGraphService for GraphProvider {
         _id: String,
         _label: Option<String>,
         payload: Option<serde_json::Value>,
-    ) -> Result<bool, JsonRpcError> {
+    ) -> Result<bool, RpcCallError> {
         self.configured.lock().unwrap().push(payload);
         Ok(true)
     }
@@ -50,7 +50,7 @@ impl ComExampleGraphService for EventProvider {
         _point: Option<Point>,
         _parent: Option<Box<TreeNode>>,
         _children: Option<Vec<TreeNode>>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         self.events.lock().unwrap().push(value);
         Ok(())
     }
@@ -60,8 +60,11 @@ struct FailingProvider;
 
 #[async_trait]
 impl ComExampleGraphService for FailingProvider {
-    async fn notify_changed(&self, _ctx: &CallCtx, _node: TreeNode) -> Result<(), JsonRpcError> {
-        Err(JsonRpcError::new(-32_001, "notification failed"))
+    async fn notify_changed(&self, _ctx: &CallCtx, _node: TreeNode) -> Result<(), RpcCallError> {
+        Err(RpcCallError::Local(JsonRpcError::new(
+            -32_001,
+            "notification failed",
+        )))
     }
 }
 
@@ -141,7 +144,13 @@ async fn generated_client_provider_and_event_round_trip() {
     );
 
     let error = client.paint(Shape::Point, Color::Red).await.unwrap_err();
-    assert_eq!(error.code, error_codes::METHOD_NOT_FOUND);
+    assert!(matches!(
+        error,
+        RpcCallError::Remote(JsonRpcError {
+            code: error_codes::METHOD_NOT_FOUND,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]

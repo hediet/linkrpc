@@ -92,7 +92,9 @@ async fn run_client(connection: LinkRpcConnection) -> Result<(), JsonRpcError> {
         }
         assert_eq!(received, vec![Some(7), Some(12), Some(12)]);
         if fail {
-            let error = result.await.expect_err("final error");
+            let RpcCallError::Remote(error) = result.await.expect_err("final error") else {
+                panic!("expected remote error");
+            };
             assert_eq!(error.code, 1234);
             assert_eq!(error.data, Some(serde_json::json!({ "total": 12 })));
         } else {
@@ -103,7 +105,9 @@ async fn run_client(connection: LinkRpcConnection) -> Result<(), JsonRpcError> {
     let (result, _, mut events, control) = client.cancellable().await?.into_parts();
     assert_eq!(events.recv().await.as_deref(), Some("ready"));
     control.cancel(Some("interop cancellation".into())).await?;
-    let error = result.await.expect_err("cancelled");
+    let RpcCallError::Remote(error) = result.await.expect_err("cancelled") else {
+        panic!("expected remote cancellation");
+    };
     assert_eq!(error.code, error_codes::CANCELLED);
     assert_eq!(error.message, "interop cancellation");
     assert_eq!(events.recv().await, None);

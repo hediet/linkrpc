@@ -27,7 +27,7 @@ impl runtime::RuntimeService for Provider {
         &self,
         _ctx: &CallCtx,
         expression: String,
-    ) -> Result<runtime::RuntimeEvaluateResult, JsonRpcError> {
+    ) -> Result<runtime::RuntimeEvaluateResult, RpcCallError> {
         Ok(runtime::RuntimeEvaluateResult {
             object: shared::RuntimeRemoteObject { value: expression },
         })
@@ -40,7 +40,7 @@ impl debugger::DebuggerService for Provider {
         &self,
         _ctx: &CallCtx,
         value: String,
-    ) -> Result<shared::RuntimeRemoteObject, JsonRpcError> {
+    ) -> Result<shared::RuntimeRemoteObject, RpcCallError> {
         Ok(shared::RuntimeRemoteObject { value })
     }
 }
@@ -100,12 +100,15 @@ async fn all_address_modes_register_call_and_dispose() {
         let client = target.client(caller.clone());
         let result = client.evaluate("value".into()).await.unwrap();
         assert_eq!(result.object.value, "value");
-        assert_eq!(
-            client.unsupported(json!({})).await.unwrap_err().code,
-            error_codes::METHOD_NOT_FOUND
-        );
+        assert!(matches!(
+            client.unsupported(json!({})).await,
+            Err(RpcCallError::Remote(JsonRpcError {
+                code: error_codes::METHOD_NOT_FOUND,
+                ..
+            }))
+        ));
         assert!(
-            matches!(client.fallible(json!({})).await, Err(CallError::Generic(RpcCallError::Remote(error))) if error.code == error_codes::METHOD_NOT_FOUND)
+            matches!(client.fallible(json!({})).await, Err(runtime::RuntimeFallibleError::Generic(RpcCallError::Remote(error))) if error.code == error_codes::METHOD_NOT_FOUND)
         );
 
         provider.enable_reflection();
@@ -139,10 +142,13 @@ async fn all_address_modes_register_call_and_dispose() {
         assert!(schema.is_ok());
         assert!(registration.dispose());
         assert!(!registration.dispose());
-        assert_eq!(
-            client.evaluate("x".into()).await.unwrap_err().code,
-            error_codes::METHOD_NOT_FOUND
-        );
+        assert!(matches!(
+            client.evaluate("x".into()).await,
+            Err(RpcCallError::Remote(JsonRpcError {
+                code: error_codes::METHOD_NOT_FOUND,
+                ..
+            }))
+        ));
     }
 }
 
@@ -725,7 +731,7 @@ fn bare_clients_reject_streaming_while_default_clients_keep_native_support() {
 
 #[async_trait]
 impl runtime::RuntimeService for Events {
-    async fn changed(&self, _ctx: &CallCtx, value: String) -> Result<(), JsonRpcError> {
+    async fn changed(&self, _ctx: &CallCtx, value: String) -> Result<(), RpcCallError> {
         self.0.lock().unwrap().push(value);
         Ok(())
     }
@@ -886,13 +892,11 @@ async fn connection_router_shares_registration_and_disposal() {
         "shared registry"
     );
     assert!(registration.dispose());
-    assert_eq!(
-        runtime::TARGET
-            .client(caller)
-            .evaluate("".into())
-            .await
-            .unwrap_err()
-            .code,
-        error_codes::METHOD_NOT_FOUND
-    );
+    assert!(matches!(
+        runtime::TARGET.client(caller).evaluate("".into()).await,
+        Err(RpcCallError::Remote(JsonRpcError {
+            code: error_codes::METHOD_NOT_FOUND,
+            ..
+        }))
+    ));
 }

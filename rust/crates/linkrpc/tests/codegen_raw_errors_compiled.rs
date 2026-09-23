@@ -144,7 +144,7 @@ fn raw_private_tag_cannot_shadow_a_named_wire_type_on_another_code() {
 
 #[async_trait]
 impl DevLinkrpcRawErrorsService for Provider {
-    async fn check(&self, _ctx: &CallCtx, params: String) -> Result<String, CallError<CheckError>> {
+    async fn check(&self, _ctx: &CallCtx, params: String) -> Result<String, CheckError> {
         let data = match params.as_str() {
             "absent" => None,
             "null" => Some(RawBodyData::Variant1(())),
@@ -153,10 +153,10 @@ impl DevLinkrpcRawErrorsService for Provider {
                 value: Some(json!({"nested": true})),
             })),
         };
-        Err(CallError::Application(CheckError::CodeNeg32001(RawBody {
+        Err(CheckError::CodeNeg32001(RawBody {
             message: params,
             data,
-        })))
+        }))
     }
 }
 
@@ -183,10 +183,7 @@ async fn generated_raw_client_and_server_round_trip() {
         ("object", Some(json!({"value": {"nested": true}}))),
     ] {
         let error = client.check(mode.into()).await.unwrap_err();
-        assert!(matches!(
-            error,
-            CallError::Application(CheckError::CodeNeg32001(_))
-        ));
+        assert!(matches!(error, CheckError::CodeNeg32001(_)));
         assert_eq!(
             error.into_rpc_error(),
             JsonRpcError {

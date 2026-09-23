@@ -224,6 +224,17 @@ impl Channel {
 
     /// Fire a notification (no response expected).
     pub async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError> {
+        self.notify_detailed(method, params)
+            .await
+            .map_err(|_| JsonRpcError::new(error_codes::INTERNAL_ERROR, "transport closed"))
+    }
+
+    /// Fire a notification while retaining transport failure identity.
+    pub async fn notify_detailed(
+        &self,
+        method: &str,
+        params: JsonValue,
+    ) -> Result<(), RpcCallError> {
         let note = JsonRpcMessage::Notification(JsonRpcNotification {
             method: method.to_string(),
             params: Some(params),
@@ -232,7 +243,7 @@ impl Channel {
             .transport
             .send(note)
             .await
-            .map_err(|_| JsonRpcError::new(error_codes::INTERNAL_ERROR, "transport closed"))
+            .map_err(RpcCallError::Transport)
     }
 
     #[cfg(test)]
@@ -547,19 +558,19 @@ impl ChannelInner {
         state: &Arc<StreamState>,
         dir: &'static str,
         payload: JsonValue,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let _gate = state.send_gate.lock().await;
         if !state.is_active() {
-            return Err(JsonRpcError::new(
+            return Err(RpcCallError::Local(JsonRpcError::new(
                 error_codes::CANCELLED,
                 "streaming call is no longer active",
-            ));
+            )));
         }
         if !state.outgoing_declared() {
-            return Err(JsonRpcError::new(
+            return Err(RpcCallError::Local(JsonRpcError::new(
                 error_codes::INVALID_PARAMS,
                 "this call does not declare an outbound application stream",
-            ));
+            )));
         }
         self.send_stream_message(state, dir, Some(payload), None, None, None)
             .await
@@ -582,6 +593,7 @@ impl ChannelInner {
         }
         self.send_stream_message(state, dir, None, Some(kind), reason, nonce)
             .await
+            .map_err(RpcCallError::into_rpc_error)
     }
 
     async fn send_stream_message(
@@ -592,7 +604,7 @@ impl ChannelInner {
         control: Option<&'static str>,
         reason: Option<String>,
         nonce: Option<String>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         let mut params = serde_json::Map::new();
         params.insert("requestId".into(), request_id_to_value(&state.id));
         params.insert("dir".into(), JsonValue::String(dir.into()));
@@ -617,7 +629,7 @@ impl ChannelInner {
                 params: Some(JsonValue::Object(params)),
             }))
             .await;
-        if result.is_err() {
+        if let Err(error) = result {
             state.disconnect();
             let role = if dir == "toCallee" {
                 StreamRole::Outbound
@@ -625,7 +637,7 @@ impl ChannelInner {
                 StreamRole::Inbound
             };
             self.remove_stream_state(role, &state.id);
-            return Err(disconnected_error());
+            return Err(RpcCallError::Transport(error));
         }
         Ok(())
     }
@@ -918,7 +930,9 @@ mod tests {
             .typed::<JsonValue, NoStream, NoStream>(None, None);
         let (result, _sender, _receiver, control) = call.into_parts();
         control.cancel(Some("test reason".into())).await.unwrap();
-        let error = result.await.unwrap_err();
+        let RpcCallError::Remote(error) = result.await.unwrap_err() else {
+            panic!("cancellation must remain a remote error");
+        };
         assert_eq!(error.code, error_codes::CANCELLED);
         assert_eq!(error.data.unwrap()["reason"], json!("test reason"));
     }

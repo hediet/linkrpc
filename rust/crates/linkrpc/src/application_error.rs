@@ -60,6 +60,17 @@ pub trait ApplicationError: Sized {
     }
 }
 
+/// Selects the error surface of generated clients.
+///
+/// The derive implements this separately from `ApplicationError` so existing
+/// handwritten wire codecs remain source-compatible. Handwritten codecs used
+/// in generated clients can choose `CallError<Self>` and delegate to
+/// `CallError::from_call_error`.
+pub trait ClientApplicationError: ApplicationError {
+    type ClientError;
+    fn from_call_error(error: RpcCallError) -> Self::ClientError;
+}
+
 /// Failure from a typed RPC call.
 #[derive(Clone, Debug, PartialEq)]
 pub enum CallError<E> {
@@ -108,6 +119,12 @@ impl<E> CallError<E> {
                 error.to_string(),
             ),
         }
+    }
+}
+
+impl<E: ApplicationError> From<RpcCallError> for CallError<E> {
+    fn from(error: RpcCallError) -> Self {
+        Self::from_call_error(error)
     }
 }
 

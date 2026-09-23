@@ -166,7 +166,10 @@ Declarations sharing a code describe a union of possible error responses. After
 code selection, the named envelope's `type`, data presence, and data schema select
 and validate a variant. The wire `message` is diagnostic and MUST NOT be used to
 select a named variant. The schema's `message` is the producer's default diagnostic
-message. An unknown or missing tag under a handled code is a compliance failure
+message or authoring-language format template. Templates are opaque metadata
+to consumers: they MUST NOT be evaluated as code or treated as message equality
+constraints. Producers may interpolate payload fields into the wire diagnostic;
+consumers must accept that rendered string. An unknown or missing tag under a handled code is a compliance failure
 unless another explicitly declared branch of that code's union accepts it.
 
 For compatibility, declarations without `type` retain the legacy representation:
@@ -194,8 +197,14 @@ rather than an assertion about the type of an arbitrary caught exception.
 Client APIs SHOULD separate declared application failures from generic RPC failures.
 TypeScript clients may return application failures as nominally branded values while
 throwing generic failures, with a separate result client returning both categories.
-Rust clients may return `Result<T, CallError<E>>`, where `CallError` distinguishes
-`Application(E)` from `Generic(...)`. Generic failures retain remote, local, and
+Rust clients may return `Result<T, E>` when the application enum has an opt-in
+generic fallback variant, or `Result<T, CallError<E>>`, where `CallError`
+distinguishes `Application(E)` from `Generic(...)`. The fallback is a local API
+choice, not a schema declaration or wire variant, and does not affect the hash.
+Methods without declared application errors may return `RpcCallError` directly.
+The same error surface applies to streaming startup and final response; notification
+failures are local or transport failures, not remote application responses.
+Generic failures retain remote, local, and
 transport provenance instead of interpreting a remote code as a local transport event.
 The generic category also includes noncompliant-server failures. The normal
 TypeScript client throws that diagnosis, rather than the original wire error;

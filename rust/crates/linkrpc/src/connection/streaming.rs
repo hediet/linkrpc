@@ -28,13 +28,13 @@ pub(super) const STREAM_BUFFER_CAPACITY: usize = 256;
 pub enum NoStream {}
 
 /// The independently awaitable final response of a streaming call.
-pub struct CallResult<R> {
-    inner: Pin<Box<dyn Future<Output = Result<R, JsonRpcError>> + Send>>,
+pub struct CallResult<R, E = RpcCallError> {
+    inner: Pin<Box<dyn Future<Output = Result<R, E>> + Send>>,
     _lifetime: Option<Arc<OutboundLifetime>>,
 }
 
-impl<R> Future for CallResult<R> {
-    type Output = Result<R, JsonRpcError>;
+impl<R, E> Future for CallResult<R, E> {
+    type Output = Result<R, E>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         self.inner.as_mut().poll(cx)
@@ -42,18 +42,7 @@ impl<R> Future for CallResult<R> {
 }
 
 /// The independently awaitable final response of a typed-error streaming call.
-pub struct TypedCallResult<R, E> {
-    inner: Pin<Box<dyn Future<Output = Result<R, CallError<E>>> + Send>>,
-    _lifetime: Option<Arc<OutboundLifetime>>,
-}
-
-impl<R, E> Future for TypedCallResult<R, E> {
-    type Output = Result<R, CallError<E>>;
-
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        self.inner.as_mut().poll(cx)
-    }
-}
+pub type TypedCallResult<R, E> = CallResult<R, CallError<E>>;
 
 /// A typed application-payload sender for one direction of an in-flight call.
 pub struct StreamSender<T> {
@@ -78,10 +67,23 @@ impl<T> Clone for StreamSender<T> {
 
 impl<T: Serialize> StreamSender<T> {
     pub async fn send(&self, value: T) -> Result<(), JsonRpcError> {
+        self.send_detailed(value)
+            .await
+            .map_err(RpcCallError::into_rpc_error)
+    }
+
+    /// Send an item without collapsing local and transport failures.
+    pub async fn send_detailed(&self, value: T) -> Result<(), RpcCallError> {
         let payload = serde_json::to_value(value).map_err(|e| {
-            JsonRpcError::new(error_codes::INVALID_PARAMS, format!("stream payload: {e}"))
+            RpcCallError::Local(JsonRpcError::new(
+                error_codes::INVALID_PARAMS,
+                format!("stream payload: {e}"),
+            ))
         })?;
-        let channel = self.channel.upgrade().ok_or_else(disconnected)?;
+        let channel = self
+            .channel
+            .upgrade()
+            .ok_or(RpcCallError::Transport(TransportError::Closed))?;
         let result = channel
             .send_stream_payload(&self.state, self.dir, payload)
             .await;
@@ -164,18 +166,18 @@ impl CallControl {
 }
 
 /// Typed startup result for a streaming request.
-pub struct StreamingCall<R, C, S> {
-    result: CallResult<R>,
+pub struct StreamingCall<R, C, S, E = RpcCallError> {
+    result: CallResult<R, E>,
     sender: StreamSender<C>,
     receiver: StreamReceiver<S>,
     control: CallControl,
 }
 
-impl<R, C, S> StreamingCall<R, C, S> {
+impl<R, C, S, E> StreamingCall<R, C, S, E> {
     pub fn into_parts(
         self,
     ) -> (
-        CallResult<R>,
+        CallResult<R, E>,
         StreamSender<C>,
         StreamReceiver<S>,
         CallControl,
@@ -185,25 +187,7 @@ impl<R, C, S> StreamingCall<R, C, S> {
 }
 
 /// Typed streaming handles whose final response preserves declared and origin-aware errors.
-pub struct TypedStreamingCall<R, C, S, E> {
-    result: TypedCallResult<R, E>,
-    sender: StreamSender<C>,
-    receiver: StreamReceiver<S>,
-    control: CallControl,
-}
-
-impl<R, C, S, E> TypedStreamingCall<R, C, S, E> {
-    pub fn into_parts(
-        self,
-    ) -> (
-        TypedCallResult<R, E>,
-        StreamSender<C>,
-        StreamReceiver<S>,
-        CallControl,
-    ) {
-        (self.result, self.sender, self.receiver, self.control)
-    }
-}
+pub type TypedStreamingCall<R, C, S, E> = StreamingCall<R, C, S, CallError<E>>;
 
 /// Untyped runtime startup handle. Generated clients immediately convert it with [`typed`](Self::typed).
 pub struct RawStreamingCall {
@@ -222,6 +206,21 @@ impl RawStreamingCall {
     where
         R: DeserializeOwned + Send + 'static,
     {
+        self.typed_detailed(client_schema, server_schema, |error| error)
+    }
+
+    /// Convert the final response once, retaining its origin and selecting the
+    /// generated client's application-error surface.
+    pub fn typed_detailed<R, C, S, E>(
+        self,
+        client_schema: Option<JsonValue>,
+        server_schema: Option<JsonValue>,
+        map_error: fn(RpcCallError) -> E,
+    ) -> StreamingCall<R, C, S, E>
+    where
+        R: DeserializeOwned + Send + 'static,
+        E: 'static,
+    {
         self.state.set_incoming_schema(server_schema);
         let result = self.result;
         let lifetime = self.lifetime;
@@ -229,13 +228,13 @@ impl RawStreamingCall {
             inner: Box::pin(async move {
                 let value = result
                     .await
-                    .map_err(|_| disconnected())?
-                    .map_err(rpc_call_error_into_json)?;
+                    .map_err(|_| map_error(RpcCallError::Transport(TransportError::Closed)))?
+                    .map_err(map_error)?;
                 serde_json::from_value(value).map_err(|e| {
-                    JsonRpcError::new(
+                    map_error(RpcCallError::Local(JsonRpcError::new(
                         error_codes::INVALID_PARAMS,
                         format!("invalid response payload: {e}"),
-                    )
+                    )))
                 })
             }),
             _lifetime: Some(lifetime.clone()),
@@ -271,53 +270,7 @@ impl RawStreamingCall {
         R: DeserializeOwned + Send + 'static,
         E: ApplicationError + 'static,
     {
-        self.state.set_incoming_schema(server_schema);
-        let result = self.result;
-        let lifetime = self.lifetime;
-        let call_result = TypedCallResult {
-            inner: Box::pin(async move {
-                let value = result
-                    .await
-                    .map_err(|_| {
-                        CallError::Generic(RpcCallError::Transport(TransportError::Closed))
-                    })?
-                    .map_err(CallError::from_call_error)?;
-                serde_json::from_value(value).map_err(|e| {
-                    CallError::Generic(RpcCallError::Local(JsonRpcError::new(
-                        error_codes::INVALID_PARAMS,
-                        format!("invalid response payload: {e}"),
-                    )))
-                })
-            }),
-            _lifetime: Some(lifetime.clone()),
-        };
-        self.state.set_outgoing_schema(client_schema);
-        TypedStreamingCall {
-            result: call_result,
-            sender: StreamSender::new_outbound(
-                self.state.clone(),
-                self.channel.clone(),
-                "toCallee",
-                lifetime.clone(),
-            ),
-            receiver: StreamReceiver::new_outbound(self.state.clone(), lifetime.clone()),
-            control: CallControl::new_outbound(
-                self.state,
-                self.channel,
-                StreamRole::Outbound,
-                lifetime,
-            ),
-        }
-    }
-}
-
-fn rpc_call_error_into_json(error: RpcCallError) -> JsonRpcError {
-    match error {
-        RpcCallError::Remote(error) | RpcCallError::Local(error) => error,
-        RpcCallError::NonCompliantServer { original, .. } => *original,
-        RpcCallError::Transport(error) => {
-            JsonRpcError::new(error_codes::PEER_DISCONNECTED, error.to_string())
-        }
+        self.typed_detailed(client_schema, server_schema, CallError::from_call_error)
     }
 }
 

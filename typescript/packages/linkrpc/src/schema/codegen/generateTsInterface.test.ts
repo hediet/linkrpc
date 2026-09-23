@@ -4,7 +4,7 @@ import ts from "typescript";
 import { fileURLToPath } from "node:url";
 import { computeInterfaceHash } from "../hash";
 import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
-import { applicationError, notificationType, requestType, rpcError } from "../memberTypes";
+import { applicationError, notificationType, requestType, rpcError, type ApplicationErrorDescriptor } from "../memberTypes";
 import type { LinkRpcInterfaceSchema } from "../linkRpcInterfaceSchema";
 import type { LinkRpcJsonSchema } from "../linkRpcJsonSchema";
 import {
@@ -27,7 +27,10 @@ const TYPECHECK_TIMEOUT_MS = 30_000;
 async function _evalGenerated(source: string): Promise<{
     toSchema(): LinkRpcInterfaceSchema;
     schemaHash: string;
-    members: Record<string, { paramsSchema: z.ZodType }>;
+    members: Record<string, {
+        paramsSchema: z.ZodType;
+        errors: readonly ApplicationErrorDescriptor<number, string, unknown, string>[];
+    }>;
 }> {
     // Erase TypeScript syntax, then rebuild as an inline function call that
     // closes over the symbols we expose by name.
@@ -136,7 +139,7 @@ client.read({}).then((value) => {
             read: requestType(z.object({}), z.string()).withErrors([
                 applicationError("NotFound", { message: "Not found" }),
                 applicationError("Conflict", {
-                    message: "Conflict", data: z.object({ revision: z.number() }),
+                    message: "Conflict at revision {revision}", data: z.object({ revision: z.number() }),
                 }),
                 applicationError("Override", { code: 42, data: z.string().nullable() }),
             ]),
@@ -148,6 +151,10 @@ client.read({}).then((value) => {
         await _roundTrip(definition);
         const preserved = await _evalGenerated(generateTsInterface(definition.toSchema(), { preserveWireSchema: true }));
         expect(preserved.toSchema()).toEqual(definition.toSchema());
+        expect(preserved.members.read.errors[1].is({
+            ...preserved.members.read.errors[1].create({ revision: 17 }),
+            message: "Conflict at revision 17",
+        })).toBe(true);
         const schema = definition.toSchema();
         expect(() => generateTsInterface({
             ...schema,

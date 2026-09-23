@@ -1156,7 +1156,10 @@ async fn typed_client_and_server_round_trip() {
     );
 
     let legacy = client.legacy().await.unwrap_err();
-    assert_eq!(legacy.code, -31_000);
+    assert!(matches!(
+        legacy,
+        RpcCallError::Remote(JsonRpcError { code: -31_000, .. })
+    ));
 
     assert_eq!(client.direct("known".into()).await, Ok("found".into()));
     assert_eq!(
@@ -1192,7 +1195,8 @@ async fn inferred_errors_preserve_streaming_and_final_error_types() {
     let client = LookupClient::new(client_conn);
 
     for resource in ["known", "busy", "widget", "unknown", "malformed"] {
-        let call = client.streaming(resource.into()).await.unwrap();
+        let call: TypedStreamingCall<String, NoStream, String, LookupError> =
+            client.streaming(resource.into()).await.unwrap();
         let (result, _, mut progress, _) = call.into_parts();
         assert_eq!(progress.recv().await, Some("started".into()));
         let result: Result<String, CallError<LookupError>> = result.await;
@@ -1302,7 +1306,9 @@ fn generated_errors_are_typed_and_validate_against_components() {
     assert!(generated.contains("pub enum FetchError"));
     assert!(generated.contains("Code1001(Problem)"));
     assert!(generated.contains("CodeMinus7"));
-    assert!(generated.contains("CallError<FetchError>"));
+    assert!(generated.contains("Result<String, FetchError>"));
+    assert!(generated.contains("#[rpc_error(generic)]"));
+    assert!(generated.contains("Generic(linkrpc::prelude::RpcCallError)"));
     assert!(generated.contains("#[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]"));
     assert!(
         generated.contains("#[rpc_error(schema = __linkrpc_interface::schema, method = \"fetch\"")

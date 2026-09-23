@@ -29,6 +29,49 @@ pub enum RpcCallError {
     Transport(TransportError),
 }
 
+impl RpcCallError {
+    /// Convert to a wire error at a server or legacy API boundary.
+    pub fn into_rpc_error(self) -> JsonRpcError {
+        match self {
+            Self::Remote(error) | Self::Local(error) => error,
+            Self::NonCompliantServer { original, .. } => *original,
+            Self::Transport(error) => JsonRpcError::new(
+                crate::protocol::jsonrpc::error_codes::PEER_DISCONNECTED,
+                error.to_string(),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for RpcCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Remote(error) => write!(f, "remote error {}: {}", error.code, error.message),
+            Self::Local(error) => write!(f, "local error {}: {}", error.code, error.message),
+            Self::NonCompliantServer { original, issues } => write!(
+                f,
+                "non-compliant server error {}: {} ({issues:?})",
+                original.code, original.message
+            ),
+            Self::Transport(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for RpcCallError {}
+
+impl From<RpcCallError> for JsonRpcError {
+    fn from(error: RpcCallError) -> Self {
+        error.into_rpc_error()
+    }
+}
+
+impl From<TransportError> for RpcCallError {
+    fn from(error: TransportError) -> Self {
+        Self::Transport(error)
+    }
+}
+
 /// Issues request/notification calls by raw wire method name.
 ///
 /// Blanket-implemented for references, boxes and arcs so a generated client can
@@ -51,6 +94,14 @@ pub trait RpcCall: Send + Sync {
 
     /// Fire a notification addressed by `method` (no response expected).
     async fn notify(&self, method: &str, params: JsonValue) -> Result<(), JsonRpcError>;
+
+    /// Notifications cannot receive remote errors. Legacy implementations report
+    /// their failures as local; override this to retain transport identity.
+    async fn notify_detailed(&self, method: &str, params: JsonValue) -> Result<(), RpcCallError> {
+        self.notify(method, params)
+            .await
+            .map_err(RpcCallError::Local)
+    }
 
     async fn call_stream(
         &self,
@@ -77,6 +128,9 @@ pub trait RpcCall: Send + Sync {
 
 #[async_trait]
 impl<T: RpcCall + ?Sized> RpcCall for &T {
+    async fn notify_detailed(&self, method: &str, params: JsonValue) -> Result<(), RpcCallError> {
+        (**self).notify_detailed(method, params).await
+    }
     async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {
         (**self).call(method, params).await
     }
@@ -108,6 +162,9 @@ impl<T: RpcCall + ?Sized> RpcCall for &T {
 
 #[async_trait]
 impl<T: RpcCall + ?Sized> RpcCall for std::sync::Arc<T> {
+    async fn notify_detailed(&self, method: &str, params: JsonValue) -> Result<(), RpcCallError> {
+        (**self).notify_detailed(method, params).await
+    }
     async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {
         (**self).call(method, params).await
     }
@@ -139,6 +196,9 @@ impl<T: RpcCall + ?Sized> RpcCall for std::sync::Arc<T> {
 
 #[async_trait]
 impl<T: RpcCall + ?Sized> RpcCall for Box<T> {
+    async fn notify_detailed(&self, method: &str, params: JsonValue) -> Result<(), RpcCallError> {
+        (**self).notify_detailed(method, params).await
+    }
     async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {
         (**self).call(method, params).await
     }
@@ -170,6 +230,9 @@ impl<T: RpcCall + ?Sized> RpcCall for Box<T> {
 
 #[async_trait]
 impl RpcCall for crate::connection::channel::Channel {
+    async fn notify_detailed(&self, method: &str, params: JsonValue) -> Result<(), RpcCallError> {
+        crate::connection::channel::Channel::notify_detailed(self, method, params).await
+    }
     async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {
         crate::connection::channel::Channel::call(self, method, params).await
     }
@@ -201,6 +264,9 @@ impl RpcCall for crate::connection::channel::Channel {
 
 #[async_trait]
 impl RpcCall for crate::connection::hub_connection::LinkRpcConnection {
+    async fn notify_detailed(&self, method: &str, params: JsonValue) -> Result<(), RpcCallError> {
+        self.channel().notify_detailed(method, params).await
+    }
     async fn call(&self, method: &str, params: JsonValue) -> Result<JsonValue, JsonRpcError> {
         crate::connection::hub_connection::LinkRpcConnection::call(self, method, params).await
     }

@@ -94,14 +94,18 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut into_arms = Vec::new();
     let mut from_arms = Vec::new();
     let mut display_arms = Vec::new();
+    let formatter = Ident::new("__linkrpc_formatter", Span::mixed_site());
+    let rendered_message = Ident::new("__linkrpc_message", Span::mixed_site());
     let mut seen = std::collections::BTreeSet::new();
     let mut codes = std::collections::BTreeMap::new();
     let mut declarations = Vec::new();
+    let mut generic_variant = None;
     for variant in data.variants {
         let mut code = None;
         let mut message = None;
         let mut name = None;
         let mut raw = false;
+        let mut generic = false;
         for attr in &variant.attrs {
             if !attr.path().is_ident("rpc_error") {
                 continue;
@@ -121,10 +125,31 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                 } else if meta.path.is_ident("raw") {
                     raw = true;
                     Ok(())
+                } else if meta.path.is_ident("generic") {
+                    generic = true;
+                    Ok(())
                 } else {
-                    Err(meta.error("expected code, message, name, or raw"))
+                    Err(meta.error("expected code, message, name, raw, or generic"))
                 }
             })?;
+        }
+        if generic {
+            if generic_variant.is_some()
+                || raw
+                || code.is_some()
+                || message.is_some()
+                || name.is_some()
+                || !matches!(&variant.fields, Fields::Unnamed(fields) if fields.unnamed.len() == 1)
+            {
+                return Err(syn::Error::new_spanned(&variant,
+                    "exactly one generic variant is allowed, with one RpcCallError field and no other rpc_error options"));
+            }
+            let ident = variant.ident;
+            into_arms.push(quote!(Self::#ident(error) => return error.into_rpc_error()));
+            display_arms
+                .push(quote!(Self::#ident(error) => ::std::fmt::Display::fmt(error, #formatter)));
+            generic_variant = Some(ident);
+            continue;
         }
         declarations.push((variant, code, message, name, raw));
     }
@@ -245,7 +270,17 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                 "application error variants must be unit, named-field, or single-payload variants",
             )),
         };
-        into_arms.push(quote!(Self::#ident #pattern => (__Wire::#ident #pattern, #code, #message)));
+        let rendered = if !display || imported.is_some() || raw {
+            quote!(#message.to_owned())
+        } else if matches!(fields, Fields::Unnamed(_)) && has_positional_format_argument(&message) {
+            quote!(::std::format!(#message, __data))
+        } else {
+            quote!(::std::format!(#message))
+        };
+        into_arms.push(quote!(Self::#ident #pattern => {
+            let #rendered_message = #rendered;
+            (__Wire::#ident #pattern, #code, #rendered_message)
+        }));
         from_arms.push(quote!(__Wire::#ident #pattern => Self::#ident #pattern));
         let display_pattern = match fields {
             Fields::Unit => quote!(),
@@ -254,9 +289,10 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
         };
         if raw {
             let display_name = ident.to_string();
-            display_arms.push(quote!(Self::#ident #display_pattern => f.write_str(#display_name)));
+            display_arms
+                .push(quote!(Self::#ident #display_pattern => #formatter.write_str(#display_name)));
         } else {
-            display_arms.push(quote!(Self::#ident #display_pattern => f.write_str(#message)));
+            display_arms.push(quote!(Self::#ident #pattern => #formatter.write_str(&#rendered)));
         }
         let mut raw_schema_adjustments = Vec::new();
         if raw && imported.is_none() {
@@ -426,15 +462,71 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
     let display_impl = display.then(|| {
         quote! {
             impl ::std::fmt::Display for #enum_ident {
-                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                fn fmt(&self, #formatter: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    #[allow(unused_variables)]
                     match self { #(#display_arms),* }
                 }
             }
         }
     });
+    let client_impl = if let Some(ident) = generic_variant {
+        quote! {
+            impl ::linkrpc::application_error::ClientApplicationError for #enum_ident {
+                type ClientError = Self;
+                fn from_call_error(error: ::linkrpc::prelude::RpcCallError) -> Self {
+                    match ::linkrpc::prelude::CallError::<Self>::from_call_error(error) {
+                        ::linkrpc::prelude::CallError::Application(error) => error,
+                        ::linkrpc::prelude::CallError::Generic(error) => Self::#ident(error),
+                    }
+                }
+            }
+            impl ::core::convert::From<::linkrpc::prelude::RpcCallError> for #enum_ident {
+                fn from(error: ::linkrpc::prelude::RpcCallError) -> Self {
+                    <Self as ::linkrpc::application_error::ClientApplicationError>::from_call_error(error)
+                }
+            }
+            impl ::core::convert::From<::linkrpc::prelude::CallError<Self>> for #enum_ident {
+                fn from(error: ::linkrpc::prelude::CallError<Self>) -> Self {
+                    match error {
+                        ::linkrpc::prelude::CallError::Application(error) => error,
+                        ::linkrpc::prelude::CallError::Generic(error) => Self::#ident(error),
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl ::linkrpc::application_error::ClientApplicationError for #enum_ident {
+                type ClientError = ::linkrpc::prelude::CallError<Self>;
+                fn from_call_error(error: ::linkrpc::prelude::RpcCallError) -> Self::ClientError {
+                    ::linkrpc::prelude::CallError::from_call_error(error)
+                }
+            }
+        }
+    };
+    let decode_variant = if helper_variants.is_empty() {
+        quote!(match __wire {})
+    } else {
+        quote!(return Ok(match __wire { #(#from_arms),* }))
+    };
+    let encode_body = if helper_variants.is_empty() {
+        quote!(match self { #(#into_arms),* })
+    } else {
+        quote! {
+            let (__wire, __code, __message) = match self { #(#into_arms),* };
+            let __tagged = match ::serde_json::to_value(__wire) {
+                Ok(value) => value,
+                Err(error) => return ::linkrpc::prelude::JsonRpcError::new(
+                    ::linkrpc::prelude::error_codes::INTERNAL_ERROR, error.to_string()),
+            };
+            ::linkrpc::application_error::encode_application_error(
+                __tagged, __code, &__message, &Self::error_schemas(), &Self::error_components())
+        }
+    };
     with_runtime(
         quote! {
             #display_impl
+            #client_impl
             const _: () = {
             #[derive(::serde::Serialize, ::serde::Deserialize)]
             #[serde(tag = "type", content = "data", deny_unknown_fields)]
@@ -442,14 +534,7 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
             #(#payload_structs)*
             impl ::linkrpc::prelude::ApplicationError for #enum_ident {
                 fn into_rpc_error(self) -> ::linkrpc::prelude::JsonRpcError {
-                    let (__wire, __code, __message) = match self { #(#into_arms),* };
-                    let __tagged = match ::serde_json::to_value(__wire) {
-                        Ok(value) => value,
-                        Err(error) => return ::linkrpc::prelude::JsonRpcError::new(
-                            ::linkrpc::prelude::error_codes::INTERNAL_ERROR, error.to_string()),
-                    };
-                    ::linkrpc::application_error::encode_application_error(
-                        __tagged, __code, __message, &Self::error_schemas(), &Self::error_components())
+                    #encode_body
                 }
 
                 fn try_from_rpc_error(
@@ -477,7 +562,7 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
                                 schema.r#type.as_deref().is_some_and(|name| Some(name) == __tagged.get("type").and_then(::serde_json::Value::as_str))
                             ) { "/data/data" } else { "/data" };
                             match ::linkrpc::application_error::deserialize_application_error::<__Wire>(__tagged, __payload_path) {
-                                Ok(__wire) => return Ok(match __wire { #(#from_arms),* }),
+                                Ok(__wire) => #decode_variant,
                                 Err(issue) => __issues.push(issue),
                             }
                         },
@@ -499,6 +584,20 @@ fn expand_application_error(input: DeriveInput) -> syn::Result<TokenStream2> {
         },
         &runtime,
     )
+}
+
+fn has_positional_format_argument(message: &str) -> bool {
+    let mut chars = message.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            match chars.next() {
+                Some('{') => {}
+                Some('}' | ':' | '0'..='9') => return true,
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// See crate docs.
@@ -650,6 +749,22 @@ fn parse_schema_json(json: &LitStr) -> syn::Result<serde_json::Value> {
 fn with_runtime(tokens: TokenStream2, runtime: &syn::Path) -> syn::Result<TokenStream2> {
     struct RuntimePath<'a>(&'a syn::Path);
     impl syn::visit_mut::VisitMut for RuntimePath<'_> {
+        fn visit_type_path_mut(&mut self, ty: &mut syn::TypePath) {
+            let length = ty.path.segments.len();
+            syn::visit_mut::visit_type_path_mut(self, ty);
+            if let Some(qself) = &mut ty.qself {
+                qself.position = qself.position + ty.path.segments.len() - length;
+            }
+        }
+
+        fn visit_expr_path_mut(&mut self, expr: &mut syn::ExprPath) {
+            let length = expr.path.segments.len();
+            syn::visit_mut::visit_expr_path_mut(self, expr);
+            if let Some(qself) = &mut expr.qself {
+                qself.position = qself.position + expr.path.segments.len() - length;
+            }
+        }
+
         fn visit_path_mut(&mut self, path: &mut syn::Path) {
             syn::visit_mut::visit_path_mut(self, path);
             if path.leading_colon.is_some()
@@ -982,7 +1097,7 @@ fn expand(options: InterfaceOptions, item: ItemTrait) -> syn::Result<TokenStream
         } else if m.error_ty.is_some() {
             quote!(.map_err(::linkrpc::prelude::ApplicationError::into_rpc_error)?)
         } else {
-            quote!(.map_err(::core::convert::Into::into)?)
+            quote!(.map_err(::core::convert::Into::<::linkrpc::prelude::JsonRpcError>::into)?)
         };
         let receiver = m.input_stream_ty.as_ref().map(|ty| {
             let schema =
@@ -1356,7 +1471,7 @@ fn parse_method(f: &TraitItemFn) -> syn::Result<MethodModel> {
     let error_ty = wrapped_error_ty.or_else(|| {
         return_error_ty.filter(|ty| {
             !matches!(ty, Type::Path(path)
-                if path.path.segments.last().is_some_and(|segment| segment.ident == "JsonRpcError"))
+                if path.path.segments.last().is_some_and(|segment| segment.ident == "JsonRpcError" || segment.ident == "RpcCallError"))
         })
     });
 
@@ -1407,7 +1522,7 @@ fn parse_output(
             if let Some((ok, Some(err))) = result_args(ty) {
                 if is_unit(&ok)
                     && matches!(err, Type::Path(path)
-                    if path.path.segments.last().is_some_and(|segment| segment.ident == "JsonRpcError"))
+                    if path.path.segments.last().is_some_and(|segment| segment.ident == "JsonRpcError" || segment.ident == "RpcCallError"))
                 {
                     return Ok((None, None));
                 }
@@ -1768,18 +1883,21 @@ fn client_method(
         return quote!(#event_name);
     }
 
-    let serialization_error = if m.error_ty.is_some() {
-        quote! {
-            ::linkrpc::prelude::CallError::Generic(::linkrpc::prelude::RpcCallError::Local(
-                ::linkrpc::prelude::JsonRpcError::new(
-                    ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-            ))
+    let local_error = quote! {
+        ::linkrpc::prelude::RpcCallError::Local(::linkrpc::prelude::JsonRpcError::new(
+            ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string()))
+    };
+    let error_conversion = m.error_ty.as_ref().map(|error_ty| {
+        if m.server_returns_call_error {
+            quote!(::linkrpc::prelude::CallError::<#error_ty>::from_call_error)
+        } else {
+            quote!(<#error_ty as ::linkrpc::application_error::ClientApplicationError>::from_call_error)
         }
+    });
+    let serialization_error = if let Some(convert) = &error_conversion {
+        quote!(#convert(#local_error))
     } else {
-        quote! {
-            ::linkrpc::prelude::JsonRpcError::new(
-                ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-        }
+        local_error
     };
     let build_params = if m.passthrough_ty.is_some() {
         let arg = &m.params[0].name;
@@ -1803,10 +1921,10 @@ fn client_method(
             #event_name
             #doc
             pub async fn #name(&self, #(#args),*)
-                -> ::core::result::Result<(), ::linkrpc::prelude::JsonRpcError>
+                -> ::core::result::Result<(), ::linkrpc::prelude::RpcCallError>
             {
                 #build_params
-                ::linkrpc::prelude::RpcCall::notify(
+                ::linkrpc::prelude::RpcCall::notify_detailed(
                     &self.conn, &self.method_name(#wire), __params).await
             }
         }
@@ -1814,8 +1932,13 @@ fn client_method(
         let result_ty = m.result_ty.as_ref().expect("request has result type");
         let error_ty = m.error_ty.as_ref();
         let return_ty = match error_ty {
-            Some(error_ty) => quote!(::linkrpc::prelude::CallError<#error_ty>),
-            None => quote!(::linkrpc::prelude::JsonRpcError),
+            Some(error_ty) if m.server_returns_call_error => {
+                quote!(::linkrpc::prelude::CallError<#error_ty>)
+            }
+            Some(error_ty) => {
+                quote!(<#error_ty as ::linkrpc::application_error::ClientApplicationError>::ClientError)
+            }
+            None => quote!(::linkrpc::prelude::RpcCallError),
         };
         if m.input_stream_ty.is_some() || m.output_stream_ty.is_some() {
             let client_ty = m
@@ -1847,23 +1970,24 @@ fn client_method(
                 })
                 .unwrap_or_else(|| quote!(::core::option::Option::None));
             let (streaming_ty, start_call, typed_call) = match error_ty {
-                Some(error_ty) => (
-                    quote!(::linkrpc::prelude::TypedStreamingCall<
-                        #result_ty, #client_ty, #server_ty, #error_ty>),
+                Some(_) => (
+                    quote!(::linkrpc::prelude::StreamingCall<
+                        #result_ty, #client_ty, #server_ty, #return_ty>),
                     quote! {
                         ::linkrpc::prelude::RpcCall::call_stream_detailed(
                             &self.conn, &__method, __params).await
-                            .map_err(::linkrpc::prelude::CallError::<#error_ty>::from_call_error)?
+                            .map_err(#error_conversion)?
                     },
                     quote! {
-                        __call.typed_error::<#result_ty, #client_ty, #server_ty, #error_ty>(
-                            #client_schema, #server_schema)
+                        __call.typed_detailed::<#result_ty, #client_ty, #server_ty, #return_ty>(
+                            #client_schema, #server_schema,
+                            #error_conversion)
                     },
                 ),
                 None => (
                     quote!(::linkrpc::prelude::StreamingCall<#result_ty, #client_ty, #server_ty>),
                     quote! {
-                        ::linkrpc::prelude::RpcCall::call_stream(
+                        ::linkrpc::prelude::RpcCall::call_stream_detailed(
                             &self.conn, &__method, __params).await?
                     },
                     quote! {
@@ -1885,23 +2009,19 @@ fn client_method(
             };
         }
         let call = match error_ty {
-            Some(error_ty) => quote! {
+            Some(_) => quote! {
                 let __v = ::linkrpc::prelude::RpcCall::call_detailed(
                     &self.conn, &self.method_name(#wire), __params).await
-                    .map_err(::linkrpc::prelude::CallError::<#error_ty>::from_call_error)?;
+                    .map_err(#error_conversion)?;
                 ::serde_json::from_value(__v).map_err(|e| {
-                    ::linkrpc::prelude::CallError::Generic(::linkrpc::prelude::RpcCallError::Local(
-                        ::linkrpc::prelude::JsonRpcError::new(
-                            ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
-                    ))
+                    #serialization_error
                 })
             },
             None => quote! {
-                let __v = ::linkrpc::prelude::RpcCall::call(
+                let __v = ::linkrpc::prelude::RpcCall::call_detailed(
                     &self.conn, &self.method_name(#wire), __params).await?;
                 ::serde_json::from_value(__v).map_err(|e| {
-                    ::linkrpc::prelude::JsonRpcError::new(
-                        ::linkrpc::prelude::error_codes::INTERNAL_ERROR, e.to_string())
+                    #serialization_error
                 })
             },
         };
@@ -1980,6 +2100,55 @@ fn to_snake_case(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_error_variant_rejects_ambiguous_declarations() {
+        for input in [
+            quote!(
+                enum Error {
+                    #[rpc_error(generic)]
+                    Generic,
+                }
+            ),
+            quote!(
+                enum Error {
+                    #[rpc_error(generic)]
+                    Generic { error: RpcCallError },
+                }
+            ),
+            quote!(
+                enum Error {
+                    #[rpc_error(generic, message = "bad")]
+                    Generic(RpcCallError),
+                }
+            ),
+            quote!(
+                enum Error {
+                    #[rpc_error(generic, code = 1)]
+                    Generic(RpcCallError),
+                }
+            ),
+            quote!(
+                enum Error {
+                    #[rpc_error(generic, raw)]
+                    Generic(RpcCallError),
+                }
+            ),
+            quote!(
+                enum Error {
+                    #[rpc_error(generic)]
+                    First(RpcCallError),
+                    #[rpc_error(generic)]
+                    Second(RpcCallError),
+                }
+            ),
+        ] {
+            assert!(expand_application_error(syn::parse2(input).unwrap())
+                .unwrap_err()
+                .to_string()
+                .contains("exactly one generic variant"));
+        }
+    }
 
     #[test]
     fn raw_error_declarations_reject_ambiguous_or_invalid_bodies() {

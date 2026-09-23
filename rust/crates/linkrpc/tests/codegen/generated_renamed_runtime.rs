@@ -68,6 +68,8 @@ impl StreamCheckParams {
 #[derive(Clone, Debug, crate::renamed_runtime::prelude::ApplicationError)]
 #[rpc_error(schema = __linkrpc_interface::schema, method = "check", runtime = "crate::renamed_runtime", display)]
 pub enum CheckError {
+    #[rpc_error(generic)]
+    Generic(crate::renamed_runtime::prelude::RpcCallError),
     #[rpc_error(code = 1, message = "Not found", name = "NotFound")]
     NotFound(MissingData),
     #[rpc_error(code = 1, message = "Busy", name = "Busy")]
@@ -91,6 +93,8 @@ pub enum CheckError {
 #[derive(Clone, Debug, crate::renamed_runtime::prelude::ApplicationError)]
 #[rpc_error(schema = __linkrpc_interface::schema, method = "streamCheck", runtime = "crate::renamed_runtime", display)]
 pub enum StreamCheckError {
+    #[rpc_error(generic)]
+    Generic(crate::renamed_runtime::prelude::RpcCallError),
     #[rpc_error(code = 2001, message = "Missing")]
     Code2001(MissingData),
     #[rpc_error(code = 2002, message = "Busy")]
@@ -112,10 +116,10 @@ pub enum StreamCheckError {
 )]
 pub trait DevLinkrpcTsErrorsService {
     #[name("check")]
-    async fn check(mode: String) -> Result<String, crate::renamed_runtime::prelude::CallError<CheckError>>;
+    async fn check(mode: String) -> Result<String, CheckError>;
     #[name("streamCheck")]
     #[output_stream(String)]
-    async fn stream_check(mode: String) -> Result<String, crate::renamed_runtime::prelude::CallError<StreamCheckError>>;
+    async fn stream_check(mode: String) -> Result<String, StreamCheckError>;
 }
 
 #[allow(unused_imports)]

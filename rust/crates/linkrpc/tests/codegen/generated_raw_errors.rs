@@ -307,6 +307,8 @@ pub enum CheckErrorCodeNeg32015Body {
 #[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]
 #[rpc_error(schema = __linkrpc_interface::schema, method = "check", runtime = "linkrpc", display)]
 pub enum CheckError {
+    #[rpc_error(generic)]
+    Generic(linkrpc::prelude::RpcCallError),
     #[rpc_error(code = -32001, raw)]
     CodeNeg32001(RawBody),
     #[rpc_error(code = -32601, raw)]
@@ -350,7 +352,7 @@ pub enum CheckError {
 )]
 pub trait DevLinkrpcRawErrorsService {
     #[name("check")]
-    async fn check(#[params] params: String) -> Result<String, linkrpc::prelude::CallError<CheckError>>;
+    async fn check(#[params] params: String) -> Result<String, CheckError>;
 }
 
 #[allow(unused_imports)]

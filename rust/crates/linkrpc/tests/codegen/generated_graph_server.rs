@@ -253,19 +253,19 @@ pub trait ComExampleGraphService {
         id: String,
         label: Option<String>,
         payload: Option<serde_json::Value>,
-    ) -> Result<bool, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<bool, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id, label, payload,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "configure"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "configure")))
     }
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
-    async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::JsonRpcError> {
+    async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, id,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "get_tree"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "get_tree")))
     }
     #[name("notify_changed")]
     #[notification]
-    async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, node,);
         Ok(())
     }
@@ -273,19 +273,19 @@ pub trait ComExampleGraphService {
     async fn paint(
         shape: Shape,
         color: Color,
-    ) -> Result<bool, linkrpc::prelude::JsonRpcError> {
+    ) -> Result<bool, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, shape, color,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "paint"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "paint")))
     }
     #[name("raw_echo")]
-    async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
+    async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "raw_echo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "raw_echo")))
     }
     /// A method with an empty (all-defaults) params object.
     #[name("reset")]
     #[notification]
-    async fn reset() -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn reset() -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx,);
         Ok(())
     }
@@ -297,7 +297,7 @@ pub trait ComExampleGraphService {
         point: Option<Point>,
         parent: Option<Box<TreeNode>>,
         children: Option<Vec<TreeNode>>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    ) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, value, point, parent, children,);
         Ok(())
     }

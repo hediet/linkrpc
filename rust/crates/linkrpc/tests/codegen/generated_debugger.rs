@@ -14,9 +14,9 @@
 )]
 pub trait DebuggerService {
     #[name("inspect")]
-    async fn inspect(value: String) -> Result<super::shared::RuntimeRemoteObject, linkrpc::prelude::JsonRpcError> {
+    async fn inspect(value: String) -> Result<super::shared::RuntimeRemoteObject, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, value,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "inspect"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "inspect")))
     }
 }
 

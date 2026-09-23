@@ -286,7 +286,7 @@ impl<'a> Collector<'a> {
                 .map(|r| self.type_ref(r, &format!("{base}Result")))
         };
         let mut errors = Vec::new();
-        let mut variants = HashSet::new();
+        let mut variants = HashSet::from(["Generic".to_owned()]);
         // Legacy variants use private serde tags too; reserve every public wire
         // name before allocating those tags, including names declared later.
         let mut binding_names: HashSet<String> = method
@@ -1270,6 +1270,8 @@ pub(super) fn generate(
         ));
         w.line(&format!("pub enum {name} {{"));
         w.indent();
+        w.line("#[rpc_error(generic)]");
+        w.line(&format!("Generic({hub}::prelude::RpcCallError),"));
         for error in &method.errors {
             let variant = &error.variant;
             let name_attr = error
@@ -1437,8 +1439,8 @@ fn write_bindings(
         let error_ty = method
             .error_name
             .as_ref()
-            .map(|error| format!("{hub}::prelude::CallError<{error}>"))
-            .unwrap_or_else(|| format!("{hub}::prelude::JsonRpcError"));
+            .cloned()
+            .unwrap_or_else(|| format!("{hub}::prelude::RpcCallError"));
         w.line(&format!("#[name({})]", quote_str(&method.wire_name)));
         if method.server_notification {
             w.line("#[server_notification]");
@@ -1515,10 +1517,12 @@ fn write_bindings(
                     quote_str(&method.wire_name));
                 w.line(&format!(
                     "Err({})",
-                    if method.error_name.is_some() {
-                        format!("{hub}::prelude::CallError::Generic({hub}::prelude::RpcCallError::Local({error}))")
+                    if let Some(error_name) = &method.error_name {
+                        format!(
+                            "{error_name}::Generic({hub}::prelude::RpcCallError::Local({error}))"
+                        )
                     } else {
-                        error
+                        format!("{hub}::prelude::RpcCallError::Local({error})")
                     }
                 ));
             } else {

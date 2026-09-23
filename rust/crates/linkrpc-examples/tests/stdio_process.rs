@@ -44,7 +44,13 @@ async fn consumer_spawns_calc_server_over_stdio() {
         .divide(1, 0)
         .await
         .expect_err("divide by zero must fail");
-    assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    assert!(matches!(
+        err,
+        RpcCallError::Remote(JsonRpcError {
+            code: error_codes::INVALID_PARAMS,
+            ..
+        })
+    ));
 
     // Reflection is served by the same process; introspect it through the typed directory client
     // (no raw JSON) — the calculator shows up in the listing, fully typed.

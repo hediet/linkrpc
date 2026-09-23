@@ -47,7 +47,7 @@ async fn main() {
     // Typed error path: divide-by-zero surfaces as a JSON-RPC error.
     match calc.divide(1, 0).await {
         Ok(_) => println!("divide(1, 0) unexpectedly succeeded"),
-        Err(e) => println!("divide(1, 0) -> error {}: {}", e.code, e.message),
+        Err(e) => println!("divide(1, 0) -> {e}"),
     }
 
     // Introspect the server through the typed directory reflection client.

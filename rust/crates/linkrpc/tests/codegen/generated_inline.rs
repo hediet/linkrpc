@@ -63,10 +63,10 @@ impl SendParams {
 )]
 pub trait InlineService {
     #[name("disable")]
-    async fn disable() -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
+    async fn disable() -> Result<serde_json::Value, linkrpc::prelude::RpcCallError>;
     #[name("empty")]
     #[notification]
-    async fn empty() -> Result<(), linkrpc::prelude::JsonRpcError>;
+    async fn empty() -> Result<(), linkrpc::prelude::RpcCallError>;
     #[name("send")]
     async fn send(
         #[serde(rename = "camelCase")] camel_case: String,
@@ -74,7 +74,7 @@ pub trait InlineService {
         payload: Option<serde_json::Value>,
         r#type: String,
         #[serde(rename = "wire-key")] wire_key: i64,
-    ) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
+    ) -> Result<serde_json::Value, linkrpc::prelude::RpcCallError>;
 }
 
 #[allow(unused_imports)]

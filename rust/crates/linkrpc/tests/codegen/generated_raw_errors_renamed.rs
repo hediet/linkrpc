@@ -307,6 +307,8 @@ pub enum CheckErrorCodeNeg32015Body {
 #[derive(Clone, Debug, crate::renamed_runtime::prelude::ApplicationError)]
 #[rpc_error(schema = __linkrpc_interface::schema, method = "check", runtime = "crate::renamed_runtime", display)]
 pub enum CheckError {
+    #[rpc_error(generic)]
+    Generic(crate::renamed_runtime::prelude::RpcCallError),
     #[rpc_error(code = -32001, raw)]
     CodeNeg32001(RawBody),
     #[rpc_error(code = -32601, raw)]
@@ -350,7 +352,7 @@ pub enum CheckError {
 )]
 pub trait DevLinkrpcRawErrorsService {
     #[name("check")]
-    async fn check(#[params] params: String) -> Result<String, crate::renamed_runtime::prelude::CallError<CheckError>>;
+    async fn check(#[params] params: String) -> Result<String, CheckError>;
 }
 
 #[allow(unused_imports)]

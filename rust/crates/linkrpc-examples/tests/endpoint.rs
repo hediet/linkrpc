@@ -67,7 +67,13 @@ async fn server_dials_into_consumer_hosted_endpoint_via_env() {
         .divide(1, 0)
         .await
         .expect_err("divide by zero must fail");
-    assert_eq!(err.code, error_codes::INVALID_PARAMS);
+    assert!(matches!(
+        err,
+        RpcCallError::Remote(JsonRpcError {
+            code: error_codes::INVALID_PARAMS,
+            ..
+        })
+    ));
 
     // Reflection over the same connection, through the typed directory client (no raw JSON).
     let directory = DirectoryServiceClient::new(conn);

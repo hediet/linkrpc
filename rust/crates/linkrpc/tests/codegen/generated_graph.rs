@@ -253,24 +253,24 @@ pub trait ComExampleGraphService {
         id: String,
         label: Option<String>,
         payload: Option<serde_json::Value>,
-    ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
+    ) -> Result<bool, linkrpc::prelude::RpcCallError>;
     /// Fetch the tree rooted at an id.
     #[name("get_tree")]
-    async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::JsonRpcError>;
+    async fn get_tree(id: String) -> Result<TreeNode, linkrpc::prelude::RpcCallError>;
     #[name("notify_changed")]
     #[notification]
-    async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::JsonRpcError>;
+    async fn notify_changed(node: TreeNode) -> Result<(), linkrpc::prelude::RpcCallError>;
     #[name("paint")]
     async fn paint(
         shape: Shape,
         color: Color,
-    ) -> Result<bool, linkrpc::prelude::JsonRpcError>;
+    ) -> Result<bool, linkrpc::prelude::RpcCallError>;
     #[name("raw_echo")]
-    async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError>;
+    async fn raw_echo(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::RpcCallError>;
     /// A method with an empty (all-defaults) params object.
     #[name("reset")]
     #[notification]
-    async fn reset() -> Result<(), linkrpc::prelude::JsonRpcError>;
+    async fn reset() -> Result<(), linkrpc::prelude::RpcCallError>;
     /// Server-emitted event fired whenever the tree changes.
     #[name("tree_changed")]
     #[server_notification]
@@ -279,7 +279,7 @@ pub trait ComExampleGraphService {
         point: Option<Point>,
         parent: Option<Box<TreeNode>>,
         children: Option<Vec<TreeNode>>,
-    ) -> Result<(), linkrpc::prelude::JsonRpcError>;
+    ) -> Result<(), linkrpc::prelude::RpcCallError>;
 }
 
 #[allow(unused_imports)]

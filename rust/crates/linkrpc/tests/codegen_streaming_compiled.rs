@@ -17,10 +17,12 @@ impl ComExampleGeneratedStreamingService for Provider {
         initial: u32,
         mut commands: StreamReceiver<Command>,
         events: StreamSender<Event>,
-    ) -> Result<u32, JsonRpcError> {
+    ) -> Result<u32, RpcCallError> {
         let command = commands.recv().await.expect("one command");
         let total = initial + command.amount;
-        events.send(Event::new(EventKind::Progress, total)).await?;
+        events
+            .send_detailed(Event::new(EventKind::Progress, total))
+            .await?;
         Ok(total)
     }
 
@@ -28,7 +30,7 @@ impl ComExampleGeneratedStreamingService for Provider {
         &self,
         _ctx: &CallCtx,
         _events: StreamSender<NoStream>,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         Ok(())
     }
 }

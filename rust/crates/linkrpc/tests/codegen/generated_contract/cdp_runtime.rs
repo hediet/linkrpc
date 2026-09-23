@@ -36,6 +36,8 @@ impl EvaluateResult {
 #[derive(Clone, Debug, linkrpc::prelude::ApplicationError)]
 #[rpc_error(schema = __linkrpc_interface::schema, method = "fallible", runtime = "linkrpc", display)]
 pub enum FallibleError {
+    #[rpc_error(generic)]
+    Generic(linkrpc::prelude::RpcCallError),
     #[rpc_error(code = 41, message = "failed")]
     Code41,
 }
@@ -52,24 +54,24 @@ pub enum FallibleError {
 pub trait CdpRuntimeService {
     #[name("changed")]
     #[server_notification]
-    async fn changed(value: String) -> Result<(), linkrpc::prelude::JsonRpcError> {
+    async fn changed(value: String) -> Result<(), linkrpc::prelude::RpcCallError> {
         let _ = (ctx, value,);
         Ok(())
     }
     #[name("evaluate")]
-    async fn evaluate(expression: String) -> Result<EvaluateResult, linkrpc::prelude::JsonRpcError> {
+    async fn evaluate(expression: String) -> Result<EvaluateResult, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, expression,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "evaluate")))
     }
     #[name("fallible")]
-    async fn fallible(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::CallError<FallibleError>> {
+    async fn fallible(#[params] params: serde_json::Value) -> Result<serde_json::Value, FallibleError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::CallError::Generic(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fallible"))))
+        Err(FallibleError::Generic(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "fallible"))))
     }
     #[name("unsupported")]
-    async fn unsupported(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::JsonRpcError> {
+    async fn unsupported(#[params] params: serde_json::Value) -> Result<serde_json::Value, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unsupported"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "unsupported")))
     }
 }
 

@@ -15,9 +15,9 @@
 /// non-raw keyword suffix collision
 pub trait Self_Service {
     #[name("echo")]
-    async fn echo(#[params] params: String) -> Result<String, linkrpc::prelude::JsonRpcError> {
+    async fn echo(#[params] params: String) -> Result<String, linkrpc::prelude::RpcCallError> {
         let _ = (ctx, params,);
-        Err(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "echo"))
+        Err(linkrpc::prelude::RpcCallError::Local(linkrpc::prelude::JsonRpcError::new(linkrpc::prelude::error_codes::METHOD_NOT_FOUND, "echo")))
     }
 }
 
