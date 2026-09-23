@@ -11,30 +11,26 @@ struct Service;
 
 #[async_trait]
 impl DevLinkrpcTsErrorsService for Service {
-    async fn check(
-        &self,
-        _ctx: &CallCtx,
-        params: CheckParams,
-    ) -> Result<String, CallError<CheckError>> {
+    async fn check(&self, _ctx: &CallCtx, params: CheckParams) -> Result<String, CheckError> {
         match params.mode.as_str() {
             "success" => Ok("ok".into()),
-            "missing" => Err(CallError::Application(CheckError::Missing(
-                CheckErrorMissingData::new("file".into()),
+            "missing" => Err(CheckError::Missing(CheckErrorMissingData::new(
+                "file".into(),
             ))),
-            "busy" => Err(CallError::Application(CheckError::Busy)),
-            "nullable" => Err(CallError::Application(CheckError::Nullable(None))),
-            "numeric" => Err(CallError::Application(CheckError::Numeric(42.5))),
-            "invalid-encoding" => Err(CallError::Application(CheckError::Numeric(f64::NAN))),
-            "recursive" => Err(CallError::Application(CheckError::Recursive(
+            "busy" => Err(CheckError::Busy),
+            "nullable" => Err(CheckError::Nullable(None)),
+            "numeric" => Err(CheckError::Numeric(42.5)),
+            "invalid-encoding" => Err(CheckError::Numeric(f64::NAN)),
+            "recursive" => Err(CheckError::Recursive(
                 MethodCheckSchemaError3D2004Root::new(
                     "root".into(),
                     vec![MethodCheckSchemaError3D2004Root::new("leaf".into(), vec![])],
                 ),
-            ))),
-            "raw" => Err(CallError::Application(CheckError::CodeNeg32001(
+            )),
+            "raw" => Err(CheckError::CodeNeg32001(
                 serde_json::from_value(common::raw_body("raw")).unwrap(),
-            ))),
-            mode => Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
+            )),
+            mode => Err(CheckError::Generic(linkrpc::client::RpcCallError::Remote(
                 common::remote_error(mode, 2000),
             ))),
         }
@@ -55,23 +51,23 @@ async fn client(connection: LinkRpcConnection) {
         .await
         .unwrap_err()
     {
-        CallError::Application(CheckError::Missing(data)) => assert_eq!(data.resource, "file"),
+        CheckError::Missing(data) => assert_eq!(data.resource, "file"),
         error => panic!("expected declared Missing, got {error:?}"),
     }
     assert!(matches!(
         client.check(CheckParams::new("busy".into())).await,
-        Err(CallError::Application(CheckError::Busy))
+        Err(CheckError::Busy)
     ));
     assert!(matches!(
         client.check(CheckParams::new("nullable".into())).await,
-        Err(CallError::Application(CheckError::Nullable(None)))
+        Err(CheckError::Nullable(None))
     ));
     match client
         .check(CheckParams::new("recursive".into()))
         .await
         .unwrap_err()
     {
-        CallError::Application(CheckError::Recursive(data)) => {
+        CheckError::Recursive(data) => {
             assert_eq!(data.label, "root");
             assert_eq!(data.children[0].label, "leaf");
         }
@@ -79,14 +75,14 @@ async fn client(connection: LinkRpcConnection) {
     }
     assert!(matches!(
         client.check(CheckParams::new("numeric".into())).await,
-        Err(CallError::Application(CheckError::Numeric(value))) if value == 42.5
+        Err(CheckError::Numeric(value)) if value == 42.5
     ));
     match client
         .check(CheckParams::new("changed-message".into()))
         .await
         .unwrap_err()
     {
-        CallError::Application(CheckError::Missing(data)) => assert_eq!(data.resource, "file"),
+        CheckError::Missing(data) => assert_eq!(data.resource, "file"),
         error => panic!("expected Missing despite dynamic message, got {error:?}"),
     }
     for mode in common::RAW_MODES {
@@ -97,17 +93,13 @@ async fn client(connection: LinkRpcConnection) {
                 .await
                 .unwrap_err(),
         ) {
-            ("raw", CallError::Application(CheckError::CodeNeg32001(body))) => {
+            ("raw", CheckError::CodeNeg32001(body)) => serde_json::to_value(body).unwrap(),
+            ("raw-absent" | "raw-null" | "raw-value", CheckError::CodeNeg32002(body)) => {
                 serde_json::to_value(body).unwrap()
             }
-            (
-                "raw-absent" | "raw-null" | "raw-value",
-                CallError::Application(CheckError::CodeNeg32002(body)),
-            ) => serde_json::to_value(body).unwrap(),
-            (
-                "raw-string" | "raw-number",
-                CallError::Application(CheckError::CodeNeg32003(body)),
-            ) => serde_json::to_value(body).unwrap(),
+            ("raw-string" | "raw-number", CheckError::CodeNeg32003(body)) => {
+                serde_json::to_value(body).unwrap()
+            }
             (mode, error) => panic!("{mode}: expected typed plain JSON-RPC error, got {error:?}"),
         };
         assert_eq!(body["message"], common::raw_body(mode)["message"]);
@@ -129,17 +121,20 @@ async fn client(connection: LinkRpcConnection) {
         if mode == "extra-property" {
             assert!(matches!(
                 error,
-                CallError::Application(CheckError::Missing(data)) if data.resource == "file"
+                CheckError::Missing(data) if data.resource == "file"
             ));
         } else {
-            common::assert_generic_error(error, mode, 2000);
+            let CheckError::Generic(error) = error else {
+                panic!("{mode}: expected generic failure, got {error:?}");
+            };
+            common::assert_generic_error::<CheckError>(CallError::Generic(error), mode, 2000);
         }
     }
     assert!(matches!(
         client
             .check(CheckParams::new("invalid-encoding".into()))
             .await,
-        Err(CallError::Generic(linkrpc::client::RpcCallError::Remote(
+        Err(CheckError::Generic(linkrpc::client::RpcCallError::Remote(
             JsonRpcError {
                 code: error_codes::INTERNAL_ERROR,
                 ..
@@ -153,7 +148,7 @@ async fn client(connection: LinkRpcConnection) {
     assert!(
         matches!(
             disconnected,
-            CallError::Generic(linkrpc::client::RpcCallError::Transport(
+            CheckError::Generic(linkrpc::client::RpcCallError::Transport(
                 linkrpc::transport::message::TransportError::Closed
             ))
         ),

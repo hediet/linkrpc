@@ -75,7 +75,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<generated::Snapshot, JsonRpcError> {
+    ) -> Result<generated::Snapshot, RpcCallError> {
         Ok(params)
     }
 
@@ -83,7 +83,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<generated::Snapshot, JsonRpcError> {
+    ) -> Result<generated::Snapshot, RpcCallError> {
         Ok(params)
     }
 
@@ -91,7 +91,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<generated::Snapshot, JsonRpcError> {
+    ) -> Result<generated::Snapshot, RpcCallError> {
         Ok(params)
     }
 
@@ -99,7 +99,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<generated::DisplayMetadata, JsonRpcError> {
+    ) -> Result<generated::DisplayMetadata, RpcCallError> {
         Ok(params.metadata)
     }
 
@@ -107,7 +107,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<Vec<generated::Snapshot>, JsonRpcError> {
+    ) -> Result<Vec<generated::Snapshot>, RpcCallError> {
         Ok(vec![params.clone(), params])
     }
 
@@ -115,7 +115,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<generated::OptionalResult, JsonRpcError> {
+    ) -> Result<generated::OptionalResult, RpcCallError> {
         Ok(generated::OptionalResult::Snapshot(params))
     }
 
@@ -123,7 +123,7 @@ impl generated::GeneratedSharedService for GeneratedService {
         &self,
         _ctx: &CallCtx,
         params: generated::Snapshot,
-    ) -> Result<std::collections::HashMap<String, generated::Snapshot>, JsonRpcError> {
+    ) -> Result<std::collections::HashMap<String, generated::Snapshot>, RpcCallError> {
         Ok(std::collections::HashMap::from([(
             "current".into(),
             params,

@@ -15,8 +15,8 @@ const DEADLINE: Duration = Duration::from_secs(10);
 const CDP_PREFIX: &str = "DOM.";
 const LSP_PREFIX: &str = "textDocument/";
 
-fn fixture_error(message: &str) -> JsonRpcError {
-    JsonRpcError::new(-32000, message)
+fn fixture_error(message: &str) -> RpcCallError {
+    RpcCallError::Local(JsonRpcError::new(-32000, message))
 }
 
 struct CdpServerService {
@@ -29,7 +29,7 @@ impl cdp::CdpDomService for CdpServerService {
         &self,
         _ctx: &CallCtx,
         params: cdp::GetDocumentParams,
-    ) -> Result<cdp::GetDocumentResult, JsonRpcError> {
+    ) -> Result<cdp::GetDocumentResult, RpcCallError> {
         if params.depth == Some(-99) {
             return Err(fixture_error("cdp fixture error"));
         }
@@ -53,7 +53,7 @@ impl cdp::CdpDomService for CdpServerService {
         &self,
         _ctx: &CallCtx,
         _params: cdp::DocumentUpdatedParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         Ok(())
     }
 }
@@ -68,7 +68,7 @@ impl lsp::LspTextdocumentService for LspServerService {
         &self,
         _ctx: &CallCtx,
         params: lsp::DidOpenTextDocumentParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         assert_eq!(params.text_document.uri, "file:///interop.json");
         assert_eq!(params.text_document.language_id, "json");
         assert_eq!(params.text_document.version, 1);
@@ -85,7 +85,7 @@ impl lsp::LspTextdocumentService for LspServerService {
         &self,
         _ctx: &CallCtx,
         _params: lsp::PublishDiagnosticsParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         Ok(())
     }
 
@@ -93,7 +93,7 @@ impl lsp::LspTextdocumentService for LspServerService {
         &self,
         _ctx: &CallCtx,
         params: lsp::SelectionRangeParams,
-    ) -> Result<lsp::SelectionRangeResult, JsonRpcError> {
+    ) -> Result<lsp::SelectionRangeResult, RpcCallError> {
         if params.text_document.uri == "file:///error.json" {
             return Err(fixture_error("lsp fixture error"));
         }
@@ -124,15 +124,18 @@ impl cdp::CdpDomService for CdpClientService {
         &self,
         _ctx: &CallCtx,
         _params: cdp::GetDocumentParams,
-    ) -> Result<cdp::GetDocumentResult, JsonRpcError> {
-        Err(JsonRpcError::new(error_codes::METHOD_NOT_FOUND, "client"))
+    ) -> Result<cdp::GetDocumentResult, RpcCallError> {
+        Err(RpcCallError::Local(JsonRpcError::new(
+            error_codes::METHOD_NOT_FOUND,
+            "client",
+        )))
     }
 
     async fn document_updated(
         &self,
         _ctx: &CallCtx,
         _params: cdp::DocumentUpdatedParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         self.0.notify_one();
         Ok(())
     }
@@ -146,7 +149,7 @@ impl lsp::LspTextdocumentService for LspClientService {
         &self,
         _ctx: &CallCtx,
         _params: lsp::DidOpenTextDocumentParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         Ok(())
     }
 
@@ -154,7 +157,7 @@ impl lsp::LspTextdocumentService for LspClientService {
         &self,
         _ctx: &CallCtx,
         params: lsp::PublishDiagnosticsParams,
-    ) -> Result<(), JsonRpcError> {
+    ) -> Result<(), RpcCallError> {
         assert_eq!(params.uri, "file:///interop.json");
         assert!(params.diagnostics.is_empty());
         self.0.notify_one();
@@ -165,8 +168,11 @@ impl lsp::LspTextdocumentService for LspClientService {
         &self,
         _ctx: &CallCtx,
         _params: lsp::SelectionRangeParams,
-    ) -> Result<lsp::SelectionRangeResult, JsonRpcError> {
-        Err(JsonRpcError::new(error_codes::METHOD_NOT_FOUND, "client"))
+    ) -> Result<lsp::SelectionRangeResult, RpcCallError> {
+        Err(RpcCallError::Local(JsonRpcError::new(
+            error_codes::METHOD_NOT_FOUND,
+            "client",
+        )))
     }
 }
 
@@ -277,6 +283,9 @@ async fn run_cdp_client(connection: LinkRpcConnection, notification: Arc<Notify>
         .await
         .expect("CDP error deadline")
         .expect_err("CDP fixture request must fail");
+    let RpcCallError::Remote(error) = error else {
+        panic!("expected remote CDP error, got {error:?}");
+    };
     assert_eq!(error.code, -32000);
     assert_eq!(error.message, "cdp fixture error");
 }
@@ -329,6 +338,9 @@ async fn run_lsp_client(connection: LinkRpcConnection, notification: Arc<Notify>
     .await
     .expect("LSP error deadline")
     .expect_err("LSP fixture request must fail");
+    let RpcCallError::Remote(error) = error else {
+        panic!("expected remote LSP error, got {error:?}");
+    };
     assert_eq!(error.code, -32000);
     assert_eq!(error.message, "lsp fixture error");
 }
