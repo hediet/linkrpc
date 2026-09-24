@@ -15,5 +15,5 @@
         "customConditions": ["@hediet/source"]
     },
     "references": [{ "path": "../linkrpc" }],
-    "include": ["src/**/*", "generate-ahp-schema.ts"]
+    "include": ["src/**/*"]
 }

@@ -82,9 +82,9 @@ describe('loadStaticHubSchema', () => {
             new Response(JSON.stringify(validDocument()), { status: 200 }),
         );
 
-        await expect(loadStaticHubSchema('https://example.test/ahp-schema.json'))
+        await expect(loadStaticHubSchema('https://example.test/service-schema.json'))
             .resolves.toEqual(parseStaticHubSchema(validDocument()));
-        expect(fetchMock).toHaveBeenCalledWith('https://example.test/ahp-schema.json');
+        expect(fetchMock).toHaveBeenCalledWith('https://example.test/service-schema.json');
     });
 
     it('reports unsuccessful HTTP responses', async () => {

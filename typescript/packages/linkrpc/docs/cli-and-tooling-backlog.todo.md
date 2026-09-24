@@ -20,34 +20,14 @@
     requests and allow selective approval.
   - Never approve capabilities targeting another principal.
 
-## Compatibility check: Agent Host Protocol
+## Compatibility check: plain JSON-RPC over WebSocket
 
-- [x] Attempt to use `hub call` for an Agent Host Protocol root command against
-      the local development agent host at `ws://localhost:4123`.
-  - Tested the bare `initialize` request with `--no-validate`, an
-    `ahp-root://` channel, an AHP protocol version, and the connection token in
-    the WebSocket `tkn` query parameter. The token is intentionally not recorded
-    here.
-  - The original `ws:` attempt did not send the AHP request because the LinkRPC
-    connection first performs its mandatory `hubrpc::initialize` handshake.
-    AHP sent no response to that unknown pre-initialize method, so LinkRPC threw
-    when its 10-second handshake timeout expired.
-  - The VS Code AHP server's pre-initialize dispatch currently returns without
-    replying to unknown requests (`if (!client) return`). This also made the
-    CLI's managed-identity discovery hang when first testing a raw connection.
-    After a successful AHP initialize, the same unknown request receives an
-    error immediately. `ws-no-init:` therefore bypasses LinkRPC signing and
-    managed-identity setup so the requested AHP `initialize` is the first frame.
-  - AHP itself uses one JSON-RPC message per WebSocket text frame, so the basic
-    WebSocket message framing is compatible. The protocols differ at connection
-    initialization: AHP expects a bare `initialize` request whose params include
-    `channel: "ahp-root://"`, while the LinkRPC client initializes the LinkRPC
-    transport first.
-  - Implemented `ws-no-init:` for plain JSON-RPC over WebSocket. It preserves
-    query parameters, skips LinkRPC initialization/signing, and successfully
-    called AHP `initialize` with protocol version `0.6.0`.
-  - AHP accepts the connection token during the WebSocket upgrade as the `tkn`
-    query parameter; it is not an AHP `initialize` parameter.
+- [x] Implement `ws-no-init:` for remote JSON-RPC services that do not speak
+      LinkRPC's initialization protocol.
+  - Preserve endpoint query parameters and bypass LinkRPC initialization,
+    signing, and managed-identity discovery.
+  - Protocol-specific initialization, schema generation, and adapters belong
+    in consuming applications; the generic transport forwards their frames.
 
 ## Future
 

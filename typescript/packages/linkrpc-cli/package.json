@@ -16,7 +16,6 @@
         "cli": "tsx src/linkrpc.ts",
         "build": "tsdown",
         "dev": "tsdown --watch",
-        "generate:ahp-schema": "tsx generate-ahp-schema.ts",
         "test": "vitest --run",
         "test:watch": "vitest"
     },
