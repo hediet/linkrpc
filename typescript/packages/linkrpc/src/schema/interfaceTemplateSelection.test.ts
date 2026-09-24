@@ -6,7 +6,7 @@ import {
     schemasInterface, TransportPair, type Schema,
 } from '../index';
 import { exportStaticHubSchema } from './exportStaticHubSchema';
-import { preferRicherInterfaceSchema, validateInterfaceTemplates } from './interfaceTemplates';
+import { getInterfaceTags, interfaceTemplatesEqual, preferRicherInterfaceSchema, validateInterfaceTemplates, type InterfaceTemplatesMetadata } from './interfaceTemplates';
 import { SchemaValidationError } from './schemaValidationError';
 
 const Store = defineInterfaceTemplate({ id: 'selection.store', parameters: ['Value'] },
@@ -29,6 +29,41 @@ function fixture() {
 }
 
 describe('optional template document selection', () => {
+    it('aggregates only instantiated template tags, deduplicates, and ranks compatible tag supersets', () => {
+        const taggedStore = defineInterfaceTemplate(
+            { id: 'selection.tagged', parameters: ['Value'], tags: ['shared', 'store'] },
+            <V>({ Value }: { Value: Schema<V> }) => ({ get: requestType(Value, Value) }),
+        );
+        const unused = defineInterfaceTemplate(
+            { id: 'selection.unused', parameters: ['Value'], tags: ['unused'] },
+            <V>({ Value }: { Value: Schema<V> }) => ({ get: requestType(Value, Value) }),
+        );
+        expect(unused).toBeDefined();
+        const tagged = defineInterface(
+            { id: 'selection.tags', tags: ['shared', 'application', 'shared'] },
+            { primary: taggedStore({ Value: z.string() }), backup: taggedStore({ Value: z.number() }) },
+        );
+        const plain = defineInterface({ id: tagged.info.id }, tagged.members);
+        expect(tagged.info.tags).toEqual(['application', 'shared', 'store']);
+        expect(getInterfaceTags(tagged.toSchema())).toEqual(['application', 'shared', 'store']);
+        expect(tagged.toSchema().tags).toEqual(tagged.info.tags);
+        const meta = tagged.toSchema()['x-interface-templates'] as InterfaceTemplatesMetadata;
+        const usedTemplate = meta.templates['selection.tagged']!;
+        expect(interfaceTemplatesEqual(
+            usedTemplate,
+            { ...usedTemplate, tags: ['new-label'] },
+        )).toBe(true);
+        expect(tagged.schemaHash).toBe(plain.schemaHash);
+        const restored = interfaceFromSchema(tagged.toSchema());
+        expect(restored.info.tags).toEqual(tagged.info.tags);
+        expect(restored.toSchema()).toEqual(tagged.toSchema());
+        expect(preferRicherInterfaceSchema(plain.toSchema(), tagged.toSchema())).toBe(tagged.toSchema());
+        expect(preferRicherInterfaceSchema(tagged.toSchema(), plain.toSchema())).toBe(tagged.toSchema());
+        const moreTags = { ...tagged.toSchema(), tags: [...tagged.toSchema().tags!, 'extra'] };
+        expect(preferRicherInterfaceSchema(tagged.toSchema(), moreTags)).toBe(moreTags);
+        expect(preferRicherInterfaceSchema(moreTags, tagged.toSchema())).toBe(moreTags);
+    });
+
     it('selects whole valid richer documents and keeps incompatible explanations and ties stable', () => {
         for (const definition of [plain, partial, rich, incompatible]) {
             expect(definition.schemaHash).toBe(plain.schemaHash);
@@ -58,6 +93,20 @@ describe('optional template document selection', () => {
         expect(computeInterfaceHash(malformed)).toBe(plain.schemaHash);
         // This optional ranking boundary does not weaken template-aware imports.
         expect(() => interfaceFromSchema(malformed)).toThrow();
+    });
+
+    it('rejects malformed first-class tags while leaving malformed optional templates unranked', () => {
+        const invalidTags = { ...plain.toSchema(), tags: [false] as unknown as string[] };
+        expect(() => interfaceFromSchema(invalidTags)).toThrow(/tags must be an array of strings/);
+        expect(() => preferRicherInterfaceSchema(plain.toSchema(), invalidTags))
+            .toThrow(/tags must be an array of strings/);
+        expect(() => preferRicherInterfaceSchema(invalidTags, plain.toSchema()))
+            .toThrow(/tags must be an array of strings/);
+        const invalidTemplates = {
+            ...plain.toSchema(), 'x-interface-templates': { unknown: true },
+        };
+        expect(preferRicherInterfaceSchema(plain.toSchema(), invalidTemplates)).toBe(plain.toSchema());
+        expect(preferRicherInterfaceSchema(invalidTemplates, plain.toSchema())).toBe(plain.toSchema());
     });
 
     it.each([

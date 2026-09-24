@@ -72,6 +72,19 @@ fn output_is_deterministic() {
 }
 
 #[test]
+fn tagged_schema_survives_generated_frozen_binding() {
+    let text = std::fs::read_to_string(codegen_dir().join("graph_interface.json")).unwrap();
+    let mut schema: LinkRpcInterfaceSchema = serde_json::from_str(&text).unwrap();
+    schema.tags = Some(vec!["graph-tag".into()]);
+    let generated = generate_rust_interface(&schema, &GenerateRustOptions::default());
+    assert!(generated.code.contains("graph-tag"));
+    assert_eq!(
+        serde_json::to_value(&schema).unwrap()["tags"],
+        serde_json::json!(["graph-tag"])
+    );
+}
+
+#[test]
 fn no_unsupported_constructs_for_this_schema() {
     let generated = generate();
     assert!(

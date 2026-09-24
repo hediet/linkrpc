@@ -139,6 +139,10 @@ function parseInterfaceSchema(value: unknown, path: string): LinkRpcInterfaceSch
     if (typeof schema.methods !== 'object' || schema.methods === null || Array.isArray(schema.methods)) {
         throw new Error(`${path}.methods must be an object`);
     }
+    if (schema.tags !== undefined
+        && (!Array.isArray(schema.tags) || schema.tags.some(tag => typeof tag !== 'string'))) {
+        throw new Error(`${path}.tags must be an array of strings`);
+    }
     for (const [name, method] of Object.entries(schema.methods)) {
         if (name.length === 0) {
             throw new Error(`${path}.methods keys must be non-empty strings`);

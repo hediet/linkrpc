@@ -74,6 +74,8 @@ pub mod iface {
         pub service_id: String,
         pub interface_id: String,
         pub interface_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tags: Option<Vec<String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub service_description: Option<String>,
     }

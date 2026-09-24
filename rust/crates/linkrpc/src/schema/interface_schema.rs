@@ -71,6 +71,10 @@ pub struct LinkRpcInterfaceSchema {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub comment: Option<String>,
 
+    /// Non-normative discovery labels (excluded from the interface hash).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tags: Option<Vec<String>>,
+
     /// Methods keyed by local member name. Member names MUST be unique (they are
     /// map keys) and conform to the `member` grammar (chapter 01 §2). Order is
     /// **not** normative — the hash sorts keys.

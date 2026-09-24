@@ -46,6 +46,20 @@ describe('directory service-id scopes', () => {
 });
 
 describe('HubDirectoryExplorer', () => {
+    it('retains tag-only changes from a watched directory without schema calls', async () => {
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [{ ...listing('svc', 'demo'), tags: ['initial'] }]);
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+        expect(explorer.result.listings[0]?.tags).toEqual(['initial']);
+        endpoint.set(undefined, [{ ...listing('svc', 'demo'), tags: ['updated'] }]);
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        expect(explorer.result.listings[0]?.tags).toEqual(['updated']);
+        expect(explorer.graphSnapshot.root.nativeListings[0]?.tags).toEqual(['updated']);
+        stop();
+    });
+
     it('emits deterministic progressive reports that converge to the final graph', async () => {
         const endpoint = new FakeDirectoryEndpoint();
         endpoint.set(undefined, [referral('cloud', [{ prefix: 'cloud' }])]);
@@ -493,6 +507,7 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
                 serviceId: item.serviceId,
                 interfaceId: item.interfaceId,
                 interfaceHash: item.hash,
+                ...(item.tags === undefined ? {} : { tags: [...item.tags] }),
                 ...(item.rootPrincipalSets === undefined
                     ? {}
                     : {

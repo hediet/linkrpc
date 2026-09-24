@@ -70,6 +70,8 @@ export type InterfaceTemplateErrorSchema<TParameter extends string = string> =
 
 export interface InterfaceTemplateSchema<TParameter extends string = string> {
     readonly id: string;
+    /** Non-normative discovery labels contributed when this template is instantiated. */
+    readonly tags?: readonly string[];
     readonly parameters: readonly TParameter[];
     readonly methods: Readonly<Record<string, InterfaceTemplateMethodSchema<TParameter>>>;
     readonly components?: {
@@ -152,22 +154,45 @@ export function attachInterfaceTemplates(
     const instances: InterfaceTemplateInstance[] = [];
     for (const [name, instance] of Object.entries(mapped)) {
         const priorTemplate = templates[instance.template.id];
-        if (priorTemplate !== undefined && !_jsonEqual(priorTemplate, instance.template)) {
+        if (priorTemplate !== undefined && !interfaceTemplatesEqual(priorTemplate, instance.template)) {
             throw new Error(
                 `Conflicting definitions for interface template "${instance.template.id}"`,
             );
         }
-        templates[instance.template.id] = instance.template;
+        templates[instance.template.id] = priorTemplate === undefined ? instance.template : {
+            ...priorTemplate,
+            tags: normalizeInterfaceTags([...(priorTemplate.tags ?? []), ...(instance.template.tags ?? [])]),
+        };
         instances.push({ ...instance.schema, name });
     }
 
+    const tags = normalizeInterfaceTags([
+        ...(schema.tags ?? []),
+        ...instances.flatMap(instance => templates[instance.template]!.tags ?? []),
+    ]);
     return {
         ...schema,
+        ...(schema.tags !== undefined || tags.length > 0 ? { tags } : {}),
         [INTERFACE_TEMPLATES_EXTENSION]: { templates, instances } satisfies InterfaceTemplatesMetadata,
     };
 }
 
+/** Stable, deduplicated discovery labels for a schema and its instantiated templates. */
+export function getInterfaceTags(schema: LinkRpcInterfaceSchema): readonly string[] {
+    validateInterfaceTemplates(schema);
+    const metadata = schema[INTERFACE_TEMPLATES_EXTENSION] as InterfaceTemplatesMetadata | undefined;
+    return normalizeInterfaceTags([
+        ...(schema.tags ?? []),
+        ...(metadata?.instances ?? []).flatMap(instance => metadata?.templates[instance.template]?.tags ?? []),
+    ]);
+}
+
+export function normalizeInterfaceTags(tags: readonly string[]): string[] {
+    return [...new Set(tags)].sort();
+}
+
 export function validateInterfaceTemplates(schema: LinkRpcInterfaceSchema): void {
+    validateTags(schema.tags, `Interface "${schema.id}"`);
     const raw = schema[INTERFACE_TEMPLATES_EXTENSION];
     if (raw === undefined) return;
     if (!_isRecord(raw) || !_isRecord(raw.templates) || !Array.isArray(raw.instances)) {
@@ -238,23 +263,36 @@ export function preferRicherInterfaceSchema(
     if (computeInterfaceHash(existing) !== existing.hash || computeInterfaceHash(candidate) !== candidate.hash) {
         return existing;
     }
+    // Tags are first-class schema fields, not optional template explanations.
+    // A malformed tag array is an error even when the template metadata is unrankable.
+    validateTags(existing.tags, `Interface "${existing.id}"`);
+    validateTags(candidate.tags, `Interface "${candidate.id}"`);
     const next = _rankingMetadata(candidate);
-    if (next === undefined) return existing;
     const prior = _rankingMetadata(existing);
-    if (prior === undefined) return candidate;
-    for (const [id, template] of Object.entries(prior.templates)) {
-        if (!Object.hasOwn(next.templates, id) || !_jsonEqual(template, next.templates[id])) return existing;
-    }
-    for (const instance of prior.instances) {
-        if (!next.instances.some(value => _jsonEqual(instance, value))) return existing;
-    }
-    for (const [key, value] of Object.entries(prior)) {
-        if (key !== 'templates' && key !== 'instances' && !_jsonEqual(value, (next as unknown as Record<string, unknown>)[key])) {
-            return existing;
+    if (candidate[INTERFACE_TEMPLATES_EXTENSION] !== undefined && next === undefined) return existing;
+    if (existing[INTERFACE_TEMPLATES_EXTENSION] !== undefined && prior === undefined) return candidate;
+    if (prior !== undefined && next === undefined) return existing;
+    if (next !== undefined && prior !== undefined) {
+        for (const [id, template] of Object.entries(prior.templates)) {
+            if (!Object.hasOwn(next.templates, id) || !interfaceTemplatesEqual(template, next.templates[id])) return existing;
+        }
+        for (const instance of prior.instances) {
+            if (!next.instances.some(value => _jsonEqual(instance, value))) return existing;
+        }
+        for (const [key, value] of Object.entries(prior)) {
+            if (key !== 'templates' && key !== 'instances' && !_jsonEqual(value, (next as unknown as Record<string, unknown>)[key])) {
+                return existing;
+            }
         }
     }
-    return Object.keys(next.templates).length > Object.keys(prior.templates).length
-        || next.instances.length > prior.instances.length ? candidate : existing;
+    const existingTags = getInterfaceTags(existing);
+    const candidateTags = getInterfaceTags(candidate);
+    if (existingTags.some(tag => !candidateTags.includes(tag))) return existing;
+    return (prior === undefined && next !== undefined)
+        || (prior !== undefined && next !== undefined
+            && (Object.keys(next.templates).length > Object.keys(prior.templates).length
+                || next.instances.length > prior.instances.length))
+        || candidateTags.length > existingTags.length ? candidate : existing;
 }
 
 function _rankingMetadata(schema: LinkRpcInterfaceSchema): InterfaceTemplatesMetadata | undefined {
@@ -266,7 +304,7 @@ function _rankingMetadata(schema: LinkRpcInterfaceSchema): InterfaceTemplatesMet
         // Optional explanations must not turn otherwise valid reflection into a failure.
         return undefined;
     }
-    return schema[INTERFACE_TEMPLATES_EXTENSION] as InterfaceTemplatesMetadata;
+    return schema[INTERFACE_TEMPLATES_EXTENSION] as InterfaceTemplatesMetadata | undefined;
 }
 
 export function validateInterfaceTemplate(template: InterfaceTemplateSchema): void {
@@ -276,6 +314,7 @@ export function validateInterfaceTemplate(template: InterfaceTemplateSchema): vo
     if (!Array.isArray(template.parameters) || !_isRecord(template.methods)) {
         throw new SchemaValidationError(`Interface template "${template.id}" must contain parameters and methods`);
     }
+    validateTags(template.tags, `Interface template "${template.id}"`);
     const parameters = new Set<string>();
     for (const parameter of template.parameters) {
         if (typeof parameter !== "string" || parameter.length === 0) {
@@ -593,7 +632,16 @@ export function interfaceTemplateArgumentsEquivalent(
 }
 
 export function interfaceTemplatesEqual(left: InterfaceTemplateSchema, right: InterfaceTemplateSchema): boolean {
-    return _jsonEqual(left, right);
+    const { tags: _leftTags, ...leftStructure } = left;
+    const { tags: _rightTags, ...rightStructure } = right;
+    return _jsonEqual(leftStructure, rightStructure);
+}
+
+function validateTags(tags: unknown, context: string): void {
+    if (tags === undefined) return;
+    if (!Array.isArray(tags) || tags.some(tag => typeof tag !== 'string')) {
+        throw new SchemaValidationError(`${context} tags must be an array of strings`);
+    }
 }
 
 function _schemasEquivalent(

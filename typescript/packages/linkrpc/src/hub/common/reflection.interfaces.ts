@@ -61,6 +61,8 @@ const zServiceListing = object({
     interfaceId: string(),
     /** Hash of the interface as implemented by this service. */
     interfaceHash: string(),
+    /** Optional, non-authoritative discovery labels of this implemented interface. */
+    tags: optional(array(string())),
     /** Optional non-normative description of the owning service. */
     serviceDescription: optional(string()),
     /**

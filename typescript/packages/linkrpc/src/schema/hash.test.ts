@@ -6,6 +6,23 @@ import { computeInterfaceHash, EXTENSION_PREFIX } from "./hash";
 import type { LinkRpcInterfaceSchema } from "./linkRpcInterfaceSchema";
 
 describe("computeInterfaceHash", () => {
+    it("excludes only interface-level tags, not a user's tags field in a method schema", () => {
+        const base: LinkRpcInterfaceSchema = {
+            id: "tagged", hash: "", methods: { read: { params: true, result: true } },
+        };
+        expect(computeInterfaceHash({ ...base, tags: ["search", "search"] })).toBe(computeInterfaceHash(base));
+        expect(computeInterfaceHash({
+            ...base, methods: { read: {
+                params: { type: "object", properties: { tags: { type: "string" } },
+                    required: ["tags"], additionalProperties: false }, result: true,
+            } },
+        })).not.toBe(computeInterfaceHash(base));
+        const withMethodMetadata = { ...base, methods: { read: {
+            ...base.methods.read, tags: ["user-contract"],
+        } } };
+        expect(computeInterfaceHash(withMethodMetadata)).not.toBe(computeInterfaceHash(base));
+    });
+
     it("normalizes and hashes raw error body schemas without changing the legacy projection", () => {
         const data = { type: "number" as const, minimum: 0 };
         const source: LinkRpcInterfaceSchema = {

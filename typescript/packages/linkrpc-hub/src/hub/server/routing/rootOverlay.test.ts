@@ -23,6 +23,11 @@ const pingInterface = defineInterface(
     { ping: requestType(z.object({}), z.object({ pong: z.boolean() })) },
 );
 
+const taggedMathInterface = defineInterface({ id: 'math', description: 'Arithmetic.', tags: ['linkrpc.graph'] },
+    mathInterface.members);
+const taggedPingInterface = defineInterface({ id: 'ping', description: 'Liveness.', tags: ['root-discovery'] },
+    pingInterface.members);
+
 /** Build an overlay uplinked to `hub` with the bootstrap root services. */
 function makeOverlay(hub: Hub, grantedServiceIdNamespace?: string): { overlay: RootOverlay; upstream: AttachedLink; } {
     const p = new TransportPair();
@@ -36,12 +41,13 @@ function makeOverlay(hub: Hub, grantedServiceIdNamespace?: string): { overlay: R
 async function joinParticipant(
     hub: Hub,
     prefix: string,
+    iface: typeof mathInterface = mathInterface,
 ): Promise<{ conn: LinkRpcConnection; overlay: RootOverlay; upstream: AttachedLink; }> {
     const { overlay, upstream } = makeOverlay(hub, prefix);
     const pair = new TransportPair();
     overlay.connectParticipant(pair.a);
     const conn = LinkRpcConnection.fromTransport(pair.b);
-    conn.register(mathInterface, { add: ({ a, b }) => ({ sum: a + b }) }, { serviceId: prefix });
+    conn.register(iface, { add: ({ a, b }) => ({ sum: a + b }) }, { serviceId: prefix });
     conn.enableReflection({ serviceId: prefix });
     await conn.get(hubGrantedServiceIdInterface).register({ serviceId: prefix });
     return { conn, overlay, upstream };
@@ -54,6 +60,28 @@ function attachConsumer(hub: Hub): LinkRpcConnection {
 }
 
 describe('RootOverlay + hub services (end-to-end)', () => {
+    it('retains interface tags across addressed hub referrals and the default root directory', async () => {
+        const hub = new Hub();
+        createHubServiceInterfaces(hub);
+        await joinParticipant(hub, 'calc', taggedMathInterface);
+        const consumer = attachConsumer(hub);
+        expect(taggedMathInterface.schemaHash).toBe(mathInterface.schemaHash);
+        const rows = await walkHub(consumer.channel, { rootTarget: 'hub' });
+        expect(rows).toContainEqual(expect.objectContaining({
+            serviceId: 'calc', interfaceId: 'math', tags: ['linkrpc.graph'],
+        }));
+
+        const { overlay } = makeOverlay(hub);
+        const pair = new TransportPair();
+        overlay.connectParticipant(pair.a);
+        const participant = LinkRpcConnection.fromTransport(pair.b);
+        overlay.root.register(taggedPingInterface, { ping: () => ({ pong: true }) });
+        const page = await participant.get(directoryInterface).list({ interfaceId: taggedPingInterface.info.id });
+        expect(page.items).toContainEqual(expect.objectContaining({
+            serviceId: '', interfaceId: 'ping', tags: ['root-discovery'],
+        }));
+    });
+
     it('registers a participant and routes a real call consumer -> hub -> overlay -> participant', async () => {
         const hub = new Hub();
         createHubServiceInterfaces(hub);

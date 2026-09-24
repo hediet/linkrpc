@@ -191,8 +191,8 @@ describe("LinkRpcMcpServer e2e (con.explore against a gated hub)", () => {
                     "serviceId": "hello",
                   },
                   {
-                    "documentId": "linkrpc://hello/hubrpc.directory@28f85a6b67ce7754.ts",
-                    "interfaceHash": "28f85a6b67ce7754",
+                    "documentId": "linkrpc://hello/hubrpc.directory@fde86a77878692e3.ts",
+                    "interfaceHash": "fde86a77878692e3",
                     "interfaceId": "hubrpc.directory",
                     "serviceId": "hello",
                   },

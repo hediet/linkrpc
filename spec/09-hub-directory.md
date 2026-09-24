@@ -33,6 +33,7 @@ ServiceListing = {
   serviceId:           string,
   interfaceId:         string,
   interfaceHash:       string,
+  tags?:               string[],
   serviceDescription?: string,
   rootPrincipalSets?:  RootPrincipalReq[][],
   reachableServiceIds?: ServiceIdPattern[] // directory referrals only
@@ -50,6 +51,14 @@ ServiceIdPattern =
 
 A provider MUST list, for each `(serviceId, interfaceId)` pair it exposes to this
 peer, the `interfaceHash` of the implementation defined by chapter 04.
+When present, `tags` carries the deduplicated effective tags of that **listed
+interface**, including labels of its instantiated interface templates. It is
+optional for backward compatibility; its absence means no tags were advertised.
+Directory walks MUST retain these labels on discovered listings so discovery
+filters can run without fetching full schemas. Tags are hints only; filtering
+by them does not establish the advertised schema or grant authority. A change
+to tags in a watched directory MUST trigger a watch tick even when the
+interface hash remains unchanged.
 
 When a filter is present, every returned item MUST satisfy it.
 `serviceIdScopes` is a union: an item satisfies it when its `serviceId` matches at

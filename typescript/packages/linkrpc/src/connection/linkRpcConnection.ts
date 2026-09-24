@@ -422,6 +422,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         readonly serviceId: string;
         readonly interfaceId: string;
         readonly interfaceHash: string;
+        readonly tags?: readonly string[];
         readonly serviceDescription?: string;
         readonly rootPrincipalSets?: readonly RootPrincipalSet[];
     }[] {
@@ -431,6 +432,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 serviceId: string;
                 interfaceId: string;
                 interfaceHash: string;
+                tags?: readonly string[];
                 serviceDescription?: string;
                 rootPrincipalSets?: readonly RootPrincipalSet[];
             } = {
@@ -438,6 +440,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 interfaceId: r.iface.info.id,
                 interfaceHash: r.iface.schemaHash,
             };
+            if (r.iface.info.tags !== undefined) item.tags = r.iface.info.tags;
             const desc = sid === '' ? undefined : this._serviceDescriptions.get(sid);
             if (desc !== undefined) item.serviceDescription = desc;
             const sets = sid === '' ? undefined : this._serviceRootPrincipalSets.get(sid);
@@ -538,6 +541,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                     serviceId: r.serviceId,
                     interfaceId: r.interfaceId,
                     interfaceHash: r.interfaceHash,
+                    tags: r.tags === undefined ? undefined : [...r.tags],
                     serviceDescription: r.serviceDescription,
                     rootPrincipalSets: r.rootPrincipalSets?.map((set) => set.map((p) => ({ ...p }))),
                 }));

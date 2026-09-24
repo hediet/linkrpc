@@ -1316,6 +1316,7 @@ pub(super) fn generate_components(
         hash: String::new(),
         description: None,
         comment: None,
+        tags: None,
         methods: Default::default(),
         components: Some(components.clone()),
         extensions: Default::default(),

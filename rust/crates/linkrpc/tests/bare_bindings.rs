@@ -392,6 +392,80 @@ fn invalid_and_duplicate_prefixes_roll_back_registration() {
 }
 
 #[tokio::test]
+async fn directory_lists_tags_of_each_implemented_interface() {
+    let (caller, provider) = connected_pair();
+    let tagged = Arc::new(InterfaceDefinition::new(
+        InterfaceInfo::new("example.tagged").with_tags(["ui", "search", "ui"]),
+        vec![],
+    ));
+    register(
+        &provider,
+        tagged.clone(),
+        Some("service"),
+        Arc::new(Mutex::new(vec![])),
+    );
+    let opaque_schema: linkrpc::schema::LinkRpcInterfaceSchema = serde_json::from_value(json!({
+        "id": "example.opaque", "hash": "", "tags": ["explicit"], "methods": {},
+        "x-interface-templates": {
+            "templates": "unrecognized future format",
+            "instances": [{ "template": "unrecognized" }],
+            "tags": ["must-not-contribute"]
+        }
+    }))
+    .unwrap();
+    register(
+        &provider,
+        Arc::new(InterfaceDefinition::from_schema(opaque_schema.clone())),
+        Some("service"),
+        Arc::new(Mutex::new(vec![])),
+    );
+    provider.enable_reflection();
+    let listed = caller
+        .call("hubrpc.directory::list", json!({}))
+        .await
+        .unwrap();
+    let row = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["interfaceId"] == "example.tagged")
+        .unwrap();
+    assert_eq!(row["tags"], json!(["search", "ui"]));
+    assert_eq!(row["interfaceHash"], tagged.schema_hash());
+    let opaque_row = listed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["interfaceId"] == "example.opaque")
+        .unwrap();
+    assert_eq!(opaque_row["tags"], json!(["explicit"]));
+    let reflected = caller
+        .call(
+            "hubrpc.schemas::get",
+            json!({ "interfaceId": "example.opaque" }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reflected["schema"]["x-interface-templates"],
+        opaque_schema.extensions["x-interface-templates"]
+    );
+    assert_eq!(
+        reflected["schema"]["tags"],
+        json!(opaque_schema.tags.unwrap())
+    );
+    assert_eq!(
+        provider
+            .list_registered()
+            .iter()
+            .find(|row| row.interface_id == "example.tagged")
+            .unwrap()
+            .tags,
+        Some(vec!["search".into(), "ui".into()])
+    );
+}
+
+#[tokio::test]
 async fn unregister_removes_routes_and_allows_reregistration() {
     let (caller, provider) = connected_pair();
     let notifications = Arc::new(Mutex::new(Vec::new()));

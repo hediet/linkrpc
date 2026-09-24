@@ -255,8 +255,8 @@ function stripNonNormative(value, isRoot = false) {
   if (Array.isArray(value)) return value.map((v) => stripNonNormative(v));
   const out = {};
   for (const k of Object.keys(value)) {
-    // Non-normative: `comment`, any `x-…` specification extension, and the root `hash`.
-    if (k === "comment" || k.startsWith("x-") || (isRoot && k === "hash")) continue;
+    // Non-normative: `comment`, any `x-…` extension, and root `hash` and `tags`.
+    if (k === "comment" || k.startsWith("x-") || (isRoot && (k === "hash" || k === "tags"))) continue;
     const v = value[k];
     if (v === undefined) continue;
     out[k] = stripNonNormative(v);
@@ -355,6 +355,25 @@ const hashFixtures = [
           result: { type: "string" },
         },
       },
+    },
+  },
+  {
+    name: "interface-tags-stripped",
+    schema: {
+      id: "test.iface", hash: "", tags: ["searchable", "searchable", "featured"],
+      methods: { ping: { params: true, result: { type: "string" } } },
+    },
+  },
+  {
+    name: "nested-tags-property-normative",
+    schema: {
+      id: "test.iface", hash: "",
+      methods: { ping: {
+        params: { type: "object", properties: {
+          tags: { type: "array", items: { type: "string" } },
+        }, required: ["tags"], additionalProperties: false },
+        result: { type: "string" },
+      } },
     },
   },
   {
@@ -533,4 +552,3 @@ write(
 
 // ── endpoint URIs (delegated to gen-endpoint.mjs) ──────────────────────────────
 await import("./gen-endpoint.mjs");
-

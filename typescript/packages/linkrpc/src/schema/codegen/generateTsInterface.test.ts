@@ -3,7 +3,7 @@ import { z } from "zod";
 import ts from "typescript";
 import { fileURLToPath } from "node:url";
 import { computeInterfaceHash } from "../hash";
-import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
+import { defineInterface, InterfaceDefinition, interfaceFromSchema } from "../../connection/interfaceDefinition";
 import { applicationError, notificationType, requestType, rpcError, type ApplicationErrorDescriptor, type Schema } from "../memberTypes";
 import type { LinkRpcInterfaceSchema } from "../linkRpcInterfaceSchema";
 import type { LinkRpcJsonSchema } from "../linkRpcJsonSchema";
@@ -63,6 +63,25 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("preserves interface and instantiated template tags with or without a frozen wire schema", async () => {
+        const plain = defineInterface({ id: "tagged.codegen", tags: ["ui", "search"] },
+            { read: requestType(z.object({}), z.string()) });
+        await _roundTrip(plain);
+        const Template = defineInterfaceTemplate(
+            { id: "tagged.codegen.template", parameters: ["Value"], tags: ["generic", "ui"] },
+            <V>({ Value }: { Value: Schema<V> }) => ({ get: requestType(Value, Value) }),
+        );
+        const templated = defineInterface({ id: "tagged.codegen", tags: ["search"] },
+            { instance: Template({ Value: z.string() }) });
+        await _roundTrip(templated);
+        const custom = plain.toSchema();
+        const withNestedTags = {
+            ...custom, methods: { read: { ...custom.methods.read, tags: ['normative-user-field'] } },
+        };
+        withNestedTags.hash = computeInterfaceHash(withNestedTags);
+        await _roundTrip(interfaceFromSchema(withNestedTags));
+    });
+
     it("round-trips callable template checked errors and compiles specialized error clients", async () => {
         const Store = defineInterfaceTemplate({ id: "generic.checked", parameters: ["Value"] },
             <V>({ Value }: { Value: Schema<V> }) => ({
@@ -515,6 +534,7 @@ client.read({}).then((value) => {
                               serviceId: z.string(),
                               interfaceId: z.string(),
                               interfaceHash: z.string(),
+                              tags: z.array(z.string()).optional(),
                               serviceDescription: z.string().optional(),
                               rootPrincipalSets: z.array(z.array(z.object({
                                   principal: z.string(),

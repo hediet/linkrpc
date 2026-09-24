@@ -59,7 +59,8 @@ export function generateTsInterface(
     const linkRpcImport = options.linkRpcImport ?? '@hediet/linkrpc';
     const exportName = options.exportName ?? _deriveExportName(schema.id);
     const preserveWireSchema = options.preserveWireSchema
-        ?? schema[INTERFACE_TEMPLATES_EXTENSION] !== undefined;
+        ?? (schema[INTERFACE_TEMPLATES_EXTENSION] !== undefined
+            || Object.values(schema.methods).some(method => Object.hasOwn(method, 'tags')));
     if (options.bareTarget !== undefined) {
         validateBarePrefix(options.bareTarget.prefix);
     }
@@ -237,6 +238,9 @@ function _writeInterfaceInfo(
     }
     if (schema.comment !== undefined) {
         w.append(`comment: ${JSON.stringify(schema.comment)},`).newline();
+    }
+    if (schema.tags !== undefined) {
+        w.append(`tags: ${JSON.stringify(schema.tags)},`).newline();
     }
     if (includeHash) {
         w.append(`hash: ${JSON.stringify(schema.hash)},`).newline();

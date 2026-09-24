@@ -34,6 +34,57 @@
     "hash": "0ae42ee73d10bfa4"
   },
   {
+    "name": "interface-tags-stripped",
+    "schema": {
+      "id": "test.iface",
+      "hash": "",
+      "tags": [
+        "searchable",
+        "searchable",
+        "featured"
+      ],
+      "methods": {
+        "ping": {
+          "params": true,
+          "result": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hash": "0ae42ee73d10bfa4"
+  },
+  {
+    "name": "nested-tags-property-normative",
+    "schema": {
+      "id": "test.iface",
+      "hash": "",
+      "methods": {
+        "ping": {
+          "params": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "tags"
+            ],
+            "additionalProperties": false
+          },
+          "result": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "hash": "8942355cedc5616a"
+  },
+  {
     "name": "with-annotations-and-description",
     "schema": {
       "id": "test.iface",

@@ -102,7 +102,7 @@ function isNonNormativeKey(key: string, isRoot: boolean): boolean {
     return (
         key === "comment" ||
         key.startsWith(EXTENSION_PREFIX) ||
-        (isRoot && key === "hash")
+        (isRoot && (key === "hash" || key === "tags"))
     );
 }
 

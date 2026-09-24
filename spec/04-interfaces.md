@@ -23,6 +23,7 @@ InterfaceSchema = {
   hash:        string,             // content hash (§4); id@hash is a diagnostic notation only
   description?: string,            // NORMATIVE markdown; part of the hash
   comment?:    string,             // non-normative notes; stripped from the hash
+  tags?:       string[],           // non-normative discovery labels; stripped from the hash
   methods:     { [member: string]: MethodSchema },
   components?: { schemas?: { [name: string]: JsonSchema } }
 }
@@ -54,6 +55,14 @@ MemberAnnotations = {             // every flag defaults to false; NORMATIVE
 ```
 
 Each key of `methods` MUST conform to the `member` production in chapter 01 §2. The key is the member name; schemas for params, results, and stream payloads are values and therefore carry no redundant synthetic name.
+
+`tags` labels the interface for discovery, not for identity, routing, authorization,
+or structural compatibility. Producers SHOULD omit an empty array and SHOULD
+deduplicate labels; consumers MUST treat absent tags as empty. The array is a
+non-authoritative hint: membership does not establish a method, schema, or
+capability. Only the **top-level interface** `tags` field is excluded from the
+hash; a property named `tags` elsewhere remains part of its enclosing normative
+contract unless another existing rule excludes it.
 
 `JsonSchema` is the restricted JSON Schema subset defined in §3. Reusable definitions are referenced as `#/components/schemas/<name>`. A boolean `true` schema matches any value (used where a member declares no value, e.g. a void result); `false` matches nothing.
 
@@ -375,7 +384,15 @@ This profile is non-normative for LinkRPC interoperability. Peers may ignore it;
 An interface MAY describe a reusable, parameterized decomposition under the
 `x-interface-templates` extension while retaining ordinary concrete `methods` as its
 only wire contract. A template declares named schema parameters, methods, and
-optional local components. A schema parameter is written as
+optional local components and `tags?: string[]` discovery labels. A template's
+tags contribute to the interface's effective tags **only when that template is
+instantiated**, deduplicated with its explicit interface tags. An authoring
+producer MUST materialize these effective labels into the first-class top-level
+`tags` field when publishing the concrete interface schema. A consumer need
+only read that top-level field; it MUST NOT be required to parse optional template
+metadata for discovery. Template tags are not part of structural equivalence
+and do not change the interface hash. A
+schema parameter is written as
 `{"$parameter":"name"}`; it is distinct from JSON Schema `$ref`, which continues
 to refer only to a component. An instance names a template, supplies one
 concrete schema argument for every parameter, and explicitly maps every template

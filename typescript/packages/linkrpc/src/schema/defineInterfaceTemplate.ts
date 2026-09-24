@@ -22,10 +22,17 @@ export interface BoundInterfaceTemplate<M extends MemberMap> extends InterfaceTe
  */
 export function defineInterfaceTemplate<A extends Record<string, Schema>, M extends MemberMap>(
     // Infer A from the generic factory, not prematurely from metadata's keys.
-    info: { readonly id: string; readonly parameters: readonly (keyof NoInfer<A> & string)[] },
+    info: {
+        readonly id: string;
+        readonly parameters: readonly (keyof NoInfer<A> & string)[];
+        readonly tags?: readonly string[];
+    },
     factory: (args: A) => M,
 ): (args: A) => BoundInterfaceTemplate<M> {
-    const snapshot = { id: info.id, parameters: [...info.parameters] };
+    const snapshot = {
+        id: info.id, parameters: [...info.parameters],
+        ...(info.tags === undefined ? {} : { tags: [...info.tags] }),
+    };
     const markers = new WeakMap<Schema, string>();
     const symbolic = Object.fromEntries(snapshot.parameters.map(name => {
         const schema = never();

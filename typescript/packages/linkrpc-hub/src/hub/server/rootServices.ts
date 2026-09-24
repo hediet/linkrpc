@@ -116,6 +116,7 @@ export function registerHubServices(
                 serviceId: hubServiceId,
                 interfaceId: directoryInterface.info.id,
                 interfaceHash: directoryInterface.schemaHash,
+                ...(directoryInterface.info.tags === undefined ? {} : { tags: [...directoryInterface.info.tags] }),
                 // This is the connection's explicit entry point to the global
                 // directory, which may list services outside the `hub` subtree.
                 reachableServiceIds: [{ prefix: '' }] as const,
@@ -130,6 +131,7 @@ export function registerHubServices(
                         serviceId: string;
                         interfaceId: string;
                         interfaceHash: string;
+                        tags?: string[];
                         serviceDescription?: string;
                         rootPrincipalSets?: RootPrincipalSet[];
                         reachableServiceIds?: ServiceIdPattern[];
@@ -138,6 +140,7 @@ export function registerHubServices(
                         interfaceId: it.interfaceId,
                         interfaceHash: it.interfaceHash,
                     };
+                    if (it.tags !== undefined) entry.tags = [...it.tags];
                     const desc = (it as { serviceDescription?: string; }).serviceDescription;
                     if (desc !== undefined) entry.serviceDescription = desc;
                     const sets = (it as { rootPrincipalSets?: readonly RootPrincipalSet[]; }).rootPrincipalSets;

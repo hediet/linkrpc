@@ -23,6 +23,8 @@ pub struct InterfaceInfo {
     pub description: Option<String>,
     /// Non-normative notes (stripped from the hash).
     pub comment: Option<String>,
+    /// Non-normative discovery labels.
+    pub tags: Vec<String>,
 }
 
 impl InterfaceInfo {
@@ -31,11 +33,17 @@ impl InterfaceInfo {
             id: id.into(),
             description: None,
             comment: None,
+            tags: Vec::new(),
         }
     }
 
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
+        self
+    }
+
+    pub fn with_tags(mut self, tags: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.tags = normalized_tags(tags.into_iter().map(Into::into).collect());
         self
     }
 }
@@ -112,10 +120,11 @@ impl InterfaceDefinition {
     ///
     /// An absent or empty bag is omitted from the wire schema, preserving [`Self::new`]'s output.
     pub fn new_with_components(
-        info: InterfaceInfo,
+        mut info: InterfaceInfo,
         members: Vec<(String, Member)>,
         components: Option<Components>,
     ) -> Self {
+        info.tags = normalized_tags(info.tags);
         let components = components.filter(|components| {
             components
                 .schemas
@@ -145,6 +154,7 @@ impl InterfaceDefinition {
             id: schema.id.clone(),
             description: schema.description.clone(),
             comment: schema.comment.clone(),
+            tags: normalized_tags(schema.tags.clone().unwrap_or_default()),
         };
         let members = schema
             .methods
@@ -265,6 +275,7 @@ impl InterfaceDefinition {
             hash,
             description: self.info.description.clone(),
             comment: self.info.comment.clone(),
+            tags: (!self.info.tags.is_empty()).then(|| self.info.tags.clone()),
             methods,
             components: (!components.is_empty()).then_some(Components {
                 schemas: Some(components),
@@ -276,6 +287,13 @@ impl InterfaceDefinition {
             .expect("invalid interface error declarations");
         schema
     }
+}
+
+fn normalized_tags(tags: Vec<String>) -> Vec<String> {
+    let mut tags = tags;
+    tags.sort();
+    tags.dedup();
+    tags
 }
 
 fn to_method_schema(member: &Member) -> MethodSchema {
@@ -307,6 +325,85 @@ fn to_method_schema(member: &Member) -> MethodSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tags_roundtrip_and_hash_only_ignore_top_level_tags() {
+        let basic: LinkRpcInterfaceSchema = serde_json::from_value(serde_json::json!({
+            "id": "example.tags", "hash": "", "methods": {
+                "get": { "params": true, "result": true }
+            }
+        }))
+        .unwrap();
+        let tagged: LinkRpcInterfaceSchema = serde_json::from_value(serde_json::json!({
+            "id": "example.tags", "hash": "", "tags": ["ui", "ui", "search"], "methods": {
+                "get": { "params": true, "result": true }
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            compute_interface_hash(&basic),
+            compute_interface_hash(&tagged)
+        );
+        let definition = InterfaceDefinition::from_schema(tagged.clone());
+        assert_eq!(definition.info().tags, ["search", "ui"]);
+        assert_eq!(definition.to_schema().tags, tagged.tags);
+        assert_eq!(
+            serde_json::to_value(&definition.to_schema()).unwrap()["tags"],
+            serde_json::json!(["ui", "ui", "search"])
+        );
+        let authored = InterfaceDefinition::new(
+            InterfaceInfo::new("example.tags").with_tags(["ui", "ui", "search"]),
+            vec![(
+                "get".into(),
+                Member::Request(Box::new(RequestMember {
+                    params_schema: JsonValue::Bool(true),
+                    result_schema: JsonValue::Bool(true),
+                    client_stream_schema: None,
+                    server_stream_schema: None,
+                    errors: None,
+                    error_components: None,
+                    docs: MemberDocs::default(),
+                })),
+            )],
+        );
+        assert_eq!(authored.schema_hash(), compute_interface_hash(&basic));
+        assert_eq!(
+            authored.to_schema().tags,
+            Some(vec!["search".into(), "ui".into()])
+        );
+        let mut nested = tagged;
+        nested
+            .methods
+            .get_mut("get")
+            .unwrap()
+            .extensions
+            .insert("tags".into(), serde_json::json!(["user-contract"]));
+        assert_ne!(
+            compute_interface_hash(&nested),
+            compute_interface_hash(&basic)
+        );
+        assert_eq!(
+            InterfaceDefinition::from_schema(nested.clone())
+                .to_schema()
+                .methods["get"]
+                .extensions,
+            nested.methods["get"].extensions
+        );
+    }
+
+    #[test]
+    fn imported_opaque_template_metadata_does_not_override_tags_or_panic() {
+        let schema: LinkRpcInterfaceSchema = serde_json::from_value(serde_json::json!({
+            "id": "example.template-tags", "hash": "", "tags": ["ui", "ui"], "methods": {},
+            "x-interface-templates": { "unknown-future-format": [false, null, 42] }
+        }))
+        .unwrap();
+        let interface = InterfaceDefinition::from_schema(schema.clone());
+        assert_eq!(interface.info().tags, ["ui"]);
+        assert_eq!(interface.to_schema().tags, schema.tags);
+        assert_eq!(interface.to_schema().extensions, schema.extensions);
+        assert_eq!(interface.schema_hash(), compute_interface_hash(&schema));
+    }
 
     #[test]
     fn frozen_schema_is_preserved_and_empty_hash_is_computed_from_it() {

@@ -131,7 +131,9 @@ fn normalize_schema_positions(schema: &JsonValue) -> JsonValue {
 
 /// True for a key that must not contribute to the interface hash.
 fn is_non_normative_key(key: &str, is_root: bool) -> bool {
-    key == "comment" || key.starts_with(EXTENSION_PREFIX) || (is_root && key == "hash")
+    key == "comment"
+        || key.starts_with(EXTENSION_PREFIX)
+        || (is_root && (key == "hash" || key == "tags"))
 }
 
 /// Recursively drop non-normative fields: every `comment`, every `x-…`

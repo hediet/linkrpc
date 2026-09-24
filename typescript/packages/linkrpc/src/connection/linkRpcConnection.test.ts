@@ -1290,6 +1290,25 @@ describe('LinkRpcConnection — bare bindings', () => {
 });
 
 describe('LinkRpcConnection — reflection', () => {
+    it('publishes interface tags in directory rows without changing the interface hash', async () => {
+        const { client, server, dispose } = makePair();
+        const tagged = defineInterface({ id: greeter.info.id, tags: ['ui', 'search', 'ui'] }, greeter.members);
+        expect(tagged.schemaHash).toBe(greeter.schemaHash);
+        server.service('acme').register(tagged, {
+            hello: async ({ name }) => ({ greeting: name }),
+            shout: () => { },
+        });
+        server.enableReflection();
+        const page = await client.get(directoryInterface).list({ interfaceId: tagged.info.id });
+        expect(page.items).toEqual([expect.objectContaining({
+            serviceId: 'acme', interfaceId: tagged.info.id,
+            interfaceHash: greeter.schemaHash, tags: ['search', 'ui'],
+        })]);
+        expect(server.listRegisteredInterfaces().find(item => item.interfaceId === tagged.info.id)?.tags)
+            .toEqual(['search', 'ui']);
+        dispose();
+    });
+
     it('hubrpc.defaults reports the empty-prefix registration', async () => {
         const { client, server, dispose } = makePair();
         server.register(bareInterfaceTarget(greeter), {

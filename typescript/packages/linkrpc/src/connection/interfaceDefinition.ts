@@ -15,7 +15,7 @@ import {
 } from '../schema/memberTypes';
 import { schemaToZod } from '../schema/schemaToZod';
 import {
-    attachInterfaceTemplates, validateInterfaceTemplates, type MappedInterfaceTemplate,
+    attachInterfaceTemplates, getInterfaceTags, normalizeInterfaceTags, validateInterfaceTemplates, type MappedInterfaceTemplate,
 } from '../schema/interfaceTemplates';
 import type { MethodSchema, LinkRpcInterfaceSchema } from '../schema/linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
@@ -63,6 +63,8 @@ export interface StreamApi<TClient = unknown, TServer = unknown> {
 
 export interface InterfaceInfo {
     id: string;
+    /** Non-normative discovery labels; do not affect interface identity. */
+    tags?: readonly string[];
     /**
      * Normative description of the interface (markdown). Part of the
      * interface hash — changing it is a contract change.
@@ -350,6 +352,12 @@ export class InterfaceDefinition<TMembers extends MemberMap, TDeclarations exten
             : attachInterfaceTemplates(buildSchema(info, members, ''), opts.templates);
         validateInterfaceErrors(frozenSchema);
         if (frozenSchema !== undefined) validateInterfaceTemplates(frozenSchema);
+        const effectiveTags = frozenSchema === undefined
+            ? normalizeInterfaceTags(info.tags ?? [])
+            : getInterfaceTags(frozenSchema);
+        if (info.tags !== undefined || effectiveTags.length > 0) {
+            this.info = { ...info, tags: effectiveTags };
+        }
         interfaceDefinitionState.set(this, {
             frozenSchema,
             schemaCache: undefined,
@@ -444,7 +452,10 @@ export class InterfaceDefinition<TMembers extends MemberMap, TDeclarations exten
         const state = interfaceDefinitionState.get(this)!;
         if (state.schemaCache === undefined) {
             state.schemaCache = state.frozenSchema !== undefined ?
-                { ...state.frozenSchema, hash: this.schemaHash } :
+                {
+                    ...state.frozenSchema, hash: this.schemaHash,
+                    ...(this.info.tags !== undefined ? { tags: [...this.info.tags] } : {}),
+                } :
                 buildSchema(this.info, this.members, this.schemaHash);
         }
         return state.schemaCache;
@@ -469,6 +480,7 @@ function buildSchema(
     if (Object.keys(components).length > 0) schema.components = { schemas: components };
     if (info.description !== undefined) schema.description = info.description;
     if (info.comment !== undefined) schema.comment = info.comment;
+    if (info.tags !== undefined) schema.tags = [...new Set(info.tags)];
     return schema;
 }
 
@@ -663,5 +675,6 @@ export function interfaceFromSchema(schema: LinkRpcInterfaceSchema): InterfaceDe
     const info: InterfaceInfo = { id: schema.id };
     if (schema.description !== undefined) info.description = schema.description;
     if (schema.comment !== undefined) info.comment = schema.comment;
+    if (schema.tags !== undefined) info.tags = schema.tags;
     return new InterfaceDefinition(info, members, { frozenSchema: schema });
 }

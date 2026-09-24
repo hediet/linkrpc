@@ -38,6 +38,7 @@ interface Listing {
     serviceId: string;
     interfaceId: string;
     interfaceHash: string;
+    tags?: readonly string[];
     serviceDescription?: string;
     rootPrincipalSets?: readonly RootPrincipalSet[];
     reachableServiceIds?: readonly ServiceIdPattern[];
@@ -100,6 +101,7 @@ function registerHubReflection(
                 serviceId: hubServiceId,
                 interfaceId: directoryInterface.info.id,
                 interfaceHash: directoryInterface.schemaHash,
+                ...(directoryInterface.info.tags === undefined ? {} : { tags: [...directoryInterface.info.tags] }),
                 reachableServiceIds: [{ prefix: hubServiceId }],
             };
             const items = [referral]
@@ -172,8 +174,9 @@ function registerHubReflection(
                     || item.rootPrincipalSets !== undefined
                     ? item
                     : previous;
+                const tags = [...new Set([...(previous.tags ?? []), ...(item.tags ?? [])])].sort();
                 if (item.interfaceId !== directoryInterface.info.id) {
-                    deduplicated.set(key, preferred);
+                    deduplicated.set(key, { ...preferred, ...(tags.length === 0 ? {} : { tags }) });
                     continue;
                 }
                 const previousScopes = previous.reachableServiceIds
@@ -182,6 +185,7 @@ function registerHubReflection(
                     ?? [{ prefix: item.serviceId }];
                 deduplicated.set(key, {
                     ...preferred,
+                    ...(tags.length === 0 ? {} : { tags }),
                     reachableServiceIds: normalizeServiceIdScopes([
                         ...previousScopes,
                         ...itemScopes,
@@ -198,6 +202,7 @@ function registerHubReflection(
                     serviceId: it.serviceId,
                     interfaceId: it.interfaceId,
                     interfaceHash: it.interfaceHash,
+                    ...(it.tags === undefined ? {} : { tags: [...it.tags] }),
                     ...(it.serviceDescription !== undefined
                         ? { serviceDescription: it.serviceDescription }
                         : {}),

@@ -31,6 +31,9 @@ export interface LinkRpcInterfaceSchema {
      */
     comment?: string;
 
+    /** Non-normative discovery labels, excluded from the interface hash. */
+    tags?: string[];
+
     /** Methods keyed by local member name. */
     methods: Record<string, MethodSchema>;
 

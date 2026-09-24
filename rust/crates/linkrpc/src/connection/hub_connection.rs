@@ -417,6 +417,7 @@ impl LinkRpcConnection {
                 service_id: e.service_id.clone().unwrap_or_default(),
                 interface_id: e.iface.id().to_string(),
                 interface_hash: e.iface.schema_hash().to_string(),
+                tags: (!e.iface.info().tags.is_empty()).then(|| e.iface.info().tags.clone()),
                 service_description: e.service_description.clone(),
             })
             .collect()
@@ -509,6 +510,7 @@ pub struct RegisteredListing {
     pub service_id: String,
     pub interface_id: String,
     pub interface_hash: String,
+    pub tags: Option<Vec<String>>,
     pub service_description: Option<String>,
 }
 
@@ -801,6 +803,7 @@ impl DirectoryService for Reflection {
                 service_id: e.service_id.clone().unwrap_or_default(),
                 interface_id: e.iface.id().to_string(),
                 interface_hash: e.iface.schema_hash().to_string(),
+                tags: (!e.iface.info().tags.is_empty()).then(|| e.iface.info().tags.clone()),
                 service_description: e.service_description.clone(),
             })
             .collect();

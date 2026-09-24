@@ -2,7 +2,7 @@ export * from "./schema/linkRpcJsonSchema";
 export * from "./schema/linkRpcInterfaceSchema";
 export {
     INTERFACE_TEMPLATES_EXTENSION, validateInterfaceTemplates,
-    interfaceTemplateMemberName, interfaceTemplateArgumentsEquivalent, interfaceTemplatesEqual,
+    interfaceTemplateMemberName, interfaceTemplateArgumentsEquivalent, interfaceTemplatesEqual, getInterfaceTags,
     type SchemaParameterReference, type InterfaceTemplateJsonSchema, type InterfaceTemplateMethodSchema,
     type InterfaceTemplateErrorSchema, type InterfaceTemplateSchema, type InterfaceTemplateArgument,
     type InterfaceTemplateInstance, type InterfaceTemplatesMetadata, type MappedInterfaceTemplate,

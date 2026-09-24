@@ -25,6 +25,7 @@ interface DirectoryItem {
     readonly serviceId: string;
     readonly interfaceId: string;
     readonly interfaceHash: string;
+    readonly tags?: readonly string[];
 }
 
 export class StaticHubReflection {
@@ -39,6 +40,7 @@ export class StaticHubReflection {
                 serviceId: service.serviceId,
                 interfaceId: ref.interfaceId,
                 interfaceHash: ref.interfaceHash,
+                tags: _schema.interfaceSchemas.find(schema => schema.id === ref.interfaceId && schema.hash === ref.interfaceHash)?.tags,
             })));
         for (const schema of _schema.interfaceSchemas) {
             this._schemasByKey.set(interfaceKey(schema.id, schema.hash), schema);

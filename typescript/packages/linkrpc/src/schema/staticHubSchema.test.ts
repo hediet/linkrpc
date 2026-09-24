@@ -6,6 +6,20 @@ import { computeInterfaceHash } from './hash';
 import type { LinkRpcInterfaceSchema } from './linkRpcInterfaceSchema';
 
 describe('shared Rust/TypeScript static contract fixture', () => {
+    it('preserves tagged schema metadata without changing its pinned hash', () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: 'tagged.static', hash: '', tags: ['search'],
+            methods: { read: { params: true, result: true } },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        expect(schema.hash).toBe(computeInterfaceHash({ ...schema, tags: ['other'] }));
+        const parsed = parseStaticHubSchema({ interfaceSchemas: [schema] });
+        expect(parsed.interfaceSchemas[0]?.tags).toEqual(['search']);
+        expect(() => parseStaticHubSchema({
+            interfaceSchemas: [{ ...schema, tags: [1] }],
+        })).toThrow(/tags must be an array of strings/);
+    });
+
     it('rejects different root/default versions of one interface but permits named-service versions', () => {
         const first: LinkRpcInterfaceSchema = { id: 'versions', hash: '', methods: { read: { params: true, result: true } } };
         first.hash = computeInterfaceHash(first);

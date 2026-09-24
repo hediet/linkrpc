@@ -161,6 +161,7 @@ fn build_pizza_interface() -> LinkRpcInterfaceSchema {
         hash: String::new(),
         description: Some("Order pizzas and track delivery.".to_string()),
         comment: None,
+        tags: None,
         methods,
         components: None,
         extensions: Default::default(),

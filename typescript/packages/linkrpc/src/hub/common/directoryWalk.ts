@@ -28,6 +28,8 @@ export interface ServiceListing {
     readonly serviceId: string;
     readonly interfaceId: string;
     readonly hash: string;
+    /** Non-authoritative discovery labels of the advertised interface. */
+    readonly tags?: readonly string[];
     readonly path?: string;
     /** Optional non-normative description of the owning service. */
     readonly serviceDescription?: string;
@@ -102,6 +104,7 @@ export async function fetchDirectory(
                 serviceId: string;
                 interfaceId: string;
                 interfaceHash: string;
+                tags?: readonly string[];
                 path?: string;
                 serviceDescription?: string;
                 rootPrincipalSets?: readonly RootPrincipalSet[];
@@ -110,10 +113,15 @@ export async function fetchDirectory(
             nextCursor?: string;
         };
         for (const it of page.items) {
+            if (it.tags !== undefined
+                && (!Array.isArray(it.tags) || !it.tags.every(tag => typeof tag === 'string'))) {
+                throw new Error(`Invalid directory tags for "${it.serviceId}::${it.interfaceId}"`);
+            }
             all.push({
                 serviceId: it.serviceId,
                 interfaceId: it.interfaceId,
                 hash: it.interfaceHash,
+                ...(it.tags === undefined ? {} : { tags: [...it.tags] }),
                 ...(it.path !== undefined ? { path: it.path } : {}),
                 ...(it.serviceDescription !== undefined
                     ? { serviceDescription: it.serviceDescription }
@@ -1423,6 +1431,7 @@ function cloneScopes(scopes: readonly ServiceIdPattern[]): ServiceIdPattern[] {
 function cloneListing(item: ServiceListing): ServiceListing {
     return {
         ...item,
+        ...(item.tags === undefined ? {} : { tags: [...item.tags] }),
         ...(item.rootPrincipalSets === undefined
             ? {}
             : {
