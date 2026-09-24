@@ -166,11 +166,8 @@ export interface StartLocalOverlayOptions {
  * to the child regardless. So `hubGrantedServiceId::register` succeeds as a
  * no-op through this stub link.
  */
-const _noopUpstream: AttachedLink = {
-    claimPrefix: () => { },
-    releasePrefix: () => false,
-    edgeId: 'overlay-uplink',
-    dispose: () => { },
+const _noopUpstream: Pick<AttachedLink, 'addPrefixRoute'> = {
+    addPrefixRoute: () => { },
 };
 
 export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise<LocalOverlay> {

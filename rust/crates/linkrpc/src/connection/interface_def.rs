@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(definition.info().tags, ["search", "ui"]);
         assert_eq!(definition.to_schema().tags, tagged.tags);
         assert_eq!(
-            serde_json::to_value(&definition.to_schema()).unwrap()["tags"],
+            serde_json::to_value(definition.to_schema()).unwrap()["tags"],
             serde_json::json!(["ui", "ui", "search"])
         );
         let authored = InterfaceDefinition::new(

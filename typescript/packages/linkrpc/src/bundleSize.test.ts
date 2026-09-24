@@ -247,7 +247,7 @@ function renderBreakdown(perModule: { id: string; bytes: number; }[], total: num
 
 describe('bundle size', () => {
     it('a 1:1 stdio client+server bundles under the size budget', async () => {
-        const { totalBytes } = await bundleStdioApp();
+        const { totalBytes, perModule } = await bundleStdioApp();
         const kib = totalBytes / 1024;
         const bundledCode = readFileSync(join(outDir, 'bundle.js'), 'utf8');
 
@@ -255,6 +255,7 @@ describe('bundle size', () => {
         // the stdio-only scenario.
         expect(bundledCode).not.toContain('hubAccess');
         expect(bundledCode).not.toContain('hubGrantedServiceId');
+        expect(perModule.filter(({ id }) => /zod\/v4\/classic\//.test(id))).toEqual([]);
 
         // Visible in test output so regressions are easy to eyeball; the full
         // bundle + breakdown.txt live in .tmp/bundleSizeTest/ for inspection.
@@ -263,9 +264,9 @@ describe('bundle size', () => {
         // eslint-disable-next-line no-console
         console.log(`  written to ${outDir}`);
 
-        // Measured baseline: 244.5 KiB with code-first errors and single-pass decoding.
-        // The classic Zod facade must remain tree-shaken out.
-        // Keep roughly 2 KiB of headroom without changing what this test measures.
+        // Measured baseline: 280.0 KiB after callable interface templates and
+        // inspection support. The classic Zod facade must remain tree-shaken out.
+        // Keep roughly 3 KiB of headroom without changing what this test measures.
         // The example authors with
         // `zod/mini` and linkrpc's internals do too, so only zod's shared *core*
         // (parsing + json-schema, ~75 KiB) is pulled — the classic schema
@@ -275,7 +276,7 @@ describe('bundle size', () => {
         // stack is lazy and tree-shaken out of the stdio path. This is a
         // regression guard, not a target — bump it deliberately when a
         // dependency genuinely grows, and investigate sudden jumps.
-        const BUDGET_KIB = 247;
+        const BUDGET_KIB = 283;
         expect(kib).toBeLessThanOrEqual(BUDGET_KIB);
     }, 60_000);
 });

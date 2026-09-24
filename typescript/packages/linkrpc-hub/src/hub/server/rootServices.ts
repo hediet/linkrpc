@@ -68,7 +68,7 @@ export interface RegisterHubServicesOptions {
  */
 export function registerHubServices(
     root: LinkRpcConnection<unknown>,
-    upstream: AttachedLink,
+    upstream: Pick<AttachedLink, 'addPrefixRoute'>,
     options: RegisterHubServicesOptions = {},
 ): void {
     const hubServiceId = options.hubServiceId ?? 'hub';

@@ -110,7 +110,7 @@ export class StaticHubReflection {
 
     private _listDirectory(params: JsonValue | undefined): Result {
         const parsed = parseDirectoryParams(params);
-        if ('error' in parsed) return parsed;
+        if ('error' in parsed || 'result' in parsed) return parsed;
 
         const filtered = this._directory
             .filter((item) =>
@@ -126,7 +126,12 @@ export class StaticHubReflection {
             : Math.min(filtered.length, start + parsed.limit);
         return {
             result: {
-                items: filtered.slice(start, end),
+                items: filtered.slice(start, end).map(({ serviceId, interfaceId, interfaceHash, tags }) => ({
+                    serviceId,
+                    interfaceId,
+                    interfaceHash,
+                    ...(tags === undefined ? {} : { tags: [...tags] }),
+                })),
                 ...(end < filtered.length ? { nextCursor: String(end) } : {}),
             },
         };
@@ -134,7 +139,7 @@ export class StaticHubReflection {
 
     private _watchDirectory(params: JsonValue | undefined, signal: AbortSignal): Promise<Result> {
         const parsed = parseDirectoryParams(params, false);
-        if ('error' in parsed) return Promise.resolve(parsed);
+        if ('error' in parsed || 'result' in parsed) return Promise.resolve(parsed);
         return new Promise<Result>((resolve) => {
             const done = (): void => resolve({ result: {} });
             if (signal.aborted) {
