@@ -18,6 +18,10 @@
             "@hediet/source": "./src/graph/index.ts",
             "default": "./dist/graph/index.js"
         },
+        "./graph/source": {
+            "@hediet/source": "./src/graph/source.ts",
+            "default": "./dist/graph/source.js"
+        },
         "./inspection": {
             "@hediet/source": "./src/inspection/index.ts",
             "default": "./dist/inspection/index.js"
@@ -49,6 +53,9 @@
         "test:typed-errors-interop": "vitest --run test/protocols/typedErrors.crossLanguage.test.ts",
         "test:watch": "vitest"
     },
+    "dependencies": {
+        "@vscode/observables": "^0.1.1-10"
+    },
     "peerDependencies": {
         "@hediet/linkrpc": "workspace:*",
         "zod": "^4.4.3"
@@ -66,6 +73,7 @@
         "exports": {
             ".": "./dist/index.js",
             "./graph": "./dist/graph/index.js",
+            "./graph/source": "./dist/graph/source.js",
             "./inspection": "./dist/inspection/index.js",
             "./json-document": "./dist/json-document/index.js",
             "./json-rpc": "./dist/json-rpc/index.js",

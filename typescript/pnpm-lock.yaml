@@ -213,6 +213,10 @@ importers:
         version: 3.2.7(@types/node@22.20.1)(tsx@4.22.4)
 
   packages/linkrpc-infra:
+    dependencies:
+      '@vscode/observables':
+        specifier: ^0.1.1-10
+        version: 0.1.1-24
     devDependencies:
       '@hediet/linkrpc':
         specifier: workspace:*
@@ -852,6 +856,9 @@ packages:
 
   '@vscode/observables@0.1.1-0':
     resolution: {integrity: sha512-Ppl/2o6DPQdLOfJCqMyHhGutoVVOl4Xgwxqtfd6Mxl0wMnaNjwSovWNGR88UWdXJIU8RVRzS+tpPFwwiBGwD4g==}
+
+  '@vscode/observables@0.1.1-24':
+    resolution: {integrity: sha512-Gm8CRSVSp1SC1PLenWIyl7y5sQfARFdpvqx8YvFgIIBBSTn2Yz6NAkRoOC8lMKcgsaFKezbHYSpO+4YjcKYvfg==}
 
   '@vscode/rollup-plugin-esm-url@1.0.1-11':
     resolution: {integrity: sha512-tP42ZfA6bojBsNgBT40P97sKkrz18Fb2jeE+ChPWeaMXR4FSJ1/BPG+0cSu26E9+AoA4Fc16eUvvOmkJeXum+A==}
@@ -2419,6 +2426,8 @@ snapshots:
       tinyrainbow: 2.0.0
 
   '@vscode/observables@0.1.1-0': {}
+
+  '@vscode/observables@0.1.1-24': {}
 
   '@vscode/rollup-plugin-esm-url@1.0.1-11(rollup@4.62.5)':
     dependencies:

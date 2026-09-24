@@ -33,6 +33,16 @@ deduplicated across roots and advertised by directory reflection. View discovery
 can match that tag without fetching schemas; opening a view still validates the
 actual graph contract. Tags are optional hints and do not affect contract hashes.
 
+`@hediet/linkrpc-infra/graph/source` adds observable, Node.js graph sources:
+`LocalGraphSource` interns immutable values in a unique namespace,
+`LazyGraphSource` materializes deferred objects only when fetched, and
+`GraphComposition` references independent source graphs without re-projecting
+their data. Compositions retain historical routing and root leases until
+disposed. `registerGraphSource(connection, source, { serviceId })` exposes the
+`linkrpc.graph.v1` interface with `objects` and `workspace` template groups;
+omitting `serviceId` registers at the root. Dispose both the registration and
+the owned composition when its server stops.
+
 `ImmutableGraphRuntime` traverses an `ImmutableGraphSource` deterministically,
 ancestor-first, deduplicating shared references and cycles. Selectors use JSON
 Pointer escaping (`~0`, `~1`), `/` for the object itself, `*` for JSON children,

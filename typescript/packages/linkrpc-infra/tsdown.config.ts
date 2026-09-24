@@ -4,6 +4,7 @@ export default defineConfig({
     entry: {
         index: 'src/index.ts',
         'graph/index': 'src/graph/index.ts',
+        'graph/source': 'src/graph/source.ts',
         'inspection/index': 'src/inspection/index.ts',
         'json-document/index': 'src/json-document/index.ts',
         'json-rpc/index': 'src/json-rpc/index.ts',
