@@ -2,6 +2,81 @@
 
 Reusable infrastructure protocols and adapters built on LinkRPC.
 
+## Immutable graphs (experimental)
+
+`@hediet/linkrpc-infra/graph` provides a generic, JSON-valued immutable graph
+protocol and reference runtime. It is an **experimental infrastructure API**,
+not a core LinkRPC module or an application data model. The stable protocol IDs
+are `linkrpc.graph.objects.v1`, `linkrpc.graph.root.v1`, and
+`linkrpc.graph.live.v1`.
+
+```ts
+import { defineInterface } from '@hediet/linkrpc';
+import { GraphObjects, GraphRoot, graphRefSchema } from '@hediet/linkrpc-infra/graph';
+import { z } from 'zod';
+
+const graph = defineInterface({ id: 'example.graph' }, {
+    objects: GraphObjects({ ref: graphRefSchema, value: z.json() }),
+    root: GraphRoot({ params: z.object({ filter: z.string() }), ref: graphRefSchema }),
+});
+```
+
+These callable templates retain the supplied Zod schema types. Register nested
+handlers (`{ objects: { batchObjGet }, root: { watch } }`) and use nested clients
+(`connection.get(graph).objects.batchObjGet(...)` and `.root.watch(...)`).
+`mapMembers` can override wire member names without changing the nested API.
+`validateGraphInterfaceSchema` checks reflected template contracts and enforces
+at most one object store per containing interface, with every root using the
+same reference schema as that store. Core template authoring remains generic.
+Root templates contribute the first-class `linkrpc.graph` interface tag,
+deduplicated across roots and advertised by directory reflection. View discovery
+can match that tag without fetching schemas; opening a view still validates the
+actual graph contract. Tags are optional hints and do not affect contract hashes.
+
+`ImmutableGraphRuntime` traverses an `ImmutableGraphSource` deterministically,
+ancestor-first, deduplicating shared references and cycles. Selectors use JSON
+Pointer escaping (`~0`, `~1`), `/` for the object itself, `*` for JSON children,
+`@` to dereference, and terminal `**` for transitive closure. For example,
+`/children/0/@/**` fetches the root and the selected child's closure, not its
+siblings. Empty `paths` means `/`.
+
+`batchObjGet` is a normal request/response operation. Positive safe-integer
+`maxObjects` and `maxBytes` bound returned object rows; bytes are the sum of each
+`{ref,value}` row's UTF-8 JSON encoding, excluding envelope and missing reports.
+These are output budgets, not limits on lookup/retention work. Budget exhaustion
+returns `complete: false`; repeat the request with received rows in
+`have: [{ref, coverage: 'object'}]` to progress. `coverage: 'closure'` suppresses a
+closure only after the source validates it is complete. Lookups are cached within
+one batch, not across requests. Missing, expired, forbidden, and individually
+oversized rows are explicit terminal reports; `complete: true` means traversal
+finished, not that every object was available. An unavailable/oversized object
+stops traversal through that object.
+
+`InMemoryImmutableGraphStore` clones/freezes JSON values, rejects replacement of
+immutable identities even after expiry, and provides idempotent closure leases.
+It retains identity tombstones rather than implementing automatic eviction.
+The standard `{kind,id}` reference uses collision-free keys; applications must
+namespace IDs across stores. Custom reference schemas use explicit `refKey` and
+`isRef` callbacks. References must be unambiguous within JSON values.
+
+`RootWatchCoordinator` publishes versioned root offers and retains each watcher's
+accepted root plus one outstanding offer. `{accept: version}` releases the prior
+accepted lease; later publications coalesce until that acknowledgement. Stale
+acknowledgements are ignored. `watch.cancel()` (or transport closure) releases
+watcher leases, including leases acquired after cancellation, without requiring
+an acknowledgement. The publisher owns the availability of current/pending roots
+outside those leases. The coordinator remembers current roots per `paramsKey`;
+use a coordinator scoped to the owning service/resource lifetime. A source must
+keep its immutable values and closure-retention contract consistent.
+
+`defineLiveResourceWatchInterface` separately describes mutable live-resource
+events; they are not immutable graph objects or part of closure synchronization.
+
+Build core and infra before running `pnpm --filter @hediet/linkrpc-infra test:graph`.
+The graph suite exercises source-condition exports, emitted generic declarations,
+published JavaScript exports, and real paired LinkRPC connections with grouped
+registration, nested clients, bounded requests, acknowledgements and cancellation.
+
 ## Inspection
 
 The `@hediet/linkrpc-infra/inspection` entry point provides node identity,
