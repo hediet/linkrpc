@@ -6,8 +6,118 @@ The CLI speaks plain linkrpc over sockets, WebSockets, or a child process's
 stdio: it connects to (or spawns) the server you point it at and drives it
 through the JSON-RPC channel. Reflection
 interfaces (`hubrpc.defaults`, `hubrpc.directory`, `hubrpc.schemas`) are
-used to discover what the endpoint exposes; the CLI is otherwise generic — it
-has no compiled-in knowledge of any particular interface.
+used to discover what the endpoint exposes. Generic RPC commands work with any
+reflected interface; compiled-in views add specialized CLI and TUI renderers.
+
+## Views
+
+Views target an **interface** or a **service** (including the main/root service),
+not a service-name-prefix tree. The compiled-in typed registry is shared by the
+CLI and terminal UI:
+
+```sh
+rpc view list
+rpc --endpoint ws://localhost:7700 view targets graph --json
+rpc --endpoint ws://localhost:7700 view open graph --target 'service::' --mode roots --json
+rpc --endpoint ws://localhost:7700 view open graph --target 'service::' --root sessions --params '{}' --json
+rpc --endpoint ws://localhost:7700 view open graph --target 'service::' --root sessions --mode watch --json
+rpc --endpoint ws://localhost:7700 view open graph --target 'service::' --tui
+```
+
+`view list` is offline and prints modes and conditions, for example
+`interface:tag(linkrpc.graph)` and `service:implements(tag(linkrpc.graph))`.
+Conditions match interface IDs or tags, never template IDs. `view targets`
+returns `{ targets, warnings }` with `--json`; targets include their stable `id`,
+`kind`, service route, reporting directory, and implemented interfaces. IDs are
+opaque within the selected endpoint/context and are not row numbers. They do
+not pin schema hashes. The root service reported by the root directory has ID
+`service::`; use the returned IDs for other targets.
+
+For spawned/ephemeral endpoints, discover and open on **one connection**:
+
+```sh
+rpc view open graph --interface explorer.graph.v1 --root workspace --json --depth 2 \
+  --endpoint-cmd-stdio '<server command>'
+rpc view open graph --interface explorer.graph.v1 --root workspace --tui \
+  --endpoint-cmd-stdio '<server command>'
+```
+
+Without `--target`, an exact `--interface` must resolve uniquely. `--service`
+can narrow it, or select a service target by itself. Ambiguity is an error;
+the CLI never chooses the first row. A main interface's default and qualified
+reflection entries count as one implementation, preferring its default route.
+Wrappers may choose `--tui` when stdin and stdout are terminals and otherwise
+use `--json`; the CLI itself remains noninteractive unless `--tui` is explicit.
+
+Advertised directory tags allow matching without downloading schemas.
+Absent tags mean no advertised labels: there is no implicit legacy schema scan.
+Interface-ID conditions still match without tags. Listing targets does
+not start watches or load graph data. Opening re-resolves the target and its
+latest schema through the reporting directory, validates the graph template
+contracts and member mappings, and requires compatible roots/object stores.
+Tags are untrusted discovery hints, not permissions or proof of capability.
+
+Graph modes:
+
+- `--mode roots`: list root names, interface IDs, and parameter schemas without
+  starting a graph watch.
+- `--mode snapshot` (default): materialize one root, then cancel its watch.
+  `--json` emits the materialized value; unresolved references and cycles use
+  `$ref` with `$missing`/`$cycle` markers.
+- `--mode watch`: keep the root watch open until Ctrl-C. With `--json`, emit one
+  complete materialized value per JSONL line.
+- `--tui`: explicitly launch the Ink graph browser. There is no automatic
+  TTY-dependent mode switch. Multiple roots open a picker; `--root` and
+  `--interface` disambiguate. `p` edits JSON parameters, Enter opens a root,
+  arrow keys navigate/expand/collapse, `r` returns to roots, and `q` exits.
+  The browser fetches one reference level beyond expanded nodes, so collapsed
+  rows can show their objects' `title` or `name`. This also refreshes collapsed
+  titles when watched roots change. It fetches full objects (which may be large
+  or trigger a deferred load), but does not recursively follow their references.
+  This is a CLI browsing policy, not a graph protocol or preview feature.
+
+`--depth`, `--path`, `--max-objects`, `--max-bytes`, `--max-rounds`,
+`--timeout-ms`, and `--log-timing` bound or diagnose graph loading. The default
+snapshot depth is 2; TUI loading is demand-driven. `--max-depth` bounds directory
+discovery. Use `view open graph --help` for contribution-specific options.
+
+Logging uses the canonical `linkrpc.logging` interface from
+`@hediet/linkrpc-infra`. Its ID matches older producers even when directory
+tags are absent. Listing targets does not fetch schemas or logs; opening checks
+the selected interface's actual logging contract, so a tag alone is not enough.
+
+```sh
+rpc view targets logging --json
+rpc --endpoint ws://localhost:7700 view open logging --interface linkrpc.logging --json
+rpc --endpoint ws://localhost:7700 view open logging --interface linkrpc.logging --mode watch --json
+rpc --endpoint ws://localhost:7700 view open logging --interface linkrpc.logging --tui
+```
+
+Snapshot uses the read-only `getLogSnapshot` operation. Watch uses `watchLog`
+(initial snapshot followed by revisioned JSON document patches); a revision
+gap triggers `getLogSnapshot` resynchronization. Each `--json` watch line is a
+complete bounded frame with `revision`, `service`, `startedAt`, `state`,
+`entries`, and `hidden` (earlier matching entries omitted by `--tail`).
+Use `--level` and `--tail` for local display filtering and `--max-bytes` to
+reject oversized authoritative documents (and stop the watch), not to truncate
+them: truncation would corrupt subsequent positional JSON-pointer patches.
+The protocol does not offer a server-side cursor, filter, or backfill beyond
+its snapshot. Thus document retention still depends on the producer's size and
+`--max-bytes` may stop a growing stream; `--tail` only bounds rendered rows.
+No read or local filter change implicitly calls `setLogLevel`.
+The TUI navigates entries with arrows/Page Up/Page Down; `p` pauses display,
+`f` toggles follow, `l` cycles the local level filter, and `c` clears the
+display locally, never remote logs. Clear tracks overlapping retained entries
+across rolling buffers; when a replacement is ambiguous (such as duplicate
+entries without stable IDs), entries may reappear rather than hiding new logs.
+`q` closes the tab/standalone UI.
+
+The regular `rpc ui` / `hub ui` has Methods and Schema tabs plus matching
+contributed views. Tab cycles views and `v` switches interface/service scope;
+the displayed conditions explain availability. Graph sessions cancel when
+inactive or disconnected, ignore stale asynchronous results, and restore the
+selected root/params after reconnection. Escape returns focus to the services
+column. Static `--schema` profiles apply to both commands and UI.
 
 ## Profiles
 
@@ -340,17 +450,22 @@ commands:
 ```sh
 export LINKRPC_ENDPOINT="$(
   hub --endpoint 'ws-no-init://localhost:4123?tkn=…' \
-    connection create --timeout 30s --ttl 5min --schema ./ahp-schema.json
+    connection create --timeout 30s --ttl 5min --schema ./service-schema.json
 )"
 
 hub defaults
-hub schema show ahp --method initialize
-hub call initialize --params '{"channel":"ahp-root://","protocolVersions":["0.6.0"],"clientId":"hub"}'
-hub call listSessions --params '{"channel":"ahp-root://","limit":50}'
+hub ls
+hub schema show example.counter --method get
+hub call get --params '{}'
 hub connection notifications --follow
 hub connection status
 hub connection destroy
 ```
+
+This example assumes the schema document declares `example.counter` as its
+default interface and the remote JSON-RPC service exposes a bare `get` method.
+Protocol-specific schema generators and initialization sequences belong in
+the consuming application, not the generic CLI.
 
 The endpoint contains a local authentication token and should be treated as a
 secret. The broker handles `hubrpc.connectionBroker::status`,

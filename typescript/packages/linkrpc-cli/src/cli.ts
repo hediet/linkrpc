@@ -91,6 +91,7 @@ import {
 } from './invocationContext';
 import { resolveCliInvocation } from './cliInvocation';
 import { withStaticHubReflection } from './commands/staticHubReflection';
+import { registerViewCommands } from './commands/view';
 
 export async function main(
     rawArgv: readonly string[],
@@ -1463,6 +1464,8 @@ Batch options:
             });
     }
 
+    registerViewCommands(program, action => withChannel(endpoint, getPrincipalSpec(), action));
+
     program
         .command('ui')
         .description('Launch the terminal UI (form-based browser of services + methods).')
@@ -1470,7 +1473,11 @@ Batch options:
             const acquired = await acquireConnection(endpoint);
             const { runUi } = await import('./ui/runUi');
             try {
-                await runUi({ endpoint: acquired.ep, principalSpec: getPrincipalSpec() });
+                await runUi({
+                    endpoint: acquired.ep, principalSpec: getPrincipalSpec(), profile,
+                    schema: g_invocation?.values.schema === undefined ? undefined
+                        : await loadStaticHubSchema(g_invocation.values.schema),
+                });
             } finally {
                 acquired.running?.dispose();
             }

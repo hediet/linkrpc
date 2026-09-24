@@ -18,6 +18,7 @@ import {
     walkHubDetailed,
 } from "@hediet/linkrpc-client";
 import { validateValueAgainstSchema } from "../validation";
+import { ViewController } from "./ViewController";
 
 export interface MethodKey {
     /** "" means the root (no `serviceId::` prefix on the wire). */
@@ -30,6 +31,7 @@ export interface MethodKey {
 }
 
 export interface UiServiceListing {
+    readonly tags?: readonly string[];
     readonly serviceId: string;
     readonly interfaceId: string;
     readonly hash?: string;
@@ -72,6 +74,7 @@ export type SchemaState =
  * an `ObservablePromise` from `@vscode/observables` — no ad-hoc loading flags.
  */
 export class UiModel extends Disposable {
+    public readonly views: ViewController;
     /** Initial directory fetch — kicked off in the constructor. */
     public readonly servicesPromise: ObservablePromise<UiServiceListing[]>;
 
@@ -174,6 +177,10 @@ export class UiModel extends Disposable {
         // before the call settles) doesn't surface as an unhandled rejection.
         // The error is still observable via `servicesPromise.promiseResult`.
         this.servicesPromise.promise.catch(() => { });
+        this.views = this._register(new ViewController(
+            _channel, this.selection, this.currentSchemaState,
+            () => this.servicesPromise.promiseResult.get()?.data ?? [],
+        ));
 
         // When selection changes, kick the lazy schema promise so its
         // observable state starts ticking. The derived below only OBSERVES;

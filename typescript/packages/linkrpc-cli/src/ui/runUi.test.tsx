@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
         })),
         UiModel: class {
             public readonly identity = { set: identitySet };
+            public readonly views = { waitForIdle: async () => {} };
 
             public dispose(): void {
                 disposeModel();

@@ -18,37 +18,42 @@ import type { SigningSession } from "@hediet/linkrpc-client";
 import { formatPrincipalSource, type PrincipalSpec } from "@hediet/linkrpc-client";
 import { UiModel } from "./UiModel";
 import { App } from "./App";
+import { withStaticHubReflection } from "../commands/staticHubReflection";
+import type { StaticHubSchema } from "../staticHubSchema";
 
 export interface RunUiOptions {
     readonly endpoint: ResolvedEndpoint;
     readonly principalSpec: PrincipalSpec;
+    readonly schema?: StaticHubSchema;
+    readonly profile?: "rpc" | "hub";
 }
 
 export async function runUi(opts: RunUiOptions): Promise<void> {
-    if (isHubEndpoint(opts.endpoint)) {
-        await _runUiReconnecting(opts.endpoint, opts.principalSpec);
+    if (isHubEndpoint(opts.endpoint) && opts.profile !== "rpc") {
+        await _runUiReconnecting(opts.endpoint, opts.principalSpec, opts.schema);
     } else {
-        await _runUiOnce(opts.endpoint, opts.principalSpec);
+        await _runUiOnce(opts.endpoint, opts.principalSpec, opts.schema, opts.profile);
     }
 }
 
 /** Non-Hub endpoints: a single connection, no redial. */
-async function _runUiOnce(endpoint: ResolvedEndpoint, principalSpec: PrincipalSpec): Promise<void> {
+async function _runUiOnce(endpoint: ResolvedEndpoint, principalSpec: PrincipalSpec, schema?: StaticHubSchema, profile?: "rpc" | "hub"): Promise<void> {
     const conn = await connect(endpoint);
-    const identity = _isRawEndpoint(endpoint)
+    const identity = _isRawEndpoint(endpoint) || profile === "rpc"
         ? "unsigned (raw endpoint)"
         : _formatIdentity(
             await setupSigning(conn.channel, conn.signing, principalSpec, {
                 negotiateHubCaps: false,
             }),
         );
-    const model = new UiModel(conn.channel);
+    const model = new UiModel(schema ? withStaticHubReflection(conn.channel, schema) : conn.channel);
     model.identity.set(identity, undefined);
-    const instance = render(<App model={model} />);
+    const instance = render(<App model={model} />, { exitOnCtrlC: false });
     try {
         await instance.waitUntilExit();
     } finally {
         model.dispose();
+        await model.views.waitForIdle();
         conn.close();
     }
 }
@@ -67,6 +72,7 @@ function _isRawEndpoint(endpoint: ResolvedEndpoint): boolean {
 async function _runUiReconnecting(
     endpoint: Extract<ResolvedEndpoint, { kind: "ws"; } | { kind: "socket"; }>,
     principalSpec: PrincipalSpec,
+    schema?: StaticHubSchema,
 ): Promise<void> {
     const swappable = new SwappableSender();
     let model: UiModel | undefined;
@@ -83,17 +89,27 @@ async function _runUiReconnecting(
             negotiateHubCaps: true,
         });
         swappable.setTarget(signed);
+        channel.onClose(() => {
+            swappable.setTarget(undefined);
+            model?.views.disconnect();
+            model?.identity.set("disconnected; reconnecting…", undefined);
+        });
 
         if (!model) {
-            model = new UiModel(swappable);
+            model = new UiModel(schema ? withStaticHubReflection(swappable, schema) : swappable);
             model.identity.set(_formatIdentity(session), undefined);
-            const instance = render(<App model={model} />);
+            const instance = render(<App model={model} />, { exitOnCtrlC: false });
             // When the user quits the TUI, stop redialing and tear down.
-            void instance.waitUntilExit().finally(() => handle.stop());
+            void instance.waitUntilExit().then(async () => {
+                model?.dispose();
+                await model?.views.waitForIdle();
+                handle.stop();
+            }, () => handle.stop());
         } else {
             // Reconnected: update header identity label. Pending/next calls
             // use the swapped target; signing hooks live on that sender.
             model.identity.set(_formatIdentity(session), undefined);
+            model.views.reconnect();
         }
     });
 
@@ -101,6 +117,7 @@ async function _runUiReconnecting(
         await handle.done;
     } finally {
         model?.dispose();
+        await model?.views.waitForIdle();
     }
 }
 
