@@ -14,11 +14,15 @@ import {
     zodToSvcJsonSchema,
 } from '../schema/memberTypes';
 import { schemaToZod } from '../schema/schemaToZod';
+import {
+    attachInterfaceTemplates, validateInterfaceTemplates, type MappedInterfaceTemplate,
+} from '../schema/interfaceTemplates';
 import type { MethodSchema, LinkRpcInterfaceSchema } from '../schema/linkRpcInterfaceSchema';
 import type { LinkRpcJsonSchema } from '../schema/linkRpcJsonSchema';
 import type { Result } from './rpcFailure';
 import type { NonCompliantServerError } from './nonCompliantServerError';
 import { validateInterfaceErrors } from '../schema/validateInterfaceErrors';
+import { interfaceTemplateGroup, type InterfaceTemplateGroup } from '../schema/interfaceTemplateGroup';
 
 /**
  * Per-call stream API handed to a request handler as its third argument.
@@ -78,6 +82,22 @@ export interface InterfaceInfo {
 
 
 export type MemberMap = Record<string, MemberType>;
+export type InterfaceDeclarations = Record<string, MemberType | InterfaceTemplateGroup>;
+type GroupWireName<Name extends string, K extends string, Mapping> =
+    Mapping extends Record<string, string> ? Mapping[K] : `${Name}$${K}`;
+type GroupWireMembers<Name extends string, G extends InterfaceTemplateGroup> = {
+    readonly [K in keyof G['members'] & string as GroupWireName<Name, K, G['mapping']>]: G['members'][K];
+};
+type DeclarationWireMember<K extends string, M> = M extends InterfaceTemplateGroup
+    ? GroupWireMembers<K, M> : M extends MemberType ? { readonly [N in K]: M } : never;
+type DeclarationWireMembers<D extends InterfaceDeclarations> = {
+    [K in keyof D & string]: DeclarationWireMember<K, D[K]>;
+}[keyof D & string];
+type WireKeys<U> = U extends MemberMap ? keyof U : never;
+type WireValue<U, K extends PropertyKey> = U extends MemberMap ? K extends keyof U ? U[K] : never : never;
+export type FlattenInterfaceDeclarations<D extends InterfaceDeclarations> =
+    string extends keyof D ? MemberMap :
+    { readonly [K in WireKeys<DeclarationWireMembers<D>>]: WireValue<DeclarationWireMembers<D>, K> };
 
 /** Stable wire identity of one member in an interface definition. */
 export interface InterfaceMemberRef<TName extends string = string> {
@@ -208,19 +228,41 @@ type InterfaceClientMember<TMember> =
     TMember extends NotificationType<infer P> ? (params: P) => void :
     never;
 
-export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
-    [K in keyof TDef['members']]: InterfaceClientMember<TDef['members'][K]>;
+type MembersClient<M extends MemberMap> = {
+    [K in keyof M]: InterfaceClientMember<M[K]>;
 };
 
-/** Every request returns failures as values, including methods with no declared errors. */
-export type InterfaceResultClient<TDef extends InterfaceDefinition<any>> = {
-    [K in keyof TDef['members']]: TDef['members'][K] extends
+/** A reusable consumer's client shape, independent of instance name or wire mapping. */
+export type InterfaceTemplateClient<T extends InterfaceTemplateGroup> = MembersClient<T['members']>;
+
+type DeclarationClient<M> = M extends InterfaceTemplateGroup
+    ? InterfaceTemplateClient<M> : InterfaceClientMember<M>;
+
+export type InterfaceClient<TDef extends InterfaceDefinition<any>> = {
+    [K in keyof TDef['_declarations']]: DeclarationClient<TDef['_declarations'][K]>;
+};
+
+type InterfaceResultClientMember<TMember> = TMember extends
         RequestType<infer P, infer R, infer E, infer TC, infer TS, any, any>
         ? _HasStream<TC, TS> extends true
             ? (params: P, opts?: StreamCallOptions<TS>) =>
                 StreamingCall<Result<R, RpcCallError<PublicApplicationErrorOf<E>>>, TC>
             : (params: P) => Promise<Result<R, RpcCallError<PublicApplicationErrorOf<E>>>>
-        : TDef['members'][K] extends NotificationType<infer P> ? (params: P) => void : never;
+        : TMember extends NotificationType<infer P> ? (params: P) => void : never;
+
+type MembersResultClient<M extends MemberMap> = {
+    [K in keyof M]: InterfaceResultClientMember<M[K]>;
+};
+
+/** Result-client counterpart of {@link InterfaceTemplateClient}. */
+export type InterfaceTemplateResultClient<T extends InterfaceTemplateGroup> = MembersResultClient<T['members']>;
+
+/** Every request returns failures as values, including methods with no declared errors. */
+type DeclarationResultClient<M> = M extends InterfaceTemplateGroup
+    ? InterfaceTemplateResultClient<M> : InterfaceResultClientMember<M>;
+
+export type InterfaceResultClient<TDef extends InterfaceDefinition<any>> = {
+    [K in keyof TDef['_declarations']]: DeclarationResultClient<TDef['_declarations'][K]>;
 };
 
 /**
@@ -243,11 +285,22 @@ type InterfaceHandler<TMember, TCtx> =
     TMember extends NotificationType<infer P> ? (params: P, ctx: TCtx) => void | Promise<void> :
     never;
 
+type DeclarationHandler<M, TCtx> = M extends InterfaceTemplateGroup
+    ? { [K in keyof M['members']]: InterfaceHandler<M['members'][K], TCtx> }
+    : InterfaceHandler<M, TCtx>;
+type KnownKeys<T> = keyof {
+    [K in keyof T as string extends K ? never : number extends K ? never : symbol extends K ? never : K]: unknown;
+};
+
 export type InterfaceHandlers<
     TDef extends InterfaceDefinition<any>,
     TCtx = undefined,
 > = {
-        [K in keyof TDef['members']]: InterfaceHandler<TDef['members'][K], TCtx>;
+        [K in keyof TDef['_declarations']]: DeclarationHandler<TDef['_declarations'][K], TCtx>;
+    } & {
+        // TypeScript includes inherited Object methods in structural assignments.
+        // Own prototype-named aliases are still rejected by flattenHandlers.
+        [K in Exclude<KnownKeys<TDef['members']>, keyof TDef['_declarations']>]?: K extends keyof Object ? Object[K] : never;
     };
 
 /**
@@ -261,7 +314,12 @@ export type InterfaceHandlers<
  * validation, stream routing) and is no longer the source of truth for
  * the wire shape.
  */
-export interface InterfaceDefinitionOpts {
+export interface InterfaceAuthoringOptions {
+    /** Checked structural instances; implementations remain in connection.register(). */
+    readonly templates?: Readonly<Record<string, MappedInterfaceTemplate>>;
+}
+
+export interface InterfaceDefinitionOpts extends InterfaceAuthoringOptions {
     frozenSchema?: LinkRpcInterfaceSchema;
 }
 
@@ -269,11 +327,14 @@ interface InterfaceDefinitionState {
     readonly frozenSchema: LinkRpcInterfaceSchema | undefined;
     schemaCache: LinkRpcInterfaceSchema | undefined;
     hashCache: string | undefined;
+    declarationGroups: Readonly<Record<string, Readonly<Record<string, string>>>> | undefined;
 }
 
 const interfaceDefinitionState = new WeakMap<object, InterfaceDefinitionState>();
 
-export class InterfaceDefinition<TMembers extends MemberMap> {
+export class InterfaceDefinition<TMembers extends MemberMap, TDeclarations extends InterfaceDeclarations = TMembers> {
+    /** Compile-time authoring shape shared by clients and handlers; wire members remain flat. */
+    declare readonly _declarations: TDeclarations;
     /** Typed wire references for capability and access-request construction. */
     public readonly ref: InterfaceMemberRefMap<TMembers>;
 
@@ -282,11 +343,18 @@ export class InterfaceDefinition<TMembers extends MemberMap> {
         public readonly members: TMembers,
         opts: InterfaceDefinitionOpts = {},
     ) {
-        validateInterfaceErrors(opts.frozenSchema);
+        if (opts.frozenSchema !== undefined && opts.templates !== undefined) {
+            throw new Error('Cannot combine frozenSchema with authored templates');
+        }
+        const frozenSchema = opts.templates === undefined ? opts.frozenSchema
+            : attachInterfaceTemplates(buildSchema(info, members, ''), opts.templates);
+        validateInterfaceErrors(frozenSchema);
+        if (frozenSchema !== undefined) validateInterfaceTemplates(frozenSchema);
         interfaceDefinitionState.set(this, {
-            frozenSchema: opts.frozenSchema,
+            frozenSchema,
             schemaCache: undefined,
             hashCache: undefined,
+            declarationGroups: undefined,
         });
         this.ref = Object.fromEntries(
             Object.keys(members).map((member) => [
@@ -304,6 +372,61 @@ export class InterfaceDefinition<TMembers extends MemberMap> {
                 + `The interface's wire contract changed — update the pinned hash to "${this.schemaHash}" after reviewing the change.`,
             );
         }
+    }
+
+    /** @internal Materialize authored groups using the existing wire call functions verbatim. */
+    public nestClient(client: Record<string, unknown>): Record<string, unknown> {
+        const groups = interfaceDefinitionState.get(this)!.declarationGroups;
+        if (groups === undefined) return client;
+        const groupedWireNames = new Set(Object.values(groups).flatMap(group => Object.values(group)));
+        const result: Record<string, unknown> = Object.create(null);
+        for (const [name, call] of Object.entries(client)) {
+            if (!groupedWireNames.has(name)) result[name] = call;
+        }
+        for (const [name, mapping] of Object.entries(groups)) {
+            const group: Record<string, unknown> = Object.create(null);
+            for (const [member, wireName] of Object.entries(mapping)) group[member] = client[wireName];
+            result[name] = group;
+        }
+        return result;
+    }
+
+    /** Validate grouped implementations atomically, then lower them to wire handlers. */
+    public flattenHandlers(handlers: unknown): Record<string, unknown> {
+        const groups = interfaceDefinitionState.get(this)!.declarationGroups;
+        if (groups === undefined) return handlers as Record<string, unknown>;
+        const requireObject = (value: unknown, where: string): Record<string, unknown> => {
+            if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+                throw new Error(`Expected handler group object at "${where}"`);
+            }
+            return value as Record<string, unknown>;
+        };
+        const implementation = requireObject(handlers, this.info.id);
+        const groupedWireNames = new Set(Object.values(groups).flatMap(group => Object.values(group)));
+        const flatNames = Object.keys(this.members).filter(name => !groupedWireNames.has(name));
+        const expected = new Set([...Object.keys(groups), ...flatNames]);
+        for (const key of Reflect.ownKeys(implementation)) {
+            if (typeof key !== 'string' || !expected.has(key)) throw new Error(`Unexpected handler "${String(key)}"; grouped members require grouped handlers`);
+        }
+        const result: Record<string, unknown> = Object.create(null);
+        const requireHandler = (object: Record<string, unknown>, key: string, where: string) => {
+            if (!Object.hasOwn(object, key) || typeof object[key] !== 'function') {
+                throw new Error(`Missing or invalid handler "${where}"`);
+            }
+            return object[key];
+        };
+        for (const name of flatNames) result[name] = requireHandler(implementation, name, name);
+        for (const [name, mapping] of Object.entries(groups)) {
+            if (!Object.hasOwn(implementation, name)) throw new Error(`Missing handler group "${name}"`);
+            const group = requireObject(implementation[name], name);
+            for (const member of Reflect.ownKeys(group)) {
+                if (typeof member !== 'string' || !Object.hasOwn(mapping, member)) throw new Error(`Unexpected handler "${name}.${String(member)}"`);
+            }
+            for (const [member, wireName] of Object.entries(mapping)) {
+                result[wireName] = requireHandler(group, member, `${name}.${member}`);
+            }
+        }
+        return result;
     }
 
     /** Content hash of this interface (see `computeInterfaceHash`). */
@@ -333,7 +456,7 @@ function buildSchema(
     members: MemberMap,
     hash: string,
 ): LinkRpcInterfaceSchema {
-    const methods: Record<string, MethodSchema> = {};
+    const methods: Record<string, MethodSchema> = Object.create(null);
     const components: Record<string, LinkRpcJsonSchema> = {};
     for (const [name, member] of Object.entries(members)) {
         methods[name] = toMethodSchema(name, member, components);
@@ -349,40 +472,32 @@ function buildSchema(
     return schema;
 }
 
-function toMethodSchema(
+export function toMethodSchema(
     name: string,
     member: MemberType,
     components: Record<string, LinkRpcJsonSchema>,
+    convert: (schema: Schema, position: string) => LinkRpcJsonSchema =
+        (schema, position) => convertMemberSchema(name, position, schema, components),
 ): MethodSchema {
     const docs = member.docs;
 
     if (member.kind === 'request') {
         const m: MethodSchema = {
-            params: convertMemberSchema(name, 'params', member.paramsSchema, components),
-            result: convertMemberSchema(name, 'result', member.resultSchema, components),
+            params: convert(member.paramsSchema, 'params'),
+            result: convert(member.resultSchema, 'result'),
         };
         if (member.clientStreamSchema !== undefined) {
-            m.clientStream = convertMemberSchema(
-                name,
-                'clientStream',
-                member.clientStreamSchema,
-                components,
-            );
+            m.clientStream = convert(member.clientStreamSchema, 'clientStream');
         }
         if (member.serverStreamSchema !== undefined) {
-            m.serverStream = convertMemberSchema(
-                name,
-                'serverStream',
-                member.serverStreamSchema,
-                components,
-            );
+            m.serverStream = convert(member.serverStreamSchema, 'serverStream');
         }
         if (member.applicationErrors.length > 0) {
             m.errors = member.applicationErrors.map((error: ApplicationErrorDescriptorBase) => {
                 if (error.bodySchema !== undefined) {
                     return {
                         code: error.code,
-                        schema: convertMemberSchema(name, `error=${error.code}`, error.bodySchema, components),
+                        schema: convert(error.bodySchema, `error=${error.code}`),
                     };
                 }
                 const result: NonNullable<MethodSchema['errors']>[number] = {
@@ -391,12 +506,7 @@ function toMethodSchema(
                     ...(error.type === undefined ? {} : { type: error.type }),
                 };
                 if (error.dataSchema !== undefined) {
-                    result.data = convertMemberSchema(
-                        name,
-                        `error=${error.code}`,
-                        error.dataSchema,
-                        components,
-                    );
+                    result.data = convert(error.dataSchema, `error=${error.code}`);
                 }
                 return result;
             });
@@ -408,7 +518,7 @@ function toMethodSchema(
     }
 
     const m: MethodSchema = {
-        params: convertMemberSchema(name, 'params', member.paramsSchema, components),
+        params: convert(member.paramsSchema, 'params'),
     };
     if (docs.description !== undefined) m.description = docs.description;
     if (docs.comment !== undefined) m.comment = docs.comment;
@@ -443,11 +553,60 @@ function convertMemberSchema(
  *     },
  *   );
  */
-export function defineInterface<TMembers extends MemberMap>(
+export function defineInterface<const D extends InterfaceDeclarations>(
     info: InterfaceInfo,
-    members: TMembers,
-): InterfaceDefinition<TMembers> {
-    return new InterfaceDefinition(info, members);
+    declarations: D,
+    options: InterfaceAuthoringOptions = {},
+): InterfaceDefinition<FlattenInterfaceDeclarations<D>, D> {
+    const entries = Object.entries(declarations);
+    const isGroup = (value: MemberType | InterfaceTemplateGroup): value is InterfaceTemplateGroup =>
+        value !== null && typeof value === 'object' && interfaceTemplateGroup in value
+        && value[interfaceTemplateGroup] === true;
+    if (!entries.some(([, value]) => isGroup(value))) {
+        return new InterfaceDefinition<FlattenInterfaceDeclarations<D>, D>(
+            info, declarations as unknown as FlattenInterfaceDeclarations<D>, options,
+        );
+    }
+    const members: MemberMap = Object.create(null);
+    const groups: Record<string, Record<string, string>> = Object.create(null);
+    const templates: Record<string, MappedInterfaceTemplate> = Object.assign(Object.create(null), options.templates);
+    const groupNames = new Set(entries.filter(([, value]) => isGroup(value)).map(([name]) => name));
+    const addMember = (name: string, member: MemberType) => {
+        if (Object.hasOwn(members, name) || groupNames.has(name)) throw new Error(`Interface member collision at "${name}"`);
+        members[name] = member;
+    };
+    for (const [name, declaration] of entries) {
+        if (!isGroup(declaration)) {
+            addMember(name, declaration);
+            continue;
+        }
+        if (Object.hasOwn(templates, name)) throw new Error(`Interface template instance collision at "${name}"`);
+        const mapping: Record<string, string> = Object.create(null);
+        if (declaration.mapping !== undefined) {
+            for (const member of Object.keys(declaration.mapping)) {
+                if (!Object.hasOwn(declaration.members, member)) throw new Error(`Unknown mapped member "${member}"`);
+            }
+        }
+        for (const [member, type] of Object.entries(declaration.members)) {
+            if (declaration.mapping !== undefined && !Object.hasOwn(declaration.mapping, member)) {
+                throw new Error(`Missing mapped member "${member}"`);
+            }
+            const wireName = declaration.mapping === undefined ? `${name}$${member}` : declaration.mapping[member];
+            if (typeof wireName !== 'string' || wireName.length === 0) throw new Error(`Missing mapped member "${member}"`);
+            addMember(wireName, type);
+            mapping[member] = wireName;
+        }
+        groups[name] = Object.freeze(mapping);
+        templates[name] = { template: declaration.template, schema: {
+            template: declaration.template.id, arguments: declaration.arguments, members: mapping,
+        } };
+    }
+    const definition = new InterfaceDefinition<FlattenInterfaceDeclarations<D>, D>(
+        info, members as FlattenInterfaceDeclarations<D>,
+        { ...options, templates },
+    );
+    interfaceDefinitionState.get(definition)!.declarationGroups = Object.freeze(groups);
+    return definition;
 }
 
 /**
@@ -472,7 +631,8 @@ export function defineInterface<TMembers extends MemberMap>(
  */
 export function interfaceFromSchema(schema: LinkRpcInterfaceSchema): InterfaceDefinition<MemberMap> {
     validateInterfaceErrors(schema);
-    const members: MemberMap = {};
+    validateInterfaceTemplates(schema);
+    const members: MemberMap = Object.create(null);
     for (const [name, method] of Object.entries(schema.methods)) {
         if (method.result === undefined) {
             members[name] = new NotificationType(zAny());

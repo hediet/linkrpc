@@ -86,7 +86,7 @@ export function createSchemaToZod(
                 case "object": {
                     const required = new Set(schema.required ?? []);
                     const shape: Record<string, z.ZodType<unknown>> = {};
-                    for (const [name, property] of Object.entries(schema.properties)) {
+                    for (const [name, property] of Object.entries(schema.properties ?? {})) {
                         const validator = compile(property);
                         shape[name] = required.has(name) ? validator : validator.optional();
                     }

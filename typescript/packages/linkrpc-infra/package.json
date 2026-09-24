@@ -40,7 +40,7 @@
         "build": "tsdown",
         "test": "vitest --run",
         "test:interop": "vitest --run test/protocols/protocolInterop.live.test.ts",
-        "test:generated-interop": "vitest --run test/protocols/contracts/contracts.test.ts test/protocols/generatedInterop.crossLanguage.test.ts test/protocols/typedErrors.crossLanguage.test.ts test/protocols/protocolInterop.live.test.ts",
+        "test:generated-interop": "vitest --run test/protocols/contracts/contracts.test.ts test/protocols/generatedInterop.crossLanguage.test.ts test/protocols/typedErrors.crossLanguage.test.ts test/protocols/templateInterop.crossLanguage.test.ts test/protocols/protocolInterop.live.test.ts",
         "test:typed-errors-interop": "vitest --run test/protocols/typedErrors.crossLanguage.test.ts",
         "test:watch": "vitest"
     },

@@ -9,6 +9,7 @@ import { validateBarePrefix } from '../../connection/bareInterfaceTarget';
 import { CodeWriter } from './utils/codeWriter';
 import { validateInterfaceErrors } from '../validateInterfaceErrors';
 import { componentSchemaName } from '../assertSchemaReferences';
+import { INTERFACE_TEMPLATES_EXTENSION, validateInterfaceTemplates } from '../interfaceTemplates';
 
 export interface GenerateInterfaceOptions {
     /** Omit imports when composing definitions inside a generated module. */
@@ -54,9 +55,11 @@ export function generateTsInterface(
     options: GenerateInterfaceOptions = {},
 ): string {
     validateInterfaceErrors(schema);
+    validateInterfaceTemplates(schema);
     const linkRpcImport = options.linkRpcImport ?? '@hediet/linkrpc';
     const exportName = options.exportName ?? _deriveExportName(schema.id);
-    const preserveWireSchema = options.preserveWireSchema ?? false;
+    const preserveWireSchema = options.preserveWireSchema
+        ?? schema[INTERFACE_TEMPLATES_EXTENSION] !== undefined;
     if (options.bareTarget !== undefined) {
         validateBarePrefix(options.bareTarget.prefix);
     }

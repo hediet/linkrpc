@@ -45,6 +45,12 @@ export type CreatedApplicationErrorValue<
     TType extends string | undefined = undefined,
 > = ApplicationErrorValue<TCode, TMessage, TData, TType> & {
     readonly [applicationErrorBrand]: true;
+    // Keep the branded base visible even while generic data/type conditionals are deferred.
+    readonly kind: 'application';
+    readonly code: TCode;
+    readonly message: TMessage;
+    readonly data?: TData;
+    readonly type?: TType;
 };
 
 export interface ApplicationErrorDescriptor<
@@ -459,6 +465,8 @@ export interface ZodToSvcJsonSchemaOptions {
     readonly methodName: string;
     readonly schemaPosition: string;
     readonly components: Record<string, LinkRpcJsonSchema>;
+    /** Internal symbolic parameters used while reflecting a declarative factory. */
+    readonly parameterNames?: WeakMap<Schema, string>;
 }
 
 /** Convert a zod schema to our restricted SvcJsonSchema subset. */
@@ -480,7 +488,21 @@ export function zodToSvcJsonSchema(
     // anyway, so this is the right structural answer for "no value".
     const type = (schema as { _zod?: { def?: { type?: string; }; }; })._zod?.def?.type;
     if (type === 'void' || type === 'undefined') return true;
-    return normalizeZodJsonSchema(toJSONSchema(schema), options);
+    return normalizeZodJsonSchema(toJSONSchema(schema, {
+        override: context => {
+            const name = options?.parameterNames?.get(context.zodSchema);
+            if (name !== undefined) {
+                for (const key of Object.keys(context.jsonSchema)) delete context.jsonSchema[key];
+                context.jsonSchema.$ref = `linkrpc-parameter:${encodeURIComponent(name)}`;
+            } else if (options?.parameterNames !== undefined) {
+                // Unlike numeric/string refinements, these change structural shape.
+                // Normalization must not silently erase a parameter inside them.
+                for (const key of ['allOf', 'patternProperties', 'unevaluatedProperties', 'if', 'then', 'else', 'contains']) {
+                    if (key in context.jsonSchema) throw new Error(`Unsupported template JSON Schema keyword "${key}"`);
+                }
+            }
+        },
+    }), options);
 }
 
 function normalizeZodJsonSchema(

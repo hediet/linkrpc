@@ -370,6 +370,101 @@ Specialization can narrow but cannot widen the structural contract. In particula
 
 This profile is non-normative for LinkRPC interoperability. Peers may ignore it; changing a fragment does not change the interface hash, and structural compatibility checks do not prove that a specialization-aware peer will accept a value. Consumers that need to detect specialization changes must separately version or hash the exported rich view. Implementations should preserve the rich source document and derive the normalized hash projection rather than replace the source with that projection.
 
+### 4.3 Non-normative interface template instances
+
+An interface MAY describe a reusable, parameterized decomposition under the
+`x-interface-templates` extension while retaining ordinary concrete `methods` as its
+only wire contract. A template declares named schema parameters, methods, and
+optional local components. A schema parameter is written as
+`{"$parameter":"name"}`; it is distinct from JSON Schema `$ref`, which continues
+to refer only to a component. An instance names a template, supplies one
+concrete schema argument for every parameter, and explicitly maps every template
+member to a concrete member:
+
+```json
+{
+  "x-interface-templates": {
+    "templates": {
+      "store": {
+        "id": "store",
+        "parameters": ["value"],
+        "methods": {
+          "get": { "params": true, "result": { "$parameter": "value" } }
+        }
+      }
+    },
+    "instances": [{
+      "name": "users",
+      "template": "store",
+      "members": { "get": "fetchUser" },
+      "arguments": { "value": { "schema": { "type": "string" } } }
+    }]
+  }
+}
+```
+
+The example describes the already-present concrete member `fetchUser`.
+Consumers that understand
+this extension MUST reject unknown or missing parameters, unresolved template
+or argument component references, missing or extra mapping keys, duplicate
+instance names, and any instance whose instantiated methods do not exactly match
+the corresponding concrete methods. A concrete member MUST be claimed at most
+once globally, even across different template instances. Unclaimed ordinary
+members are allowed. Prefix-based instances are not supported.
+Template-local and argument-local component namespaces are independent, so
+recursive schemas do not require globally unique component names.
+
+Template instances are structural metadata, not handler implementations.
+The TypeScript `defineInterfaceTemplate(info, genericFactory)` authoring helper
+returns a generic callable: `Store({ Value: z.number() })`. The factory uses an
+explicitly generic schema argument (for example `<V>({ Value }: { Value: Schema<V> })`).
+It MUST be declarative and side-effect free: it is called once with symbolic
+schemas to export the template and again with concrete schemas for each instance.
+Concrete methods and checked error descriptors retain their original validators;
+instantiation does not clone or substitute a Zod AST. Parameter references are
+exported and substituted in checked error data/body schemas just as in params,
+results and streams. Concrete instances MUST match the instantiated reflected
+contract. Arbitrary refinements are not compared; unsupported JSON Schema
+representations fail explicitly. Metadata is available on bound instances, not
+as properties on the generic callable.
+A peer may ignore them, and adding,
+removing, or reorganizing it does not affect the interface hash. Schema import,
+reflection, and source generation SHOULD preserve the extension verbatim.
+
+The TypeScript authoring API can declare a bound template directly under a group
+key. It expands members to `group$member` (or to an explicit `mapMembers` target),
+emits the same explicit metadata, and requires a complete nested implementation
+at registration. Clients built from that directly authored definition expose the
+same nested groups, with no flat aliases: `connection.get(api).numbers.get({})`.
+This applies equally to result-returning clients. Group access reuses the concrete
+call functions, preserving checked errors and streaming handles; it does not change
+method dispatch, addressing, hashes, or reflection.
+
+This is a local authoring constraint, not a wire-level feature. Imported schemas
+and generated interfaces remain flat. The optional metadata-only authoring form
+for independently defined concrete methods changes neither their flat registration
+nor their flat client shape. Non-normative reflected metadata MUST NOT silently
+reshape a client's API. Local grouping is snapshotted from the authored declaration.
+`InterfaceTemplateClient<typeof bound>` (or its `InterfaceTemplateResultClient`
+counterpart) allows consumers to depend on a group's specialized methods without
+depending on its instance name, containing interface, or concrete wire mapping.
+
+### Optional explanation selection
+
+This bounded v1 profile does not introduce generic wire calls or require generic
+factory authoring in other languages. Concrete imported/generated APIs remain
+flat. Explanations may be absent or lost; they are not authority for dispatch,
+permissions, or interface compatibility.
+
+Implementations with multiple documents for a validated identical `id@hash` MAY
+prefer valid `x-interface-templates` over none, or a compatible superset retaining
+the existing templates and instances. Otherwise selection SHOULD remain stable.
+This is a best-effort heuristic, not a metadata version or completeness protocol.
+Select one existing document in its entirety; do not union fragments. Malformed
+optional metadata MUST NOT gain preference or make otherwise valid RPC dispatch
+fail merely because a selection heuristic inspected it. Template-aware consumers
+may still reject invalid explanations using the profile's validation rules.
+
 ## 5. `$hubrpc.interfaceHash`
 
 A caller MAY assert the interface hash it believes the target implements by setting `interfaceHash` (a hash string, §4) inside the call's `$hubrpc` object (chapter 01 §3.1):

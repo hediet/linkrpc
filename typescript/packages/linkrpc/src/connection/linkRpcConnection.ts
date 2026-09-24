@@ -26,6 +26,7 @@ import type {
     StreamApi,
 } from './interfaceDefinition';
 import { RpcFailure } from './rpcFailure';
+import { preferRicherInterfaceSchema } from '../schema/interfaceTemplates';
 import { NonCompliantServerError } from './nonCompliantServerError';
 import { jsonIssues, parseDeclaredErrorBody } from '../schema/errorValidation';
 import { brandApplicationError } from '../schema/applicationErrorBrand';
@@ -181,7 +182,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         ifaceOrTarget: InterfaceDefinition<any> | InterfaceTarget<InterfaceDefinition<any>>,
         opts: GetOptions<TOutCtx> | undefined,
         allFailuresAsValues: boolean,
-    ): Record<string, (params: any) => any> {
+    ): Record<string, unknown> {
         if (isInterfaceTarget(ifaceOrTarget)) {
             if (opts !== undefined) {
                 const api = allFailuresAsValues ? 'getResultClient' : 'get';
@@ -212,7 +213,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         iface: InterfaceDefinition<any>,
         prefix: string,
         allFailuresAsValues: boolean,
-    ): Record<string, (params: any) => any> {
+    ): Record<string, unknown> {
         validateBarePrefix(prefix);
         for (const [name, member] of Object.entries(iface.members)) {
             if (
@@ -358,7 +359,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
 
         const entry: RegisteredInterface = {
             iface,
-            handlers: handlers as Record<string, (p: any, c: any) => any>,
+            handlers: iface.flattenHandlers(handlers) as Record<string, (p: any, c: any) => any>,
             serviceId,
             internalInspection,
         };
@@ -459,12 +460,16 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         interfaceId: string,
         hash?: string,
     ): InterfaceDefinition<any> | undefined {
+        let selected: InterfaceDefinition<any> | undefined;
         for (const r of this._registry.values()) {
             if (r.iface.info.id !== interfaceId) continue;
             if (hash !== undefined && r.iface.schemaHash !== hash) continue;
-            return r.iface;
+            if (selected === undefined
+                || preferRicherInterfaceSchema(selected.toSchema(), r.iface.toSchema()) === r.iface.toSchema()) {
+                selected = r.iface;
+            }
         }
-        return undefined;
+        return selected;
     }
 
     /**
@@ -723,13 +728,13 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         barePrefix?: string,
         defaultRoute = false,
         allFailuresAsValues = false,
-    ): Record<string, (params: any) => any> {
+    ): Record<string, unknown> {
         const { serviceId, ...ctxRest } = opts;
         const sendOpts = barePrefix === undefined
             ? { ctx: ctxRest as unknown as TOutCtx, interfaceHash: iface.schemaHash }
             : undefined;
         const prefix = barePrefix ?? (defaultRoute ? '' : serviceId ? `${serviceId}::${iface.info.id}::` : `${iface.info.id}::`);
-        const proxy: Record<string, (p: any) => any> = {};
+        const proxy: Record<string, (p: any) => any> = Object.create(null);
         for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
             const wireMethod = `${prefix}${name}`;
 
@@ -824,7 +829,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 proxy[name] = barePrefix === undefined ? async (params: unknown) => notify(params) : notify;
             }
         }
-        return proxy;
+        return iface.nestClient(proxy);
     }
 
     private _validateOutboundParamsFor(

@@ -5,6 +5,7 @@ import { defaultsInterface, directoryInterface, schemasInterface } from '../hub/
 import { safeParse } from 'zod/v4/core';
 import { parseStaticHubSchema, type InterfaceRef, type StaticHubSchemaDocument } from './staticHubSchema';
 import type { LinkRpcInterfaceSchema } from './linkRpcInterfaceSchema';
+import { preferRicherInterfaceSchema } from './interfaceTemplates';
 
 export interface ExportStaticHubSchemaOptions {
     /** Directory and default-binding reflection scope; omitted means the connection root. */
@@ -87,9 +88,11 @@ export async function exportStaticHubSchema(
         }
         const services = new Map<string, InterfaceRef[]>();
         const schemas = new Map<string, LinkRpcInterfaceSchema>();
+        const resolvedSources = new Map<string, Set<string | undefined>>();
         async function resolve(ref: InterfaceRef, serviceId?: string): Promise<void> {
             const key = `${ref.interfaceId}@${ref.interfaceHash}`;
-            if (schemas.has(key)) return;
+            const sources = resolvedSources.get(key) ?? new Set<string | undefined>();
+            if (sources.has(serviceId)) return;
             const { schema } = await connection.get(schemasInterface, { serviceId }).get({
                 interfaceId: ref.interfaceId, hash: ref.interfaceHash,
             });
@@ -97,7 +100,10 @@ export async function exportStaticHubSchema(
             if (validated.id !== ref.interfaceId || validated.hash !== ref.interfaceHash) {
                 throw new Error(`Schema response does not match ${key}`);
             }
-            schemas.set(key, validated);
+            sources.add(serviceId);
+            resolvedSources.set(key, sources);
+            const existing = schemas.get(key);
+            schemas.set(key, existing === undefined ? validated : preferRicherInterfaceSchema(existing, validated));
         }
         for (const listing of snapshot.result.listings) {
             const ref = { interfaceId: listing.interfaceId, interfaceHash: listing.hash };

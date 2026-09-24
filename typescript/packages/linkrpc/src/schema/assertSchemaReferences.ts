@@ -1,4 +1,5 @@
 import type { LinkRpcJsonSchema } from './linkRpcJsonSchema';
+import { SchemaValidationError } from './schemaValidationError';
 
 type SchemaNode = Exclude<LinkRpcJsonSchema, boolean>;
 const componentPrefix = '#/components/schemas/';
@@ -9,11 +10,11 @@ export function componentSchemaRef(name: string): string {
 
 export function componentSchemaName(ref: string): string {
     if (!ref.startsWith(componentPrefix)) {
-        throw new Error(`Invalid component reference: ${ref}`);
+        throw new SchemaValidationError(`Invalid component reference: ${ref}`);
     }
     const token = ref.slice(componentPrefix.length);
     if (token.includes('/') || /~(?:[^01]|$)/.test(token)) {
-        throw new Error(`Invalid component reference token: ${ref}`);
+        throw new SchemaValidationError(`Invalid component reference token: ${ref}`);
     }
     return token.replace(/~1/g, '/').replace(/~0/g, '~');
 }

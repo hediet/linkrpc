@@ -4,7 +4,7 @@ import ts from "typescript";
 import { fileURLToPath } from "node:url";
 import { computeInterfaceHash } from "../hash";
 import { defineInterface, InterfaceDefinition } from "../../connection/interfaceDefinition";
-import { applicationError, notificationType, requestType, rpcError, type ApplicationErrorDescriptor } from "../memberTypes";
+import { applicationError, notificationType, requestType, rpcError, type ApplicationErrorDescriptor, type Schema } from "../memberTypes";
 import type { LinkRpcInterfaceSchema } from "../linkRpcInterfaceSchema";
 import type { LinkRpcJsonSchema } from "../linkRpcJsonSchema";
 import {
@@ -14,6 +14,7 @@ import {
 } from "../../hub/common/reflection.interfaces";
 import { streamInterface } from "../../connection/streaming";
 import { generateTsInterface } from "./generateTsInterface";
+import { defineInterfaceTemplate } from "../defineInterfaceTemplate";
 
 // Compiler integration tests load the transitive package graph while CI builds run in parallel.
 const TYPECHECK_TIMEOUT_MS = 30_000;
@@ -62,6 +63,72 @@ async function _roundTrip(def: { toSchema(): LinkRpcInterfaceSchema; schemaHash:
 }
 
 describe("generateInterface", () => {
+    it("round-trips callable template checked errors and compiles specialized error clients", async () => {
+        const Store = defineInterfaceTemplate({ id: "generic.checked", parameters: ["Value"] },
+            <V>({ Value }: { Value: Schema<V> }) => ({
+                set: requestType(Value, Value).withErrors([
+                    applicationError("conflict", { data: z.object({ current: Value }) }),
+                    rpcError(410, { message: z.literal("retry"), data: z.object({ value: Value }) }),
+                ]),
+            }));
+        const definition = defineInterface({ id: "test.checked.codegen" }, {
+            numbers: Store({ Value: z.number() }),
+            text: Store({ Value: z.string() }).mapMembers({ set: "writeText" }),
+        });
+        await _roundTrip(definition);
+        const source = generateTsInterface(definition.toSchema(), { exportName: "generated", linkRpcImport: "../../index" });
+        _expectTypeChecks(`${source}
+import { isRpcFailure, type InterfaceClient, type InterfaceHandlers } from "../../index";
+const conflict = generated.members["numbers$set"].errors[0];
+conflict.create({ current: 1 });
+// @ts-expect-error concrete parameterized error data is numeric
+conflict.create({ current: "wrong" });
+const retry = generated.members["numbers$set"].errors[1];
+retry.create({ message: "retry", data: { value: 1 } });
+// @ts-expect-error concrete raw body is numeric
+retry.create({ message: "retry", data: { value: "wrong" } });
+const handlers: InterfaceHandlers<typeof generated> = {
+    "numbers$set": value => value,
+    writeText: value => generated.members.writeText.errors[0].create({ current: value }),
+};
+declare const client: InterfaceClient<typeof generated>;
+async function check() {
+    const result = await client["numbers$set"](1);
+    if (!isRpcFailure(result)) { const number: number = result; return; }
+    if (result.error.type === "conflict") {
+        const current: number = result.error.data.current;
+    } else {
+        const value: number = result.error.data.value;
+        const message: "retry" = result.error.message;
+    }
+}
+`);
+    }, TYPECHECK_TIMEOUT_MS);
+
+    it("round-trips grouped authoring as flat generated clients and implementations", async () => {
+        const Echo = defineInterfaceTemplate({ id: "generic.echo", parameters: ["value"] }, <V>({ value }: { value: Schema<V> }) => ({
+            echo: requestType(value, value),
+        }));
+        const definition = defineInterface({ id: "test.groups.codegen" }, {
+            numbers: Echo({ value: z.number() }),
+            text: Echo({ value: z.string() }).mapMembers({ echo: "readText" }),
+        });
+        await _roundTrip(definition);
+        const source = generateTsInterface(definition.toSchema(), { exportName: "generated", linkRpcImport: "../../index" });
+        _expectTypeChecks(`${source}
+import { type InterfaceHandlers, type InterfaceClient } from "../../index";
+const handlers: InterfaceHandlers<typeof generated> = {
+    "numbers$echo": value => value + 1,
+    readText: value => value.toUpperCase(),
+};
+declare const client: InterfaceClient<typeof generated>;
+const number: Promise<number> = client["numbers$echo"](1);
+const text: Promise<string> = client.readText("hello");
+// @ts-expect-error reflected metadata does not reconstruct local handler groups
+const grouped: InterfaceHandlers<typeof generated> = { numbers: { echo: (value: number) => value }, text: { echo: (value: string) => value } };
+`);
+    }, TYPECHECK_TIMEOUT_MS);
+
     it("round-trips raw body schemas and preserves exact code-discriminated types", async () => {
         const definition = defineInterface({ id: "test.raw-codegen" }, {
             read: requestType(z.object({}), z.string()).withErrors([

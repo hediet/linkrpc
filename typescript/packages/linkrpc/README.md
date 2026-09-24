@@ -7,6 +7,139 @@ message on the wire is a valid JSON-RPC message, and linkrpc adds just enough on
 strongly-typed services share one connection — an addressing grammar, built-in reflection,
 content-addressed interface identity, and optional layers for signing and capabilities.
 
+## Interface templates
+
+This bounded v1 adds TypeScript authoring groups over ordinary concrete RPC methods.
+Imported and generated TypeScript/Rust contracts remain flat; Rust generic factory
+authoring is not part of this API. `x-interface-templates` is optional,
+non-authoritative explanation: it can disappear without changing an interface's
+hash, dispatch, permissions, or compatibility.
+
+When reflection sees multiple documents with the same validated `id@hash`, it
+prefers valid template metadata over none, or a compatible superset preserving
+existing templates and instances. Otherwise the first candidate wins. Selection
+retains one whole document, never merges fragments, and malformed optional
+metadata is not ranked. Template-aware import/codegen still validates explanations
+explicitly. No metadata revision or completeness guarantee is implied.
+
+Author structural interface templates as **generic callable factories**, with ordinary Zod schemas and
+`requestType` (classic Zod and `zod/mini` are both supported):
+
+```ts
+import { z } from 'zod';
+import {
+  defineInterfaceTemplate, defineInterface, requestType, applicationError,
+  type InterfaceTemplateClient, type Schema,
+} from '@hediet/linkrpc';
+
+const Store = defineInterfaceTemplate(
+  { id: 'example.store', parameters: ['Value'] },
+  <V>({ Value }: { Value: Schema<V> }) => {
+    const Conflict = applicationError('conflict', { data: z.object({ current: Value }) });
+    return {
+      get: requestType(z.object({}), Value),
+      set: requestType(z.object({ value: Value }), z.object({})).withErrors([Conflict]),
+    };
+  },
+);
+const numbers = Store({ Value: z.number() });
+// numbers.members.get has result type number, not any.
+// numbers.members.set.errors[0].create({ current: 42 }) creates a checked error.
+const api = defineInterface({ id: 'example.api' }, {
+  numbers,
+  backup: Store({ Value: z.number() }).mapMembers({ get: 'fetchBackup', set: 'writeBackup' }),
+  ping: requestType(z.object({}), z.string()),
+});
+connection.register(api, {
+  numbers: {
+    get: () => 42,
+    set: ({ value }) => numbers.members.set.errors[0].create({ current: value }),
+  },
+  backup: {
+    get: () => 100,
+    set: () => ({}),
+  },
+  ping: () => 'pong',
+});
+
+// The consumer depends on the bound template, not the containing interface or wire names.
+function readStore(store: InterfaceTemplateClient<typeof numbers>): Promise<number> {
+  return store.get({});
+}
+const client = connection.get(api);
+await readStore(client.numbers); // 42
+await readStore(client.backup);  // 100, sent as example.api::fetchBackup
+await client.numbers.set({ value: 43 }); // retains the checked conflict result
+await connection.getResultClient(api).backup.get({}); // includes generic failures as values
+```
+
+Direct groups derive their instance names from declaration keys and lower to
+ordinary flat wire members: `numbers$get`, `numbers$set`, `fetchBackup`, `writeBackup` and `ping` here. Registration **must**
+use the corresponding nested group shape; missing groups/members, non-functions,
+extra members, and flat aliases are rejected before anything is registered.
+Handlers keep inferred params, context, results, notifications and streams.
+Clients use the same nested shape: `connection.get(api).numbers.get({})`.
+Both `get` and `getResultClient` expose **only** the declared groups and ordinary members,
+not flat aliases. `InterfaceClient<typeof api>` and `InterfaceResultClient<typeof api>`
+describe these shapes. `InterfaceTemplateClient<typeof numbers>` and
+`InterfaceTemplateResultClient<typeof numbers>` describe reusable group consumers.
+Group methods retain their materialized call functions: checked `.result()` calls
+and streaming `send`, `cancel`, `ping`, and `dispose` are not hidden by an async wrapper.
+Service-scoped, qualified/default-target, and bare clients follow the same grouping;
+bare routes still do not support streaming.
+
+For arbitrary wire names, use a mapped binding **directly as a group**:
+`{ numbers: numbers.mapMembers({ get: 'fetchNumber', set: 'writeNumber' }) }`.
+Its implementation is still `{ numbers: { get: ..., set: ... } }` and its client
+still calls `numbers.get`; only the dispatched wire name becomes `fetchNumber`.
+Compatible nonstreaming groups can also be passed to another registration:
+`connection.register(otherApi, { store: client.numbers })`. This is not a general
+stream-forwarding adapter: handlers receive `(params, context, stream)`, while
+clients receive `(params, streamOptions?)`. Context variance and stream lifetimes
+must be handled explicitly when the types are not compatible.
+
+Calling `Store({ Value: schema })` specializes TypeScript payload types and creates
+real method and error descriptors. The explicitly generic factory runs once with
+symbolic schemas to export the portable template, then once per call with concrete
+schemas. Factories **must be declarative and side-effect free**: do not inspect or
+branch on schemas, capture changing state, or perform I/O. Every instantiation is
+checked against the reflected template; structurally inconsistent specializations fail.
+The wrapper has a bare generic call signature (no metadata properties); access
+`numbers.template` and `numbers.arguments` on a bound instance. Metadata is snapshotted.
+Arguments retain their original validators, including refinements and recursive
+schemas. Concrete members can also be authored independently: `defineInterface`
+validates their normalized wire contracts against its optional third argument,
+`{ templates: { instanceName: boundTemplate.mapMembers(mapping) } }`, rather than
+requiring JavaScript object identity. It never replaces them.
+
+Mappings must supply every template member exactly once, with no extra keys.
+Names can be arbitrary method names, including identity mappings. For the
+optional metadata-only third argument, the concrete methods must already exist
+and both registration and clients stay flat; metadata never invents local groups.
+Every concrete method can be claimed at most once, within or across instances;
+ordinary unclaimed methods are allowed. Unknown/missing parameters, missing
+methods and inconsistent wire shapes fail explicitly.
+Instances use the `x-interface-templates` extension and survive schema
+import and code generation without changing the concrete interface hash.
+Each instance has an explicit `members: { templateMember: concreteMember }`
+mapping; the wire format has no prefix convention or implicit handler registration.
+Schema import and generated code expose flat handlers and flat clients, preserving
+the metadata verbatim. Local grouped declaration shape is not reconstructed from
+reflection: independently authored flat interfaces may publish identical metadata.
+
+Template schemas use the same representable, normalized structural JSON Schema
+subset as ordinary interfaces: objects, arrays, tuples, unions, optional/nullable
+values, primitives, and supported recursive/component references. Refinements are
+retained in the concrete Zod validators but are not compared as validation code.
+Unrepresentable transforms and unsupported structural constructs such as intersections
+(`allOf`) fail explicitly; there is no fallback to an unknown schema.
+Checked errors support both `applicationError` data and `rpcError` body schemas,
+including generic parameters, nested payloads, and concrete `.create`/`.is` types.
+Arguments must not themselves be
+optional: express optionality with `z.optional(Value)` in the template. Validation
+of instances uses LinkRPC's normalized structural JSON Schema subset, not
+equivalence of arbitrary validation code or refinements.
+
 ## How linkrpc works
 
 ```mermaid

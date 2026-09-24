@@ -1,5 +1,14 @@
 export * from "./schema/linkRpcJsonSchema";
 export * from "./schema/linkRpcInterfaceSchema";
+export {
+    INTERFACE_TEMPLATES_EXTENSION, validateInterfaceTemplates,
+    interfaceTemplateMemberName, interfaceTemplateArgumentsEquivalent, interfaceTemplatesEqual,
+    type SchemaParameterReference, type InterfaceTemplateJsonSchema, type InterfaceTemplateMethodSchema,
+    type InterfaceTemplateErrorSchema, type InterfaceTemplateSchema, type InterfaceTemplateArgument,
+    type InterfaceTemplateInstance, type InterfaceTemplatesMetadata, type MappedInterfaceTemplate,
+} from "./schema/interfaceTemplates";
+export * from "./schema/defineInterfaceTemplate";
+export type { InterfaceTemplateGroup } from "./schema/interfaceTemplateGroup";
 export * from "./schema/memberTypes";
 export * from "./connection/interfaceDefinition";
 export * from "./connection/nonCompliantServerError";
