@@ -130,17 +130,19 @@ async function _connectCmdStdio(
     if (!child.stdin || !child.stdout) {
         throw new Error('connect: child process exposes no stdio');
     }
+    const input = child.stdin;
+    const close = () => {
+        // A child handling SIGTERM may still wait on its open stdin pipe.
+        if (!input.destroyed && !input.writableEnded) input.end();
+        if (!child.killed) child.kill();
+    };
     const { transport } = await connectNdjson({
         input: child.stdout,
         output: child.stdin,
-        onClose: () => {
-            if (!child.killed) child.kill();
-        },
+        onClose: close,
         trace: log?.trace,
     });
-    return _makeCliConnection(transport, () => {
-        if (!child.killed) child.kill();
-    }, log);
+    return _makeCliConnection(transport, close, log);
 }
 
 /**
