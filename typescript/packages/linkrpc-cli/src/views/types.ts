@@ -71,6 +71,8 @@ export interface ViewSession {
     readonly element: React.ReactElement;
     /** Publish a new command list whenever availability, titles or context change. */
     readonly commands: IObservable<readonly ViewCommand[]>;
+    /** Optional compact-legend limit; a view can expose full help as a command. */
+    readonly maxLegendRows?: number;
     readonly capturesInput?: boolean;
     captureState?(): unknown;
     restoreState?(state: unknown): void;

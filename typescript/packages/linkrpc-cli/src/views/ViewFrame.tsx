@@ -38,7 +38,8 @@ export class ViewFrame extends React.Component<{
     }
     private get legendRows(): number {
         return viewLegendLines(this.props.session, { ...this.props, columns: this.columns,
-            maxRows: this.props.tabbed ? Math.min(2, Math.max(1, this.props.rows - 7)) : Math.max(1, this.props.rows - 7) }).length;
+            maxRows: Math.min(this.props.session.maxLegendRows ?? Infinity,
+                this.props.tabbed ? Math.min(2, Math.max(1, this.props.rows - 7)) : Math.max(1, this.props.rows - 7)) }).length;
     }
     private layout(): void {
         const rows = Math.max(1, this.props.rows - this.legendRows);

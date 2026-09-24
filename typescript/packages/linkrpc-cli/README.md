@@ -112,6 +112,49 @@ across rolling buffers; when a replacement is ambiguous (such as duplicate
 entries without stable IDs), entries may reappear rather than hiding new logs.
 `q` closes the tab/standalone UI.
 
+### Topology view
+
+The contributed `topology` view inspects **one selected service's** canonical
+`hubrpc.topology` interface. It is not the network-wide Hub topology scan.
+Interface and service targets match the interface ID, without requiring tags;
+opening validates the current canonical schema and uses the selected default
+or qualified route.
+
+```sh
+rpc --endpoint ws://localhost:7700 view targets topology --json
+rpc --endpoint ws://localhost:7700 view open topology --target 'service::'
+rpc --endpoint ws://localhost:7700 view open topology --interface hubrpc.topology --service demo --json
+rpc --endpoint ws://localhost:7700 view open topology --target 'service::' --mode watch --json
+rpc --endpoint ws://localhost:7700 view open topology --target 'service::' --tui
+```
+
+Snapshot is the default and reads the full `getGraph` result. Watch subscribes
+to `watchGraph` invalidations and re-fetches the full authoritative result;
+`--json` emits one complete snapshot per JSONL line, including all nodes,
+ports, links, transport metadata, descriptors and route claims. Fetch/watch
+errors are reported, not treated as empty topology. `--timeout-ms` bounds
+individual snapshot fetches. Closing a view cancels its watch and pending
+fetches without closing the shared connection.
+
+Text output uses `beautiful-mermaid` to draw Unicode boxes and **undirected**
+connection lines. Placement and `from`/`to` endpoint roles do not imply RPC
+direction. Generated node IDs link the diagram to complete node/link/route
+records below it. Box labels are abbreviated ASCII-safe hints; those records
+preserve complete Unicode labels. Remote text cannot supply Mermaid syntax.
+Parallel links share a diagram line, but every link and exact port pair remains
+in the numbered link records. Self-links, cycles and disconnected nodes are
+retained. Unlisted endpoints are marked explicitly. If layout fails or exceeds
+200 nodes/400 distinct connections, the text explains why the diagram is
+omitted and still includes all authoritative records.
+
+In the standalone TUI and regular UI's Topology tab, arrows scroll vertically
+and horizontally, Page Up/Down and `[`/`]` page, Home/End jump vertically,
+`r` refreshes the snapshot, and `?` shows the actual contributed command list.
+The live diagram and records share one bounded, scrollable document. Normal
+host keys still apply: `q`/Ctrl-C quit, and Tab/Escape navigate the regular UI.
+No topology command changes the inspected service or interprets route claims
+as proof of authority.
+
 The regular `rpc ui` / `hub ui` has Methods and Schema tabs plus matching
 contributed views. Tab cycles views and `v` switches interface/service scope;
 the displayed conditions explain availability. Graph sessions cancel when
