@@ -2,7 +2,7 @@ import React from "react";
 import { PassThrough } from "node:stream";
 import { stdin, stdout } from "node:process";
 import { stripVTControlCharacters } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { Box, Text, render } from "ink";
 import { derived, observableValue } from "@vscode/observables";
 import { z } from "zod";
@@ -11,6 +11,10 @@ import { connectViaTransport } from "@hediet/linkrpc-client";
 import { App, uiLayout } from "./App";
 import { UiModel } from "./UiModel";
 import type { ViewCommand, ViewSession } from "../views/types";
+
+// Ink suppresses intermediate frames in CI unless interactive mode is explicit.
+vi.hoisted(() => { vi.stubEnv("CI", "false"); });
+afterAll(() => { vi.unstubAllEnvs(); });
 
 vi.mock("node:process", async () => {
     const { PassThrough } = await import("node:stream");

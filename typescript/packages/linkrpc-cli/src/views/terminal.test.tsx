@@ -1,7 +1,7 @@
 import React from "react";
 import { PassThrough } from "node:stream";
 import { stdin, stdout } from "node:process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { Box, Text, render } from "ink";
 import { derived, observableValue } from "@vscode/observables";
 import { runViewTui } from "./runViewTui";
@@ -10,6 +10,10 @@ import { TerminalKeyInput } from "./TerminalKeyInput";
 import { dispatchHostKey } from "./commands";
 import type { ViewCommand, ViewSession } from "./types";
 import { ViewFrame } from "./ViewFrame";
+
+// These fixtures emulate an interactive terminal, including in CI workers.
+vi.hoisted(() => { vi.stubEnv("CI", "false"); });
+afterAll(() => { vi.unstubAllEnvs(); });
 
 vi.mock("node:process", async () => {
     const { PassThrough } = await import("node:stream");
