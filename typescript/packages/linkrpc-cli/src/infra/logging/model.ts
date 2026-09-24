@@ -1,6 +1,5 @@
 import type { CliChannel } from "@hediet/linkrpc-client";
-import type { JsonValue } from "@hediet/linkrpc";
-import { isDeepStrictEqual } from "node:util";
+import { computeInterfaceHash, type JsonValue } from "@hediet/linkrpc";
 import { parse } from "zod/mini";
 import {
     applyJsonDocumentEdits, loggingInterface, logDocumentSchema, logStreamEventSchema,
@@ -44,8 +43,9 @@ export function resolveLoggingTargets(context: ViewOpenContext): LoggingTarget[]
 function validateLoggingSchema(listing: ResolvedViewInterface): void {
     const canonical = loggingInterface.toSchema();
     if (listing.interfaceId !== canonical.id
-        || !isDeepStrictEqual(listing.schema.methods, canonical.methods)
-        || !isDeepStrictEqual(listing.schema.components, canonical.components)) {
+        || listing.schema.id !== canonical.id
+        || computeInterfaceHash({ ...canonical, methods: listing.schema.methods,
+            components: listing.schema.components }) !== canonical.hash) {
         throw new Error(`Interface ${listing.interfaceId} does not implement the canonical logging contract (tags are discovery hints)`);
     }
 }

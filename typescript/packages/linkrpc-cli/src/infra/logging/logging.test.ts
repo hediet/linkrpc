@@ -25,6 +25,9 @@ describe("logging view", () => {
     it("discovers by interface ID without tags and checks the actual contract", () => {
         expect(loggingView.conditions).toContainEqual({ kind: "service", implements: { interfaceId: "linkrpc.logging" } });
         expect(resolveLoggingTargets(context)[0]?.route("watchLog")).toBe("watchLog");
+        const wireSchema = JSON.parse(JSON.stringify(listing.schema));
+        expect(resolveLoggingTargets({ ...context, interfaces: [{ ...listing, schema: wireSchema }] })[0]?.route("watchLog"))
+            .toBe("watchLog");
         const qualified = { ...listing, isDefault: false, serviceId: "nested" };
         expect(resolveLoggingTargets({ ...context, interfaces: [qualified] })[0]?.route("watchLog"))
             .toBe("nested::linkrpc.logging::watchLog");
