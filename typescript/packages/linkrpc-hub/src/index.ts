@@ -93,6 +93,13 @@ export {
 export { loadHubConfig, printHubConfigSchema, type ServeHubOptions, serveHub } from './serve';
 export { spawnCommand } from './spawn';
 export {
+    hostParticipant,
+    type ParticipantHostContext,
+    type ParticipantHostHandle,
+    type ParticipantHostOptions,
+    type ParticipantTransport,
+} from './participantHost';
+export {
     createIdentityKeystore,
     type IdentityKeystore,
     type IdentityKeystoreOptions,

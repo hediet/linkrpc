@@ -14,6 +14,38 @@ node packages/linkrpc-hub/dist/cli.js --port 7878 --token <shared-secret>
 When `--token` and `--tokens-file` are both omitted, a one-shot token is
 minted and printed at startup.
 
+## Hosting a Node participant
+
+`hostParticipant` runs a service on a single connection. In `stdio` mode it
+registers services at the connection root, suitable for a hub `cmd-stdio`
+endpoint. In `hub` mode it connects to an existing hub, claims the namespace
+granted to this connection, and passes that service ID to `setup`:
+
+```ts
+import { hostParticipant } from '@hediet/linkrpc-hub/participant-host';
+
+const host = await hostParticipant({
+    transport: process.argv.includes('--stdio')
+        ? { type: 'stdio' }
+        : { type: 'hub', endpoint: process.env.LINKRPC_ENDPOINT!, token: process.env.LINKRPC_TOKEN },
+    setup: ({ connection, serviceId, signal }) => {
+        // Register your interfaces with { serviceId } in hub mode, or at
+        // the root (without serviceId) in stdio mode.
+        // Return a disposable for watchers or other external resources.
+    },
+});
+await host.done;
+```
+
+`host.dispose()` closes the connection and awaits cleanup. An `AbortSignal`
+passed to `hostParticipant` also stops it. A requested hub `serviceId` must
+lie within the provenance-granted namespace; out-of-grant claims reject
+instead of silently falling back to another authority. When the hub
+provisions a managed identity overlay, set `managedIdentity: true` to sign
+outbound calls. Do not set it for plain socket/token connections without
+that overlay. This helper does not spawn a hub or retry connections; callers
+control those lifecycles independently.
+
 ## CLI
 
 ```

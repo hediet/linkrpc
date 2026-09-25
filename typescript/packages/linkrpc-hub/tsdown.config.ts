@@ -12,6 +12,7 @@ export default defineConfig({
         'configFile': 'src/configFile.ts',
         'spawn': 'src/spawn.ts',
         'serve': 'src/serve.ts',
+        'participantHost': 'src/participantHost.ts',
         'engine/runHub': 'src/engine/runHub.ts',
         'hub/server/index': 'src/hub/server/index.ts',
         'hub/server/client': 'src/hub/server/client.ts',

@@ -45,6 +45,10 @@
             "import": "./dist/serve.js",
             "types": "./dist/serve.d.ts"
         },
+        "./participant-host": {
+            "import": "./dist/participantHost.js",
+            "types": "./dist/participantHost.d.ts"
+        },
         "./engine/runHub": {
             "import": "./dist/engine/runHub.js",
             "types": "./dist/engine/runHub.d.ts"
