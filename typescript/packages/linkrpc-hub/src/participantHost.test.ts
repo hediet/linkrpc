@@ -160,6 +160,9 @@ describe('hostParticipant', () => {
                     signal: abort.signal,
                     setup: () => {},
                 });
+                process.send('ready');
+                await new Promise(resolve => process.once('message', resolve));
+                process.disconnect();
                 if (${JSON.stringify(stop)} === 'abort') abort.abort();
                 else await host.dispose();
                 await host.done;
@@ -169,24 +172,40 @@ describe('hostParticipant', () => {
             `;
             const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
                 cwd: process.cwd(),
-                stdio: ['pipe', 'pipe', 'pipe'],
+                stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
             });
             try {
-                await Promise.race([
-                    new Promise<void>((resolve, reject) => {
-                        child.once('error', reject);
-                        child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`child exited ${code}`)));
-                    }),
-                    new Promise<never>((_resolve, reject) => {
-                        setTimeout(() => reject(new Error('stdio child remained alive after shutdown')), 2_000).unref();
-                    }),
-                ]);
+                await new Promise<void>((resolve, reject) => {
+                    let ready = false;
+                    let deadline: NodeJS.Timeout | undefined;
+                    child.once('error', reject);
+                    child.once('message', message => {
+                        if (message !== 'ready') {
+                            reject(new Error(`Unexpected stdio child handshake: ${String(message)}`));
+                            return;
+                        }
+                        ready = true;
+                        deadline = setTimeout(
+                            () => reject(new Error('stdio child remained alive after shutdown')),
+                            2_000,
+                        );
+                        deadline.unref();
+                        child.send('shutdown', error => { if (error) reject(error); });
+                    });
+                    child.once('exit', code => {
+                        clearTimeout(deadline);
+                        if (!ready) reject(new Error(`stdio child exited before readiness (${code})`));
+                        else if (code !== 0) reject(new Error(`child exited ${code}`));
+                        else resolve();
+                    });
+                });
             } finally {
                 if (child.exitCode === null) child.kill();
-                child.stdin.destroy();
-                child.stdout.destroy();
-                child.stderr.destroy();
+                child.stdin?.destroy();
+                child.stdout?.destroy();
+                child.stderr?.destroy();
             }
         },
+        15_000,
     );
 });
