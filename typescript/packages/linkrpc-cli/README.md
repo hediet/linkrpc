@@ -506,6 +506,12 @@ Unlimited limits schedule no timer; status reports their `timeoutMs`/`ttlMs` as
 the JSON string `"inf"`, while finite values remain millisecond numbers.
 Broker startup has a separate 60-second readiness deadline; `inf` does not
 disable startup error detection.
+Command-environment endpoints also retain their existing 10-second deadline for
+the spawned application to connect back. This is distinct from the transport
+initialize handshake and the broker's lifetime limits. A slow application must
+establish its endpoint before that deadline. Startup failures report the broker's
+underlying error, including the last 16384 characters of command-environment child
+stdout/stderr, rather than only the broker process's exit code.
 
 Use a folder context to own the broker without environment overrides:
 

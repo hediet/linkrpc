@@ -198,7 +198,7 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
     try {
         child = spawnCommand(opts.command, {
             // Keep parent stdout reserved for CLI/broker output.
-            stdio: ['ignore', 'pipe', 'inherit'],
+            stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, ...opts.env, LINKRPC_ENDPOINT: socketPath, LINKRPC_TOKEN: token },
             ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
         });
@@ -207,6 +207,13 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
         throw error;
     }
     child.stdout?.pipe(process.stderr, { end: false });
+    child.stderr?.pipe(process.stderr, { end: false });
+    let startupOutput = '';
+    const captureStartupOutput = (chunk: Buffer): void => {
+        startupOutput = (startupOutput + chunk.toString()).slice(-16_384);
+    };
+    child.stdout?.on('data', captureStartupOutput);
+    child.stderr?.on('data', captureStartupOutput);
 
     const pair = new TransportPair();
     const overlay = new RootOverlay({ uplink: pair.a });
@@ -241,7 +248,7 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
             new Promise<never>((_resolve, reject) => {
                 onExit = code => reject(new Error(`overlay: cmd-env child exited (code ${code ?? '?'}) before connecting`));
                 onError = reject;
-                child.once('exit', onExit);
+                child.once('close', onExit);
                 child.once('error', onError);
                 timer = setTimeout(() => reject(new Error('overlay: timed out waiting for cmd-env child to connect')),
                     opts.readyTimeoutMs ?? 10_000);
@@ -249,11 +256,19 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
         ]);
     } catch (error) {
         dispose();
+        if (startupOutput.trim().length > 0) {
+            throw new Error(
+                `${error instanceof Error ? error.message : String(error)}\nChild startup output (last 16384 characters):\n${startupOutput.trim()}`,
+                { cause: error },
+            );
+        }
         throw error;
     } finally {
         clearTimeout(timer);
-        child.removeListener('exit', onExit);
+        child.removeListener('close', onExit);
         child.removeListener('error', onError);
+        child.stdout?.removeListener('data', captureStartupOutput);
+        child.stderr?.removeListener('data', captureStartupOutput);
     }
 
     overlay.connectParticipant(childTransport);

@@ -182,6 +182,18 @@ function readReadyEndpoint(
             const endpoint = buffer.slice(0, newline).trim();
             cleanup();
             try {
+                if (endpoint.startsWith("{")) {
+                    const response: unknown = JSON.parse(endpoint);
+                    if (
+                        typeof response === "object"
+                        && response !== null
+                        && "error" in response
+                        && typeof response.error === "string"
+                    ) {
+                        throw new Error(`connection broker failed to start: ${response.error}`);
+                    }
+                    throw new Error("connection broker returned an invalid startup response");
+                }
                 const parsed = new URL(endpoint);
                 if (parsed.protocol !== "unix:" && parsed.protocol !== "npipe:") {
                     throw new Error(`unexpected broker endpoint '${endpoint}'`);
@@ -203,10 +215,10 @@ function readReadyEndpoint(
             clearTimeout(timer);
             stdout.removeListener("data", onData);
             child.removeListener("error", onError);
-            child.removeListener("exit", onExit);
+            child.removeListener("close", onExit);
         };
         stdout.on("data", onData);
         child.once("error", onError);
-        child.once("exit", onExit);
+        child.once("close", onExit);
     });
 }

@@ -2129,8 +2129,17 @@ function parseInterfaceRef(raw: string): { id: string; hash: string | undefined;
 }
 
 export function runCli(executableName: 'linkrpc' | 'rpc' | 'hub'): void {
-    main(process.argv.slice(2), executableName).catch((e: unknown) => {
-        process.stderr.write(`linkrpc: ${formatCliError(e)}\n`);
+    main(process.argv.slice(2), executableName).catch(async (e: unknown) => {
+        const message = formatCliError(e);
+        process.stderr.write(`linkrpc: ${message}\n`);
+        if (process.argv[2] === '_connection-broker') {
+            await new Promise<void>((resolve, reject) => {
+                process.stdout.write(JSON.stringify({ error: message }) + '\n', error => {
+                    if (error) reject(error);
+                    else resolve();
+                });
+            });
+        }
         process.exit(1);
     });
 }

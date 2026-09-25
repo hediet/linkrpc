@@ -78,6 +78,72 @@ async function fixture() {
 }
 
 describe('connection lifecycle CLI', { timeout: 180_000 }, () => {
+    it('preserves remote connection startup errors instead of reporting only broker exit code', async () => {
+        const f = await fixture();
+        const missingSocket = formatEndpointUri({
+            kind: 'socket',
+            path: process.platform === 'win32'
+                ? `\\\\.\\pipe\\missing-linkrpc-${path.basename(f.root)}`
+                : path.join(f.root, 'missing.sock'),
+        });
+        const result = await f.run([
+            '--endpoint', missingSocket, 'connection', 'create', '--timeout', 'inf',
+            '--new-context', '.',
+        ]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('connection broker failed to start:');
+        expect(result.stderr).toMatch(/ENOENT|ECONNREFUSED/);
+        expect(await f.store.list()).toEqual([]);
+    });
+
+    it.each([false, true])('preserves bounded cmd-env startup diagnostics (large output: %s)', async large => {
+        const f = await fixture();
+        const endpoint = formatEndpointUri({
+            kind: 'cmd-env',
+            command: {
+                argv: [process.execPath, '-e', [
+                    large ? 'process.stdout.write("discarded-start:" + "x".repeat(20000));' : '',
+                    'process.stdout.write("\\nchild stdout diagnostic\\n");',
+                    'process.stderr.write("child stderr diagnostic\\n");',
+                    'process.exitCode = 23;',
+                ].join(' ')],
+            },
+        });
+        const result = await f.run(['--endpoint', endpoint, 'connection', 'create', '--ttl', 'inf']);
+        expect(result.code).not.toBe(0);
+        expect(result.stdout).toBe('');
+        expect(result.stderr).toContain('connection broker failed to start: overlay: cmd-env child exited (code 23)');
+        expect(result.stderr).toContain('child stdout diagnostic');
+        if (!large) expect(result.stderr).toContain('child stderr diagnostic');
+        expect(result.stderr).not.toContain('discarded-start:');
+        expect(result.stderr.length).toBeLessThan(17_000);
+    });
+
+    it('reports the cmd-env startup deadline and kills a child that never connects', async () => {
+        const f = await fixture();
+        const pidFile = path.join(f.root, 'startup-child.pid');
+        const endpoint = formatEndpointUri({
+            kind: 'cmd-env',
+            command: {
+                argv: [process.execPath, '-e', [
+                    'require("node:fs").writeFileSync(process.env.LINKRPC_TEST_PID_FILE, String(process.pid));',
+                    'process.stderr.write("still starting the application\\n");',
+                    'setInterval(() => {}, 1000);',
+                ].join(' ')],
+            },
+            env: { LINKRPC_TEST_PID_FILE: pidFile },
+        });
+        const result = await f.run([
+            '--endpoint', endpoint, 'connection', 'create', '--timeout', 'inf', '--new-context', '.',
+        ]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('overlay: timed out waiting for cmd-env child to connect');
+        expect(result.stderr).toContain('still starting the application');
+        expect(await f.store.list()).toEqual([]);
+        const pid = Number(await readFile(pidFile, 'utf8'));
+        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+    });
+
     it('requires an explicit limit even with stored limits and --new-context', async () => {
         const f = await fixture();
         await f.store.set({ kind: 'id', id: 'limits' }, {
