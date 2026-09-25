@@ -90,6 +90,13 @@ The returned `endpoint` is a dialable address with the actual bound port and no
 token (or `stdio:`). `onConnection` runs once for stdio/dial mode and once per
 authenticated listener peer. Install services promptly; an asynchronous callback
 is for setup, not a task that runs for the endpoint's lifetime.
+Incoming requests, notifications, and their input streams are queued until that
+peer's `onConnection` completes, including messages received immediately after
+authentication. Responses and output streams for setup-time outbound calls remain
+live. Authentication acknowledges the transport, not application registration;
+callers can issue requests immediately without racing handler installation.
+Setup callbacks must not mutually wait for requests served only after the other
+peer's setup completes. Failed setup closes the peer and discards queued messages.
 
 Startup errors (including a failed initial callback) reject `startEndpoint`.
 Listener peer handshake/setup failures close that peer and call `onError`, while

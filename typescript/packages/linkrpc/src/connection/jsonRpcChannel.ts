@@ -61,17 +61,22 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         return this.createWithClose(transport).channel;
     }
 
-    /** Wrap a transport and retain an explicit lifecycle hook for its owner. */
+    /**
+     * Wrap a transport with lifecycle hooks. deferRequests queues requests,
+     * notifications, and their input streams until resumeRequests is called.
+     * Responses and output streams remain live for setup-time outbound calls.
+     */
     public static createWithClose<TInCtx = undefined>(
         transport: ChannelTransport<TInCtx>,
-    ): { channel: Channel<TInCtx, unknown>; close: () => void; } {
-        const jrc = new JsonRpcChannel<TInCtx>(transport);
+        options: { readonly deferRequests?: boolean } = {},
+    ): { channel: Channel<TInCtx, unknown>; close: () => void; resumeRequests: () => void; } {
+        const jrc = new JsonRpcChannel<TInCtx>(transport, options.deferRequests === true);
         const channel = new Channel<TInCtx, unknown>(
             jrc,
             (h) => jrc.setRequestHandler(h),
             (observer) => jrc.setWireMessageObserver(observer),
         );
-        return { channel, close: () => jrc.close() };
+        return { channel, close: () => jrc.close(), resumeRequests: () => jrc.resumeRequests() };
     }
 
     private _nextId = 1;
@@ -104,6 +109,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     private _handler: IRequestHandler<TInCtx> | undefined;
     private _wireObserver: WireMessageObserver | undefined;
     private _closeError: Error | undefined;
+    private readonly _deferredMessages: MessageWithCtx<TInCtx>[] = [];
 
     public setRequestHandler(handler: IRequestHandler<TInCtx> | undefined): void {
         this._handler = handler;
@@ -115,8 +121,18 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         this._wireObserver = observer;
     }
 
-    private constructor(private readonly _transport: ChannelTransport<TInCtx>) {
+    private constructor(
+        private readonly _transport: ChannelTransport<TInCtx>,
+        private _requestsDeferred: boolean,
+    ) {
         this._transport.setListener((m) => this._onMessage(m));
+    }
+
+    public resumeRequests(): void {
+        while (this._deferredMessages.length > 0) {
+            this._dispatchMessage(this._deferredMessages.shift()!);
+        }
+        this._requestsDeferred = false;
     }
 
     public async sendRequest(
@@ -300,6 +316,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         if (this._closeError) return;
         const error = new RpcError('Connection closed', ErrorCode.peerDisconnected);
         this._closeError = error;
+        this._deferredMessages.length = 0;
         for (const abort of this._incomingAborts.values()) abort.abort(error);
         this._incomingAborts.clear();
         this._transport.dispose();
@@ -314,11 +331,24 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     }
 
     private _onMessage(m: MessageWithCtx<TInCtx>): void {
+        this._observeInbound(m);
+        if (
+            this._requestsDeferred
+            && !isResponse(m)
+            && !(isNotification(m) && m.method === STREAM_METHOD
+                && (m.params as StreamSendParams | undefined)?.dir === StreamDir.toCaller)
+        ) {
+            this._deferredMessages.push(m);
+            return;
+        }
+        this._dispatchMessage(m);
+    }
+
+    private _dispatchMessage(m: MessageWithCtx<TInCtx>): void {
         // `context` is present iff TInCtx ≠ undefined; the channel itself
         // doesn't care which case we're in and just forwards whatever the
         // transport delivered.
         const ctx = (m as { context?: TInCtx; }).context as TInCtx;
-        this._observeInbound(m);
         if (isResponse(m)) {
             if (m.id === null) return;
             const key = String(m.id);

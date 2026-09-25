@@ -58,9 +58,11 @@ export type StdioChannel = Channel<undefined, unknown> & {
     onClose(listener: () => void): IDisposable;
     /** Detach from stdin/stdout without closing these process-owned streams. */
     close(): void;
+    /** Release incoming requests after installing application handlers. */
+    resumeRequests(): void;
 };
 
-export async function openStdioChannel(): Promise<StdioChannel> {
+export async function openStdioChannel(options: { readonly deferRequests?: boolean } = {}): Promise<StdioChannel> {
     const closeListeners = new Set<() => void>();
     let closed = false;
     let closeChannel: (() => void) | undefined;
@@ -79,11 +81,12 @@ export async function openStdioChannel(): Promise<StdioChannel> {
     const { transport } = await connectNdjson({
         input: process.stdin, output: process.stdout, onClose: fireClose,
     });
-    const rpc = JsonRpcChannel.createWithClose(transport);
+    const rpc = JsonRpcChannel.createWithClose(transport, options);
     closeChannel = rpc.close;
     if (closed) rpc.close();
 
     return Object.assign(rpc.channel, {
+        resumeRequests: rpc.resumeRequests,
         close: fireClose,
         onClose: (listener: () => void) => {
             if (closed) {

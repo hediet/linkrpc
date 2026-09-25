@@ -17,7 +17,7 @@ export interface StartEndpointOptions {
     readonly endpoint?: string;
     /** Overrides the URI token, then LINKRPC_TOKEN. Required for listeners. */
     readonly token?: string;
-    /** Install services/signing on each authenticated, unsigned channel. */
+    /** Install services/signing. Inbound requests wait for completion; outbound calls remain live. */
     readonly onConnection: (connection: EndpointConnection) => void | Promise<void>;
     /** Listener peer/transport failures. Defaults to process.emitWarning. Must not throw. */
     readonly onError?: (error: Error) => void;
@@ -46,7 +46,7 @@ export async function startEndpoint(options: StartEndpointOptions): Promise<Star
     const configured = (options.endpoint ?? process.env[LINKRPC_ENDPOINT_VAR])?.trim();
     if (!configured) throw new Error(`${LINKRPC_ENDPOINT_VAR} is not set; specify an endpoint.`);
     if (configured === 'stdio' || configured === 'stdio:') {
-        return _startSingle('stdio:', await openStdioChannel(), options);
+        return _startSingle('stdio:', await openStdioChannel({ deferRequests: true }), options);
     }
     const listening = configured.startsWith('listen:');
     const target = parseEndpointUri(listening ? configured.slice('listen:'.length) : configured);
@@ -57,7 +57,7 @@ export async function startEndpoint(options: StartEndpointOptions): Promise<Star
     const endpoint = formatEndpointUri({ ...target, token: undefined });
     if (!listening) {
         const channel = await openHubChannel({
-            endpoint: target.kind === 'socket' ? target.path : target.url, token,
+            endpoint: target.kind === 'socket' ? target.path : target.url, token, deferRequests: true,
         });
         return _startSingle(endpoint, channel, options);
     }
@@ -67,7 +67,11 @@ export async function startEndpoint(options: StartEndpointOptions): Promise<Star
 
 async function _startSingle(
     endpoint: string,
-    source: Channel<undefined, unknown> & { close(): void; onClose(listener: () => void): IDisposable },
+    source: Channel<undefined, unknown> & {
+        close(): void;
+        resumeRequests(): void;
+        onClose(listener: () => void): IDisposable;
+    },
     options: StartEndpointOptions,
 ): Promise<StartedEndpoint> {
     let finish!: () => void;
@@ -77,6 +81,7 @@ async function _startSingle(
     const connection: EndpointConnection = { channel: source, closed, dispose: () => source.close() };
     try {
         await options.onConnection(connection);
+        source.resumeRequests();
         return { endpoint, closed, dispose: connection.dispose };
     } catch (error) {
         connection.dispose();
@@ -212,6 +217,7 @@ class EndpointListener implements StartedEndpoint {
                 if (this._disposed || peer.signal.aborted) return;
                 const connection = peer.connect();
                 await this._options.onConnection(connection);
+                peer.resumeRequests();
             } catch (error) {
                 const report = !this._disposed;
                 peer.dispose();
@@ -244,6 +250,7 @@ class ListenerPeer implements IDisposable {
     public readonly closed = new Promise<void>(resolve => { this._finish = resolve; });
     private _transport: IMessageTransport | undefined;
     private _closeChannel: (() => void) | undefined;
+    private _resumeRequests: (() => void) | undefined;
 
     constructor(private readonly _closeSocket: () => void) {}
 
@@ -253,9 +260,14 @@ class ListenerPeer implements IDisposable {
     }
 
     public connect(): EndpointConnection {
-        const rpc = JsonRpcChannel.createWithClose(this._transport!);
+        const rpc = JsonRpcChannel.createWithClose(this._transport!, { deferRequests: true });
         this._closeChannel = rpc.close;
+        this._resumeRequests = rpc.resumeRequests;
         return { channel: rpc.channel, closed: this.closed, dispose: () => this.dispose() };
+    }
+
+    public resumeRequests(): void {
+        this._resumeRequests?.();
     }
 
     public dispose(): void {

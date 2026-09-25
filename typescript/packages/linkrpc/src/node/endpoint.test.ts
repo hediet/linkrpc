@@ -46,6 +46,109 @@ function socketEndpoint(): string {
 }
 
 describe('startEndpoint', () => {
+    it.each(['websocket', 'socket'])('serves immediate reverse %s schema requests after registration', async kind => {
+        let resolveResult!: (value: unknown) => void;
+        let rejectResult!: (error: unknown) => void;
+        const result = new Promise<unknown>((resolve, reject) => {
+            resolveResult = resolve;
+            rejectResult = reject;
+        });
+        const server = await listen(kind === 'websocket' ? 'listen:ws://127.0.0.1:0' : `listen:${socketEndpoint()}`, peer => {
+            void peer.channel.sender.sendRequest('hubrpc.schemas::get', { interfaceId: 'endpoint.echo' })
+                .then(resolveResult, rejectResult);
+        });
+        await Promise.all([
+            expect(result).resolves.toMatchObject({ schema: { id: 'endpoint.echo' } }),
+            startEndpoint({
+                endpoint: server.endpoint, token: 'secret',
+                onConnection: async peer => {
+                    await new Promise(resolve => setTimeout(resolve, 30));
+                    const rpc = new LinkRpcConnection(peer.channel);
+                    rpc.register(echo, { ping: value => value.toUpperCase() });
+                    rpc.enableReflection();
+                },
+            }).then(endpoint => { endpoints.push(endpoint); }),
+        ]);
+    });
+
+    it.each(['websocket', 'socket'])('queues reverse %s calls until outbound setup completes', async kind => {
+        let resolveResult!: (value: string) => void;
+        let rejectResult!: (error: unknown) => void;
+        const result = new Promise<string>((resolve, reject) => {
+            resolveResult = resolve;
+            rejectResult = reject;
+        });
+        const server = await listen(kind === 'websocket' ? 'listen:ws://127.0.0.1:0' : `listen:${socketEndpoint()}`, peer => {
+            void new LinkRpcConnection(peer.channel).get(echo).ping('ready').then(resolveResult, rejectResult);
+        });
+        await Promise.all([expect(result).resolves.toBe('READY'), startEndpoint({
+            endpoint: server.endpoint,
+            token: 'secret',
+            onConnection: async peer => {
+                await new Promise(resolve => setTimeout(resolve, 50));
+                serve(peer);
+            },
+        }).then(endpoint => { endpoints.push(endpoint); })]);
+    });
+
+    it.each(['websocket', 'socket'])('queues %s calls while listener setup makes an outbound call', async kind => {
+        const server = await startEndpoint({
+            endpoint: kind === 'websocket' ? 'listen:ws://127.0.0.1:0' : `listen:${socketEndpoint()}`,
+            token: 'secret',
+            onConnection: async peer => {
+                await new Promise(resolve => setTimeout(resolve, 50));
+                expect(await new LinkRpcConnection(peer.channel).get(echo).ping('bootstrap')).toBe('BOOTSTRAP');
+                serve(peer);
+            },
+        });
+        endpoints.push(server);
+        let client!: LinkRpcConnection;
+        endpoints.push(await startEndpoint({
+            endpoint: server.endpoint, token: 'secret',
+            onConnection: peer => {
+                client = new LinkRpcConnection(peer.channel);
+                client.register(echo, { ping: value => value.toUpperCase() });
+            },
+        }));
+        expect(await client.get(echo).ping('ready')).toBe('READY');
+    });
+
+    it('queues stdio messages already buffered before application setup', async () => {
+        const input = new PassThrough();
+        const output = new PassThrough();
+        streams.push(input, output);
+        vi.spyOn(process, 'stdin', 'get').mockReturnValue(input as unknown as typeof process.stdin);
+        vi.spyOn(process, 'stdout', 'get').mockReturnValue(output as unknown as typeof process.stdout);
+        const response = new Promise<string>(resolve => output.once('data', data => resolve(data.toString())));
+        input.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'endpoint.echo::ping', params: 'ready' }) + '\n');
+        endpoints.push(await startEndpoint({
+            endpoint: 'stdio:',
+            onConnection: async peer => {
+                await new Promise(resolve => setTimeout(resolve, 20));
+                serve(peer);
+            },
+        }));
+        expect(JSON.parse(await response)).toEqual({ jsonrpc: '2.0', id: 1, result: 'READY' });
+    });
+
+    it('closes queued requests when asynchronous listener setup fails', async () => {
+        const onError = vi.fn();
+        const server = await startEndpoint({
+            endpoint: 'listen:ws://127.0.0.1:0', token: 'secret', onError,
+            onConnection: async () => {
+                await new Promise(resolve => setTimeout(resolve, 30));
+                throw new Error('asynchronous setup failed');
+            },
+        });
+        endpoints.push(server);
+        let client!: EndpointConnection;
+        endpoints.push(await startEndpoint({
+            endpoint: server.endpoint, token: 'secret', onConnection: peer => { client = peer; },
+        }));
+        await expect(new LinkRpcConnection(client.channel).get(echo).ping('queued')).rejects.toThrow(/closed/i);
+        expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: 'asynchronous setup failed' }));
+    });
+
     it.each(['websocket', 'socket'])('round-trips and closes %s connections', async kind => {
         let accepted!: EndpointConnection;
         const server = await listen(kind === 'websocket' ? 'listen:ws://127.0.0.1:0/rpc' : `listen:${socketEndpoint()}`, peer => {
