@@ -3,7 +3,7 @@ import { stripVTControlCharacters } from "node:util";
 import { describe, expect, it, vi } from "vitest";
 import { render } from "ink";
 import {
-    bareInterfaceTarget, LinkRpcConnection, TransportPair, type JsonRpcChannel, type JsonValue,
+    bareInterfaceTarget, computeInterfaceHash, LinkRpcConnection, TransportPair, type JsonRpcChannel, type JsonValue,
 } from "@hediet/linkrpc";
 import { topologyInterface, type TopologyGraph } from "@hediet/linkrpc/inspection";
 import { connectViaTransport } from "@hediet/linkrpc-client";
@@ -112,6 +112,44 @@ describe("contributed topology view", () => {
                 schema: { ...topologyInterface.toSchema(), methods: {} } }] };
             await expect(topologyView.open(bad, {})).rejects.toThrow("canonical inspection contract");
             expect(f.methods).toEqual([]);
+        } finally { f.close(); }
+    });
+
+    it("accepts the equivalent primitive-union encoding from another Zod version but rejects contract drift", () => {
+        const f = fixture();
+        try {
+            let converted = 0;
+            const toTypeArray = (value: unknown): unknown => {
+                if (Array.isArray(value)) return value.map(toTypeArray);
+                if (value === null || typeof value !== "object") return value;
+                const record = value as Record<string, unknown>;
+                if (Object.keys(record).length === 1
+                    && JSON.stringify(record.anyOf) === JSON.stringify([
+                        { type: "string" }, { type: "number" }, { type: "boolean" },
+                    ])) {
+                    converted++;
+                    return { type: ["string", "number", "boolean"] };
+                }
+                return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, toTypeArray(child)]));
+            };
+            const schema = toTypeArray(topologyInterface.toSchema()) as ReturnType<typeof topologyInterface.toSchema>;
+            expect(converted).toBe(2);
+            schema.hash = computeInterfaceHash(schema);
+            expect(schema.hash).not.toBe(topologyInterface.schemaHash);
+            const listing = f.context.interfaces[0]!;
+            const context = { ...f.context, interfaces: [{ ...listing, hash: schema.hash, schema }] };
+            expect(resolveTopologyTarget(context)).toEqual({
+                serviceId: listing.serviceId, hash: schema.hash, isDefault: false,
+            });
+
+            const incompatible = structuredClone(schema);
+            incompatible.methods.getGraph.params = { type: "string" };
+            incompatible.hash = computeInterfaceHash(incompatible);
+            expect(() => resolveTopologyTarget({ ...context, interfaces: [{ ...listing, schema: incompatible }] }))
+                .toThrow("canonical inspection contract");
+            expect(() => resolveTopologyTarget({ ...context, interfaces: [{
+                ...listing, schema: { ...schema, hash: "stale" },
+            }] })).toThrow("canonical inspection contract");
         } finally { f.close(); }
     });
 

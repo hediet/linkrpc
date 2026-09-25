@@ -1,5 +1,5 @@
 import { parse } from "zod/mini";
-import { computeInterfaceHash, LinkRpcConnection, type IRequestSender, type JsonValue, type RawStreamingCall, type StreamSendOpts } from "@hediet/linkrpc";
+import { computeInterfaceHash, LinkRpcConnection, type IRequestSender, type JsonValue, type LinkRpcInterfaceSchema, type RawStreamingCall, type StreamSendOpts } from "@hediet/linkrpc";
 import { topologyInterface, zTopologyGraph, type TopologyGraph } from "@hediet/linkrpc/inspection";
 import { TopologyClient, type TopologyWatch } from "@hediet/linkrpc-infra/inspection";
 import type { ViewOpenContext } from "../../views/types";
@@ -16,11 +16,28 @@ export function resolveTopologyTarget(context: ViewOpenContext): TopologyTarget 
     const listing = candidates[0]!;
     const canonical = topologyInterface.toSchema();
     if (listing.schema.id !== canonical.id
-        || computeInterfaceHash({ ...canonical, methods: listing.schema.methods,
-            components: listing.schema.components }) !== canonical.hash) {
+        || computeInterfaceHash(listing.schema) !== listing.schema.hash
+        || computeInterfaceHash(normalizePrimitiveTypeUnions({
+            ...canonical, methods: listing.schema.methods, components: listing.schema.components,
+        })) !== computeInterfaceHash(normalizePrimitiveTypeUnions(canonical))) {
         throw new Error("Selected hubrpc.topology schema does not match the canonical inspection contract");
     }
     return { serviceId: listing.serviceId, hash: listing.schema.hash, isDefault: listing.isDefault === true };
+}
+
+function normalizePrimitiveTypeUnions(schema: LinkRpcInterfaceSchema): LinkRpcInterfaceSchema {
+    const visit = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(visit);
+        if (value === null || typeof value !== "object") return value;
+        const record = value as Record<string, unknown>;
+        const types = record.type;
+        if (Object.keys(record).length === 1 && Array.isArray(types) && types.length > 0
+            && types.every(type => ["string", "number", "integer", "boolean", "null"].includes(type))) {
+            return { anyOf: types.map(type => ({ type })) };
+        }
+        return Object.fromEntries(Object.entries(record).map(([key, child]) => [key, visit(child)]));
+    };
+    return visit(schema) as LinkRpcInterfaceSchema;
 }
 
 export function topologyTimeout(options: Readonly<Record<string, unknown>>): number {
