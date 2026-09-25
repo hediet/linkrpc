@@ -119,9 +119,20 @@ The `@hediet/linkrpc-infra/json-rpc` entry point provides:
 - a message-oriented `JsonRpcTransport` abstraction
 - an NDJSON stdio transport
 - a generic adapter from parsed JSON-RPC frames to a LinkRPC message transport
+- `jsonRpcConnectionFactoryInterface` (also exported as
+  `jsonRpcManagedConnectionInterface`) and `registerJsonRpcConnectionFactory`
+  for persistent/ephemeral connections, idle/TTL expiry, reverse requests,
+  event polling, and optional initialization
+- `createJsonRpcBridgeInterface` to expose typed LinkRPC application methods
+  over JSON-RPC (including optional acknowledged notifications)
 
-The bridge treats JSON-RPC frames as opaque JSON values. Applications remain
-responsible for JSON-RPC method semantics, initialization, and authorization.
+The original `jsonRpcConnectionInterface` retains its raw-only wire contract;
+the managed interface has a separate ID so existing clients remain compatible.
+The factory also registers the raw interface on the same service. Pass
+`{ source, bridge }` in `profile.interfaces` to use an acknowledged-notification
+bridge, or pass the source interface directly for ordinary methods. A method
+without `jsonRpcConnectionId` opens an ephemeral connection. Applications remain
+responsible for JSON-RPC method semantics and authorization.
 
 ### CDP/LSP proof of concept (test-only)
 

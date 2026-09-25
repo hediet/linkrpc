@@ -1,9 +1,43 @@
 import type { InterfaceClient, JsonValue } from '@hediet/linkrpc';
 import { jsonRpcConnectionInterface } from './interface';
+import {
+    jsonRpcManagedConnectionInterface,
+    type JsonRpcConnectionDescriptor,
+    type JsonRpcConnectionOptions,
+} from './interface';
 import type { Disposable, JsonRpcTransport } from './transport';
 
 type JsonRpcConnectionClient = InterfaceClient<typeof jsonRpcConnectionInterface>;
 const MAX_RAW_FRAME_BACKLOG = 1_024;
+
+export interface ManagedJsonRpcConnectionCall {
+    readonly opened: Promise<JsonRpcConnectionDescriptor>;
+    readonly closed: Promise<unknown>;
+    cancel(reason?: string): Promise<void>;
+}
+
+export function connectManagedJsonRpc(
+    connection: InterfaceClient<typeof jsonRpcManagedConnectionInterface>,
+    options: JsonRpcConnectionOptions,
+): ManagedJsonRpcConnectionCall {
+    let resolveOpened!: (descriptor: JsonRpcConnectionDescriptor) => void;
+    let rejectOpened!: (error: unknown) => void;
+    const opened = new Promise<JsonRpcConnectionDescriptor>((resolve, reject) => {
+        resolveOpened = resolve;
+        rejectOpened = reject;
+    });
+    const call = connection.connect(options, {
+        onMessage: (event) => {
+            if (event.type === 'opened') resolveOpened(event.connection);
+        },
+    });
+    void call.then(() => rejectOpened(new Error('Managed JSON-RPC connection closed before opening')), rejectOpened);
+    return {
+        opened,
+        closed: call,
+        cancel: (reason) => call.cancel(reason),
+    };
+}
 
 export async function connectRawJsonRpcTransport(
     client: JsonRpcConnectionClient,
