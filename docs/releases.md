@@ -5,21 +5,27 @@ publisher**; CI has no npm or Cargo registry credentials.
 
 ## Safe rollout
 
-Before pushing the release workflow, enable ArtifactGate's Cargo dependency gate
-and use repository-scoped ingestion pipelines. Set npm's `npmTagSource` to
-`package-json` and Cargo's `waitForDependencies` to `true`; npm needs no dependency
-gate. Accept only successful, trusted `main` runs.
+Use one active ArtifactGate ingestion pipeline per source kind (`workflow` and
+`release`) for all `hediet` repositories. Repository, workflow, branch, package,
+and ecosystem restrictions belong in publication rules, not duplicate
+repository-specific ingestion pipelines. Preserve ingestion history by disabling
+redundant pipelines when they cannot be deleted because artifacts reference them.
 
-During rollout, let those pipelines discover `.github/workflows/*.yml` and use
-the publication-rule regexp `^\.github/workflows/(package-artifacts|release)\.yml$`.
+Before pushing the release workflow, enable ArtifactGate's Cargo dependency gate.
+Set npm's `npmTagSource` to `package-json` and Cargo's `waitForDependencies` to
+`true`; npm needs no dependency gate. Publication rules must accept only
+successful, trusted `main` runs.
+
+During rollout, keep owner-wide ingestion broad and use the LinkRPC
+publication-rule regexp `^\.github/workflows/(package-artifacts|release)\.yml$`.
 This keeps the current publisher working until the new workflow is active.
-After verifying a successful release, narrow both pipelines and publication
-rules to `.github/workflows/release.yml`. Do not switch away from the current
-workflow before its replacement is available.
+After verifying a successful release, narrow the LinkRPC publication rules to
+`.github/workflows/release.yml`, without narrowing shared ingestion. Do not switch
+away from the current workflow before its replacement is available.
 
-The existing owner-wide npm pipeline can remain unchanged: the candidate
-workflow emits only the nonmatching `candidate-packages` artifact. Do not
-manually publish candidates or backfill historical artifacts during rollout.
+The candidate workflow emits only `candidate-packages`; publication rules must
+exclude that artifact even if shared ingestion discovers it. Do not manually
+publish candidates or backfill historical artifacts during rollout.
 
 ### Bootstrap already-published stable versions
 
@@ -111,8 +117,9 @@ npm package keys: `linkrpc`, `linkrpc-infra`, `linkrpc-hub`, `linkrpc-cli`,
 Workspace output paths are
 `artifacts/release/npm-{next,stable}-{package}/*.tgz` and
 `artifacts/release/cargo-crate-{next,stable}-{crate}/*.crate`.
-Use ingestion patterns **`npm-*`** and **`cargo-crate-*`** only for the final
-release workflow. Each artifact contains exactly one publishable archive.
+Use publication rules selecting **`npm-*`** and **`cargo-crate-*`** only from this
+repository's final release workflow; shared owner-wide ingestion stays broad.
+Each artifact contains exactly one publishable archive.
 Repeated workflow attempts overwrite same-run upload artifacts; reserved
 versions and source identity do not change.
 
