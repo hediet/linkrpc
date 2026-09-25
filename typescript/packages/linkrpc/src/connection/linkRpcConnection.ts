@@ -35,8 +35,7 @@ import {
     type RpcErrorBody,
     isApplicationErrorValue,
     type MemberType,
-    NotificationType,
-    RequestType,
+    type RequestType,
     type Schema,
 } from '../schema/memberTypes';
 import { safeParse } from 'zod/v4/core';
@@ -215,9 +214,9 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         allFailuresAsValues: boolean,
     ): Record<string, unknown> {
         validateBarePrefix(prefix);
-        for (const [name, member] of Object.entries(iface.members)) {
+        for (const [name, member] of Object.entries(iface.members) as [string, MemberType][]) {
             if (
-                member instanceof RequestType
+                member.kind === 'request'
                 && (member.clientStreamSchema !== undefined || member.serverStreamSchema !== undefined)
             ) {
                 throw new Error(`getBare: streaming method "${name}" is not supported on foreign wires.`);
@@ -879,7 +878,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             };
         }
 
-        if (!(member instanceof RequestType)) {
+        if (member.kind !== 'request') {
             // Caller used request semantics on a notification-only method.
             return notFound('unknown-method', call.method);
         }
@@ -951,7 +950,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         if (!parsed.ok) return;
         const { entry, memberName } = parsed;
         const member = entry.iface.members[memberName];
-        if (!(member instanceof NotificationType)) return;
+        if (member?.kind !== 'notification') return;
         const handler = entry.handlers[memberName] as
             | ((params: unknown, ctx: TInCtx) => unknown)
             | undefined;

@@ -2,7 +2,7 @@ import type { MemberType } from './memberTypes';
 import type { InterfaceTemplateArgument, InterfaceTemplateSchema } from './interfaceTemplates';
 
 /** Local authoring marker. Never serialized into the wire contract. */
-export const interfaceTemplateGroup = Symbol('interfaceTemplateGroup');
+export const interfaceTemplateGroup = Symbol.for('@hediet/linkrpc.interfaceTemplateGroup');
 
 export interface InterfaceTemplateGroup<
     M extends Record<string, MemberType> = Record<string, MemberType>,
