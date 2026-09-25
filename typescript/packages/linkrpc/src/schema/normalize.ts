@@ -29,6 +29,7 @@ const KEPT_KEYS = new Set([
  *  - `{"not":{}}` ⇒ `false` (bottom); any other `not` is stripped
  *  - `type:"object"` without `additionalProperties` ⇒ closed (`false`),
  *    matching linkrpc's stricter contract
+ *  - producer `type` arrays ⇒ `anyOf` branches, preserving their order
  *
  * The output is canonical: structurally equal inputs produce structurally
  * equal outputs, which is what `computeInterfaceHash` relies on.
@@ -46,6 +47,32 @@ export function normalizeJsonSchema(raw: unknown): LinkRpcJsonSchema {
 
     // {"not": {}} => false (bottom). Handle before generic descent.
     if ("not" in r && isEmptyObject(r["not"])) return false;
+
+    if (Array.isArray(r["type"])) {
+        const types = r["type"];
+        if (types.length === 0 || new Set(types).size !== types.length
+            || types.some(type => !["null", "boolean", "number", "integer", "string", "array", "object"].includes(type))) {
+            throw new Error("normalizeJsonSchema: type array must contain distinct JSON Schema type names");
+        }
+        const { title, description, ...branch } = r;
+        return normalizeJsonSchema({
+            title, description,
+            anyOf: types.map(type => {
+                const schema: Record<string, unknown> = { ...branch, type };
+                if (type !== "object") {
+                    delete schema.properties;
+                    delete schema.required;
+                    delete schema.additionalProperties;
+                }
+                if (type !== "array") {
+                    delete schema.items;
+                    delete schema.prefixItems;
+                }
+                if (type !== "string" && type !== "number" && type !== "integer") delete schema.format;
+                return schema;
+            }),
+        });
+    }
 
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(r)) {

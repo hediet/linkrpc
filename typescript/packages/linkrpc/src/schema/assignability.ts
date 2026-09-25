@@ -255,11 +255,6 @@ function _matches(
         return r === undefined ? mismatch(`Unresolved reference ${sup.$ref}`)
             : _matches(v, r, c, new Set(seen).add(sup.$ref), issues, path);
     }
-    const rawType: unknown = (sup as { type?: unknown }).type;
-    if (Array.isArray(rawType)) {
-        return _matches(v, { anyOf: rawType.map((type) => ({ ...sup, type }) as LinkRpcJsonSchema) },
-            c, seen, issues, path);
-    }
     if (_isUnion(sup)) {
         const failures: JsonSchemaValidationIssue[] | undefined = issues === undefined ? undefined : [];
         if (_branches(sup).some((branch) => _matches(v, branch, c, seen, failures, path))) return true;

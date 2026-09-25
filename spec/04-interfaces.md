@@ -249,6 +249,10 @@ JsonSchema =
 
 Every node MAY additionally carry the annotation keys `title` and `description`.
 
+Array-valued `type` is not part of the wire subset. Producers accepting richer
+JSON Schema (for example from Zod or schemars) MUST lower it to `anyOf` before
+publishing a schema. Consumers use `anyOf`/`oneOf`, not type arrays.
+
 **Reserved keys.** Object keys beginning with `x-` are reserved as specification extensions (§4.1) at every level of the interface schema, including inside a `JsonSchema` node. A property name in a `properties` map therefore MUST NOT begin with `x-`.
 
 **Excluded keywords.** The following JSON Schema keywords are **not** part of the subset and MUST NOT appear in a `JsonSchema`: `not` (except the special form below), `if`/`then`/`else`, `allOf`, `pattern`, `patternProperties`, `propertyNames`, `dependentSchemas`, numeric bounds (`minimum`, `maximum`, `multipleOf`, …), and length/size bounds. A producer that lowers a richer schema into this subset MUST drop these.
@@ -269,6 +273,7 @@ Before an interface schema is hashed (§4), every `JsonSchema` in it MUST be in 
 4. A `{ type: "object" }` with no `additionalProperties` becomes closed — `additionalProperties: false`.
 5. `required` is sorted ascending.
 6. For a `oneOf` with no explicit `discriminator`, a `discriminator` MAY be synthesized when every branch is an object schema sharing exactly one property that is `const`-valued and pairwise-distinct across branches; a `discriminator` with no `oneOf` to attach to is dropped.
+7. When lowering a producer's array-valued `type`, expand it into `anyOf` in the original order. Each branch replaces the array with one scalar type and is normalized recursively with the remaining constraints. Keep `title` and `description` on the outer union. Retain `properties`/`required`/`additionalProperties` only on object branches, `items`/`prefixItems` only on array branches, and `format` only on string/number/integer branches. The input array MUST be nonempty and contain distinct valid JSON Schema type names. For example, `{ "type": ["string", "null"] }` becomes `{ "anyOf": [{ "type": "string" }, { "type": "null" }] }`.
 
 > **Rationale.** The subset trades JSON Schema's full expressivity for interoperable structural checks and a stable, language-independent canonical form — both prerequisites for the interface hash (§4) and for schema-compatibility checks across versions.
 

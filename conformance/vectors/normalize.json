@@ -1,5 +1,134 @@
 [
   {
+    "name": "primitive-type-array",
+    "raw": {
+      "type": [
+        "string",
+        "number",
+        "boolean"
+      ]
+    },
+    "normalized": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        }
+      ]
+    }
+  },
+  {
+    "name": "nullable-formatted-type-array",
+    "raw": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "email",
+      "title": "Contact",
+      "description": "Nullable email"
+    },
+    "normalized": {
+      "title": "Contact",
+      "description": "Nullable email",
+      "anyOf": [
+        {
+          "type": "string",
+          "format": "email"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  {
+    "name": "nullable-container-type-array",
+    "raw": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "value": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "number"
+            ]
+          }
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "normalized": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "value": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "value"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  {
+    "name": "literal-type-array-untouched",
+    "raw": {
+      "const": {
+        "type": [
+          "string",
+          "number"
+        ]
+      }
+    },
+    "normalized": {
+      "const": {
+        "type": [
+          "string",
+          "number"
+        ]
+      }
+    }
+  },
+  {
     "name": "drops-incidental-keys",
     "raw": {
       "type": "string",

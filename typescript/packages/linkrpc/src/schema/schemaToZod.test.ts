@@ -6,6 +6,7 @@ import { z } from "zod";
 import { defineInterface } from "../connection/interfaceDefinition";
 import { requestType, type Schema } from "./memberTypes";
 import { defineInterfaceTemplate } from "./defineInterfaceTemplate";
+import { normalizeJsonSchema } from "./normalize";
 
 describe("schemaToZod", () => {
     it("validates reflected recursive JSON template arguments with property-less record schemas", () => {
@@ -20,9 +21,9 @@ describe("schemaToZod", () => {
         expect(validator.safeParse({ invalid: undefined }).success).toBe(false);
     });
 
-    it("supports nullable primitive type arrays and annotation-only schemas", () => {
+    it("supports normalized nullable unions and annotation-only schemas", () => {
         const nullableString = schemaToZod(
-            { type: ["string", "null"] } as unknown as LinkRpcJsonSchema,
+            normalizeJsonSchema({ type: ["string", "null"] }),
         );
         expect(nullableString.safeParse("value").success).toBe(true);
         expect(nullableString.safeParse(null).success).toBe(true);
@@ -32,6 +33,14 @@ describe("schemaToZod", () => {
             { title: "Arbitrary JSON", description: "Any JSON value." } as LinkRpcJsonSchema,
         );
         expect(arbitraryJson.safeParse({ open: ["shape"] }).success).toBe(true);
+    });
+
+    it("rejects unnormalized type arrays", () => {
+        const raw = JSON.parse('{"type":["string","null"]}') as LinkRpcJsonSchema;
+        expect(() => schemaToZod(raw)).toThrow("unsupported schema type");
+        expect(() => createSchemaToZod({ Value: raw }).toZod({
+            type: "array", items: { $ref: "#/components/schemas/Value" },
+        }).parse([null])).toThrow("unsupported schema type");
     });
 
     it("validates recursive structural components", () => {

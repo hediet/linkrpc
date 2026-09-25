@@ -33,11 +33,6 @@ export function createSchemaToZod(
         if (schema === true) return z.unknown();
         if (schema === false) return z.never();
         const raw = schema as unknown as Record<string, unknown>;
-        if (Array.isArray(raw.type)) {
-            return union(raw.type.map((type) =>
-                compile({ ...raw, type } as unknown as LinkRpcJsonSchema)
-            ));
-        }
         let base: z.ZodType<unknown>;
         if ("$ref" in schema) {
             base = component(componentSchemaName(schema.$ref));
@@ -107,6 +102,8 @@ export function createSchemaToZod(
                     });
                     break;
                 }
+                default:
+                    throw new Error("schemaToZod: unsupported schema type; normalize producer schemas before use");
             }
         }
         return base;

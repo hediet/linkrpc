@@ -10,6 +10,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { normalizeJsonSchema } from "../../typescript/packages/linkrpc/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "..", "vectors");
@@ -115,107 +116,8 @@ write(
 // ── interface hash (inlined from linkrpc/src/schema/hash.ts) ────────────────────
 import { createHash } from "node:crypto";
 
-// Schema normalization (inlined from linkrpc/src/schema/normalize.ts). Used by
-// both the interface-hash projection below and the `normalize.json` fixtures.
-const KEPT_KEYS = new Set([
-  "type", "format", "properties", "required", "additionalProperties", "items",
-  "prefixItems", "const", "enum", "anyOf", "oneOf", "discriminator", "$ref",
-  "title", "description",
-]);
-
 function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
-}
-function isEmptyObject(v) {
-  return isPlainObject(v) && Object.keys(v).length === 0;
-}
-function constPropNames(props) {
-  const out = [];
-  for (const [k, v] of Object.entries(props)) {
-    if (v === true || v === false) continue;
-    if (isPlainObject(v) && "const" in v) out.push(k);
-  }
-  return out;
-}
-function detectDiscriminator(branches) {
-  if (branches.length < 2) return undefined;
-  const branchPropsList = [];
-  for (const b of branches) {
-    if (b === true || b === false) return undefined;
-    if (b.type !== "object") return undefined;
-    if (!b.properties) return undefined;
-    branchPropsList.push(b.properties);
-  }
-  let candidates = constPropNames(branchPropsList[0]);
-  for (let i = 1; i < branchPropsList.length; i++) {
-    candidates = candidates.filter((n) => constPropNames(branchPropsList[i]).includes(n));
-    if (candidates.length === 0) return undefined;
-  }
-  for (const name of candidates) {
-    const seen = new Set();
-    let allDistinct = true;
-    for (const props of branchPropsList) {
-      const key = JSON.stringify(props[name].const);
-      if (seen.has(key)) { allDistinct = false; break; }
-      seen.add(key);
-    }
-    if (allDistinct) return { propertyName: name };
-  }
-  return undefined;
-}
-function normalizeChild(key, v) {
-  switch (key) {
-    case "properties": {
-      if (!isPlainObject(v)) return {};
-      const out = {};
-      for (const [pk, pv] of Object.entries(v)) out[pk] = normalizeJsonSchema(pv);
-      return out;
-    }
-    case "items":
-    case "additionalProperties":
-      if (v === false) return false;
-      return normalizeJsonSchema(v);
-    case "prefixItems":
-    case "anyOf":
-    case "oneOf":
-      if (!Array.isArray(v)) return [];
-      return v.map((s) => normalizeJsonSchema(s));
-    case "discriminator": {
-      if (!isPlainObject(v)) return undefined;
-      const name = v.propertyName;
-      if (typeof name !== "string" || name.length === 0) return undefined;
-      return { propertyName: name };
-    }
-    case "enum":
-      if (!Array.isArray(v)) return [];
-      return v.slice();
-    case "required":
-      if (!Array.isArray(v)) return [];
-      return v.slice().sort();
-    default:
-      return v;
-  }
-}
-function normalizeJsonSchema(raw) {
-  if (raw === true || raw === false) return raw;
-  if (raw === null || typeof raw !== "object") throw new Error("expected object");
-  if (Array.isArray(raw)) throw new Error("expected object, got array");
-  if ("not" in raw && isEmptyObject(raw.not)) return false;
-  const out = {};
-  for (const [k, v] of Object.entries(raw)) {
-    if (!KEPT_KEYS.has(k)) continue;
-    const normalized = normalizeChild(k, v);
-    if (normalized === undefined) continue;
-    out[k] = normalized;
-  }
-  if (out.type === "object" && !("additionalProperties" in out)) out.additionalProperties = false;
-  if (Array.isArray(out.oneOf) && !("discriminator" in out)) {
-    const d = detectDiscriminator(out.oneOf);
-    if (d !== undefined) out.discriminator = d;
-  }
-  if ("discriminator" in out && !Array.isArray(out.oneOf)) delete out.discriminator;
-  if (Object.keys(out).length === 0) return true;
-  return out;
 }
 
 // The interface-hash projection normalizes every JSON-Schema position (each
@@ -517,12 +419,28 @@ const hashFixtures = [
     },
   },
 ];
+for (const [name, result] of [
+  ["type-array-producer", { type: ["string", "number", "boolean"] }],
+  ["type-array-normalized", { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] }],
+]) {
+  hashFixtures.push({ name, schema: {
+    id: "test.primitive-union", methods: { read: { params: true, result } },
+  } });
+}
 write(
   "interface_hash.json",
   hashFixtures.map(({ name, schema }) => ({ name, schema, hash: computeInterfaceHash(schema) }))
 );
 
 const normalizeFixtures = [
+  { name: "primitive-type-array", raw: { type: ["string", "number", "boolean"] } },
+  { name: "nullable-formatted-type-array", raw: { type: ["string", "null"], format: "email", title: "Contact", description: "Nullable email" } },
+  { name: "nullable-container-type-array", raw: {
+    type: ["object", "null"],
+    properties: { value: { type: ["array", "null"], items: { type: ["string", "number"] } } },
+    required: ["value"],
+  } },
+  { name: "literal-type-array-untouched", raw: { const: { type: ["string", "number"] } } },
   { name: "drops-incidental-keys", raw: { type: "string", minLength: 1, default: "x", title: "Name" } },
   { name: "object-defaults-closed", raw: { type: "object", properties: { a: { type: "number" } }, required: ["a"] } },
   { name: "empty-becomes-true", raw: {} },

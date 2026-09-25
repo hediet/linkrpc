@@ -385,7 +385,7 @@ client.read({}).then((value) => {
         _expectTypeChecks(source);
     }, TYPECHECK_TIMEOUT_MS);
 
-    it("renders nullable primitive type arrays recursively and annotation-only schemas", async () => {
+    it("renders nullable anyOf unions recursively and annotation-only schemas", async () => {
         const schema = {
             id: "test.schemars",
             hash: "",
@@ -400,7 +400,7 @@ client.read({}).then((value) => {
                     Node: {
                         type: "object",
                         properties: {
-                            value: { type: ["string", "null"] },
+                            value: { anyOf: [{ type: "string" }, { type: "null" }] },
                             next: { $ref: "#/components/schemas/Node" },
                         },
                         required: ["value"],
@@ -427,6 +427,11 @@ client.read({}).then((value) => {
         }).success).toBe(true);
         _expectTypeChecks(source);
     }, TYPECHECK_TIMEOUT_MS);
+
+    it.each([false, true])("rejects unnormalized type arrays (preserveWireSchema=%s)", preserveWireSchema => {
+        const schema = JSON.parse('{"id":"test.invalid","hash":"","methods":{"read":{"params":{"type":["string","null"]}}}}') as LinkRpcInterfaceSchema;
+        expect(() => generateTsInterface(schema, { preserveWireSchema })).toThrow("unsupported schema");
+    });
 
     it("round-trips defaultsInterface", async () => {
         await _roundTrip(defaultsInterface);

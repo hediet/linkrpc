@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { isAssignable, matchesJsonSchema, validateJsonSchema } from "./assignability";
 import type { LinkRpcJsonSchema } from "./linkRpcJsonSchema";
+import { normalizeJsonSchema } from "./normalize";
 
 describe("JSON schema diagnostics", () => {
     it("reports nested union issues as JSON Pointers without leaking failed alternatives on success", () => {
@@ -17,13 +18,35 @@ describe("JSON schema diagnostics", () => {
         expect(matchesJsonSchema(null, schema)).toBe(true);
     });
 
-    it("supports escaped references, type arrays, and annotation-only schemas", () => {
+    it("supports escaped references, normalized nullable unions, and annotation-only schemas", () => {
         expect(validateJsonSchema(3, { $ref: "#/components/schemas/a~1b~0c" },
             { schemas: { "a/b~c": { type: "number" } } })).toEqual([]);
-        const nullable = { type: ["string", "null"] } as unknown as LinkRpcJsonSchema;
+        const nullable = normalizeJsonSchema({ type: ["string", "null"] });
         expect(validateJsonSchema(null, nullable)).toEqual([]);
         expect(matchesJsonSchema(null, nullable)).toBe(true);
         expect(validateJsonSchema(3, { description: "any JSON" } as LinkRpcJsonSchema)).toEqual([]);
+    });
+
+    it("does not accept unnormalized type arrays", () => {
+        const raw = JSON.parse('{"type":["string","null"]}') as LinkRpcJsonSchema;
+        expect(validateJsonSchema(null, raw)).toMatchInlineSnapshot(`
+          [
+            {
+              "message": "Unsupported schema shape",
+              "path": "",
+            },
+          ]
+        `);
+        expect(matchesJsonSchema("value", raw)).toBe(false);
+        expect(isAssignable(raw, { type: "string" })).toBe(false);
+        expect(isAssignable({ type: "string" }, raw)).toBe(false);
+    });
+
+    it("recognizes normalized type arrays and anyOf unions as mutually assignable", () => {
+        const normalized = normalizeJsonSchema({ type: ["string", "number", "boolean"] });
+        const union: LinkRpcJsonSchema = { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] };
+        expect(isAssignable(normalized, union)).toBe(true);
+        expect(isAssignable(union, normalized)).toBe(true);
     });
 
     it("requires tuple prefix items and explicitly required unknown object properties", () => {

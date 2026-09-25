@@ -417,5 +417,49 @@
       }
     },
     "hash": "189384909507c866"
+  },
+  {
+    "name": "type-array-producer",
+    "schema": {
+      "id": "test.primitive-union",
+      "methods": {
+        "read": {
+          "params": true,
+          "result": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "hash": "465f4c9e13caf869"
+  },
+  {
+    "name": "type-array-normalized",
+    "schema": {
+      "id": "test.primitive-union",
+      "methods": {
+        "read": {
+          "params": true,
+          "result": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "hash": "465f4c9e13caf869"
   }
 ]

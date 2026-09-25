@@ -4,8 +4,42 @@ import { defineInterface } from "../connection/interfaceDefinition";
 import { notificationType, requestType } from "./memberTypes";
 import { computeInterfaceHash, EXTENSION_PREFIX } from "./hash";
 import type { LinkRpcInterfaceSchema } from "./linkRpcInterfaceSchema";
+import { topologyInterface } from "../inspection/inspection.interfaces";
 
 describe("computeInterfaceHash", () => {
+    it("preserves topology identity across Zod primitive union encodings", () => {
+        const canonical = topologyInterface.toSchema();
+        let converted = 0;
+        const raw: LinkRpcInterfaceSchema = JSON.parse(JSON.stringify(canonical, (_key, value: unknown) => {
+            if (value !== null && typeof value === "object" && !Array.isArray(value)
+                && Object.keys(value).length === 1 && "anyOf" in value
+                && JSON.stringify(value.anyOf) === JSON.stringify([
+                    { type: "string" }, { type: "number" }, { type: "boolean" },
+                ])) {
+                converted++;
+                return { type: ["string", "number", "boolean"] };
+            }
+            return value;
+        }));
+        expect(converted).toBe(2);
+        expect(computeInterfaceHash(raw)).toBe(canonical.hash);
+        expect(canonical.hash).toBe("5d8843adb6cf5b2a");
+    });
+
+    it("normalizes type arrays at every interface schema position", () => {
+        const union = { anyOf: [{ type: "string" as const }, { type: "null" as const }] };
+        const canonical: LinkRpcInterfaceSchema = {
+            id: "test.type-array", hash: "", methods: {
+                read: { params: union, result: union, clientStream: union, serverStream: union,
+                    errors: [{ code: 1, message: "failed", data: union }, { code: 2, schema: union }] },
+            },
+            components: { schemas: { Value: union } },
+        };
+        const raw: LinkRpcInterfaceSchema = JSON.parse(JSON.stringify(canonical, (_key, value: unknown) =>
+            JSON.stringify(value) === JSON.stringify(union) ? { type: ["string", "null"] } : value));
+        expect(computeInterfaceHash(raw)).toBe(computeInterfaceHash(canonical));
+    });
+
     it("excludes only interface-level tags, not a user's tags field in a method schema", () => {
         const base: LinkRpcInterfaceSchema = {
             id: "tagged", hash: "", methods: { read: { params: true, result: true } },

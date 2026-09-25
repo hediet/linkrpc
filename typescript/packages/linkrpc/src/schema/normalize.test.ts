@@ -5,6 +5,74 @@ import { requestType, zodToSvcJsonSchema } from "./memberTypes";
 import { defineInterface } from "../connection/interfaceDefinition";
 
 describe("normalizeJsonSchema", () => {
+    it("lowers producer type arrays to canonical anyOf unions", () => {
+        const normalized = normalizeJsonSchema({ type: ["string", "number", "boolean"] });
+        expect(normalized).toMatchInlineSnapshot(`
+          {
+            "anyOf": [
+              {
+                "type": "string",
+              },
+              {
+                "type": "number",
+              },
+              {
+                "type": "boolean",
+              },
+            ],
+          }
+        `);
+        expect(normalizeJsonSchema(normalized)).toEqual(normalized);
+    });
+
+    it("preserves annotations, branch constraints, and recursively normalizes nullable containers", () => {
+        expect(normalizeJsonSchema({
+            title: "Nullable email", description: "Contact",
+            type: ["string", "null"], format: "email", pattern: "ignored",
+        })).toMatchInlineSnapshot(`
+          {
+            "anyOf": [
+              {
+                "format": "email",
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
+            ],
+            "description": "Contact",
+            "title": "Nullable email",
+          }
+        `);
+        expect(normalizeJsonSchema({
+            type: ["object", "null"],
+            properties: { value: { type: ["array", "null"], items: { type: ["string", "number"] } } },
+            required: ["value"],
+        })).toEqual({ anyOf: [
+            {
+                type: "object",
+                properties: { value: { anyOf: [
+                    { type: "array", items: { anyOf: [{ type: "string" }, { type: "number" }] } },
+                    { type: "null" },
+                ] } },
+                required: ["value"], additionalProperties: false,
+            },
+            { type: "null" },
+        ] });
+    });
+
+    it.each([[], ["string", "string"], ["invalid"], ["string", 1], [["string"]]])(
+        "rejects malformed producer type arrays: %j", (...types) => {
+            expect(() => normalizeJsonSchema({ type: types })).toThrow("distinct JSON Schema type names");
+        },
+    );
+
+    it("does not rewrite type arrays in literal JSON data", () => {
+        const literal = { type: ["string", "number"] };
+        expect(normalizeJsonSchema({ const: literal })).toEqual({ const: literal });
+        expect(normalizeJsonSchema({ enum: [literal] })).toEqual({ enum: [literal] });
+    });
+
     it("collapses {} to true", () => {
         expect(normalizeJsonSchema({})).toBe(true);
     });

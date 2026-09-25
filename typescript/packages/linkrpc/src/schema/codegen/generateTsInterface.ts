@@ -154,15 +154,6 @@ function _schemaType(
     if (schema === false) return 'never';
 
     const s = schema as unknown as Record<string, unknown>;
-    if (Array.isArray(s['type'])) {
-        return s['type']
-            .map((type) => _schemaType(
-                { ...s, type } as unknown as LinkRpcJsonSchema,
-                components,
-                payloads,
-            ))
-            .join(' | ') || 'never';
-    }
     if (typeof s['$ref'] === 'string') {
         const name = _parseRef(s['$ref']);
         const payload = payloads.get(name);
@@ -408,19 +399,6 @@ function _writeSchema(
     }
 
     const s = schema as unknown as Record<string, unknown>;
-    if (Array.isArray(s['type'])) {
-        _writeUnion(
-            w,
-            'z.union',
-            s['type'].map((type) => ({ ...s, type }) as unknown as LinkRpcJsonSchema),
-            components,
-            preserveWireSchema,
-            currentComponent,
-        );
-        _writeMetaSuffix(w, _metaOf(s));
-        return;
-    }
-
     // $ref -> component variable
     if (typeof s['$ref'] === 'string') {
         const refName = _parseRef(s['$ref']);

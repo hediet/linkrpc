@@ -135,7 +135,7 @@ describe("contributed topology view", () => {
             const schema = toTypeArray(topologyInterface.toSchema()) as ReturnType<typeof topologyInterface.toSchema>;
             expect(converted).toBe(2);
             schema.hash = computeInterfaceHash(schema);
-            expect(schema.hash).not.toBe(topologyInterface.schemaHash);
+            expect(schema.hash).toBe(topologyInterface.schemaHash);
             const listing = f.context.interfaces[0]!;
             const context = { ...f.context, interfaces: [{ ...listing, hash: schema.hash, schema }] };
             expect(resolveTopologyTarget(context)).toEqual({

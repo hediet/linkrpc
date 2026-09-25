@@ -1143,8 +1143,8 @@ mod tests {
             json!({
                 "type": "object",
                 "properties": {
-                    "optional": { "type": ["string", "null"] },
-                    "requiredNullable": { "type": ["string", "null"] }
+                    "optional": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                    "requiredNullable": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
                 },
                 "required": ["requiredNullable"],
                 "additionalProperties": false

@@ -62,6 +62,50 @@ pub fn normalize_json_schema(raw: &JsonValue) -> Result<JsonValue, NormalizeErro
         }
     }
 
+    if let Some(JsonValue::Array(types)) = r.get("type") {
+        let mut seen = std::collections::HashSet::new();
+        if types.is_empty()
+            || types.iter().any(|value| {
+                !matches!(
+                    value.as_str(),
+                    Some("null" | "boolean" | "number" | "integer" | "string" | "array" | "object")
+                ) || !seen.insert(value.as_str())
+            })
+        {
+            return Err(NormalizeError::InvalidTypeArray);
+        }
+        let mut branch = r.clone();
+        let mut union = JsonMap::new();
+        for key in ["title", "description"] {
+            if let Some(value) = branch.remove(key) {
+                union.insert(key.into(), value);
+            }
+        }
+        let branches = types
+            .iter()
+            .map(|value| {
+                let mut schema = branch.clone();
+                schema.insert("type".into(), value.clone());
+                if value.as_str() != Some("object") {
+                    for key in ["properties", "required", "additionalProperties"] {
+                        schema.remove(key);
+                    }
+                }
+                if value.as_str() != Some("array") {
+                    for key in ["items", "prefixItems"] {
+                        schema.remove(key);
+                    }
+                }
+                if !matches!(value.as_str(), Some("string" | "number" | "integer")) {
+                    schema.remove("format");
+                }
+                JsonValue::Object(schema)
+            })
+            .collect();
+        union.insert("anyOf".into(), JsonValue::Array(branches));
+        return normalize_json_schema(&JsonValue::Object(union));
+    }
+
     let mut out = JsonMap::new();
     for (k, v) in r {
         if !is_kept_key(k) {
@@ -244,4 +288,28 @@ fn const_prop_names(props: &JsonMap<String, JsonValue>) -> Vec<String> {
 pub enum NormalizeError {
     #[error("normalizeJsonSchema: expected object, got {0}")]
     ExpectedObject(&'static str),
+    #[error("normalizeJsonSchema: type array must contain distinct JSON Schema type names")]
+    InvalidTypeArray,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn rejects_invalid_type_arrays() {
+        for types in [
+            json!([]),
+            json!(["string", "string"]),
+            json!(["invalid"]),
+            json!(["string", 1]),
+            json!([["string"]]),
+        ] {
+            assert!(matches!(
+                normalize_json_schema(&json!({ "type": types })),
+                Err(NormalizeError::InvalidTypeArray)
+            ));
+        }
+    }
 }
