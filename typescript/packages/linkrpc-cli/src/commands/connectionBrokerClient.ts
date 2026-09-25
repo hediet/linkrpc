@@ -1,5 +1,6 @@
-import type { JsonValue } from "@hediet/linkrpc";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import { withRpcTimeout, type JsonValue } from "@hediet/linkrpc";
+import { connect, type CliChannel, type CliConnection } from "@hediet/linkrpc-client";
+import { parseEndpointUri } from "@hediet/linkrpc/node";
 import {
     BROKER_DISCONNECT_METHOD,
     BROKER_READ_NOTIFICATIONS_METHOD,
@@ -23,7 +24,39 @@ export function getBrokerStatus(channel: CliChannel): Promise<JsonValue> {
 }
 
 export async function disconnectBroker(channel: CliChannel): Promise<void> {
-    await channel.sendRequest(BROKER_DISCONNECT_METHOD, {});
+    const call = channel.sendRequestWithStream(BROKER_DISCONNECT_METHOD, {});
+    await withRpcTimeout(Object.assign(call.result, {
+        cancel: (reason?: string) => call.cancel(reason),
+        dispose: (reason?: string) => call.dispose?.(reason),
+    }), BROKER_DISCONNECT_METHOD);
+}
+
+export async function stopConnectionBroker(endpoint: string, allowMissing = false): Promise<void> {
+    const parsed = parseEndpointUri(endpoint);
+    if (parsed.kind !== "socket" || parsed.token === undefined || parsed.brokerMode === undefined) {
+        throw new Error("owned connection must be an authenticated local broker endpoint");
+    }
+    let connection: CliConnection;
+    try {
+        connection = await connect(parsed);
+    } catch (error) {
+        if (
+            allowMissing
+            && error instanceof Error
+            && "code" in error
+            && (error.code === "ENOENT" || error.code === "ECONNREFUSED")
+            && "syscall" in error
+            && error.syscall === "connect"
+        ) {
+            return;
+        }
+        throw error;
+    }
+    try {
+        await disconnectBroker(connection.channel);
+    } finally {
+        connection.close();
+    }
 }
 
 export async function readBrokerNotifications(

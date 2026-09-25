@@ -103,6 +103,9 @@ function _staticCandidates(ctx: ResolvedContext, prefix: string, tree: CommandTr
         if (type === 'shell') {
             return SHELLS.filter((s) => s.startsWith(prefix)).map((s) => ({ text: s }));
         }
+        if (type === 'connectionLimit' && 'inf'.startsWith(prefix)) {
+            return [{ text: 'inf', tooltip: 'Unlimited (no timer).' }];
+        }
     }
     return [];
 }

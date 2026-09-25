@@ -4,9 +4,9 @@ import {
     type JsonValue,
     requestType,
 } from "@hediet/linkrpc";
-import { parseEndpointUri } from "@hediet/linkrpc/node";
+import { formatEndpointUri, parseEndpointUri } from "@hediet/linkrpc/node";
 import { SocketServer, type NodeSocketTransport } from "@hediet/linkrpc-hub/hub/server/node";
-import { connect } from "@hediet/linkrpc-client";
+import { connect, connectViaTransport } from "@hediet/linkrpc-client";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
     disconnectBroker,
     getBrokerStatus,
     readBrokerNotifications,
+    stopConnectionBroker,
 } from "./connectionBrokerClient";
 import { runConnectionBroker } from "./connectionBrokerProcess";
 
@@ -27,6 +28,21 @@ afterEach(() => {
 });
 
 describe("runConnectionBroker", () => {
+    it("fails boundedly when an owned endpoint does not acknowledge shutdown", async () => {
+        const server = await SocketServer.start();
+        disposables.push(server);
+        server.setConnectionHandler(transport => {
+            connectViaTransport(transport).setRequestHandler({
+                handleRequest: () => new Promise(() => {}),
+                handleNotification: () => {},
+            });
+        });
+        const endpoint = formatEndpointUri({
+            kind: "socket", path: server.endpoint, token: "test", brokerMode: "linkrpc",
+        }, { revealToken: true });
+        await expect(stopConnectionBroker(endpoint, true)).rejects.toThrow("timed out after 5000ms");
+    }, 10_000);
+
     it.each([false, true])("connects a cmd-env startEndpoint child (namespace claim: %s)", async claimNamespace => {
         const script = fileURLToPath(new URL("./fixtures/cmdEnvServer.mjs", import.meta.url));
         const broker = await runConnectionBroker({

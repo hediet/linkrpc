@@ -21,6 +21,7 @@ export type SlotType =
     | 'interfaceId'
     /** One of the supported shell names (powershell, bash, zsh, fish). */
     | 'shell'
+    | 'connectionLimit'
     /** Anything else — completer returns no dynamic suggestions. */
     | 'free';
 
@@ -173,11 +174,11 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
         subcommands: [
             {
                 name: 'create',
-                description: 'Create a persistent connection.',
+                description: 'Create a persistent connection; requires --timeout or --ttl.',
                 positionals: [],
                 options: [
-                    { name: '--timeout', takesValue: true, valueType: 'free' },
-                    { name: '--ttl', takesValue: true, valueType: 'free' },
+                    { name: '--timeout', takesValue: true, valueType: 'connectionLimit', description: 'Inactivity duration or inf (omitted: inf).' },
+                    { name: '--ttl', takesValue: true, valueType: 'connectionLimit', description: 'Lifetime duration or inf (omitted: inf).' },
                     { name: '--notification-limit', takesValue: true, valueType: 'free' },
                 ],
             },
@@ -255,8 +256,8 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
         description: 'Legacy alias for connection create.',
         positionals: [],
         options: [
-            { name: '--timeout', takesValue: true, valueType: 'free' },
-            { name: '--ttl', takesValue: true, valueType: 'free' },
+            { name: '--timeout', takesValue: true, valueType: 'connectionLimit', description: 'Inactivity duration or inf (omitted: inf).' },
+            { name: '--ttl', takesValue: true, valueType: 'connectionLimit', description: 'Lifetime duration or inf (omitted: inf).' },
             { name: '--notification-limit', takesValue: true, valueType: 'free' },
         ],
     },

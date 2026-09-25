@@ -11,12 +11,13 @@ import {
     connectViaTransport,
 } from "@hediet/linkrpc-client";
 import type { StaticHubSchema } from "../staticHubSchema";
+import type { ConnectionLimit } from "../duration";
 import { ConnectionBroker, type BrokerStopReason } from "./connectionBroker";
 
 export interface RunConnectionBrokerOptions {
     readonly remote: ResolvedEndpoint;
-    readonly timeoutMs: number;
-    readonly ttlMs: number;
+    readonly timeoutMs: ConnectionLimit;
+    readonly ttlMs: ConnectionLimit;
     readonly notificationLimit?: number;
     readonly staticHubSchema?: StaticHubSchema;
 }
@@ -105,8 +106,8 @@ function formatRemoteEndpointForStatus(endpoint: ResolvedEndpoint): string {
 
 export interface SpawnConnectionBrokerOptions {
     readonly remote: ResolvedEndpoint;
-    readonly timeoutMs: number;
-    readonly ttlMs: number;
+    readonly timeoutMs: ConnectionLimit;
+    readonly ttlMs: ConnectionLimit;
     readonly notificationLimit?: number;
     readonly readyTimeoutMs?: number;
     readonly schemaSource?: string;
@@ -152,7 +153,7 @@ export async function spawnConnectionBroker(
         const endpoint = await readReadyEndpoint(
             child,
             stdout,
-            options.readyTimeoutMs ?? 15_000,
+            options.readyTimeoutMs ?? 60_000,
         );
         stdout.destroy();
         child.unref();

@@ -9,6 +9,7 @@ import { connectViaTransport, type CliConnection } from "@hediet/linkrpc-client"
 import { z } from "zod";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseStaticHubSchema, type StaticHubSchema } from "../staticHubSchema";
+import type { ConnectionLimit } from "../duration";
 import {
     BROKER_DISCONNECT_METHOD,
     BROKER_READ_NOTIFICATIONS_METHOD,
@@ -24,8 +25,8 @@ interface TestConnections {
 }
 
 function createConnections(options: {
-    timeoutMs?: number;
-    ttlMs?: number;
+    timeoutMs?: ConnectionLimit;
+    ttlMs?: ConnectionLimit;
     now?: () => number;
     staticHubSchema?: StaticHubSchema;
 } = {}): TestConnections {
@@ -66,6 +67,36 @@ afterEach(() => {
 });
 
 describe("ConnectionBroker", () => {
+    it.each([
+        ["inf", "inf", 0],
+        [100, "inf", 1],
+        ["inf", 100, 1],
+    ] as const)("schedules only finite timers (%s, %s)", async (timeoutMs, ttlMs, timers) => {
+        vi.useFakeTimers();
+        const connections = createConnections({ timeoutMs, ttlMs });
+        try {
+            expect(vi.getTimerCount()).toBe(timers);
+            connections.broker.recordActivity();
+            expect(vi.getTimerCount()).toBe(timers);
+            await vi.advanceTimersByTimeAsync(101);
+            expect(connections.broker.stoppedReason).toBe(
+                timeoutMs !== "inf" ? "timeout" : ttlMs !== "inf" ? "ttl" : undefined,
+            );
+        } finally {
+            connections.dispose();
+        }
+    });
+
+    it("serializes unlimited status without null or Infinity", async () => {
+        const connections = createConnections({ timeoutMs: "inf", ttlMs: "inf" });
+        try {
+            const status = await connections.localClient.channel.sendRequest(BROKER_STATUS_METHOD, {});
+            expect(JSON.parse(JSON.stringify(status))).toMatchObject({ timeoutMs: "inf", ttlMs: "inf" });
+        } finally {
+            connections.dispose();
+        }
+    });
+
     it("forwards arbitrary bare JSON-RPC methods and notifications", async () => {
         const connections = createConnections();
         const notifications: unknown[] = [];
