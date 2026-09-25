@@ -5,10 +5,12 @@ publisher**; CI has no npm or Cargo registry credentials.
 
 ## Safe rollout
 
-Use one active ArtifactGate ingestion pipeline per source kind (`workflow` and
-`release`) for all `hediet` repositories. Repository, workflow, branch, package,
-and ecosystem restrictions belong in publication rules, not duplicate
-repository-specific ingestion pipelines. Preserve ingestion history by disabling
+Use one active owner-wide ArtifactGate ingestion pipeline per artifact type
+(npm, Cargo, and VSIX) for all `hediet` repositories. Keep the corresponding
+asset-name filters (`npm-*`, `cargo-crate-*`, and `*.vsix`), but no repository,
+workflow, or branch restrictions. Restrict publication in package-specific
+rules, not duplicate repository-specific ingestion pipelines.
+Preserve ingestion history by disabling
 redundant pipelines when they cannot be deleted because artifacts reference them.
 
 Before pushing the release workflow, enable ArtifactGate's Cargo dependency gate.
