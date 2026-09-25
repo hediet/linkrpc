@@ -73,7 +73,7 @@ jobs:
         run: cargo test --workspace --locked
       - name: TypeScript build and tests
         working-directory: typescript
-        run: pnpm check
+        run: pnpm check --concurrency=1
       - name: Check Rust-exported streaming contract
         run: node interop/generate-streaming.mjs --check
       - name: Test typed Rust and TypeScript streaming in both directions
