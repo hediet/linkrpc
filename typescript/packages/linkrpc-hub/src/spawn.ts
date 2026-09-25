@@ -15,7 +15,8 @@ export function spawnCommand(command: EndpointCommand, options: SpawnOptions): C
     if ('argv' in command) {
         const [bin, ...args] = command.argv;
         if (!bin) throw new Error('spawnCommand: empty argv command');
-        return spawn(bin, args, { ...options, shell: process.platform === 'win32' });
+        const shell = process.platform === 'win32' && !/\.(?:exe|com)$/i.test(bin);
+        return spawn(bin, args, { ...options, shell });
     }
     return spawn(command.command, { ...options, shell: true });
 }

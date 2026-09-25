@@ -267,6 +267,17 @@ Every endpoint is a valid `new URL()` — safe in env vars and logs:
 | `cmd:?command=…` / `cmd:?argv=…&argv=…`   | spawn-as-server (`--endpoint-cmd`)         |
 | `cmd-stdio:?command=…` / `?argv=…&argv=…` | spawn over stdio (`--endpoint-cmd-stdio`)  |
 
+`cmd:` children can use `startEndpoint({ onConnection })` without parsing any
+transport flags: the parent injects `LINKRPC_ENDPOINT` and `LINKRPC_TOKEN`.
+The CLI accepts one authenticated callback connection and exposes the child's
+interfaces directly. It does not wait for a hub service-namespace claim.
+The existing root overlay still supplies namespace (`local`) and optional
+provisioned-identity services for hub-aware children. Full routing-hub startup
+remains a separate `connectViaLocalHub` helper.
+Child stdout/stderr are diagnostics and appear on the CLI's stderr; parent stdout
+remains reserved for command results. Startup fails if the child exits, cannot
+spawn, or does not connect within 10 seconds.
+
 The command payload is either a single verbatim string (`?command=node%20server.js`,
 split by the OS shell) or repeated, structure-preserving `argv` params
 (`?argv=node&argv=server.js`).
