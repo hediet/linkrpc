@@ -56,17 +56,19 @@ export async function serveOnStdio(): Promise<LinkRpcConnection> {
 export type StdioChannel = Channel<undefined, unknown> & {
     /** Fires once when stdin ends/closes. Returns a disposable to unsubscribe. */
     onClose(listener: () => void): IDisposable;
+    /** Detach from stdin/stdout without closing these process-owned streams. */
+    close(): void;
 };
 
 export async function openStdioChannel(): Promise<StdioChannel> {
-    const { transport } = await connectNdjson({ input: process.stdin, output: process.stdout });
-    const channel = JsonRpcChannel.create(transport);
-
     const closeListeners = new Set<() => void>();
     let closed = false;
+    let closeChannel: (() => void) | undefined;
     const fireClose = () => {
         if (closed) return;
         closed = true;
+        closeChannel?.();
+        if (process.stdin.listenerCount('data') === 0) process.stdin.pause();
         for (const l of closeListeners) {
             try {
                 l();
@@ -74,10 +76,15 @@ export async function openStdioChannel(): Promise<StdioChannel> {
         }
         closeListeners.clear();
     };
-    process.stdin.on('end', fireClose);
-    process.stdin.on('close', fireClose);
+    const { transport } = await connectNdjson({
+        input: process.stdin, output: process.stdout, onClose: fireClose,
+    });
+    const rpc = JsonRpcChannel.createWithClose(transport);
+    closeChannel = rpc.close;
+    if (closed) rpc.close();
 
-    return Object.assign(channel, {
+    return Object.assign(rpc.channel, {
+        close: fireClose,
         onClose: (listener: () => void) => {
             if (closed) {
                 queueMicrotask(listener);

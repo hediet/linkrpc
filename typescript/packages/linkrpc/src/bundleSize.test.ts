@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import resolve from '@rollup/plugin-node-resolve';
+import commonjs from '@rollup/plugin-commonjs';
 import typescript from '@rollup/plugin-typescript';
 import { type Plugin, rollup } from 'rollup';
 import { describe, expect, it } from 'vitest';
@@ -176,6 +177,7 @@ async function bundleStdioApp(): Promise<BundleResult> {
             virtualEntry(srcDir),
             emptyCryptoFallback(),
             resolve(),
+            commonjs(),
             typescript({
                 tsconfig: join(pkgRoot, 'tsconfig.json'),
                 noEmit: false,

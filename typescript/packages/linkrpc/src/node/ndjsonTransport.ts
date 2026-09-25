@@ -13,6 +13,8 @@ export class NdjsonTransport implements IMessageTransport {
     private readonly _buffer: JsonRpcMessage[] = [];
     private _residual = '';
     private _closed = false;
+    private readonly _onDataEvent = (chunk: string) => this._onData(chunk);
+    private readonly _onEndEvent = () => this.dispose();
 
     constructor(
         private readonly _input: NodeJS.ReadableStream,
@@ -20,12 +22,12 @@ export class NdjsonTransport implements IMessageTransport {
         private readonly _onClose?: () => void,
     ) {
         this._input.setEncoding?.('utf8');
-        this._input.on('data', (chunk: string) => this._onData(chunk));
-        this._input.on('end', () => this._onEnd());
-        this._input.on('close', () => this._onEnd());
-        this._input.on('error', () => this._onEnd());
+        this._input.on('data', this._onDataEvent);
+        this._input.on('end', this._onEndEvent);
+        this._input.on('close', this._onEndEvent);
+        this._input.on('error', this._onEndEvent);
         if (!Object.is(this._output, this._input)) {
-            this._output.on('error', () => this._onEnd());
+            this._output.on('error', this._onEndEvent);
         }
     }
 
@@ -47,6 +49,14 @@ export class NdjsonTransport implements IMessageTransport {
     public dispose(): void {
         if (this._closed) return;
         this._closed = true;
+        this._input.removeListener('data', this._onDataEvent);
+        this._input.removeListener('end', this._onEndEvent);
+        this._input.removeListener('close', this._onEndEvent);
+        this._input.removeListener('error', this._onEndEvent);
+        this._output.removeListener('error', this._onEndEvent);
+        this._listener = undefined;
+        this._buffer.length = 0;
+        this._residual = '';
         this._onClose?.();
     }
 
@@ -64,13 +74,6 @@ export class NdjsonTransport implements IMessageTransport {
                 continue;
             }
             this._deliver(parsed);
-        }
-    }
-
-    private _onEnd(): void {
-        if (!this._closed) {
-            this._closed = true;
-            this._onClose?.();
         }
     }
 

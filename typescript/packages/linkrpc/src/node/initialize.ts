@@ -62,6 +62,7 @@ export interface ConnectNdjsonOptions {
     readonly trace?: MessageTransportTrace;
     /** Override the handshake timeout (ms). */
     readonly handshakeTimeoutMs?: number;
+    readonly signal?: AbortSignal;
 }
 
 export interface ConnectedNdjson {
@@ -86,17 +87,12 @@ export interface ConnectedNdjson {
  */
 export async function connectNdjson(opts: ConnectNdjsonOptions): Promise<ConnectedNdjson> {
     const role = opts.initialize;
-    let rejectClosedHandshake: ((error: Error) => void) | undefined;
-    const closedDuringHandshake = role
-        ? new Promise<never>((_resolve, reject) => {
-            rejectClosedHandshake = reject;
-        })
-        : undefined;
+    const closed = new AbortController();
     const baseTransport = new NdjsonTransport(opts.input, opts.output, () => {
         try {
             opts.onClose?.();
         } finally {
-            rejectClosedHandshake?.(new Error('hubrpc::initialize: transport closed during handshake'));
+            closed.abort(new Error('hubrpc::initialize: transport closed during handshake'));
         }
     });
     const transport = opts.trace === undefined
@@ -108,16 +104,12 @@ export async function connectNdjson(opts: ConnectNdjsonOptions): Promise<Connect
     }
 
     try {
-        const { token } = await Promise.race([
-            runInitializeHandshake(transport, role, {
-                ...(opts.handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs: opts.handshakeTimeoutMs } : {}),
-            }),
-            closedDuringHandshake!,
-        ]);
-        rejectClosedHandshake = undefined;
+        const { token } = await runInitializeHandshake(transport, role, {
+            handshakeTimeoutMs: opts.handshakeTimeoutMs,
+            signal: opts.signal ? AbortSignal.any([closed.signal, opts.signal]) : closed.signal,
+        });
         return { transport, ...(token !== undefined ? { token } : {}) };
     } catch (err) {
-        rejectClosedHandshake = undefined;
         transport.dispose();
         throw err;
     }
@@ -126,6 +118,8 @@ export async function connectNdjson(opts: ConnectNdjsonOptions): Promise<Connect
 export interface RunInitializeHandshakeOptions {
     /** Override the handshake timeout (ms). */
     readonly handshakeTimeoutMs?: number;
+    /** Cancel an incomplete handshake and release its listener and timer. */
+    readonly signal?: AbortSignal;
 }
 
 /**
@@ -143,20 +137,35 @@ export async function runInitializeHandshake(
     options: RunInitializeHandshakeOptions = {},
 ): Promise<{ readonly token?: string; }> {
     const timeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
-    if (role.kind === 'client') {
-        await _runClientHandshake(transport, role.token, timeoutMs);
-        return {};
+    const signal = options.signal;
+    signal?.throwIfAborted();
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(signal!.reason);
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+        if (role.kind === 'client') {
+            await Promise.race([_runClientHandshake(transport, role.token, timeoutMs, signal), aborted]);
+            return {};
+        }
+        const token = await Promise.race([
+            _runServerHandshake(transport, role.isTokenAccepted, timeoutMs, signal), aborted,
+        ]);
+        return { token };
+    } finally {
+        signal?.removeEventListener('abort', onAbort!);
     }
-    const token = await _runServerHandshake(transport, role.isTokenAccepted, timeoutMs);
-    return { token };
 }
 
 async function _runClientHandshake(
     transport: IMessageTransport,
     token: string | undefined,
     timeoutMs: number,
+    signal?: AbortSignal,
 ): Promise<void> {
-    const reply = _nextMessage(transport, timeoutMs);
+    signal?.throwIfAborted();
+    const reply = _nextMessage(transport, timeoutMs, signal);
     const params: InitializeParams = {
         protocolVersion: INITIALIZE_PROTOCOL_VERSION,
         ...(token !== undefined ? { token } : {}),
@@ -180,8 +189,9 @@ async function _runServerHandshake(
     transport: IMessageTransport,
     isTokenAccepted: (token: string | undefined) => Promise<boolean>,
     timeoutMs: number,
+    signal?: AbortSignal,
 ): Promise<string | undefined> {
-    const first = await _nextMessage(transport, timeoutMs);
+    const first = await _nextMessage(transport, timeoutMs, signal);
     if (
         !isRequest(first)
         || (
@@ -192,7 +202,9 @@ async function _runServerHandshake(
         throw new Error('hubrpc::initialize: expected initialize as the first message');
     }
     const params = (first.params ?? {}) as Partial<InitializeParams>;
-    if (!(await isTokenAccepted(params.token))) {
+    const accepted = await isTokenAccepted(params.token);
+    signal?.throwIfAborted();
+    if (!accepted) {
         void transport.send({
             jsonrpc: '2.0',
             id: first.id,
@@ -215,15 +227,25 @@ async function _runServerHandshake(
  * inside the callback stops the buffer drain, leaving any later messages queued
  * for the real listener the channel attaches afterwards.
  */
-function _nextMessage(transport: IMessageTransport, timeoutMs: number): Promise<JsonRpcMessage> {
+function _nextMessage(transport: IMessageTransport, timeoutMs: number, signal?: AbortSignal): Promise<JsonRpcMessage> {
     return new Promise<JsonRpcMessage>((resolve, reject) => {
-        const timer = setTimeout(() => {
+        signal?.throwIfAborted();
+        const cleanup = () => {
+            clearTimeout(timer);
+            signal?.removeEventListener('abort', onAbort);
             transport.setListener(undefined);
+        };
+        const onAbort = () => {
+            cleanup();
+            reject(signal!.reason);
+        };
+        const timer = setTimeout(() => {
+            cleanup();
             reject(new Error('hubrpc::initialize: handshake timed out'));
         }, timeoutMs);
+        signal?.addEventListener('abort', onAbort, { once: true });
         transport.setListener((message) => {
-            clearTimeout(timer);
-            transport.setListener(undefined);
+            cleanup();
             resolve(message);
         });
     });

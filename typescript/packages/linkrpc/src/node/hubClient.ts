@@ -236,14 +236,18 @@ async function _openHubTransport(
 ): Promise<{ transport: IMessageTransport<JsonRpcMessage, JsonRpcMessage>; destroy: () => void; }> {
     if (_isWebSocketEndpoint(endpoint)) {
         const ws = await openWebSocket(endpoint);
-        const transport = new WebSocketTransport(ws, onClose);
+        const closed = new AbortController();
+        const transport = new WebSocketTransport(ws, () => {
+            closed.abort(new Error('hubrpc::initialize: transport closed during handshake'));
+            onClose();
+        });
         const destroy = () => {
             try {
                 ws.close();
             } catch { /* ignore */ }
         };
         try {
-            await runInitializeHandshake(transport, { kind: 'client', token });
+            await runInitializeHandshake(transport, { kind: 'client', token }, { signal: closed.signal });
         } catch (err) {
             transport.dispose();
             destroy();

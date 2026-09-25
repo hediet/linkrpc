@@ -19,6 +19,33 @@ function collect(stream: PassThrough): () => string {
 }
 
 describe('connectNdjson handshake', () => {
+    it('cancels while authentication is pending and never sends a late acceptance', async () => {
+        const input = new PassThrough();
+        const output = new PassThrough();
+        const replies = collect(output);
+        let authenticate!: (accepted: boolean) => void;
+        const authentication = new Promise<boolean>(resolve => { authenticate = resolve; });
+        let entered!: () => void;
+        const checking = new Promise<void>(resolve => { entered = resolve; });
+        const pending = connectNdjson({
+            input, output,
+            initialize: { kind: 'server', isTokenAccepted: () => { entered(); return authentication; } },
+        });
+        input.write(JSON.stringify({
+            jsonrpc: '2.0', id: 0, method: INITIALIZE_METHOD,
+            params: { protocolVersion: 1, token: 'secret' },
+        }) + '\n');
+        await checking;
+        input.end();
+        await expect(pending).rejects.toThrow('closed during handshake');
+        authenticate(true);
+        await new Promise(resolve => setImmediate(resolve));
+        expect(replies()).toBe('');
+        expect(input.listenerCount('data')).toBe(0);
+        input.destroy();
+        output.destroy();
+    });
+
     it('completes a client/server initialize and binds the token', async () => {
         const aToB = new PassThrough({ encoding: 'utf8' });
         const bToA = new PassThrough({ encoding: 'utf8' });
