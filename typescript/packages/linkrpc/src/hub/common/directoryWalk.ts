@@ -151,13 +151,23 @@ export async function fetchSchema(
      * interface lives behind a participant.
      */
     target?: string,
+     /** Deadline for the schema request; cancels remote work and releases local tracking. */
+     timeoutMs = DEFAULT_RPC_TIMEOUT_MS,
 ): Promise<LinkRpcInterfaceSchema> {
     const method = target
         ? `${target}::hubrpc.schemas::get`
         : 'hubrpc.schemas::get';
     const params: Record<string, JsonValue | undefined> = { interfaceId };
     if (hash !== undefined) params.hash = hash;
-    const raw = await channel.sendRequest(method, params);
+    const call = channel.sendRequestWithStream(method, params);
+    const raw = await withRpcTimeout(
+        Object.assign(call.result, {
+            cancel: (reason?: string) => call.cancel(reason),
+            dispose: (reason?: string) => call.dispose?.(reason),
+        }),
+        `hub schema '${interfaceId}' at '${target ?? '<root>'}'`,
+        timeoutMs,
+    );
     const wrap = raw as unknown as { schema: LinkRpcInterfaceSchema; };
     return wrap.schema;
 }
