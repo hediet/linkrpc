@@ -35,7 +35,7 @@ function fixture({ defaultRoot = false, tags = ["linkrpc.graph"], serviceId = "w
         },
         async sendNotification() {},
         sendRequestWithStream(method, value, options) {
-            if (method.includes("hubrpc.directory::list")) return {
+            if (method.includes("hubrpc.directory::list") || method.endsWith("hubrpc.schemas::get")) return {
                 result: channel.sendRequest(method, value), send() {}, cancel() {}, ping: async () => {},
             };
             methods.push(method); params.push(value);

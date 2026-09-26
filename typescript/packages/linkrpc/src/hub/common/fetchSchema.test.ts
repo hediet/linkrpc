@@ -3,6 +3,10 @@ import type { IRequestSender, RawStreamingCall } from '../../connection/channel'
 import { DEFAULT_RPC_TIMEOUT_MS } from '../../connection/requestTimeout';
 import type { SigningCallCtx } from '../../identity/signingSender';
 import type { JsonValue } from '../../protocol/jsonValue';
+import type { JsonRpcMessage } from '../../protocol/jsonRpc';
+import { LinkRpcConnection } from '../../connection/linkRpcConnection';
+import { TransportPair, traceMessageTransport } from '../../transport/messageTransport';
+import { schemasInterface } from './reflection.interfaces';
 import { fetchSchema } from './directoryWalk';
 
 afterEach(() => vi.useRealTimers());
@@ -21,6 +25,48 @@ function sender(result: Promise<JsonValue>) {
 }
 
 describe('fetchSchema', () => {
+    it('calls an ordinary reflected schema method with an unchanged JSON-RPC request', async () => {
+        const pair = new TransportPair();
+        const received: JsonRpcMessage[] = [];
+        const server = LinkRpcConnection.fromTransport(traceMessageTransport(pair.b, (direction, message) => {
+            if (direction === 'receive') received.push(message);
+        }));
+        const reflection = server.enableReflection();
+        const client = LinkRpcConnection.fromTransport(pair.a);
+        try {
+            const schema = await fetchSchema(client.channel, schemasInterface.info.id, undefined);
+            expect(schema).toEqual(schemasInterface.toSchema());
+            expect(received).toEqual([{
+                jsonrpc: '2.0', id: expect.any(Number), method: 'hubrpc.schemas::get',
+                params: { interfaceId: schemasInterface.info.id },
+            }]);
+        } finally {
+            client.close();
+            reflection.dispose();
+            server.close();
+        }
+    });
+
+    it('sends real request cancellation when an ordinary schema call stalls', async () => {
+        vi.useFakeTimers();
+        const pair = new TransportPair();
+        const received: JsonRpcMessage[] = [];
+        pair.b.setListener(message => received.push(message));
+        const client = LinkRpcConnection.fromTransport(pair.a);
+        try {
+            const pending = fetchSchema(client.channel, 'example', undefined, undefined, 25);
+            const rejected = expect(pending).rejects.toThrow('timed out after 25ms');
+            await vi.advanceTimersByTimeAsync(25);
+            await rejected;
+            expect(received).toHaveLength(2);
+            expect(received[0]).toMatchObject({ method: 'hubrpc.schemas::get' });
+            expect(JSON.stringify(received[1])).toContain('"cancel"');
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            client.close();
+        }
+    });
+
     it('preserves addressed schema requests and clears the deadline on success', async () => {
         vi.useFakeTimers();
         const schema = { id: 'example', hash: 'abc', methods: {} };

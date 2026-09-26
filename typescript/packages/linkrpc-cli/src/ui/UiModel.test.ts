@@ -221,7 +221,7 @@ describe("UiModel", () => {
             },
             sendNotification: async () => { },
             sendRequestWithStream: (method, params): RawStreamingCall => {
-                if (method === "hubrpc.directory::list") {
+                if (method === "hubrpc.directory::list" || method === "hubrpc.schemas::get") {
                     return streamingCall(channel.sendRequest(method, params));
                 }
                 sentMethods.push(method);
