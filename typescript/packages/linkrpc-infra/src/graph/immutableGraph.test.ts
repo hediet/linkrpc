@@ -9,6 +9,23 @@ const ref = (id: string, kind = 'node'): GraphRef => ({ kind, id });
 const request = (paths = ['/**']): GraphBatchRequest<GraphRef> => ({
     needs: [{ ref: ref('root'), paths }], have: [], limits: { maxObjects: 20, maxBytes: 20_000 },
 });
+
+it('root leases protect newly materialized descendants and collection bounds retained-root metadata', () => {
+    const store = new InMemoryImmutableGraphStore<GraphRef, JsonValue>(standardGraphRuntimeOptions);
+    store.set(ref('root'), { child: ref('deferred') });
+    const leases = Array.from({ length: 250 }, () => store.retainClosure(ref('root')));
+    store.set(ref('deferred'), { child: ref('late') });
+    store.set(ref('late'), { text: 'late materialization' });
+    store.set(ref('unused'), { unused: true });
+    store.collectGarbage([], true);
+    expect(store.lookup(ref('late')).found).toBe(true);
+    expect(store.lookup(ref('unused')).found).toBe(false);
+    expect(store.diagnostics).toEqual({ objects: 3, identities: 3, retainedRoots: 1 });
+    expect(() => store.markUnavailable(ref('late'), 'expired')).toThrow(/Retained/);
+    for (const lease of leases) lease.dispose();
+    store.collectGarbage([], true);
+    expect(store.diagnostics).toEqual({ objects: 0, identities: 0, retainedRoots: 0 });
+});
 function fixture() {
     const store = new InMemoryImmutableGraphStore<GraphRef, JsonValue>(standardGraphRuntimeOptions);
     store.set(ref('root'), { children: [ref('a'), ref('b')], shared: ref('shared') });

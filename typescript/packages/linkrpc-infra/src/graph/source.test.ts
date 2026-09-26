@@ -45,6 +45,7 @@ test('two unrelated shapes compose without reference remapping and update indepe
     { id: 'weather', label: 'Weather', source: weather },
   ]);
   const first = composition.root.get();
+  const historicalLease = await composition.store.retainClosure!(first);
   const before = await createGraphRuntime(composition).batchObjGet(request(first));
   assert.equal(before.objects.length, 5);
   assert.deepEqual(before.missing, []);
@@ -68,6 +69,7 @@ test('two unrelated shapes compose without reference remapping and update indepe
     before.objects.find(row => row.ref.id === track.id)!.value);
   const historical = await createGraphRuntime(composition).batchObjGet(request(first));
   assert.deepEqual(historical, before);
+  await historicalLease.dispose();
   subscription.dispose();
   await composition.dispose();
 });
@@ -78,6 +80,7 @@ test('detached/replaced sources keep exact historical routing even with reused s
   old.root.set(old.put('tree', { leaf: oldLeaf }), undefined);
   const composition = new GraphComposition([{ id: 'slot', label: 'Same', source: old }]);
   const historical = composition.root.get();
+  const historicalLease = await composition.store.retainClosure!(historical);
   const expected = await createGraphRuntime(composition).batchObjGet(request(historical));
   composition.setSources([]);
   old.root.set(old.put('tree', { leaf: oldLeaf, detachedChange: true }), undefined);
@@ -88,6 +91,7 @@ test('detached/replaced sources keep exact historical routing even with reused s
   composition.setSources([{ id: 'slot', label: 'Same', source: replacement }]);
   assert.deepEqual(await createGraphRuntime(composition).batchObjGet(request(historical)), expected);
   assert.deepEqual(await composition.store.lookup(oldLeaf), { found: true, value: { content: 'old' } });
+  await historicalLease.dispose();
   await composition.dispose();
 });
 
@@ -170,6 +174,7 @@ test('composition retains same-store descendants once rather than leasing every 
     },
   };
   const composition = new GraphComposition([{ id: 'test', label: 'Test', source }]);
+  await setImmediate();
   leases = 0;
   const result = await createGraphRuntime(composition).batchObjGet(request(composition.root.get(), ['/']));
   assert.equal(result.objects.length, 1);
@@ -216,7 +221,70 @@ test('composition retention crosses store boundaries and releases independent ba
   assert.throws(() => b.store.markUnavailable(leaf, 'expired'), /Retained/);
   await lease2.dispose();
   b.store.markUnavailable(leaf, 'expired');
-  assert.deepEqual(await composition.store.lookup(leaf), { found: false, reason: 'expired' });
+  assert.deepEqual(await b.store.lookup(leaf), { found: false, reason: 'expired' });
+  assert.deepEqual(composition.diagnostics, { routes: 0, stores: 0, leases: 0, objects: 0 });
+});
+
+test('250 catalog updates keep only current objects, identities, interned values, routes and leases', async () => {
+  const source = new LocalGraphSource('bounded');
+  const items = Array.from({ length: 1000 }, (_, index) => source.put('item', { index }));
+  source.root.set(source.put('catalog', { items, revision: 0 }), undefined);
+  const composition = new GraphComposition([{ id: 'source', label: 'Source', source }]);
+  for (let revision = 1; revision <= 250; revision++) {
+    source.root.set(source.put('catalog', { items, revision }), undefined);
+    if (revision % 25 === 0) await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.deepEqual(source.diagnostics, { objects: 1001, identities: 1001, interned: 1001, retainedRoots: 1 });
+  assert.deepEqual(composition.diagnostics, { routes: 1002, stores: 2, leases: 1, objects: 1 });
+  await composition.dispose();
+  source.dispose();
+  assert.deepEqual(source.diagnostics, { objects: 0, identities: 0, interned: 0, retainedRoots: 0 });
+  assert.deepEqual(composition.diagnostics, { routes: 0, stores: 0, leases: 0, objects: 0 });
+});
+
+test('leased historical roots remain readable after collection, then fully reclaim on release', async () => {
+  const source = new LocalGraphSource('old-pinned');
+  const oldItem = source.put('item', { text: 'old' });
+  const oldRoot = source.put('catalog', { items: [oldItem] });
+  source.root.set(oldRoot, undefined);
+  const composition = new GraphComposition([{ id: 'source', label: 'Source', source }]);
+  const previous = composition.root.get();
+  const pin = await composition.store.retainClosure!(previous);
+  const nextRoot = source.put('catalog', { items: [] });
+  source.root.set(nextRoot, undefined);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(await source.store.lookup(oldItem), { found: true, value: { text: 'old' } });
+  const old = await createGraphRuntime(composition).batchObjGet(request(previous));
+  assert.equal(old.objects.length, 3);
+  assert.deepEqual(old.missing, []);
+  await pin.dispose();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(source.store.lookup(oldItem).found, false);
+  assert.equal(source.store.lookup(oldRoot).found, false);
+  assert.equal((await composition.store.lookup(previous)).found, false);
+  assert.deepEqual(source.diagnostics, { objects: 1, identities: 1, interned: 1, retainedRoots: 1 });
+  const repeated = source.put('item', { text: 'old' });
+  assert.notEqual(repeated.id, oldItem.id, 'collected ids must never be reassigned');
+  await composition.dispose();
+  source.dispose();
+});
+
+test('replacing 250 independent sources releases detached stores and route history', async () => {
+  const composition = new GraphComposition();
+  const sources: LocalGraphSource[] = [];
+  for (let index = 0; index < 250; index++) {
+    const source = new LocalGraphSource(`source-${index}`);
+    sources.push(source);
+    source.root.set(source.put('catalog', { index }), undefined);
+    composition.setSources([{ id: 'slot', label: 'Source', source }]);
+    if (index % 25 === 0) await new Promise(resolve => setTimeout(resolve, 5));
+  }
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(composition.diagnostics, { routes: 2, stores: 2, leases: 1, objects: 1 });
+  for (const source of sources.slice(0, -1)) assert.equal(source.diagnostics.retainedRoots, 0);
+  await composition.dispose();
+  for (const source of sources) source.dispose();
 });
 
 test.each(['', 'sources/test'])('standard interface roundtrips batches and watch acknowledgements with clean disposal (%s)', async serviceId => {

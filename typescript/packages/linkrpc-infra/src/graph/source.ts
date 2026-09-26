@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { autorun, observableValue, type IObservable } from '@vscode/observables';
+import { autorun, observableValue, runOnChange, type IObservable } from '@vscode/observables';
 import type { JsonValue } from '@hediet/linkrpc';
 import {
   InMemoryImmutableGraphStore,
@@ -31,21 +31,62 @@ export class LocalGraphSource implements GraphSource {
   public readonly store = new InMemoryImmutableGraphStore<GraphRef, JsonValue>(standardGraphRuntimeOptions);
   public readonly root;
   private readonly _interned = new Map<string, GraphRef>();
+  private _nextId = 0;
+  private _collection: ReturnType<typeof setTimeout> | undefined;
+  private readonly _subscription;
+  private _disposed = false;
 
   public constructor(namespace = 'source') {
     this.namespace = `${encodeURIComponent(namespace)}/${randomUUID()}`;
     this.root = observableValue<GraphRef>(this, this.put('empty', {}));
+    this._subscription = runOnChange(this.root, () => this._scheduleCollection());
+    this.store.setReleaseListener(() => this._scheduleCollection());
   }
 
   public put(kind: string, value: JsonValue): GraphRef {
+    if (this._disposed) throw new Error('Graph source is disposed.');
     const normalized = normalizeJson(value);
     const key = JSON.stringify([kind, normalized]);
     const existing = this._interned.get(key);
     if (existing !== undefined) return existing;
-    const ref = Object.freeze({ kind, id: `${this.namespace}/${this._interned.size}` });
+    const ref = Object.freeze({ kind, id: `${this.namespace}/${this._nextId++}` });
     this.store.set(ref, normalized);
     this._interned.set(key, ref);
     return ref;
+  }
+
+  private _scheduleCollection(): void {
+    if (this._disposed) {
+      this.collectGarbage();
+      return;
+    }
+    if (this._collection !== undefined) return;
+    // Finish synchronous root publication and asynchronous watch handoffs first.
+    this._collection = setTimeout(() => {
+      this._collection = undefined;
+      this.collectGarbage();
+    }, 0);
+  }
+
+  public collectGarbage(): ReadonlySet<string> {
+    const reachable = this.store.collectGarbage(this._disposed ? [] : [this.root.get()], true);
+    for (const [key, ref] of this._interned) {
+      if (!reachable.has(standardGraphRuntimeOptions.refKey(ref))) this._interned.delete(key);
+    }
+    return reachable;
+  }
+
+  public dispose(): void {
+    if (this._disposed) return;
+    this._disposed = true;
+    this._subscription.dispose();
+    clearTimeout(this._collection);
+    this._collection = undefined;
+    this.collectGarbage();
+  }
+
+  public get diagnostics(): { interned: number; objects: number; identities: number; retainedRoots: number } {
+    return { interned: this._interned.size, ...this.store.diagnostics };
   }
 }
 
@@ -55,13 +96,14 @@ export interface GraphSourceEntry {
   readonly source: GraphSource;
 }
 
-/** Historical routing and root leases are kept for this composition's lifetime. */
+/** Current and explicitly leased roots retain their independent source stores. */
 export class GraphComposition implements GraphSource {
   private readonly _local = new LocalGraphSource('composition');
   private readonly _sources = observableValue<readonly GraphSourceEntry[]>(this, []);
   private readonly _stores = new Set<GraphStore>([this._local.store]);
   private readonly _routes = new Map<string, GraphStore>();
-  private readonly _historicalLeases = new Map<string, Promise<GraphLease>>();
+  private readonly _leases = new Set<{ keys: Set<string>; stores: Set<GraphStore> }>();
+  private _current: Promise<GraphLease> | undefined;
   private readonly _subscription;
   private _disposed = false;
   public readonly source: GraphSource = this;
@@ -79,17 +121,14 @@ export class GraphComposition implements GraphSource {
       const values = entries.map(entry => {
         const root = entry.source.root.read(reader);
         this._route(root, entry.source.store);
-        const key = standardGraphRuntimeOptions.refKey(root);
-        if (!this._historicalLeases.has(key)) {
-          const lease = Promise.resolve(entry.source.store.retainClosure?.(root) ?? noLease());
-          // A rejected retention is surfaced when this root is looked up, not unhandled.
-          void lease.catch(() => {});
-          this._historicalLeases.set(key, lease);
-        }
         return { id: entry.id, label: entry.label, root };
       });
       const root = this._local.put('composition', { sources: values });
       this._route(root, this._local.store);
+      const previous = this._current;
+      this._current = this._retainClosure(root);
+      void this._current.then(() => previous?.then(lease => lease.dispose()), () =>
+        previous?.then(lease => lease.dispose())).catch(() => {});
       this.root.set(root, undefined);
     });
   }
@@ -116,7 +155,15 @@ export class GraphComposition implements GraphSource {
     if (this._disposed) return;
     this._disposed = true;
     this._subscription.dispose();
-    await Promise.all([...this._historicalLeases.values()].map(async lease => (await lease).dispose()));
+    const current = this._current;
+    this._current = undefined;
+    try {
+      await (await current)?.dispose();
+    } finally {
+      this._sources.set([], undefined);
+      this._local.dispose();
+      this._pruneRoutes();
+    }
   }
 
   private _route(ref: GraphRef, store: GraphStore): void {
@@ -128,7 +175,6 @@ export class GraphComposition implements GraphSource {
 
   private async _lookup(ref: GraphRef, load = true): Promise<GraphLookup<JsonValue>> {
     const key = standardGraphRuntimeOptions.refKey(ref);
-    await this._historicalLeases.get(key);
     const routed = this._routes.get(key);
     const lookupFrom = (store: GraphStore) => !load && store.peek ? store.peek(ref) : store.lookup(ref);
     if (routed !== undefined) return lookupFrom(routed);
@@ -151,6 +197,12 @@ export class GraphComposition implements GraphSource {
   private async _retainClosure(root: GraphRef): Promise<GraphLease> {
     const leases: GraphLease[] = [];
     const seen = new Set<string>();
+    const tracking = { keys: seen, stores: new Set(this._stores) };
+    const usedStores = new Set<GraphStore>();
+    this._leases.add(tracking);
+    // Pin the composition's own root synchronously, before the first await.
+    const localLease = this._local.store.retainClosure(root);
+    leases.push(localLease);
     const queue: { ref: GraphRef; coveredBy?: GraphStore }[] = [{ ref: root }];
     try {
       while (queue.length > 0) {
@@ -160,9 +212,11 @@ export class GraphComposition implements GraphSource {
         seen.add(key);
         const value = await this._lookup(ref, false);
         const store = this._routes.get(key);
+        if (store) usedStores.add(store);
         // A store's closure lease already protects same-store descendants.
         // Continue walking only to discover edges into other stores.
-        if (store?.retainClosure !== undefined && store !== coveredBy) {
+        if (store?.retainClosure !== undefined && store !== coveredBy
+          && !(store === this._local.store && ref === root)) {
           leases.push(await store.retainClosure(ref));
         }
         if (value.found) {
@@ -171,8 +225,14 @@ export class GraphComposition implements GraphSource {
           for (const child of children) queue.push({ ref: child, coveredBy: store });
         }
       }
+      tracking.stores = usedStores;
     } catch (error) {
-      await disposeLeases(leases);
+      try {
+        await disposeLeases(leases);
+      } finally {
+        this._leases.delete(tracking);
+        this._pruneRoutes();
+      }
       throw error;
     }
     let disposed = false;
@@ -180,13 +240,34 @@ export class GraphComposition implements GraphSource {
       dispose: async () => {
         if (disposed) return;
         disposed = true;
-        await disposeLeases(leases);
+        try {
+          await disposeLeases(leases);
+        } finally {
+          this._leases.delete(tracking);
+          this._pruneRoutes();
+        }
       },
     };
   }
-}
 
-function noLease(): GraphLease { return { dispose() {} }; }
+  private _pruneRoutes(): void {
+    const stores = new Set<GraphStore>(this._disposed ? [] : [this._local.store]);
+    for (const entry of this._sources.get()) stores.add(entry.source.store);
+    const keys = new Set<string>();
+    if (!this._disposed) keys.add(standardGraphRuntimeOptions.refKey(this.root.get()));
+    for (const lease of this._leases) {
+      for (const key of lease.keys) keys.add(key);
+      for (const store of lease.stores) stores.add(store);
+    }
+    for (const key of this._routes.keys()) if (!keys.has(key)) this._routes.delete(key);
+    for (const store of this._stores) if (!stores.has(store)) this._stores.delete(store);
+  }
+
+  public get diagnostics(): { routes: number; stores: number; leases: number; objects: number } {
+    return { routes: this._routes.size, stores: this._stores.size, leases: this._leases.size,
+      objects: this._local.store.diagnostics.objects };
+  }
+}
 
 async function disposeLeases(leases: readonly GraphLease[]): Promise<void> {
   const results = await Promise.allSettled(leases.map(lease => Promise.resolve().then(() => lease.dispose())));

@@ -37,8 +37,15 @@ actual graph contract. Tags are optional hints and do not affect contract hashes
 `LocalGraphSource` interns immutable values in a unique namespace,
 `LazyGraphSource` materializes deferred objects only when fetched, and
 `GraphComposition` references independent source graphs without re-projecting
-their data. Compositions retain historical routing and root leases until
-disposed. `registerGraphSource(connection, source, { serviceId })` exposes the
+their data. Compositions retain current roots and explicitly leased historical
+roots, not every published revision. Local sources collect values unreachable
+from their current root and outstanding closure leases after root publication
+or lease release. Historical references must be leased before replacing their
+root; a bare reference is not ownership. Interning metadata is collected with
+values and monotonic IDs are never reassigned. `dispose()` releases a source's
+current root; explicit leases still protect their objects until released.
+Compositions do not dispose independently owned source adapters.
+`registerGraphSource(connection, source, { serviceId })` exposes the
 `linkrpc.graph.v1` interface with `objects` and `workspace` template groups;
 omitting `serviceId` registers at the root. It also exposes
 `linkrpc.graph.retained.v1`, with the same object store and a `root` watch
@@ -117,7 +124,21 @@ stops traversal through that object.
 
 `InMemoryImmutableGraphStore` clones/freezes JSON values, rejects replacement of
 immutable identities even after expiry, and provides idempotent closure leases.
-It retains identity tombstones rather than implementing automatic eviction.
+Leases share a ref-counted root entry instead of allocating a transitive set for
+every lease. Their reachability is evaluated against currently materialized
+objects, so children loaded after acquiring a lease are also protected.
+`collectGarbage(currentRoots)` reclaims unowned values but preserves identity
+tombstones. Owners that guarantee IDs are never reused may pass `true` as its
+second argument to collect tombstones too; `LocalGraphSource` does so.
+`diagnostics` reports object/identity/retained-root counts for store tests and
+operational inspection; local sources and compositions expose corresponding
+interning/routing/lease counts.
+
+Producer caches must not publish an old, unleased reference after reclamation:
+either own a lease while caching it, or regenerate the object/reference on reuse.
+This applies to application caches outside the graph, including deferred-content
+reference caches. Garbage collection does not itself dispose producer-specific
+loader closures or caches.
 The standard `{kind,id}` reference uses collision-free keys; applications must
 namespace IDs across stores. Custom reference schemas use explicit `refKey` and
 `isRef` callbacks. References must be unambiguous within JSON values.

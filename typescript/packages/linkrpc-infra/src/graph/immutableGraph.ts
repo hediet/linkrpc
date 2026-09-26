@@ -205,7 +205,8 @@ export class InMemoryImmutableGraphStore<TRef, TValue extends JsonValue>
 implements ImmutableGraphSource<TRef, TValue> {
     private readonly _objects = new Map<string, Stored<TValue>>();
     private readonly _identities = new Map<string, string>();
-    private readonly _retained = new Map<string, number>();
+    private readonly _retained = new Map<string, { ref: TRef; count: number }>();
+    private _onRelease: (() => void) | undefined;
 
     public constructor(private readonly _options: ImmutableGraphRuntimeOptions<TRef>) { }
 
@@ -222,7 +223,7 @@ implements ImmutableGraphSource<TRef, TValue> {
 
     public markUnavailable(ref: TRef, reason: Exclude<GraphMissingReason, 'oversized'>, detail?: string): void {
         const key = this._options.refKey(ref);
-        if ((this._retained.get(key) ?? 0) > 0) {
+        if (this.isRetained(ref)) {
             throw new Error(`Retained graph object "${key}" cannot be made unavailable.`);
         }
         this._objects.set(key, {
@@ -243,9 +244,25 @@ implements ImmutableGraphSource<TRef, TValue> {
     }
 
     public retainClosure(ref: TRef): GraphLease {
-        const keys = new Set<string>();
+        const key = this._options.refKey(ref);
+        const entry = this._retained.get(key);
+        if (entry) entry.count++;
+        else this._retained.set(key, { ref, count: 1 });
+        let disposed = false;
+        return {
+            dispose: () => {
+                if (disposed) return;
+                disposed = true;
+                const entry = this._retained.get(key)!;
+                if (--entry.count === 0) this._retained.delete(key);
+                this._onRelease?.();
+            },
+        };
+    }
+
+    private _reachable(roots: readonly TRef[]): Set<string> {
         const seen = new Set<string>();
-        const queue = [ref];
+        const queue = [...roots];
         for (let i = 0; i < queue.length; i++) {
             const current = queue[i]!;
             const key = this._options.refKey(current);
@@ -253,26 +270,38 @@ implements ImmutableGraphSource<TRef, TValue> {
             seen.add(key);
             const lookup = this.lookup(current);
             if (!lookup.found) continue;
-            keys.add(key);
             queue.push(...collectRefs(lookup.value, this._options.isRef));
         }
-        for (const key of keys) this._retained.set(key, (this._retained.get(key) ?? 0) + 1);
-        let disposed = false;
-        return {
-            dispose: () => {
-                if (disposed) return;
-                disposed = true;
-                for (const key of keys) {
-                    const count = this._retained.get(key)!;
-                    if (count <= 1) this._retained.delete(key);
-                    else this._retained.set(key, count - 1);
-                }
-            },
-        };
+        return seen;
     }
 
     public isRetained(ref: TRef): boolean {
-        return (this._retained.get(this._options.refKey(ref)) ?? 0) > 0;
+        return this._reachable([...this._retained.values()].map(entry => entry.ref))
+            .has(this._options.refKey(ref));
+    }
+
+    /** Reclaim values not reachable from current roots or explicit leases.
+     * Identity tombstones are preserved unless the owner guarantees IDs can never be reused.
+     */
+    public collectGarbage(roots: readonly TRef[], forgetIdentities = false): ReadonlySet<string> {
+        const reachable = this._reachable([...roots, ...[...this._retained.values()].map(entry => entry.ref)]);
+        for (const key of this._objects.keys()) {
+            if (!reachable.has(key)) this._objects.delete(key);
+        }
+        if (forgetIdentities) {
+            for (const key of this._identities.keys()) {
+                if (!reachable.has(key)) this._identities.delete(key);
+            }
+        }
+        return reachable;
+    }
+
+    public setReleaseListener(listener: (() => void) | undefined): void {
+        this._onRelease = listener;
+    }
+
+    public get diagnostics(): { objects: number; identities: number; retainedRoots: number } {
+        return { objects: this._objects.size, identities: this._identities.size, retainedRoots: this._retained.size };
     }
 }
 
