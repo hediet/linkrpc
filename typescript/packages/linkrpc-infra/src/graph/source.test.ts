@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { onTestFinished, test } from 'vitest';
 import { setImmediate } from 'node:timers/promises';
 import { autorun } from '@vscode/observables';
-import { LinkRpcConnection, type JsonRpcMessage } from '@hediet/linkrpc';
+import { LinkRpcConnection, TransportPair, type JsonRpcMessage } from '@hediet/linkrpc';
+import { GraphClient } from './client';
 import {
   GraphComposition, LocalGraphSource, createGraphRuntime, graphInterface, registerGraphSource,
   type GraphRef, type GraphSource, type JsonValue,
@@ -285,6 +286,97 @@ test('replacing 250 independent sources releases detached stores and route histo
   for (const source of sources.slice(0, -1)) assert.equal(source.diagnostics.retainedRoots, 0);
   await composition.dispose();
   for (const source of sources) source.dispose();
+});
+
+test('known routes acquire a lease before asynchronous peek can overlap root replacement and collection', async () => {
+  const local = new LocalGraphSource('delayed-peek');
+  const old = local.put('record', { version: 1 });
+  local.root.set(old, undefined);
+  let delayed = false;
+  let entered!: () => void;
+  const peeking = new Promise<void>(resolve => { entered = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const composition = new GraphComposition([{
+    id: 'source', label: 'Source',
+    source: {
+      root: local.root,
+      store: {
+        lookup: ref => local.store.lookup(ref),
+        retainClosure: ref => local.store.retainClosure(ref),
+        peek: async ref => {
+          if (delayed && ref.id === old.id) { entered(); await gate; }
+          return local.store.lookup(ref);
+        },
+      },
+    },
+  }]);
+  try {
+    await composition.store.lookup(composition.root.get());
+    delayed = true;
+    const acquiring = composition.store.retainClosure!(old);
+    await peeking;
+    local.root.set(local.put('record', { version: 2 }), undefined);
+    await composition.store.lookup(composition.root.get());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(local.store.isRetained(old), true);
+    assert.deepEqual(local.store.lookup(old), { found: true, value: { version: 1 } });
+    release();
+    const lease = await acquiring;
+    assert.deepEqual(await composition.store.lookup(old), { found: true, value: { version: 1 } });
+    await lease.dispose();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(local.store.lookup(old).found, false);
+  } finally {
+    release();
+    await composition.dispose();
+    local.dispose();
+  }
+});
+
+test('current retention failures surface through composition errors, lookups and watches, then recover', async () => {
+  const local = new LocalGraphSource('retention-error');
+  let fail = true;
+  const composition = new GraphComposition([{
+    id: 'source', label: 'Source',
+    source: {
+      root: local.root,
+      store: {
+        lookup: ref => local.store.lookup(ref),
+        retainClosure: ref => {
+          if (fail) throw new Error('Cannot retain source root');
+          return local.store.retainClosure(ref);
+        },
+      },
+    },
+  }]);
+  const pair = new TransportPair();
+  const server = LinkRpcConnection.fromTransport(pair.a);
+  const connection = LinkRpcConnection.fromTransport(pair.b);
+  const registration = registerGraphSource(server, composition);
+  const client = new GraphClient(connection);
+  try {
+    await assert.rejects(Promise.resolve(composition.store.lookup(composition.root.get())), /Cannot retain source root/);
+    await assert.rejects(Promise.resolve(composition.store.retainClosure!(composition.root.get())), /Cannot retain source root/);
+    assert.match(composition.error.get()?.message ?? '', /Cannot retain source root/);
+    for (let i = 0; i < 100 && !client.rootError.get(); i++) await setImmediate();
+    assert.match(client.rootError.get() ?? '', /Cannot retain source root/);
+    fail = false;
+    local.root.set(local.put('root', { recovered: true }), undefined);
+    await composition.store.lookup(composition.root.get());
+    assert.equal(composition.error.get(), undefined);
+    client.retryRoot();
+    for (let i = 0; i < 100 && client.root.get().kind !== 'ready'; i++) await setImmediate();
+    assert.equal(client.root.get().kind, 'ready');
+    assert.equal(client.rootError.get(), undefined);
+  } finally {
+    client.dispose();
+    registration.dispose();
+    await composition.dispose();
+    local.dispose();
+    connection.close();
+    server.close();
+  }
 });
 
 test.each(['', 'sources/test'])('standard interface roundtrips batches and watch acknowledgements with clean disposal (%s)', async serviceId => {

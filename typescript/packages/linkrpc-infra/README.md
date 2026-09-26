@@ -45,6 +45,10 @@ root; a bare reference is not ownership. Interning metadata is collected with
 values and monotonic IDs are never reassigned. `dispose()` releases a source's
 current root; explicit leases still protect their objects until released.
 Compositions do not dispose independently owned source adapters.
+Known source routes are leased before asynchronous peek/traversal. A current
+composition root whose retention fails is not silently exposed as available:
+`composition.error` reports the failure, and reading or watching that root
+rejects until a successfully retained replacement root is published.
 `registerGraphSource(connection, source, { serviceId })` exposes the
 `linkrpc.graph.v1` interface with `objects` and `workspace` template groups;
 omitting `serviceId` registers at the root. It also exposes

@@ -115,14 +115,17 @@ export class GraphComposition implements GraphSource {
   private readonly _routes = new Map<string, GraphStore>();
   private readonly _leases = new Set<{ keys: Set<string>; stores: Set<GraphStore> }>();
   private _current: Promise<GraphLease> | undefined;
+  private _currentRef: GraphRef | undefined;
+  private readonly _error = observableValue<Error | undefined>(this, undefined);
+  public readonly error: IObservable<Error | undefined> = this._error;
   private readonly _subscription;
   private _disposed = false;
   public readonly source: GraphSource = this;
   public readonly root = this._local.root;
   public readonly store: GraphStore = {
-    lookup: (ref) => this._lookup(ref),
-    peek: (ref) => this._lookup(ref, false),
-    retainClosure: (ref) => this._retainClosure(ref),
+    lookup: async (ref) => { await this._ready(ref); return this._lookup(ref); },
+    peek: async (ref) => { await this._ready(ref); return this._lookup(ref, false); },
+    retainClosure: async (ref) => { await this._ready(ref); return this._retainClosure(ref); },
   };
 
   public constructor(sources: readonly GraphSourceEntry[] = []) {
@@ -137,9 +140,18 @@ export class GraphComposition implements GraphSource {
       const root = this._local.put('composition', { sources: values });
       this._route(root, this._local.store);
       const previous = this._current;
-      this._current = this._retainClosure(root);
-      void this._current.then(() => previous?.then(lease => lease.dispose()), () =>
-        previous?.then(lease => lease.dispose())).catch(() => {});
+      const current = this._retainClosure(root);
+      this._current = current;
+      this._currentRef = root;
+      void current.then(() => {
+        if (this._current === current) this._error.set(undefined, undefined);
+      }, error => {
+        if (this._current === current) this._error.set(asError(error), undefined);
+      });
+      void current.then(() => previous?.then(lease => lease.dispose(), () => {}), () =>
+        previous?.then(lease => lease.dispose(), () => {})).catch(error => {
+          this._error.set(asError(error), undefined);
+        });
       this.root.set(root, undefined);
     });
   }
@@ -168,6 +180,7 @@ export class GraphComposition implements GraphSource {
     this._subscription.dispose();
     const current = this._current;
     this._current = undefined;
+    this._currentRef = undefined;
     try {
       await (await current)?.dispose();
     } finally {
@@ -182,6 +195,12 @@ export class GraphComposition implements GraphSource {
     const prior = this._routes.get(key);
     if (prior !== undefined && prior !== store) throw new Error('Graph reference collision between distinct stores.');
     this._routes.set(key, store);
+  }
+
+  private _ready(ref: GraphRef): Promise<unknown> | undefined {
+    if (this._currentRef && standardGraphRuntimeOptions.refKey(ref)
+      === standardGraphRuntimeOptions.refKey(this._currentRef)) return this._current;
+    return undefined;
   }
 
   private async _lookup(ref: GraphRef, load = true): Promise<GraphLookup<JsonValue>> {
@@ -221,15 +240,21 @@ export class GraphComposition implements GraphSource {
         const key = standardGraphRuntimeOptions.refKey(ref);
         if (seen.has(key)) continue;
         seen.add(key);
-        const value = await this._lookup(ref, false);
-        const store = this._routes.get(key);
-        if (store) usedStores.add(store);
+        let store = this._routes.get(key);
         // A store's closure lease already protects same-store descendants.
-        // Continue walking only to discover edges into other stores.
+        // Establish a known route's lease before awaiting a potentially async peek.
         if (store?.retainClosure !== undefined && store !== coveredBy
           && !(store === this._local.store && ref === root)) {
           leases.push(await store.retainClosure(ref));
         }
+        const value = await this._lookup(ref, false);
+        if (!store) {
+          store = this._routes.get(key);
+          if (store?.retainClosure !== undefined && store !== coveredBy) {
+            leases.push(await store.retainClosure(ref));
+          }
+        }
+        if (store) usedStores.add(store);
         if (value.found) {
           const children: GraphRef[] = [];
           collectRefs(value.value, children);
@@ -278,6 +303,10 @@ export class GraphComposition implements GraphSource {
     return { routes: this._routes.size, stores: this._stores.size, leases: this._leases.size,
       objects: this._local.store.diagnostics.objects };
   }
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 async function disposeLeases(leases: readonly GraphLease[]): Promise<void> {
