@@ -11,12 +11,12 @@ const CommandSchema = z.discriminatedUnion("kind", [
     }),
 ]);
 
-const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.linkrpc.streaming-interop\",\"hash\":\"5f78a76e3c307c41\",\"methods\":{\"cancellable\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"serverStream\":{\"type\":\"string\"}},\"exchange\":{\"params\":{\"type\":\"object\",\"required\":[\"fail\"],\"properties\":{\"fail\":{\"type\":\"boolean\"}},\"additionalProperties\":false},\"result\":{\"type\":\"integer\"},\"clientStream\":{\"$ref\":\"#/components/schemas/Command\"},\"serverStream\":{\"type\":[\"integer\",\"null\"],\"format\":\"int64\"}}},\"components\":{\"schemas\":{\"Command\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"kind\",\"value\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"add\"},\"value\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"kind\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"finish\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}}}}}");
+const wireSchema: LinkRpcInterfaceSchema = JSON.parse("{\"id\":\"dev.linkrpc.streaming-interop\",\"hash\":\"314f9dbf51f13f84\",\"methods\":{\"cancellable\":{\"params\":{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false},\"result\":{\"type\":\"string\"},\"serverStream\":{\"type\":\"string\"}},\"exchange\":{\"params\":{\"type\":\"object\",\"required\":[\"fail\"],\"properties\":{\"fail\":{\"type\":\"boolean\"}},\"additionalProperties\":false},\"result\":{\"type\":\"integer\"},\"clientStream\":{\"$ref\":\"#/components/schemas/Command\"},\"serverStream\":{\"anyOf\":[{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"null\"}]}}},\"components\":{\"schemas\":{\"Command\":{\"oneOf\":[{\"type\":\"object\",\"required\":[\"kind\",\"value\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"add\"},\"value\":{\"type\":\"integer\"}},\"additionalProperties\":false},{\"type\":\"object\",\"required\":[\"kind\"],\"properties\":{\"kind\":{\"type\":\"string\",\"const\":\"finish\"}},\"additionalProperties\":false}],\"discriminator\":{\"propertyName\":\"kind\"}}}}}");
 
 export const streamingInterop = new InterfaceDefinition(
     {
         id: "dev.linkrpc.streaming-interop",
-        hash: "5f78a76e3c307c41",
+        hash: "314f9dbf51f13f84",
     },
     {
         cancellable: requestType(
