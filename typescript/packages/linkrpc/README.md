@@ -7,6 +7,43 @@ message on the wire is a valid JSON-RPC message, and linkrpc adds just enough on
 strongly-typed services share one connection — an addressing grammar, built-in reflection,
 content-addressed interface identity, and optional layers for signing and capabilities.
 
+## Direct browser hub connections
+
+The `@hediet/linkrpc/web` entry exports the native `WebSocketTransport`,
+`openWebSocket`, and `connectWebSocketTransport` helpers without Node imports.
+The last helper completes the same `runInitializeHandshake` used by Node
+transports before exposing the connection:
+
+```ts
+import {
+  connectWebSocketTransport, JsonRpcChannel, SigningSender, LinkRpcConnection,
+} from '@hediet/linkrpc/web';
+
+const abort = new AbortController();
+const transport = await connectWebSocketTransport(endpoint, {
+  token: userSuppliedToken, // in-band initialization, not a URL parameter
+  signal: abort.signal,
+  timeoutMs: 10_000,
+  onClose: () => { /* clear connection-dependent state */ },
+});
+const connection = new LinkRpcConnection(SigningSender.wrapChannel(
+  JsonRpcChannel.create(transport), { principal },
+));
+// On disposal, close RPC state and the socket.
+connection.close();
+abort.abort();
+```
+
+`principal` is a caller-owned `Principal`; restore a browser identity with
+`KeypairSigningIdentity.fromJson` or generate one with `generateNew`, and pair
+it with a `CapBag`. Storage and explicit permission consent remain the app's
+responsibility. A connection token does not authorize a signing identity.
+These helpers never negotiate additional permissions or persist credentials.
+The browser must trust the endpoint's TLS certificate, and its Origin must be
+accepted by the server. `openWebSocket` accepts only standard browser
+subprotocols, cancellation, and timeout options; Node-only upgrade headers
+remain available through `@hediet/linkrpc/node`.
+
 ## Interface templates
 
 This bounded v1 adds TypeScript authoring groups over ordinary concrete RPC methods.
