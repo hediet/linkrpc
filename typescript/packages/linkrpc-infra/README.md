@@ -81,7 +81,9 @@ fetches a closure or traverses references found in an object. Consumers control
 expansion and viewport demand through `acquire(ref)`/`dispose()`. Structural
 ancestors can stay acquired while their children are displayed.
 
-The `GraphReader` interface exposes `root`, `acquire`, and `retry(ref)`.
+The `GraphReader` interface exposes `root`, `acquire`, and `retry(ref)`, with
+optional `rootError`/`refreshing` observables and optional handle
+`error`/`refreshing` observables so lightweight fixture readers remain valid.
 `LoadState<T>` is `{kind:'loading'}`, `{kind:'ready',value:T}`, or
 `{kind:'error',message:string}`. Root retry and `setConnection(newConnection)`
 preserve ready root and object values, including the stable per-reference
@@ -102,6 +104,8 @@ requested again only if acquired again. Missing, forbidden, expired,
 oversized, failed, or non-progressing responses produce explicit errors rather
 than retry storms. The client requires both canonical graph registrations;
 it does not silently fall back to unretained reads on older servers.
+A rejected per-object lease remains an object error but does not block newer
+workspace offers; a still-pending lease delays acknowledgement until it settles.
 
 `ImmutableGraphRuntime` traverses an `ImmutableGraphSource` deterministically,
 ancestor-first, deduplicating shared references and cycles. Selectors use JSON

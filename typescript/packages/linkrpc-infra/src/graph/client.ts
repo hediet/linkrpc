@@ -16,7 +16,14 @@ export type LoadState<T> =
 
 export interface GraphReader {
   readonly root: IObservable<LoadState<GraphRef>>
-  acquire(ref: GraphRef): { readonly state: IObservable<LoadState<JsonValue>>, dispose(): void }
+  readonly rootError?: IObservable<string | undefined>
+  readonly refreshing?: IObservable<boolean>
+  acquire(ref: GraphRef): {
+    readonly state: IObservable<LoadState<JsonValue>>
+    readonly error?: IObservable<string | undefined>
+    readonly refreshing?: IObservable<boolean>
+    dispose(): void
+  }
   retry(ref: GraphRef): void
 }
 
@@ -180,7 +187,9 @@ export class GraphClient implements GraphReader {
         // its own retained-root lease. This also covers pending batch requests.
         const pins = [...this._entries.values()].filter(entry => entry.users > 0)
           .map(entry => entry.pin?.ready)
-        void Promise.all(pins).then(() => {
+        // A failed pin stays an explicit per-object error. It cannot block a
+        // newer workspace that lets the consumer navigate away from that ref.
+        void Promise.allSettled(pins).then(() => {
           if (this._disposed || generation !== this._generation) return
           const current = this._root.get()
           if (current.kind !== 'ready' || keyOf(current.value) !== keyOf(offer.ref)) {

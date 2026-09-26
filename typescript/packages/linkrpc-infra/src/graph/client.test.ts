@@ -21,6 +21,7 @@ async function state<T>(observable: IObservable<LoadState<T>>): Promise<LoadStat
 function setup(
   batch: (request: GraphBatchRequest<GraphRef>) => Promise<GraphBatchResult<GraphRef, JsonValue>>,
   options: GraphClientOptions = {},
+  behavior: { root?: GraphRef; pinError?: (ref: GraphRef) => Error | undefined } = {},
 ) {
   const pair = new TransportPair()
   const server = LinkRpcConnection.fromTransport(pair.a)
@@ -38,12 +39,16 @@ function setup(
     } finally { watches-- }
   }
   server.register(graphProtocol, {
-    workspace: { watch: (_params, _ctx, stream) => watch(ref('root'), stream) },
+    workspace: { watch: (_params, _ctx, stream) => watch(behavior.root ?? ref('root'), stream) },
     objects: { batchObjGet: batch },
   })
   server.register(retainedGraphProtocol, {
     objects: { batchObjGet: batch },
-    root: { watch: (params, _ctx, stream) => watch(params.ref, stream) },
+    root: { watch: (params, _ctx, stream) => {
+      const error = behavior.pinError?.(params.ref)
+      if (error) throw error
+      return watch(params.ref, stream)
+    } },
   })
   const connection = LinkRpcConnection.fromTransport(pair.b)
   const client = new GraphClient(connection, options)
@@ -270,4 +275,41 @@ test('byte-budget cache eviction never evicts active readers and evicts their en
     again.dispose()
     b.dispose()
   } finally { env.dispose() }
+})
+
+test('failed old-reference retention on reconnect cannot wedge new workspace offers', async () => {
+  const batch = async (request: GraphBatchRequest<GraphRef>) => ({
+    objects: request.needs.map(need => ({ ref: need.ref, value: { title: need.ref.id } })),
+    missing: [], complete: true,
+  })
+  const first = setup(batch)
+  const replacement = setup(batch, {}, {
+    root: ref('new-root'),
+    pinError: item => item.id === 'expired-old' ? new Error('Old reference expired') : undefined,
+  })
+  try {
+    await state(first.client.root)
+    const old = first.client.acquire(ref('expired-old'))
+    await state(old.state)
+    const cached = old.state.get()
+    first.connection.close()
+    first.client.setConnection(replacement.connection)
+    for (let i = 0; i < 100; i++) {
+      const root = first.client.root.get()
+      if (root.kind === 'ready' && root.value.id === 'new-root') break
+      await tick()
+    }
+    assert.deepEqual(first.client.root.get(), { kind: 'ready', value: ref('new-root') })
+    assert.equal(first.client.rootError.get(), undefined)
+    assert.equal(old.state.get(), cached)
+    assert.match(old.error.get() ?? '', /Old reference expired/)
+    first.client.retryRoot()
+    await tick()
+    assert.equal(first.client.rootError.get(), undefined)
+    assert.equal(first.client.refreshing.get(), false)
+    const current = first.client.acquire(ref('new-root'))
+    assert.deepEqual(await state(current.state), { kind: 'ready', value: { title: 'new-root' } })
+    current.dispose()
+    old.dispose()
+  } finally { first.dispose(); replacement.dispose() }
 })
