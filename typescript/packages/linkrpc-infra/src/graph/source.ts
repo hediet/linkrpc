@@ -138,11 +138,11 @@ export class GraphComposition implements GraphSource {
     this.setSources(sources);
     this._subscription = autorun(reader => {
       const entries = this._sources.read(reader);
-      const values = entries.map(entry => {
+      const values = Object.fromEntries(entries.map(entry => {
         const root = entry.source.root.read(reader);
         this._route(root, entry.source.store);
-        return { id: entry.id, label: entry.label, root };
-      });
+        return [entry.id, { id: entry.id, label: entry.label, root }] as const;
+      }));
       const root = this._local.put('composition', { sources: values });
       this._route(root, this._local.store);
       const previous = this._current;
@@ -169,6 +169,7 @@ export class GraphComposition implements GraphSource {
     const routes = new Map(this._routes);
     for (const entry of sources) {
       if (ids.has(entry.id)) throw new Error(`Duplicate graph source id: ${entry.id}`);
+      if (isArrayIndexKey(entry.id)) throw new Error(`Graph source id must not be an integer-like object key: ${entry.id}`);
       ids.add(entry.id);
       const key = standardGraphRuntimeOptions.refKey(entry.source.root.get());
       const previous = routes.get(key);
@@ -311,6 +312,12 @@ export class GraphComposition implements GraphSource {
     return { routes: this._routes.size, stores: this._stores.size, leases: this._leases.size,
       objects: this._local.store.diagnostics.objects };
   }
+}
+
+function isArrayIndexKey(key: string): boolean {
+  if (key === '') return false;
+  const value = Number(key);
+  return Number.isInteger(value) && value >= 0 && value < 2 ** 32 - 1 && String(value) === key;
 }
 
 function asError(error: unknown): Error {

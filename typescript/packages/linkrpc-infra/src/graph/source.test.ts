@@ -51,10 +51,10 @@ test('two unrelated shapes compose without reference remapping and update indepe
   assert.equal(before.objects.length, 5);
   assert.deepEqual(before.missing, []);
   assert.deepEqual(before.objects[0]!.value, {
-    sources: [
-      { id: 'music', label: 'Music', root: music.root.get() },
-      { id: 'weather', label: 'Weather', root: weather.root.get() },
-    ],
+    sources: {
+      music: { id: 'music', label: 'Music', root: music.root.get() },
+      weather: { id: 'weather', label: 'Weather', root: weather.root.get() },
+    },
   });
   const weatherRoot = weather.root.get();
   const versions: GraphRef[] = [];
@@ -86,7 +86,7 @@ test('detached/replaced sources keep exact historical routing even with reused s
   composition.setSources([]);
   old.root.set(old.put('tree', { leaf: oldLeaf, detachedChange: true }), undefined);
   const empty = composition.root.get();
-  assert.deepEqual((await createGraphRuntime(composition).batchObjGet(request(empty))).objects[0]!.value, { sources: [] });
+  assert.deepEqual((await createGraphRuntime(composition).batchObjGet(request(empty))).objects[0]!.value, { sources: {} });
   const replacement = new LocalGraphSource('reused');
   replacement.root.set(replacement.put('tree', { content: 'new' }), undefined);
   composition.setSources([{ id: 'slot', label: 'Same', source: replacement }]);
@@ -107,7 +107,7 @@ test('cross-source traversal, closure haves, selectors, and bounded batches use 
     { id: 'inventory', label: 'Inventory', source: inventory },
   ]);
   const runtime = createGraphRuntime(composition);
-  const selected = await runtime.batchObjGet(request(composition.root.get(), ['/sources/0/root/@/product/@']));
+  const selected = await runtime.batchObjGet(request(composition.root.get(), ['/sources/orders/root/@/product/@']));
   assert.deepEqual(selected.objects.map(row => row.ref.id), [composition.root.get().id, orders.root.get().id, product.id]);
   const first = await runtime.batchObjGet({ ...request(composition.root.get()), limits: { ...limits, maxObjects: 2 } });
   assert.equal(first.complete, false);
@@ -197,6 +197,9 @@ test('ambiguous identities and duplicate source ids are rejected without changin
   assert.throws(() => composition.setSources([
     { id: 'same', label: 'A', source: a }, { id: 'same', label: 'B', source: a },
   ]), /Duplicate/);
+  assert.throws(() => composition.setSources([
+    { id: '0', label: 'Integer-like', source: a },
+  ]), /integer-like/);
   assert.equal(composition.root.get(), before);
   composition.setSources([{ id: 'a', label: 'A', source: a }]);
   composition.setSources([]);

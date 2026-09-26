@@ -37,7 +37,12 @@ actual graph contract. Tags are optional hints and do not affect contract hashes
 `LocalGraphSource` interns immutable values in a unique namespace,
 `LazyGraphSource` materializes deferred objects only when fetched, and
 `GraphComposition` references independent source graphs without re-projecting
-their data. Compositions retain current roots and explicitly leased historical
+their data. Its root is `{ sources: Record<sourceId, { id, label, root }> }`:
+the source id is the plain path segment used to address a source
+(`/sources/<sourceId>/root`), and the value repeats `id` for display and
+compatibility. `setSources` order is preserved for non-integer-like ids; integer-like
+ids are rejected because JavaScript object enumeration would reorder them.
+Compositions retain current roots and explicitly leased historical
 roots, not every published revision. Local sources collect values unreachable
 from their current root and outstanding closure leases after root publication
 or lease release. Historical references must be leased before replacing their
