@@ -89,6 +89,14 @@ request; consumers should read that state for their first render rather than
 introducing a separate loading placeholder. Releasing the last handle ends its
 server lease, not its local immutable cache lifetime.
 
+`client.peekCached(ref)` returns already-ready immutable JSON synchronously, or
+`undefined` for a miss, loading/error entry, or disposed client (`null` is a
+valid cached value). It creates no entry, request, or server lease and does not
+refresh LRU recency. This read-only snapshot can seed an initial render before
+mount acquires its handle, without a second application cache. It is not
+observable or ownership: displayed branches must still be acquired to protect
+descendants, and a snapshot does not prevent subsequent cache eviction.
+
 Once an object's JSON is loaded, the client checks whether it contains graph
 references. Ready leaves need no server lease, even on reacquisition or
 reconnection. Acquired branches keep (or reacquire) their retention watch to
@@ -97,7 +105,8 @@ any descendants. Idle cached branches hold no server leases and do not keep
 historical closures alive; reacquiring one whose descendants have expired still
 exposes its cached value and reports the lease failure separately.
 
-The `GraphReader` interface exposes `root`, `acquire`, and `retry(ref)`, with
+The `GraphReader` interface exposes `root`, `acquire`, and `retry(ref)`, with an
+optional `peekCached(ref)` snapshot method,
 optional `rootError`/`refreshing` observables and optional handle
 `error`/`refreshing` observables so lightweight fixture readers remain valid.
 `LoadState<T>` is `{kind:'loading'}`, `{kind:'ready',value:T}`, or

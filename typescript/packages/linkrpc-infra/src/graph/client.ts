@@ -18,6 +18,8 @@ export interface GraphReader {
   readonly root: IObservable<LoadState<GraphRef>>
   readonly rootError?: IObservable<string | undefined>
   readonly refreshing?: IObservable<boolean>
+  /** Ready cached JSON without creating demand, retaining descendants, or refreshing LRU recency. */
+  peekCached?(ref: GraphRef): JsonValue | undefined
   acquire(ref: GraphRef): {
     readonly state: IObservable<LoadState<JsonValue>>
     readonly error?: IObservable<string | undefined>
@@ -124,6 +126,12 @@ export class GraphClient implements GraphReader {
   /** Report transport setup failures without replacing already displayed immutable values. */
   public reportConnectionError(error: unknown): void {
     if (!this._disposed) this._failRoot(error)
+  }
+
+  /** A snapshot, not ownership: acquire displayed branches to retain their descendants. */
+  public peekCached(ref: GraphRef): JsonValue | undefined {
+    const state = this._entries.get(keyOf(ref))?.state.get()
+    return state?.kind === 'ready' ? state.value : undefined
   }
 
   public acquire(ref: GraphRef): GraphObjectHandle {

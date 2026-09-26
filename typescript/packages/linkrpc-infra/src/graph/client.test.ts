@@ -170,6 +170,85 @@ test('disposing before pin confirmation cancels object demand', async () => {
   env.dispose()
 })
 
+test('peekCached exposes only ready immutable values without demand or leases', async () => {
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let calls = 0
+  const env = setup(async request => {
+    calls++
+    await gate
+    return {
+      objects: request.needs.filter(need => need.ref.id !== 'missing').map(need => ({
+        ref: need.ref,
+        value: need.ref.id === 'null' ? null : { nested: { text: 'cached' } },
+      })),
+      missing: request.needs.filter(need => need.ref.id === 'missing')
+        .map(need => ({ ref: need.ref, reason: 'missing' as const })),
+      complete: true,
+    }
+  })
+  try {
+    assert.equal(env.client.peekCached(ref('unseen')), undefined)
+    await tick()
+    assert.equal(calls, 0)
+    assert.equal(env.pinned.length, 0)
+    const ready = env.client.acquire(ref('ready'))
+    const nil = env.client.acquire(ref('null'))
+    const missing = env.client.acquire(ref('missing'))
+    assert.equal(env.client.peekCached(ref('ready')), undefined)
+    release()
+    const loaded = await state(ready.state)
+    await Promise.all([state(nil.state), state(missing.state)])
+    assert.equal(loaded.kind, 'ready')
+    if (loaded.kind !== 'ready') throw new Error('Expected ready object')
+    assert.equal(env.client.peekCached(ref('ready')), loaded.value)
+    assert.ok(Object.isFrozen(env.client.peekCached(ref('ready'))))
+    assert.equal(env.client.peekCached(ref('null')), null)
+    assert.equal(env.client.peekCached(ref('missing')), undefined)
+    ready.dispose()
+    nil.dispose()
+    missing.dispose()
+    await tick()
+    const pins = env.pinned.length
+    const requests = calls
+    assert.equal(env.client.peekCached(ref('ready')), loaded.value)
+    await tick()
+    assert.equal(env.pinned.length, pins)
+    assert.equal(calls, requests)
+    env.client.setConnection(undefined)
+    assert.equal(env.client.peekCached(ref('ready')), loaded.value)
+    env.client.dispose()
+    assert.equal(env.client.peekCached(ref('ready')), undefined)
+  } finally { release(); env.dispose() }
+})
+
+test('peekCached neither refreshes LRU recency nor retains cached branch descendants', async () => {
+  const env = setup(async request => ({
+    objects: request.needs.map(need => ({ ref: need.ref, value: { child: ref('child') } })),
+    missing: [], complete: true,
+  }), { maxCachedObjects: 2 })
+  try {
+    for (const id of ['a', 'b']) {
+      const handle = env.client.acquire(ref(id))
+      await state(handle.state)
+      handle.dispose()
+    }
+    for (let i = 0; i < 100 && env.watches() !== 1; i++) await tick()
+    assert.equal(env.watches(), 1)
+    const pins = env.pinned.length
+    assert.deepEqual(env.client.peekCached(ref('a')), { child: ref('child') })
+    await tick()
+    assert.equal(env.pinned.length, pins)
+    assert.equal(env.watches(), 1, 'peeking a branch cannot establish retention')
+    const c = env.client.acquire(ref('c'))
+    await state(c.state)
+    c.dispose()
+    assert.equal(env.client.peekCached(ref('a')), undefined, 'peek must not update recency')
+    assert.deepEqual(env.client.peekCached(ref('b')), { child: ref('child') })
+    assert.deepEqual(env.client.peekCached(ref('c')), { child: ref('child') })
+  } finally { env.dispose() }
+})
+
 test('active objects and transient misses do not consume the idle-ready cache budget', async () => {
   const env = setup(async request => ({
     objects: request.needs.map(need => ({ ref: need.ref, value: 'cached' })),
