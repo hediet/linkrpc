@@ -192,6 +192,7 @@ export class GraphClient implements GraphReader {
     if (this._root.get().kind !== 'ready') this._root.set({ kind: 'loading' }, undefined)
     this._rootError.set(undefined, undefined)
     this._refreshing.set(true, undefined)
+    let applied = 0
     const watch = this._api.workspace.watch({}, {
       onMessage: offer => {
         // Do not release the accepted workspace until every visible object has
@@ -201,13 +202,16 @@ export class GraphClient implements GraphReader {
         // A failed pin stays an explicit per-object error. It cannot block a
         // newer workspace that lets the consumer navigate away from that ref.
         void Promise.allSettled(pins).then(() => {
-          if (this._disposed || generation !== this._generation) return
+          // Offers stream without waiting for acknowledgements; never regress to an older root.
+          if (this._disposed || generation !== this._generation || offer.version <= applied) return
+          applied = offer.version
           const current = this._root.get()
           if (current.kind !== 'ready' || keyOf(current.value) !== keyOf(offer.ref)) {
             this._root.set({ kind: 'ready', value: Object.freeze({ ...offer.ref }) }, undefined)
           }
           this._refreshing.set(false, undefined)
           this._rootError.set(undefined, undefined)
+          // Optional hint that lets the server release superseded roots before their grace period.
           return watch.send({ accept: offer.version })
         }).catch(error => {
           if (!this._disposed && generation === this._generation) {

@@ -185,3 +185,40 @@ test('registration disposal during lazy initialization cannot leave a root watch
   connection.close()
   server.close()
 })
+
+test('a client that never acknowledges receives every newer root and old roots stay queryable', async () => {
+  const source = new LocalGraphSource('no-ack')
+  const oldItem = source.put('item', { text: 'old' })
+  const oldRoot = source.put('catalog', { items: [oldItem] })
+  source.root.set(oldRoot, undefined)
+  const pair = new TransportPair()
+  const server = LinkRpcConnection.fromTransport(pair.a)
+  const registration = registerGraphSource(server, async () => source)
+  const client = LinkRpcConnection.fromTransport(pair.b)
+  const offers: { version: number, ref: { id: string } }[] = []
+  const watch = client.get(graphProtocol).workspace.watch({}, { onMessage: offer => { offers.push(offer) } })
+  void watch.catch(() => {})
+  const waitFor = async (condition: () => boolean) => {
+    for (let i = 0; i < 200 && !condition(); i++) await new Promise(resolve => setTimeout(resolve, 5))
+    assert.ok(condition())
+  }
+  try {
+    await waitFor(() => offers.length === 1)
+    const newer = source.put('catalog', { items: [] })
+    source.root.set(newer, undefined)
+    const newest = source.put('catalog', { items: [source.put('item', { text: 'new' })] })
+    source.root.set(newest, undefined)
+    await waitFor(() => offers.at(-1)?.ref.id === newest.id)
+    assert.deepEqual(offers.map(offer => offer.version), offers.map(offer => offer.version).sort((a, b) => a - b))
+    assert.equal(source.store.isRetained(oldRoot), true, 'superseded root stays queryable during its grace period')
+    const response = await client.get(graphProtocol).objects.batchObjGet({
+      needs: [{ ref: oldItem, paths: ['/'] }], have: [], limits: { maxObjects: 10, maxBytes: 100_000 },
+    })
+    assert.deepEqual(response.objects.map(object => object.value), [{ text: 'old' }])
+  } finally {
+    await watch.cancel().catch(() => {})
+    registration.dispose()
+    client.close()
+    server.close()
+  }
+})

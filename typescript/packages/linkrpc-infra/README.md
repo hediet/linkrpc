@@ -185,12 +185,21 @@ The standard `{kind,id}` reference uses collision-free keys; applications must
 namespace IDs across stores. Custom reference schemas use explicit `refKey` and
 `isRef` callbacks. References must be unambiguous within JSON values.
 
-`RootWatchCoordinator` publishes versioned root offers and retains each watcher's
-accepted root plus one outstanding offer. `{accept: version}` releases the prior
-accepted lease; later publications coalesce until that acknowledgement. Stale
-acknowledgements are ignored. `watch.cancel()` (or transport closure) releases
-watcher leases, including leases acquired after cancellation, without requiring
-an acknowledgement. The publisher owns the availability of current/pending roots
+`RootWatchCoordinator` streams versioned root offers to each watcher as soon as
+they are published; it does not wait for acknowledgements. While a send is in
+flight, later publications coalesce to the newest root. Each watcher retains
+its newest root. A superseded root remains queryable for `supersededGraceMs`
+(default 10 s), and at most `maxSuperseded` (default 8) superseded roots are kept.
+`{accept: version}` is an optional hint: it releases the roots older than
+`version` early. Stale or unknown acknowledgements are ignored.
+
+Ordering guarantee: a superseded root is released only after its successor has
+been sent on the same watch. A client therefore always receives the newer root
+before objects that were reachable only from the older root report `expired`.
+On `expired`, clients should read from their newest root rather than retry.
+`watch.cancel()` (or transport closure) releases all watcher leases, including
+leases acquired after cancellation.
+The publisher owns the availability of current/pending roots
 outside those leases. The coordinator remembers current roots per `paramsKey`;
 use a coordinator scoped to the owning service/resource lifetime. A source must
 keep its immutable values and closure-retention contract consistent.

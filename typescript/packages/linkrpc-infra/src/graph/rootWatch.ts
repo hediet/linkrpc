@@ -15,11 +15,24 @@ export interface RootWatchCoordinatorOptions<TParams, TRef> {
     readonly paramsKey: (params: TParams) => string;
     readonly sameRef: (left: TRef, right: TRef) => boolean;
     readonly retention: RootRetention<TRef>;
+    /** How long a superseded root stays queryable without an acknowledgement. */
+    readonly supersededGraceMs?: number;
+    /** Upper bound on superseded roots retained per watcher; the oldest is released first. */
+    readonly maxSuperseded?: number;
 }
 interface RetainedOffer<TRef> extends RootOffer<TRef> {
     readonly lease: GraphLease;
+    timer?: ReturnType<typeof setTimeout>;
 }
 
+export const defaultSupersededRootGraceMs = 10_000;
+export const defaultMaxSupersededRoots = 8;
+
+/**
+ * Streams the newest root per watcher without waiting for acknowledgements.
+ * A superseded root is released only after its successor was sent, so a client
+ * always observes the newer root before objects of the older one expire.
+ */
 export class RootWatchCoordinator<TParams, TRef> {
     private readonly _roots = new Map<string, TRef>();
     private readonly _watchers = new Set<RootWatcher<TRef>>();
@@ -37,10 +50,14 @@ export class RootWatchCoordinator<TParams, TRef> {
 
     public watch(params: TParams, stream: StreamApi<RootAccept, RootOffer<TRef>>): Promise<Record<string, never>> {
         const key = this._options.paramsKey(params);
-        const watcher = new RootWatcher(
-            key, stream, this._options.retention, this._options.sameRef,
-            () => this._nextVersion++, () => this._watchers.delete(watcher),
-        );
+        const watcher = new RootWatcher(key, stream, {
+            retention: this._options.retention,
+            sameRef: this._options.sameRef,
+            graceMs: this._options.supersededGraceMs ?? defaultSupersededRootGraceMs,
+            maxSuperseded: this._options.maxSuperseded ?? defaultMaxSupersededRoots,
+            nextVersion: () => this._nextVersion++,
+            onDispose: () => this._watchers.delete(watcher),
+        });
         this._watchers.add(watcher);
         watcher.start();
         if (this._roots.has(key)) watcher.offer(this._roots.get(key)!);
@@ -48,10 +65,19 @@ export class RootWatchCoordinator<TParams, TRef> {
     }
 }
 
+interface RootWatcherOptions<TRef> {
+    readonly retention: RootRetention<TRef>;
+    readonly sameRef: (left: TRef, right: TRef) => boolean;
+    readonly graceMs: number;
+    readonly maxSuperseded: number;
+    readonly nextVersion: () => number;
+    readonly onDispose: () => void;
+}
+
 class RootWatcher<TRef> {
-    private _accepted: RetainedOffer<TRef> | undefined;
-    private _offered: RetainedOffer<TRef> | undefined;
-    private _pending: { ref: TRef } | undefined;
+    /** Retained offers in version order; the last one is the newest sent (or sending) root. */
+    private readonly _retained: RetainedOffer<TRef>[] = [];
+    private _wanted: { ref: TRef } | undefined;
     private _queue = Promise.resolve();
     private _settled = false;
     private readonly _resolve: (value: Record<string, never>) => void;
@@ -62,10 +88,7 @@ class RootWatcher<TRef> {
     public constructor(
         public readonly paramsKey: string,
         private readonly _stream: StreamApi<RootAccept, RootOffer<TRef>>,
-        private readonly _retention: RootRetention<TRef>,
-        private readonly _sameRef: (left: TRef, right: TRef) => boolean,
-        private readonly _nextVersion: () => number,
-        private readonly _onDispose: () => void,
+        private readonly _options: RootWatcherOptions<TRef>,
     ) {
         let resolve!: (value: Record<string, never>) => void;
         let reject!: (error: unknown) => void;
@@ -81,7 +104,9 @@ class RootWatcher<TRef> {
     }
 
     public offer(ref: TRef): void {
-        this._enqueue(() => this._offer(ref));
+        if (this._settled) return;
+        this._wanted = { ref };
+        this._enqueue(() => this._sendWanted());
     }
 
     private _enqueue(operation: () => Promise<void>): void {
@@ -89,48 +114,56 @@ class RootWatcher<TRef> {
         this._queue = this._queue.then(operation).catch((error: unknown) => this._finish([error]));
     }
 
-    private async _offer(ref: TRef): Promise<void> {
-        if (this._settled) return;
-        if (this._offered !== undefined) {
-            this._pending = this._sameRef(this._offered.ref, ref) ? undefined : { ref };
-            return;
-        }
-        if (this._accepted !== undefined && this._sameRef(this._accepted.ref, ref)) {
-            this._pending = undefined;
-            return;
-        }
-        const lease = await this._retention.retainClosure(ref);
+    private async _sendWanted(): Promise<void> {
+        const wanted = this._wanted;
+        this._wanted = undefined;
+        if (this._settled || wanted === undefined) return;
+        const previous = this._retained.at(-1);
+        if (previous !== undefined && this._options.sameRef(previous.ref, wanted.ref)) return;
+        const lease = await this._options.retention.retainClosure(wanted.ref);
         if (this._settled) {
             await lease.dispose();
             return;
         }
-        const offer = { version: this._nextVersion(), ref, lease };
-        this._offered = offer;
+        const offer: RetainedOffer<TRef> = { version: this._options.nextVersion(), ref: wanted.ref, lease };
+        this._retained.push(offer);
         await this._stream.send({ version: offer.version, ref: offer.ref });
+        if (this._settled || previous === undefined) return;
+        previous.timer = setTimeout(() => this._enqueue(() => this._release(previous)), this._options.graceMs);
+        (previous.timer as { unref?: () => void }).unref?.();
+        const superseded = this._retained.slice(0, -1);
+        for (const expired of superseded.slice(0, Math.max(0, superseded.length - this._options.maxSuperseded))) {
+            await this._release(expired);
+        }
     }
 
+    /** An acknowledgement is an optional hint: the client no longer needs roots older than it. */
     private async _accept(version: number): Promise<void> {
-        if (this._settled || this._offered?.version !== version) return;
-        const previous = this._accepted;
-        this._accepted = this._offered;
-        this._offered = undefined;
-        if (previous !== undefined) await previous.lease.dispose();
-        const pending = this._pending;
-        this._pending = undefined;
-        if (pending !== undefined) await this._offer(pending.ref);
+        const index = this._retained.findIndex(offer => offer.version === version);
+        if (this._settled || index <= 0) return;
+        for (const older of this._retained.slice(0, index)) await this._release(older);
+    }
+
+    private async _release(offer: RetainedOffer<TRef>): Promise<void> {
+        const index = this._retained.indexOf(offer);
+        if (this._settled || index < 0 || index === this._retained.length - 1) return;
+        clearTimeout(offer.timer);
+        this._retained.splice(index, 1);
+        await offer.lease.dispose();
     }
 
     private async _finish(errors: unknown[]): Promise<void> {
         if (this._settled) return;
         this._settled = true;
         this._stream.signal.removeEventListener('abort', this._abort);
-        this._onDispose();
-        const leases = [this._accepted?.lease, this._offered?.lease];
-        this._accepted = undefined;
-        this._offered = undefined;
-        this._pending = undefined;
+        this._options.onDispose();
+        const leases = this._retained.splice(0).map(offer => {
+            clearTimeout(offer.timer);
+            return offer.lease;
+        });
+        this._wanted = undefined;
         const outcomes = await Promise.allSettled(leases.map(lease =>
-            Promise.resolve().then(() => lease?.dispose())));
+            Promise.resolve().then(() => lease.dispose())));
         for (const outcome of outcomes) {
             if (outcome.status === 'rejected') errors.push(outcome.reason);
         }

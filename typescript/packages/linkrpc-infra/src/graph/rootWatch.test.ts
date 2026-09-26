@@ -28,36 +28,97 @@ function fixture() {
     return { sent, abort, stream, accept: (version: number) => listener({ accept: version }) };
 }
 const flush = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 const options = (retention = new Retention()) => ({
     paramsKey: (params: string) => params, sameRef: (a: string, b: string) => a === b, retention,
 });
 
 describe('root watch coordinator', () => {
-    it('retains accepted plus offered roots, coalesces pending roots and ignores stale acknowledgements', async () => {
+    it('streams newest roots without acknowledgements and coalesces while a send is in flight', async () => {
         const opts = options();
         const coordinator = new RootWatchCoordinator(opts);
         const f = fixture();
+        let unblock!: () => void;
+        const blocked = new Promise<void>(resolve => { unblock = resolve; });
+        let sends = 0;
+        f.stream.send = async offer => { f.sent.push(offer); if (sends++ === 0) await blocked; };
         coordinator.publish('root', 'one');
         const watching = coordinator.watch('root', f.stream);
         await flush();
         coordinator.publish('root', 'two');
         coordinator.publish('root', 'three');
-        f.accept(999);
         await flush();
         expect(f.sent.map(offer => offer.ref)).toEqual(['one']);
-        expect([...opts.retention.counts.keys()]).toEqual(['one']);
-        f.accept(f.sent[0]!.version);
+        unblock();
         await flush();
         expect(f.sent.map(offer => offer.ref)).toEqual(['one', 'three']);
         expect([...opts.retention.counts.keys()]).toEqual(['one', 'three']);
+        f.abort.abort();
+        await expect(watching).resolves.toEqual({});
+        expect(opts.retention.counts.size).toBe(0);
+    });
+
+    it('acknowledgements release older roots early and stale or unknown versions are ignored', async () => {
+        const opts = options();
+        const coordinator = new RootWatchCoordinator({ ...opts, supersededGraceMs: 60_000 });
+        const f = fixture();
+        coordinator.publish('root', 'one');
+        const watching = coordinator.watch('root', f.stream);
+        await flush();
+        coordinator.publish('root', 'two');
+        await flush();
+        coordinator.publish('root', 'three');
+        await flush();
+        expect([...opts.retention.counts.keys()]).toEqual(['one', 'two', 'three']);
+        f.accept(999);
         f.accept(f.sent[0]!.version);
         await flush();
-        expect([...opts.retention.counts.keys()]).toEqual(['one', 'three']);
+        expect([...opts.retention.counts.keys()]).toEqual(['one', 'two', 'three']);
         f.accept(f.sent[1]!.version);
+        await flush();
+        expect([...opts.retention.counts.keys()]).toEqual(['two', 'three']);
+        f.accept(f.sent[0]!.version);
+        f.accept(f.sent[2]!.version);
         await flush();
         expect([...opts.retention.counts.keys()]).toEqual(['three']);
         f.abort.abort();
-        await expect(watching).resolves.toEqual({});
+        await watching;
+    });
+
+    it('superseded roots expire after the grace period only once their successor was sent', async () => {
+        const opts = options();
+        const coordinator = new RootWatchCoordinator({ ...opts, supersededGraceMs: 5 });
+        const f = fixture();
+        coordinator.publish('root', 'one');
+        const watching = coordinator.watch('root', f.stream);
+        await flush();
+        let unblock!: () => void;
+        f.stream.send = offer => { f.sent.push(offer); return new Promise<void>(resolve => { unblock = resolve; }); };
+        coordinator.publish('root', 'two');
+        await sleep(20);
+        expect([...opts.retention.counts.keys()]).toEqual(['one', 'two']);
+        unblock();
+        await flush();
+        expect([...opts.retention.counts.keys()]).toEqual(['one', 'two']);
+        await sleep(20);
+        expect([...opts.retention.counts.keys()]).toEqual(['two']);
+        f.abort.abort();
+        await watching;
+    });
+
+    it('bounds superseded roots per watcher, releasing the oldest first', async () => {
+        const opts = options();
+        const coordinator = new RootWatchCoordinator({ ...opts, supersededGraceMs: 60_000, maxSuperseded: 2 });
+        const f = fixture();
+        const watching = coordinator.watch('root', f.stream);
+        for (const ref of ['one', 'two', 'three', 'four', 'five']) {
+            coordinator.publish('root', ref);
+            await flush();
+        }
+        expect(f.sent.map(offer => offer.ref)).toEqual(['one', 'two', 'three', 'four', 'five']);
+        expect([...opts.retention.counts.keys()]).toEqual(['three', 'four', 'five']);
+        f.abort.abort();
+        await watching;
         expect(opts.retention.counts.size).toBe(0);
     });
 
