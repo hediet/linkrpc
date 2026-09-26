@@ -591,6 +591,46 @@ test('failed old-reference retention on reconnect cannot wedge new workspace off
   } finally { first.dispose(); replacement.dispose() }
 })
 
+test('reacquiring an expired cached branch preserves its ready state through pin failures and retries', async () => {
+  let expired = false
+  let calls = 0
+  const env = setup(async request => {
+    calls++
+    return {
+      objects: request.needs.map(need => ({ ref: need.ref, value: { child: ref('child') } })),
+      missing: [], complete: true,
+    }
+  }, {}, { pinError: () => expired ? new Error('Old reference expired') : undefined })
+  try {
+    const initial = env.client.acquire(ref('old'))
+    const loaded = await state(initial.state)
+    assert.equal(loaded.kind, 'ready')
+    if (loaded.kind !== 'ready') throw new Error('Expected ready branch')
+    initial.dispose()
+    expired = true
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const reopened = env.client.acquire(ref('old'))
+      assert.equal(reopened.state, initial.state)
+      assert.equal(reopened.state.get(), loaded, 'the initial reopened render must be ready')
+      for (let i = 0; i < 100 && reopened.refreshing.get(); i++) {
+        assert.equal(reopened.state.get(), loaded, 'a pending pin cannot replace ready data')
+        await tick()
+      }
+      assert.match(reopened.error.get() ?? '', /Old reference expired/)
+      assert.equal(reopened.refreshing.get(), false)
+      assert.equal(reopened.state.get(), loaded)
+      assert.equal(env.client.peekCached(ref('old')), loaded.value)
+      reopened.retry()
+      assert.equal(reopened.state.get(), loaded, 'retry cannot replace ready data with loading')
+      for (let i = 0; i < 100 && reopened.refreshing.get(); i++) await tick()
+      assert.match(reopened.error.get() ?? '', /Old reference expired/)
+      assert.equal(reopened.state.get(), loaded)
+      reopened.dispose()
+    }
+    assert.equal(calls, 1, 'failed retention must not refetch an immutable cached object')
+  } finally { env.dispose() }
+})
+
 test('the same reader switches service routes, preserves omitted targets and resets with empty options', async () => {
   const pair = new TransportPair()
   const server = LinkRpcConnection.fromTransport(pair.a)
