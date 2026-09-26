@@ -34,6 +34,10 @@
             "@hediet/source": "./src/json-rpc/index.ts",
             "default": "./dist/json-rpc/index.js"
         },
+        "./json-rpc/protocol": {
+            "@hediet/source": "./src/json-rpc/protocol.ts",
+            "default": "./dist/json-rpc/protocol.js"
+        },
         "./logging": {
             "@hediet/source": "./src/logging/index.ts",
             "default": "./dist/logging/index.js"
@@ -77,6 +81,7 @@
             "./inspection": "./dist/inspection/index.js",
             "./json-document": "./dist/json-document/index.js",
             "./json-rpc": "./dist/json-rpc/index.js",
+            "./json-rpc/protocol": "./dist/json-rpc/protocol.js",
             "./logging": "./dist/logging/index.js",
             "./package.json": "./package.json"
         }

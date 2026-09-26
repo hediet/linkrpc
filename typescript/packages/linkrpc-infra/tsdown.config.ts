@@ -8,6 +8,7 @@ export default defineConfig({
         'inspection/index': 'src/inspection/index.ts',
         'json-document/index': 'src/json-document/index.ts',
         'json-rpc/index': 'src/json-rpc/index.ts',
+        'json-rpc/protocol': 'src/json-rpc/protocol.ts',
         'logging/index': 'src/logging/index.ts',
     },
     format: 'esm',

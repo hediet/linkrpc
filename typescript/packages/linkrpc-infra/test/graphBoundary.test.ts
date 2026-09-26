@@ -82,4 +82,20 @@ describe('public graph package boundary', () => {
         expect(core.exports['./graph']).toBeUndefined();
         expect(core.dependencies?.['@hediet/linkrpc-infra']).toBeUndefined();
     });
+
+    it('publishes JSON-RPC protocol contracts without pulling in Node transports', () => {
+        const seen = new Set<string>();
+        function inspect(url: URL): void {
+            if (seen.has(url.href)) return;
+            seen.add(url.href);
+            const text = readFileSync(url, 'utf8');
+            expect(text).not.toMatch(/(?:from|import)\s*(?:\(\s*)?["']node:/);
+            for (const file of ts.preProcessFile(text).importedFiles) {
+                if (file.fileName.startsWith('.')) inspect(new URL(file.fileName, url));
+            }
+        }
+        inspect(new URL('../dist/json-rpc/protocol.js', import.meta.url));
+        const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+        expect(manifest.publishConfig.exports['./json-rpc/protocol']).toBe('./dist/json-rpc/protocol.js');
+    });
 });
