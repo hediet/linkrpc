@@ -40,8 +40,61 @@ actual graph contract. Tags are optional hints and do not affect contract hashes
 their data. Compositions retain historical routing and root leases until
 disposed. `registerGraphSource(connection, source, { serviceId })` exposes the
 `linkrpc.graph.v1` interface with `objects` and `workspace` template groups;
-omitting `serviceId` registers at the root. Dispose both the registration and
-the owned composition when its server stops.
+omitting `serviceId` registers at the root. It also exposes
+`linkrpc.graph.retained.v1`, with the same object store and a `root` watch
+parameterized by an immutable reference. These independent leases protect
+acquired objects and their closures when the workspace acknowledgement advances.
+Both contracts, the client, and registration are exported from the browser-safe
+`@hediet/linkrpc-infra/graph` entry. The source entry reexports the same canonical
+`graphInterface` and registration for compatibility. Registration accepts a
+source or an asynchronous source provider, so server initialization can be lazy.
+Dispose both the registration and the owned composition when its server stops.
+
+### Demand-driven shared client
+
+```ts
+import { GraphClient, registerGraphSource } from '@hediet/linkrpc-infra/graph';
+
+const registration = registerGraphSource(serverConnection, source);
+const client = new GraphClient(browserConnection);
+// client.root is IObservable<LoadState<GraphRef>>.
+// Acquire only an object needed by a currently rendered view:
+const handle = client.acquire(ref);
+// handle.state is IObservable<LoadState<JsonValue>>.
+// Mount/unmount controls the lifetime; nested references are not prefetched.
+handle.dispose();
+client.dispose();
+registration.dispose();
+```
+
+`GraphClient` owns exact-object (`paths: ['/']`) bounded batches, pending-reader
+deduplication, immutable caching, partial-batch continuation, explicit retries,
+root acknowledgements, and acquired-reference retention watches. It never
+fetches a closure or traverses references found in an object. Consumers control
+expansion and viewport demand through `acquire(ref)`/`dispose()`. Structural
+ancestors can stay acquired while their children are displayed.
+
+The `GraphReader` interface exposes `root`, `acquire`, and `retry(ref)`.
+`LoadState<T>` is `{kind:'loading'}`, `{kind:'ready',value:T}`, or
+`{kind:'error',message:string}`. Root retry and `setConnection(newConnection)`
+preserve ready root and object values, including the stable per-reference
+observable identity. A repeated offer of the same immutable root does not
+invalidate the root observable. Transport/lease failures remain visible through
+`rootError` and handle `error` observables without replacing cached ready values;
+`refreshing` distinguishes pending root/lease refresh. Initial failures still
+appear directly in `LoadState`. `reportConnectionError(error)` lets a transport
+adapter report connection setup failures. There is no automatic reconnect or
+retry loop: the owner supplies the next connection or calls `retryRoot()` /
+`retry(ref)`. Connections remain caller-owned.
+
+Client options include `serviceId`, `maxBatchObjects` (32), `maxBatchBytes`
+(1 MiB), `maxCachedObjects` (256), and `maxCachedBytes` (16 MiB). Cache limits
+evict least-recently-used unacquired entries; actively acquired entries and
+bounded in-flight batches are exempt until released. An evicted object is
+requested again only if acquired again. Missing, forbidden, expired,
+oversized, failed, or non-progressing responses produce explicit errors rather
+than retry storms. The client requires both canonical graph registrations;
+it does not silently fall back to unretained reads on older servers.
 
 `ImmutableGraphRuntime` traverses an `ImmutableGraphSource` deterministically,
 ancestor-first, deduplicating shared references and cycles. Selectors use JSON

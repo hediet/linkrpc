@@ -6,7 +6,9 @@ import {
 import {
     GraphObjects, GraphRoot, ImmutableGraphRuntime, InMemoryImmutableGraphStore,
     RootWatchCoordinator, validateGraphInterfaceSchema,
+    GraphClient, registerGraphSource, type GraphReader, type GraphRef, type JsonValue,
 } from '@hediet/linkrpc-infra/graph';
+import { observableValue } from '@vscode/observables';
 
 const refSchema = z.object({ store: z.string(), id: z.string() });
 type Ref = z.infer<typeof refSchema>;
@@ -43,6 +45,43 @@ function assertClientTypes(client: InterfaceClient<typeof definition>) {
     return exact;
 }
 void assertClientTypes;
+
+export async function runGraphClientBoundaryFixture() {
+    const root: GraphRef = { kind: 'catalog', id: 'root' };
+    const child: GraphRef = { kind: 'item', id: 'child' };
+    const fetched: string[] = [];
+    const pair = new TransportPair();
+    const server = LinkRpcConnection.fromTransport(pair.a);
+    const connection = LinkRpcConnection.fromTransport(pair.b);
+    const registration = registerGraphSource(server, {
+        root: observableValue('root', root),
+        store: {
+            lookup: async (ref: GraphRef) => {
+                fetched.push(ref.id);
+                const value: JsonValue = ref.id === root.id ? { items: [child] } : { text: 'child' };
+                return { found: true as const, value };
+            },
+        },
+    });
+    const client = new GraphClient(connection);
+    const reader: GraphReader = client;
+    try {
+        await until(() => reader.root.get().kind === 'ready');
+        const beforeAcquire = fetched.length;
+        const rootHandle = reader.acquire(root);
+        await until(() => rootHandle.state.get().kind === 'ready');
+        const childHandle = reader.acquire(child);
+        await until(() => childHandle.state.get().kind === 'ready');
+        rootHandle.dispose();
+        childHandle.dispose();
+        return { beforeAcquire, fetched };
+    } finally {
+        client.dispose();
+        registration.dispose();
+        connection.close();
+        server.close();
+    }
+}
 
 const pause = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 async function until(predicate: () => boolean) {

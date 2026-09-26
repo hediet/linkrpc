@@ -1,20 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { autorun, observableValue, type IObservable } from '@vscode/observables';
+import type { JsonValue } from '@hediet/linkrpc';
 import {
-  defineInterface,
-  type JsonValue, type LinkRpcConnection, type StreamApi,
-} from '@hediet/linkrpc';
-import {
-  ImmutableGraphRuntime, InMemoryImmutableGraphStore, RootWatchCoordinator,
-  graphRefSchema, GraphObjects, GraphRoot, validateGraphInterfaceSchema,
+  InMemoryImmutableGraphStore,
   isGraphRef, standardGraphRuntimeOptions,
   type GraphRef, type ImmutableGraphSource, type GraphLease, type GraphLookup,
 } from './index.js';
-import { z } from 'zod';
 
 export type { JsonValue } from '@hediet/linkrpc';
 export type { GraphRef, ImmutableGraphSource } from './index.js';
 export { ImmutableGraphRuntime, standardGraphRuntimeOptions, isGraphRef } from './index.js';
+export { graphInterface } from './protocol';
+export { createGraphRuntime, registerGraphSource } from './registration';
 
 export interface GraphSource {
   readonly root: IObservable<GraphRef>;
@@ -187,52 +184,6 @@ export class GraphComposition implements GraphSource {
       },
     };
   }
-}
-
-const jsonSchema: z.ZodType<JsonValue> = z.json();
-const objects = GraphObjects({ ref: graphRefSchema, value: jsonSchema });
-const workspace = GraphRoot({ params: z.object({}), ref: graphRefSchema });
-export const graphInterface = defineInterface(
-  { id: 'linkrpc.graph.v1' },
-  { objects, workspace },
-);
-validateGraphInterfaceSchema(graphInterface.toSchema());
-
-export function createGraphRuntime(source: GraphSource): ImmutableGraphRuntime<GraphRef, JsonValue> {
-  return new ImmutableGraphRuntime(source.store, standardGraphRuntimeOptions);
-}
-
-export function registerGraphSource(
-  connection: LinkRpcConnection,
-  source: GraphSource,
-  options: { serviceId?: string } = {},
-): { dispose(): void } {
-  const runtime = createGraphRuntime(source);
-  const abort = new AbortController();
-  const roots = new RootWatchCoordinator<Record<string, never>, GraphRef>({
-    paramsKey: () => '',
-    sameRef: (a, b) => standardGraphRuntimeOptions.refKey(a) === standardGraphRuntimeOptions.refKey(b),
-    retention: { retainClosure: ref => source.store.retainClosure?.(ref) ?? noLease() },
-  });
-  const registration = connection.register(graphInterface, {
-    objects: { batchObjGet: params => runtime.batchObjGet(params) },
-    workspace: {
-      watch: (params, _context, stream) => {
-        const scoped: StreamApi<{ accept: number }, { version: number; ref: GraphRef }> = {
-          ...stream, signal: AbortSignal.any([stream.signal, abort.signal]),
-        };
-        return roots.watch(params, scoped);
-      },
-    },
-  }, options);
-  const subscription = autorun(reader => roots.publish({}, source.root.read(reader)));
-  return {
-    dispose: () => {
-      subscription.dispose();
-      abort.abort();
-      registration.dispose();
-    },
-  };
 }
 
 function noLease(): GraphLease { return { dispose() {} }; }
