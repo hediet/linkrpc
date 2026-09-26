@@ -83,7 +83,19 @@ deduplication, immutable caching, partial-batch continuation, explicit retries,
 root acknowledgements, and acquired-reference retention watches. It never
 fetches a closure or traverses references found in an object. Consumers control
 expansion and viewport demand through `acquire(ref)`/`dispose()`. Structural
-ancestors can stay acquired while their children are displayed.
+ancestors can stay acquired while their children are displayed. Acquiring a
+cached object exposes its existing ready state synchronously, without an object
+request; consumers should read that state for their first render rather than
+introducing a separate loading placeholder. Releasing the last handle ends its
+server lease, not its local immutable cache lifetime.
+
+Once an object's JSON is loaded, the client checks whether it contains graph
+references. Ready leaves need no server lease, even on reacquisition or
+reconnection. Acquired branches keep (or reacquire) their retention watch to
+protect descendants that have not been fetched yet. This check does not fetch
+any descendants. Idle cached branches hold no server leases and do not keep
+historical closures alive; reacquiring one whose descendants have expired still
+exposes its cached value and reports the lease failure separately.
 
 The `GraphReader` interface exposes `root`, `acquire`, and `retry(ref)`, with
 optional `rootError`/`refreshing` observables and optional handle
@@ -105,10 +117,16 @@ passing `{}` resets to the unscoped graph service. This also works when replacin
 the transport or detaching it with `setConnection(undefined)`.
 
 Client options include `serviceId`, `maxBatchObjects` (32), `maxBatchBytes`
-(1 MiB), `maxCachedObjects` (256), and `maxCachedBytes` (16 MiB). Cache limits
-evict least-recently-used unacquired entries; actively acquired entries and
-bounded in-flight batches are exempt until released. An evicted object is
-requested again only if acquired again. Missing, forbidden, expired,
+(1 MiB), `maxCachedObjects` (2048), and `maxCachedBytes` (16 MiB). Both cache
+budgets apply only to idle ready entries, not the active working set:
+temporarily displaying many objects cannot flush previously read objects from
+the idle cache. Releasing a handle refreshes recency, and least-recently-used
+idle objects are evicted when either budget is exceeded. Active entries and
+bounded in-flight batches are exempt until released; once idle they count
+against the budgets. Unacquired loading/error entries are discarded when no
+batch is in flight, so abandoned demand cannot displace ready data and a later
+acquisition can retry a failed read. An evicted object is requested again only
+if acquired again. Missing, forbidden, expired,
 oversized, failed, or non-progressing responses produce explicit errors rather
 than retry storms. The client requires both canonical graph registrations;
 it does not silently fall back to unretained reads on older servers.

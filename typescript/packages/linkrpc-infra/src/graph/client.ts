@@ -39,8 +39,9 @@ export interface GraphClientOptions {
   readonly serviceId?: string
   readonly maxBatchObjects?: number
   readonly maxBatchBytes?: number
-  /** Unreferenced entries are evicted first. Visible objects are never evicted. */
+  /** LRU budget for idle ready objects, independent of active handles (default 2048). */
   readonly maxCachedObjects?: number
+  /** Serialized byte budget for idle ready objects (default 16 MiB). */
   readonly maxCachedBytes?: number
 }
 
@@ -53,6 +54,7 @@ interface Entry {
   users: number
   bytes: number
   lastUsed: number
+  retainsDescendants: boolean
   pin?: { readonly ready: Promise<void>, dispose(): void }
 }
 
@@ -95,7 +97,7 @@ export class GraphClient implements GraphReader {
       maxObjects: positive(options.maxBatchObjects ?? 32),
       maxBytes: positive(options.maxBatchBytes ?? 1024 * 1024),
     }
-    this._maxCachedObjects = positive(options.maxCachedObjects ?? 256)
+    this._maxCachedObjects = positive(options.maxCachedObjects ?? 2048)
     this._maxCachedBytes = positive(options.maxCachedBytes ?? 16 * 1024 * 1024)
     if (connection) this.setConnection(connection)
   }
@@ -134,7 +136,7 @@ export class GraphClient implements GraphReader {
         state: observableValue<LoadState<JsonValue>>(this, { kind: 'loading' }),
         error: observableValue<string | undefined>(this, undefined),
         refreshing: observableValue(this, false),
-        users: 0, bytes: 0, lastUsed: ++this._clock,
+        users: 0, bytes: 0, lastUsed: ++this._clock, retainsDescendants: true,
       }
       this._entries.set(key, entry)
     }
@@ -219,6 +221,9 @@ export class GraphClient implements GraphReader {
   }
 
   private _pin(entry: Entry): void {
+    // A cached leaf is entirely local. Branches still need a lease so a later
+    // child acquisition can succeed after the workspace advances.
+    if (!entry.retainsDescendants && entry.state.get().kind === 'ready') return
     entry.refreshing.set(true, undefined)
     let resolve!: () => void
     let reject!: (error: unknown) => void
@@ -311,8 +316,14 @@ export class GraphClient implements GraphReader {
             const result = cache.lookup(object.ref)
             if (!result.found) throw new Error('Immutable cache rejected graph object')
             entry.bytes = new TextEncoder().encode(JSON.stringify(object)).byteLength
+            entry.retainsDescendants = hasGraphReferences(result.value)
             entry.state.set({ kind: 'ready', value: result.value }, undefined)
             entry.error.set(undefined, undefined)
+            if (!entry.retainsDescendants) {
+              entry.pin?.dispose()
+              entry.pin = undefined
+              entry.refreshing.set(false, undefined)
+            }
             requested.delete(keyOf(object.ref))
             progress++
           }
@@ -351,12 +362,21 @@ export class GraphClient implements GraphReader {
   }
 
   private _evict(): void {
-    let bytes = [...this._entries.values()].reduce((sum, entry) => sum + entry.bytes, 0)
     const idle = [...this._entries.values()].filter(entry => entry.users === 0 && !this._inFlight.has(entry))
       .sort((a, b) => a.lastUsed - b.lastUsed)
+    let count = idle.length
+    let bytes = idle.reduce((sum, entry) => sum + entry.bytes, 0)
     for (const entry of idle) {
-      if (this._entries.size <= this._maxCachedObjects && bytes <= this._maxCachedBytes) break
+      if (entry.state.get().kind === 'ready') continue
       this._entries.delete(keyOf(entry.ref))
+      count--
+      bytes -= entry.bytes
+    }
+    for (const entry of idle) {
+      if (count <= this._maxCachedObjects && bytes <= this._maxCachedBytes) break
+      if (!this._entries.has(keyOf(entry.ref))) continue
+      this._entries.delete(keyOf(entry.ref))
+      count--
       bytes -= entry.bytes
     }
   }
@@ -366,7 +386,9 @@ export class GraphClient implements GraphReader {
     const error = new Error('Graph connection closed')
     this._failRoot(error)
     for (const entry of this._entries.values()) {
-      if (entry.users > 0) this._failEntry(entry, error)
+      if (entry.users > 0 && (entry.retainsDescendants || entry.state.get().kind !== 'ready')) {
+        this._failEntry(entry, error)
+      }
     }
     this._detach()
   }
@@ -399,6 +421,7 @@ export class GraphClient implements GraphReader {
     }
     this._pending.clear()
     this._inFlight.clear()
+    this._evict()
     this._refreshing.set(false, undefined)
     this._api = undefined
     this._pins = undefined
@@ -411,6 +434,20 @@ export class GraphClient implements GraphReader {
     this._entries.clear()
     this._pending.clear()
   }
+}
+
+function hasGraphReferences(value: JsonValue): boolean {
+  const pending = [value]
+  while (pending.length) {
+    const item = pending.pop()!
+    if (standardGraphRuntimeOptions.isRef(item)) return true
+    if (item !== null && typeof item === 'object') {
+      for (const child of Object.values(item)) {
+        if (child !== undefined) pending.push(child)
+      }
+    }
+  }
+  return false
 }
 
 function cancel(call: RootCall | undefined): void {

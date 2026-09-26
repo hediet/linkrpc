@@ -107,7 +107,8 @@ test('workspace ACK releases obsolete root while visible old refs retain their c
 
 test('pending acquired-reference lease blocks workspace ACK until the old object is safe', async () => {
   const source = new LocalGraphSource('pending-lease')
-  const old = source.put('old', { value: 1 })
+  const child = source.put('child', { value: 1 })
+  const old = source.put('old', { child })
   const initial = source.put('catalog', { items: [old] })
   source.root.set(initial, undefined)
   let release!: () => void
