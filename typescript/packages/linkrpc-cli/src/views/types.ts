@@ -29,6 +29,8 @@ export interface ViewTarget {
     readonly interfaceId?: string;
     readonly discoveredFrom: string;
     readonly interfaces: readonly ViewInterface[];
+    /** Sibling advertisements on the same service, for optional companion protocols. */
+    readonly serviceInterfaces?: readonly ViewInterface[];
 }
 
 export interface ResolvedViewInterface extends ViewInterface {

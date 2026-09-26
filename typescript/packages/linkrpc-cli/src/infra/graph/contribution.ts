@@ -1,11 +1,14 @@
 import { interfaceTemplateArgumentsEquivalent } from "@hediet/linkrpc";
-import { GRAPH_INTERFACE_TAG } from "@hediet/linkrpc-infra/graph";
+import { GRAPH_INTERFACE_TAG, graphPresentationInterface } from "@hediet/linkrpc-infra/graph";
 import type { ViewContribution, ViewOpenContext } from "../../views/types";
 import { graphDescriptorsFromSchema, inspectGraphCommand, type GraphTarget } from "./inspectGraph";
 import { GraphSession, runGraphTui } from "./session";
 
 export function resolveGraphRoots(context: ViewOpenContext): GraphTarget[] {
     return context.interfaces.flatMap(listing => {
+        const presentation = (context.target.serviceInterfaces ?? context.target.interfaces).find(candidate =>
+            candidate.serviceId === listing.serviceId && candidate.interfaceId === graphPresentationInterface.info.id
+            && candidate.hash === graphPresentationInterface.toSchema().hash);
         const { roots, stores } = graphDescriptorsFromSchema({ ...listing, hash: listing.hash ?? "" }, listing.schema);
         return roots.map(root => {
             const compatible = stores.filter(store => interfaceTemplateArgumentsEquivalent(store.refArgument, root.refArgument));
@@ -15,6 +18,10 @@ export function resolveGraphRoots(context: ViewOpenContext): GraphTarget[] {
             return {
                 ...root, graphInterfaceId: store.interfaceId, watchMethod: route(root.watchMethod),
                 batchMethod: route(store.batchMethod), valueArgument: store.valueArgument,
+                ...(presentation === undefined ? {} : {
+                    presentationMethod: presentation.isDefault ? "get"
+                        : [presentation.serviceId, presentation.interfaceId, "get"].filter(Boolean).join("::"),
+                }),
             };
         });
     });

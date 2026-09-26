@@ -6,6 +6,7 @@ import { GraphClient, type LoadState } from './client'
 import { graphInterface as graphProtocol } from './protocol'
 import { registerGraphSource } from './registration'
 import type { IObservable } from '@vscode/observables'
+import { graphPresentationInterface } from './presentation'
 
 async function value<T>(state: IObservable<LoadState<T>>): Promise<T> {
   for (let i = 0; i < 200; i++) {
@@ -19,6 +20,19 @@ async function value<T>(state: IObservable<LoadState<T>>): Promise<T> {
 
 test('browser contract matches published source graph contract', () => {
   assert.deepEqual(graphProtocol.toSchema(), graphInterface.toSchema())
+})
+
+test('presentation metadata is additive, available through a lazy source and absent rules stay empty', async () => {
+  const source = new LocalGraphSource('presentation')
+  const pair = new TransportPair()
+  const server = LinkRpcConnection.fromTransport(pair.a)
+  const client = LinkRpcConnection.fromTransport(pair.b)
+  const presentation = { rules: { named: { label: [{ path: ['name'] }] } } }
+  const registration = registerGraphSource(server, async () => ({ root: source.root, store: source.store, presentation }))
+  try {
+    assert.deepEqual(await client.get(graphPresentationInterface).get({}), presentation)
+    assert.equal(graphProtocol.schemaHash, graphInterface.schemaHash)
+  } finally { registration.dispose(); client.close(); server.close(); source.dispose() }
 })
 
 test('catalog and selected viewport only resolve demanded objects from 1000 lazy items', async () => {

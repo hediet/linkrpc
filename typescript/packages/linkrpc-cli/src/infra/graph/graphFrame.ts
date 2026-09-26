@@ -89,6 +89,7 @@ export function formatGraphTreeRows(lines: readonly GraphTreeLine[], showObjectI
         const content = line.ref === undefined ? line.text.slice(line.key.length).replace(/^ = /, "  ")
             : `  ${line.ref.kind}${showObjectIds ? `:${line.ref.id}` : ""}`
                 + (line.summary === undefined ? "" : `  ${line.summary}`)
+                + (line.description === undefined ? "" : ` — ${line.description}`)
                 + (line.loaded ? "" : "  [fetch on expand]")
                 + (line.targetKey === undefined ? "" : `  [link to ${line.targetKey}]`);
         const branch = line.depth === 0 ? "" : ancestorIndices.slice(1, line.depth)

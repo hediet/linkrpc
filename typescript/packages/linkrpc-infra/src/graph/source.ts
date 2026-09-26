@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { autorun, observableValue, runOnChange, type IObservable } from '@vscode/observables';
 import type { JsonValue } from '@hediet/linkrpc';
+import { mergeGraphPresentations, type GraphPresentation } from './presentation';
 import {
   InMemoryImmutableGraphStore,
   isGraphRef, standardGraphRuntimeOptions,
@@ -16,6 +17,7 @@ export { createGraphRuntime, registerGraphSource } from './registration';
 export interface GraphSource {
   readonly root: IObservable<GraphRef>;
   readonly store: GraphStore;
+  readonly presentation?: GraphPresentation;
 }
 
 export interface GraphStore extends ImmutableGraphSource<GraphRef, JsonValue> {
@@ -109,6 +111,10 @@ export interface GraphSourceEntry {
 
 /** Current and explicitly leased roots retain their independent source stores. */
 export class GraphComposition implements GraphSource {
+  private _presentation: GraphPresentation = { rules: {} };
+  public get presentation(): GraphPresentation {
+    return mergeGraphPresentations(this._presentation, ...this._sources.get().map(entry => entry.source.presentation));
+  }
   private readonly _local = new LocalGraphSource('composition');
   private readonly _sources = observableValue<readonly GraphSourceEntry[]>(this, []);
   private readonly _stores = new Set<GraphStore>([this._local.store]);
@@ -158,6 +164,7 @@ export class GraphComposition implements GraphSource {
 
   public setSources(sources: readonly GraphSourceEntry[]): void {
     if (this._disposed) throw new Error('Graph composition is disposed.');
+    const presentation = mergeGraphPresentations(this.presentation, ...sources.map(entry => entry.source.presentation));
     const ids = new Set<string>();
     const routes = new Map(this._routes);
     for (const entry of sources) {
@@ -171,6 +178,7 @@ export class GraphComposition implements GraphSource {
       routes.set(key, entry.source.store);
     }
     for (const entry of sources) this._stores.add(entry.source.store);
+    this._presentation = presentation;
     this._sources.set(sources.map(entry => ({ ...entry })), undefined);
   }
 

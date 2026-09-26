@@ -5,6 +5,7 @@ import type { GraphRef } from './interfaces';
 import { graphInterface, retainedGraphInterface } from './protocol';
 import { RootWatchCoordinator } from './rootWatch';
 import type { GraphSource } from './source';
+import { graphPresentationInterface, graphPresentationSchema } from './presentation';
 
 export function createGraphRuntime(source: GraphSource): ImmutableGraphRuntime<GraphRef, JsonValue> {
     return new ImmutableGraphRuntime(source.store, standardGraphRuntimeOptions);
@@ -71,6 +72,9 @@ export function registerGraphSource(
             },
         },
     }, options);
+    const presentation = connection.register(graphPresentationInterface, {
+        get: async () => graphPresentationSchema.parse((await getSource()).presentation ?? { rules: {} }),
+    }, options);
     let disposed = false;
     const close = connection.onDidClose(() => result.dispose());
     const result = {
@@ -83,6 +87,7 @@ export function registerGraphSource(
             subscriptions.clear();
             graph.dispose();
             pins.dispose();
+            presentation.dispose();
         },
     };
     return result;

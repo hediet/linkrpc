@@ -1,5 +1,5 @@
 import type { JsonValue } from "@hediet/linkrpc";
-import { isGraphRef } from "@hediet/linkrpc-infra/graph";
+import { isGraphRef, type GraphPresentation } from "@hediet/linkrpc-infra/graph";
 import { observableValue } from "@vscode/observables";
 import {
     GraphLoader,
@@ -11,6 +11,7 @@ import {
     type GraphTreeLine,
 } from "./inspectGraphModel";
 import type { GraphTimings } from "./inspectGraphTiming";
+import { safeTerminalText } from "../../ui/terminalText";
 
 export interface GraphViewOptions {
     readonly depth?: number;
@@ -36,6 +37,7 @@ export class GraphExplorerModel {
             readonly expandedPaths?: ReadonlySet<string>;
         },
         private readonly _timings?: GraphTimings,
+        private readonly _presentation?: GraphPresentation,
     ) {
         const expanded = new Set(state?.expanded);
         if (state?.expandedPaths === undefined || state.expandedPaths.has("$")) expanded.add(graphRefKey(root));
@@ -49,7 +51,7 @@ export class GraphExplorerModel {
         const size = this._loader.cache.size;
         const expanded = this._expanded.get();
         if (this._cachedTree?.size !== size || this._cachedTree.expanded !== expanded) {
-            const build = () => createGraphTree(this.root, this._loader.cache, expanded, this._maxDepth);
+            const build = () => createGraphTree(this.root, this._loader.cache, expanded, this._maxDepth, this._presentation);
             this._cachedTree = { size, expanded, lines: this._timings?.measureSync("tree", build) ?? build() };
         }
         return this._cachedTree.lines;
@@ -119,6 +121,19 @@ export class GraphExplorerModel {
         const needs = this.lines.flatMap(line => line.ref !== undefined
             ? [{ ref: line.ref, paths: ["/"] }] : []);
         await this._loader.load(needs);
+        await this.loadPresentation();
+    }
+
+    public async loadPresentation(): Promise<void> {
+        // The evaluator stops at the first unresolved candidate. Re-evaluate after
+        // each bounded object-only batch, never fetching a graph closure for labels.
+        for (let round = 0; round < 32; round++) {
+            const refs = this.lines.flatMap(line => line.presentationPending ?? []);
+            if (refs.length === 0) return;
+            const before = this._loader.cache.size;
+            await this._loader.load(refs.map(ref => ({ ref, paths: ["/"] })));
+            if (this._loader.cache.size === before) return;
+        }
     }
 
     public select(index: number): void {
@@ -224,7 +239,8 @@ export function renderGraphTree(
         const cursor = options.selected === true
             ? (index === selectedIndex ? "> " : "  ")
             : "";
-        return `${cursor}${"  ".repeat(line.depth)}${line.text}`;
+        const presentation = [line.summary, line.description].filter(value => value !== undefined).join(" — ");
+        return `${cursor}${"  ".repeat(line.depth)}${line.text}${presentation ? `  ${safeTerminalText(presentation)}` : ""}`;
     }).join("\n");
 }
 

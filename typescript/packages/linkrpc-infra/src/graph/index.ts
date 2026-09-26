@@ -5,3 +5,4 @@ export * from './reflection';
 export * from './protocol';
 export * from './registration';
 export * from './client';
+export * from './presentation';

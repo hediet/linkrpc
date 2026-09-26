@@ -12,6 +12,7 @@ import {
     IMMUTABLE_GRAPH_INTERFACE_ID,
     ROOT_WATCH_INTERFACE_ID,
     validateGraphInterfaceSchema,
+    graphPresentationSchema,
 } from "@hediet/linkrpc-infra/graph";
 import type { DiscoveredListing } from "@hediet/linkrpc/hub/common";
 import type { CliChannel } from "@hediet/linkrpc-client";
@@ -22,6 +23,7 @@ import {
     GraphObjectCache,
     graphRefKey,
     parseGraphRef,
+    withTimeout,
     type GraphBatchFetch,
     type GraphRef,
 } from "./inspectGraphModel";
@@ -43,6 +45,7 @@ export interface GraphTarget {
     readonly paramsArgument: InterfaceTemplateArgument;
     readonly refArgument: InterfaceTemplateArgument;
     readonly valueArgument: InterfaceTemplateArgument;
+    readonly presentationMethod?: string;
 }
 
 export interface InspectGraphOptions {
@@ -192,13 +195,22 @@ export async function inspectGraphCommand(
                     if (navigable && currentModel !== undefined) await currentModel.prefetchExpanded(ref);
                     await loadGraphDepth(ref, loader, options.depth ?? (navigable ? 0 : 2));
                 }
+                const presentation = options.json || target.presentationMethod === undefined ? undefined
+                    : await withTimeout(async signal => {
+                        const call = channel.sendRequestWithStream(target.presentationMethod!, {});
+                        const cancel = () => { call.cancel("graph presentation cancelled"); call.dispose?.(); };
+                        signal.addEventListener("abort", cancel, { once: true });
+                        try { return graphPresentationSchema.parse(await call.result); }
+                        finally { signal.removeEventListener("abort", cancel); call.dispose?.(); }
+                    }, options.timeoutMs ?? 5_000, "graph presentation", cancellation.signal);
                 const model = new GraphExplorerModel(ref, loader, navigable ? undefined : options.depth, navigable
                     ? currentModel === undefined ? undefined : {
                         selectedKey: currentModel.selectedKey,
                         expanded: currentModel.expandedKeys,
                         expandedPaths: currentModel.expandedPaths,
                     }
-                    : { expanded: new Set(loader.cache.have().map((item) => graphRefKey(item.ref))) }, timings);
+                    : { expanded: new Set(loader.cache.have().map((item) => graphRefKey(item.ref))) }, timings, presentation);
+                await model.loadPresentation();
                 cancellation.signal.throwIfAborted();
                 if (options.onModel !== undefined) {
                     await options.onModel(model, version);

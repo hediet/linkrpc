@@ -203,6 +203,56 @@ The graph suite exercises source-condition exports, emitted generic declarations
 published JavaScript exports, and real paired LinkRPC connections with grouped
 registration, nested clients, bounded requests, acknowledgements and cancellation.
 
+### Shared declarative presentation
+
+Sources may expose `GraphSource.presentation`, a `GraphPresentation` containing
+per-kind `label` and `secondary` fallback candidates. This is metadata, not a
+replacement for graph values or property names. `registerGraphSource` advertises
+the separate optional `graphPresentationInterface` (`linkrpc.graph.presentation.v1`);
+its `get({})` request returns the rules without changing the graph protocol hash.
+Old servers without this interface remain valid graph sources.
+
+```ts
+import {
+    evaluateGraphPresentation, graphPresentationInterface,
+    type GraphPresentation,
+} from '@hediet/linkrpc-infra/graph';
+
+const presentation: GraphPresentation = { rules: {
+    item: { label: [{ path: ['displayName'] }, { path: ['name'] }] },
+    wrapper: { label: [{ path: ['item'], presentation: 'label' }] },
+} };
+const result = evaluateGraphPresentation(ref, presentation, ref => cache.get(ref), {
+    fields: ['label'], // omit to evaluate label and secondary
+});
+```
+
+Each path is an explicit array of property names (array indices are strings).
+Intermediate references are dereferenced only when needed. A terminal
+`presentation` field delegates to that referenced object's kind rule. Only
+nonblank strings are display text; objects, numbers, missing properties, and
+empty strings fall through. There are no implicit title fields, property-position
+heuristics, scripts, or rich expressions in the evaluator.
+
+The synchronous read callback returns `{ value }` or `undefined` when not cached.
+`pending` lists object-only dependencies to load; an unresolved candidate blocks
+later fallbacks until it is available. Re-evaluate after loading those objects.
+`dependencies` includes all reads, ready and pending, so viewport consumers can
+observe and retain exactly the objects their labels use. The evaluator never
+fetches itself or requests a closure. `limited` reports cycles or exhaustion of
+`maxDepth` (default 32) / `maxWork` (default 256); both limits must be positive
+integers. Requesting only `label` does not evaluate `secondary`.
+
+`GraphComposition` merges declarations without knowing any adapter's domain.
+Conflicting rules for the same kind throw explicitly, including a conflict with
+previously attached sources whose old roots may still be leased. Candidate order
+is significant. Declarations should remain stable for a source's lifetime.
+Clients should refresh metadata when a new root introduces sources/kinds.
+
+The CLI graph view discovers this companion interface on the selected service,
+loads only presentation paths for displayed rows, and renders labels/descriptions
+alongside their original property paths. JSON snapshots remain graph data.
+
 ## Inspection
 
 The `@hediet/linkrpc-infra/inspection` entry point provides node identity,
@@ -227,6 +277,11 @@ document events and atomic `set`, `remove`, `append`, `splice`, and `insert`
 operations addressed by RFC 6901 JSON Pointers.
 
 ## JSON-RPC
+
+Browser consumers that only need the generated connection and bridge contracts
+can import `@hediet/linkrpc-infra/json-rpc/protocol`. It exports the same
+`jsonRpcConnectionInterface` and `createJsonRpcBridgeInterface` identities as the parent
+entrypoint, without importing stdio, `node:readline`, or Node transports.
 
 The `@hediet/linkrpc-infra/json-rpc` entry point provides:
 

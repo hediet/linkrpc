@@ -11,7 +11,7 @@ import type {
     GraphLimits,
     MissingGraphObject,
 } from "@hediet/linkrpc-infra/graph";
-import { isGraphRef, standardGraphRuntimeOptions } from "@hediet/linkrpc-infra/graph";
+import { evaluateGraphPresentation, isGraphRef, standardGraphRuntimeOptions, type GraphPresentation } from "@hediet/linkrpc-infra/graph";
 import type { GraphTimings } from "./inspectGraphTiming";
 
 export type GraphBatchRequest = LinkRpcGraphBatchRequest<GraphRef>;
@@ -157,6 +157,8 @@ export interface GraphTreeLine {
     readonly loaded?: boolean;
     readonly targetKey?: string;
     readonly summary?: string;
+    readonly description?: string;
+    readonly presentationPending?: readonly GraphRef[];
     readonly selector?: string;
 }
 
@@ -165,11 +167,17 @@ export function createGraphTree(
     cache: GraphObjectCache,
     expanded: ReadonlySet<string>,
     maxDepth = Number.POSITIVE_INFINITY,
+    presentation?: GraphPresentation,
 ): readonly GraphTreeLine[] {
     const lines: GraphTreeLine[] = [];
     const firstPaths = new Map<string, string>();
     appendRef(root, "$", 0, new Set(), lines, firstPaths, cache, expanded, maxDepth, []);
-    return lines;
+    if (presentation === undefined) return lines;
+    return lines.map(line => {
+        if (line.ref === undefined || !Object.hasOwn(presentation.rules, line.ref.kind)) return line;
+        const result = evaluateGraphPresentation(line.ref, presentation, ref => cache.get(ref));
+        return { ...line, summary: result.label, description: result.secondary, presentationPending: result.pending };
+    });
 }
 
 export function graphRefsInValue(value: JsonValue): readonly GraphRef[] {
@@ -370,7 +378,7 @@ function propertyPath(parent: string, name: string): string {
         : `${parent}[${JSON.stringify(name)}]`;
 }
 
-async function withTimeout<T>(
+export async function withTimeout<T>(
     operation: (signal: AbortSignal) => Promise<T>,
     timeoutMs: number,
     label: string,

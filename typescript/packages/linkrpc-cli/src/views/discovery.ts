@@ -55,7 +55,10 @@ export async function discoverViewTargets(channel: CliChannel, view: ViewContrib
             const first = interfaces[0]!;
             targets.push({ id, kind: "service", serviceId: first.serviceId, discoveredFrom: first.discoveredFrom, interfaces });
         }
-        return { targets: targets.filter(target => matchesTarget(target, view)).sort((a, b) => a.id.localeCompare(b.id)), warnings };
+        return { targets: targets.filter(target => matchesTarget(target, view))
+            .map(target => ({ ...target, serviceInterfaces: listings.filter(listing =>
+                listing.serviceId === target.serviceId && listing.discoveredFrom === target.discoveredFrom) }))
+            .sort((a, b) => a.id.localeCompare(b.id)), warnings };
     } finally {
         explorer.dispose();
     }
