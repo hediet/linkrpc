@@ -95,6 +95,10 @@ appear directly in `LoadState`. `reportConnectionError(error)` lets a transport
 adapter report connection setup failures. There is no automatic reconnect or
 retry loop: the owner supplies the next connection or calls `retryRoot()` /
 `retry(ref)`. Connections remain caller-owned.
+`setConnection(connection, {serviceId})` switches graph services on the same
+reader. Omitting the options preserves the previous service target; explicitly
+passing `{}` resets to the unscoped graph service. This also works when replacing
+the transport or detaching it with `setConnection(undefined)`.
 
 Client options include `serviceId`, `maxBatchObjects` (32), `maxBatchBytes`
 (1 MiB), `maxCachedObjects` (256), and `maxCachedBytes` (16 MiB). Cache limits

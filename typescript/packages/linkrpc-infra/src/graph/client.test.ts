@@ -5,6 +5,8 @@ import { ImmutableGraphRuntime, standardGraphRuntimeOptions, type GraphBatchRequ
 import type { GraphRef } from './interfaces'
 import { GraphClient, type GraphClientOptions, type LoadState } from './client'
 import { graphInterface as graphProtocol, retainedGraphInterface as retainedGraphProtocol } from './protocol'
+import { registerGraphSource } from './registration'
+import { LocalGraphSource } from './source'
 import type { IObservable } from '@vscode/observables'
 
 const ref = (id: string): GraphRef => ({ kind: 'item', id })
@@ -312,4 +314,57 @@ test('failed old-reference retention on reconnect cannot wedge new workspace off
     current.dispose()
     old.dispose()
   } finally { first.dispose(); replacement.dispose() }
+})
+
+test('the same reader switches service routes, preserves omitted targets and resets with empty options', async () => {
+  const pair = new TransportPair()
+  const server = LinkRpcConnection.fromTransport(pair.a)
+  const connection = LinkRpcConnection.fromTransport(pair.b)
+  const sources = ['', 'first', 'second'].map(name => {
+    const source = new LocalGraphSource(`route-${name}`)
+    source.root.set(source.put('catalog', { name }), undefined)
+    return source
+  })
+  const registrations = sources.map((source, index) =>
+    registerGraphSource(server, source, { serviceId: ['', 'first', 'second'][index] }))
+  const client = new GraphClient(connection, { serviceId: 'first' })
+  const rootObservable = client.root
+  const waitRoot = async (source: LocalGraphSource) => {
+    for (let i = 0; i < 100; i++) {
+      const root = client.root.get()
+      if (root.kind === 'ready' && root.value.id === source.root.get().id && !client.refreshing.get()) return
+      await tick()
+    }
+    throw new Error('Service route did not update')
+  }
+  try {
+    await waitRoot(sources[1]!)
+    const first = client.acquire(sources[1]!.root.get())
+    assert.deepEqual(await state(first.state), { kind: 'ready', value: { name: 'first' } })
+    const cached = first.state.get()
+    client.setConnection(connection, { serviceId: 'second' })
+    await waitRoot(sources[2]!)
+    assert.equal(client.root, rootObservable)
+    assert.equal(first.state.get(), cached)
+    const second = client.acquire(sources[2]!.root.get())
+    assert.deepEqual(await state(second.state), { kind: 'ready', value: { name: 'second' } })
+    client.setConnection(connection)
+    await waitRoot(sources[2]!)
+    client.setConnection(undefined)
+    client.setConnection(connection)
+    await waitRoot(sources[2]!)
+    client.setConnection(connection, {})
+    await waitRoot(sources[0]!)
+    const unscoped = client.acquire(sources[0]!.root.get())
+    assert.deepEqual(await state(unscoped.state), { kind: 'ready', value: { name: '' } })
+    first.dispose()
+    second.dispose()
+    unscoped.dispose()
+  } finally {
+    client.dispose()
+    for (const registration of registrations) registration.dispose()
+    for (const source of sources) source.dispose()
+    connection.close()
+    server.close()
+  }
 })

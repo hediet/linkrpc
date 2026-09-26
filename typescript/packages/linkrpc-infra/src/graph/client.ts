@@ -80,7 +80,7 @@ export class GraphClient implements GraphReader {
   private readonly _maxCachedObjects: number
   private readonly _maxCachedBytes: number
   private _close: { dispose(): void } | undefined
-  private readonly _serviceId: string | undefined
+  private _serviceId: string | undefined
   private _epoch = 0
   private _watch: RootCall | undefined
   private _generation = 0
@@ -101,9 +101,10 @@ export class GraphClient implements GraphReader {
   }
 
   /** Swap transports without throwing away immutable objects or their observable identities. */
-  public setConnection(connection: LinkRpcConnection | undefined): void {
+  public setConnection(connection: LinkRpcConnection | undefined, options?: { serviceId?: string }): void {
     if (this._disposed) throw new Error('Graph client is disposed')
     this._detach()
+    if (options !== undefined) this._serviceId = options.serviceId
     if (!connection) return
     this._api = connection.get(graphInterface, { serviceId: this._serviceId })
     this._pins = connection.get(retainedGraphInterface, { serviceId: this._serviceId })
