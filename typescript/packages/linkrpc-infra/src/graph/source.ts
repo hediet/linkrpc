@@ -35,6 +35,7 @@ export class LocalGraphSource implements GraphSource {
   private _collection: ReturnType<typeof setTimeout> | undefined;
   private readonly _subscription;
   private _disposed = false;
+  private readonly _collectionListeners = new Set<(reachable: ReadonlySet<string>) => void>();
 
   public constructor(namespace = 'source') {
     this.namespace = `${encodeURIComponent(namespace)}/${randomUUID()}`;
@@ -73,7 +74,17 @@ export class LocalGraphSource implements GraphSource {
     for (const [key, ref] of this._interned) {
       if (!reachable.has(standardGraphRuntimeOptions.refKey(ref))) this._interned.delete(key);
     }
+    for (const listener of this._collectionListeners) listener(reachable);
+    if (this._disposed && this.store.diagnostics.retainedRoots === 0) {
+      this._collectionListeners.clear();
+      this.store.setReleaseListener(undefined);
+    }
     return reachable;
+  }
+
+  public onDidCollect(listener: (reachable: ReadonlySet<string>) => void): { dispose(): void } {
+    this._collectionListeners.add(listener);
+    return { dispose: () => { this._collectionListeners.delete(listener); } };
   }
 
   public dispose(): void {

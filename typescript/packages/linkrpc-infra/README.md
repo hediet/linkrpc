@@ -145,8 +145,11 @@ interning/routing/lease counts.
 Producer caches must not publish an old, unleased reference after reclamation:
 either own a lease while caching it, or regenerate the object/reference on reuse.
 This applies to application caches outside the graph, including deferred-content
-reference caches. Garbage collection does not itself dispose producer-specific
-loader closures or caches.
+reference caches. `LazyGraphSource` also collects unreachable deferred loaders,
+keeps in-flight loads protected, and exposes `collectGarbage()`, `dispose()`, and
+`diagnostics`. Failed loads can be retried. Local collection notifications let
+the lazy source release loader metadata without triggering I/O. External
+producer-specific caches remain their owner's responsibility.
 The standard `{kind,id}` reference uses collision-free keys; applications must
 namespace IDs across stores. Custom reference schemas use explicit `refKey` and
 `isRef` callbacks. References must be unambiguous within JSON values.
