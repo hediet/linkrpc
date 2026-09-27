@@ -22,6 +22,8 @@ export interface ApproveClientOptions {
     readonly manifest: IHubAccessManifest;
     /** Only expose requests this root can satisfy. Omit to expose every request. */
     readonly ownPrincipalId?: string;
+    /** Additional authenticated delegation roots, resolved again on each refresh. */
+    readonly getDelegationRootIds?: () => Promise<readonly string[]>;
     readonly log?: (line: string) => void;
     readonly reconnectDelayMs?: number;
     readonly timeoutMs?: number;
@@ -43,6 +45,7 @@ export class ApproveClient {
 
     private readonly _manifest: IHubAccessManifest;
     private readonly _ownPrincipalId: string | undefined;
+    private readonly _getDelegationRootIds: ApproveClientOptions['getDelegationRootIds'];
     private readonly _log: (line: string) => void;
     private readonly _reconnectDelayMs: number;
     private readonly _timeoutMs: number;
@@ -56,6 +59,7 @@ export class ApproveClient {
     constructor(options: ApproveClientOptions) {
         this._manifest = options.manifest;
         this._ownPrincipalId = options.ownPrincipalId;
+        this._getDelegationRootIds = options.getDelegationRootIds;
         this._log = options.log ?? (() => { /* no-op */ });
         this._reconnectDelayMs = options.reconnectDelayMs ?? 250;
         this._timeoutMs = options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
@@ -137,8 +141,14 @@ export class ApproveClient {
                     this._timeoutMs,
                 );
                 if (this._disposed) return;
+                const delegationRootIds = await this._getDelegationRootIds?.() ?? [];
+                if (this._disposed) return;
                 const requests = Object.entries(snapshot.requested)
-                    .filter(([, request]) => rootAccepted(request.acceptableRootIds, this._ownPrincipalId))
+                    .filter(([, request]) => rootAccepted(
+                        request.acceptableRootIds,
+                        this._ownPrincipalId,
+                        delegationRootIds,
+                    ))
                     .map(([id, request]) => ({ id, request, revision: snapshot.revision }));
                 this._requests.set(requests, undefined);
                 this._state.set('live', undefined);
@@ -192,10 +202,10 @@ export class ApproveClient {
 function rootAccepted(
     acceptableRootIds: readonly string[] | undefined,
     ownPrincipalId: string | undefined,
+    delegationRootIds: readonly string[],
 ): boolean {
     if (acceptableRootIds === undefined) return true;
-    if (acceptableRootIds.length === 0 || ownPrincipalId === undefined) return false;
-    return acceptableRootIds.includes(ownPrincipalId);
+    return acceptableRootIds.some((root) => root === ownPrincipalId || delegationRootIds.includes(root));
 }
 
 function escapePointer(segment: string): string {

@@ -1,6 +1,7 @@
 import type { SignedCapability } from '../../protocol';
 import { describe, expect, it } from 'vitest';
 import { findCoveringCapabilities, type HubAccessPermission } from './hubAccess';
+import { signedHash } from '../../identity/signedObject';
 
 const NOW = 1_000_000;
 
@@ -65,6 +66,31 @@ describe('findCoveringCapabilities', () => {
                 nowMs: NOW,
                 freshnessMarginMs: 2000,
             })).toBeUndefined();
+        }
+    });
+
+    it('returns all ancestors and rejects incomplete, stale or overbroad chains', () => {
+        const target = {
+            serviceId: { prefix: 'embedded/parent' } as const,
+            interfaceId: { prefix: 'sample' } as const,
+            members: [{ prefix: 'create' } as const],
+        };
+        const parent = cap(target);
+        parent.permissions[0].canDelegate = true;
+        parent.audience = 'delegate';
+        const leaf = { ...cap(target), issuer: 'delegate', parentHash: signedHash('capability', parent) };
+        const options = { nowMs: NOW, audience: 'audience' };
+        expect(findCoveringCapabilities([leaf, parent], requested, options)).toEqual([leaf, parent]);
+        expect(findCoveringCapabilities([leaf], requested, options)).toBeUndefined();
+        expect(findCoveringCapabilities([parent], requested, options)).toBeUndefined();
+        for (const changed of [
+            { ...parent, expiresAtMs: NOW - 1 },
+            { ...parent, audience: 'someone-else' },
+            { ...parent, permissions: [{ ...parent.permissions[0], canDelegate: false }] },
+            { ...parent, permissions: [{ ...parent.permissions[0], target: { ...target, members: [{ exact: 'other' }] } }] },
+        ]) {
+            const chained = { ...leaf, parentHash: signedHash('capability', changed) };
+            expect(findCoveringCapabilities([chained, changed], requested, options)).toBeUndefined();
         }
     });
 });

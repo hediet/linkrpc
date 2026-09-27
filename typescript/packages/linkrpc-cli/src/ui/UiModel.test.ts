@@ -8,7 +8,7 @@ import {
     type RawStreamingCall,
     TransportPair,
 } from "@hediet/linkrpc";
-import { connectViaTransport, type CliChannel } from "@hediet/linkrpc-client";
+import { connectViaTransport, type CliChannel } from "@hediet/linkrpc-client-internal";
 import { UiModel } from "./UiModel";
 
 const greeter = defineInterface(

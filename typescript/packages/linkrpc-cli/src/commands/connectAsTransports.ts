@@ -10,7 +10,7 @@ import { spawnCommand } from '@hediet/linkrpc-hub/spawn';
 import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
-import type { ResolvedEndpoint } from '@hediet/linkrpc-client';
+import type { ResolvedEndpoint } from '@hediet/linkrpc-client-internal';
 import type { TransportHandle } from './connectAs';
 
 /** A ws / socket endpoint the CLI can dial (the only dial-able hub-facing kinds). */

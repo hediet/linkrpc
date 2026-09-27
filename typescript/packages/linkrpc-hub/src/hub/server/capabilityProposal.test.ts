@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { InMemoryManagedIdentity } from '@hediet/linkrpc';
 import { permits, type Call, type CallTarget, type Permission } from '@hediet/linkrpc';
 import type { PrincipalId } from '@hediet/linkrpc';
-import { CapabilityProposalIssuer, durationToExp } from './capabilityProposal';
+import { CapabilityProposalIssuer } from './capabilityProposal';
+import { durationToExp } from '@hediet/linkrpc-infra/approval';
 
 const REPO_PERMS: Permission[] = [
     {

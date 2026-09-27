@@ -2,7 +2,7 @@ import { ErrorCode, type JsonValue, RpcError } from '@hediet/linkrpc';
 import { MethodRefWithOptHash } from '../methodRef';
 import { formatJson, readParamsArg } from '../output';
 import { mergeParams } from '../paramParsing';
-import { type CliChannel, findMethodInSchema } from '@hediet/linkrpc-client';
+import { type CliChannel, findMethodInSchema } from '@hediet/linkrpc-client-internal';
 import { formatSuggestion, HubSnapshot } from '../suggest';
 import {
     describeObjectParams,

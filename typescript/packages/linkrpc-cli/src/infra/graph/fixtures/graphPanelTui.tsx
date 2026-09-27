@@ -8,7 +8,7 @@ import { render } from "ink";
 import { z } from "zod";
 import { defineInterface, LinkRpcConnection, TransportPair, type JsonValue } from "@hediet/linkrpc";
 import { GraphObjects, GraphRoot, graphRefSchema } from "@hediet/linkrpc-infra/graph";
-import { connectViaTransport } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { App } from "../../../ui/App";
 import { UiModel } from "../../../ui/UiModel";
 import { dispatchViewKey } from "../../../views/commands";

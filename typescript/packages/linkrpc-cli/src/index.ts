@@ -1,7 +1,7 @@
 // CLI-only surface. The reusable hub-client primitives live in
-// `@hediet/linkrpc-client` and are an internal utility — they are deliberately
+// `@hediet/linkrpc-client-internal` and are an internal utility — they are deliberately
 // NOT re-exported here (consumers that need them import from
-// `@hediet/linkrpc` / `@hediet/linkrpc-client` directly).
+// `@hediet/linkrpc` / `@hediet/linkrpc-client-internal` directly).
 export * from "./mcpForward.interface";
 export * from "./methodRef";
 export * from "./paramParsing";

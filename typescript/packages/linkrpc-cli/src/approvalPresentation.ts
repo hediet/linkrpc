@@ -1,6 +1,6 @@
 import { jcsCanonicalize, type Pattern, type Permission } from '@hediet/linkrpc';
 import type { HubAccessManifestRequest } from '@hediet/linkrpc/hub/common';
-import type { AccessDirectPermission } from '@hediet/linkrpc-hub/hub/server';
+import type { AccessDirectPermission } from '@hediet/linkrpc-infra/approval';
 
 export interface ApprovalPresentationLine {
     readonly label?: string;

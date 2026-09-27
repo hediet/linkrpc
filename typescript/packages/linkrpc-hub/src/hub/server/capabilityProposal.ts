@@ -65,40 +65,6 @@ function isHubProposalData(v: unknown): v is HubProposalData {
     );
 }
 
-/**
- * Access-grant duration vocabulary.
- *
- * `once` and `shortLived` share the same 5-minute TTL — they differ only on
- * the *use* axis: `once` is the single-use "Allow once" choice (the consent
- * host additionally pins a `callBind`, making it intrinsically single-use),
- * while `shortLived` is an ordinary multi-use grant that simply expires soon.
- * `persistent` never expires (no `expiresAtMs`); revocation is the only way to
- * end it.
- */
-export type AccessDurationName = 'once' | 'shortLived' | 'longLived' | 'persistent';
-
-const _DURATION_TO_MS: Record<Exclude<AccessDurationName, 'persistent'>, number> = {
-    once: 5 * 60 * 1000,
-    shortLived: 5 * 60 * 1000,
-    longLived: 24 * 60 * 60 * 1000,
-};
-
-/**
- * Convert an access duration into a Unix-milliseconds expiration timestamp, so
- * handlers compute the same `expiresAtMs` the issuer mints with. Returns
- * `undefined` for `persistent` (and any future never-expiring duration), which
- * callers pass straight to {@link CapabilityProposalIssuer.propose}/`mint` —
- * both omit `expiresAtMs` when it is `undefined`, yielding a non-expiring cap.
- * Defaults to the safe short TTL (`shortLived`) when no duration is supplied.
- */
-export function durationToExp(duration: AccessDurationName | undefined): number | undefined {
-    const d = duration ?? 'shortLived';
-    if (d === 'persistent') {
-        return undefined;
-    }
-    return Date.now() + _DURATION_TO_MS[d];
-}
-
 function canonicalEqual(a: unknown, b: unknown): boolean {
     try {
         return jcsCanonicalize(a as JsonValue) === jcsCanonicalize(b as JsonValue);

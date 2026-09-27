@@ -70,13 +70,13 @@
     },
     "dependencies": {
         "@hediet/linkrpc": "workspace:*",
+        "@hediet/linkrpc-infra": "workspace:*",
         "@vscode/observables": "0.1.1-0",
         "commander": "^12.1.0",
         "ws": "^8.18.0",
         "zod": "^4.4.3"
     },
     "devDependencies": {
-        "@hediet/linkrpc-infra": "workspace:*",
         "@types/node": "^22.0.0",
         "@types/ws": "^8.5.13",
         "tsdown": "^0.22.3",

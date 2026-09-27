@@ -19,23 +19,8 @@ export {
     ParticipantConnectorConfigSchema,
     type ProvisionConfig,
 } from './config';
-export {
-    computeCallBindHash,
-    type ConsentDecision,
-    type ConsentPrompt,
-    type ConsentPromptRequest,
-    createTerminalConsentPrompt,
-    describePermissions,
-    raceConsent,
-    toSignedPermissions,
-} from './engine/consent';
-export {
-    type AccessDecider,
-    type AccessRequestContext,
-    buildSlotPermissions,
-    createHubAccessConfig,
-    describeRequest,
-} from './engine/hubAccessConfig';
+export { createTerminalConsentPrompt } from './engine/consent';
+export { type AccessDecider, type AccessRequestContext, createHubAccessConfig, describeRequest } from './engine/hubAccessConfig';
 export {
     type GrantPolicy,
     type GrantVerdict,
@@ -55,22 +40,6 @@ export {
     type ManifestApproverOptions,
     runManifestApprover,
 } from './engine/manifestApprover';
-export {
-    ApproveClient,
-    type ApproveClientOptions,
-    type ApproveClientState,
-    type CapRequest,
-} from './engine/approveClient';
-export {
-    AggregatingHubAccessManifest,
-    type AggregatingManifestOptions,
-    type AggregatorSource,
-    registerAggregatingManifest,
-} from './engine/aggregatingManifest';
-export {
-    watchHubDirectoryTree,
-    type WatchHubDirectoryTreeOptions,
-} from './engine/watchHubDirectoryTree';
 export {
     formatFlowSummary,
     TrafficFlowAggregator,

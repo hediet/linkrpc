@@ -1,5 +1,5 @@
 import type { JsonValue } from "@hediet/linkrpc";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import {
     BROKER_DISCONNECT_METHOD,
     BROKER_READ_NOTIFICATIONS_METHOD,

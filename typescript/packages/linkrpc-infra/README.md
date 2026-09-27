@@ -2,6 +2,13 @@
 
 Reusable infrastructure protocols and adapters built on LinkRPC.
 
+## Approval clients
+
+[`@hediet/linkrpc-infra/approval`](src/approval/README.md) provides observable
+approval clients, manifest aggregation, and permission/discovery helpers.
+It depends on core LinkRPC, not the hub package. The CLI and hub consume these
+helpers directly; terminal prompting remains outside infra.
+
 ## Immutable graphs (experimental)
 
 `@hediet/linkrpc-infra/graph` provides a generic, JSON-valued immutable graph

@@ -8,7 +8,7 @@ import {
 import {
     resolveEndpoint,
     type ResolvedEndpoint,
-} from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
 
 export type CliProfile = 'rpc' | 'hub';
 

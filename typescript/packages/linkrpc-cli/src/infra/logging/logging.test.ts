@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { loggingInterface } from "@hediet/linkrpc-infra";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import type { ViewOpenContext } from "../../views/types";
 import { loggingView, formatLogFrame } from "./contribution";
 import { frame, logOptions, readLogSnapshot, resolveLoggingTargets, watchLog } from "./model";

@@ -3,7 +3,7 @@ import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { type EndpointCommand } from '@hediet/linkrpc/node';
 import { spawnCommand } from '@hediet/linkrpc-hub/spawn';
 import * as readline from 'node:readline';
-import type { CliConnection } from '@hediet/linkrpc-client';
+import type { CliConnection } from '@hediet/linkrpc-client-internal';
 import { mcpForwardInterface } from '../mcpForward.interface';
 
 /**

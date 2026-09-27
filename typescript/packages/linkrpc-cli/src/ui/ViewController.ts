@@ -1,5 +1,5 @@
 import { Disposable, autorun, derived, observableValue, type IObservable } from "@vscode/observables";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { views } from "../views/registry";
 import { resolveViewTarget } from "../views/discovery";
 import { formatCondition, interfaceTarget, matchesTarget, targetId, type ViewInterface, type ViewSession, type ViewTarget } from "../views/types";

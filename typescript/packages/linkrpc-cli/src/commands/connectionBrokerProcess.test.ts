@@ -6,7 +6,7 @@ import {
 } from "@hediet/linkrpc";
 import { parseEndpointUri } from "@hediet/linkrpc/node";
 import { SocketServer, type NodeSocketTransport } from "@hediet/linkrpc-hub/hub/server/node";
-import { connect } from "@hediet/linkrpc-client";
+import { connect } from "@hediet/linkrpc-client-internal";
 import { z } from "zod";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseStaticHubSchema } from "../staticHubSchema";

@@ -6,8 +6,8 @@ import {
     requestType,
     TransportPair,
 } from "@hediet/linkrpc";
-import { connectViaTransport } from "@hediet/linkrpc-client";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { applyJsonPatch, type JsonPatchOperation, type JsonValue } from "./jsonPatch";
 import { lsCommand, type LsState } from "./ls";
 import { topologyCommand } from "./topology";

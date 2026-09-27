@@ -16,6 +16,15 @@ const PERMISSION: Permission = {
     canInvoke: true,
 };
 
+function streaming<T>(promise: Promise<T>) {
+    return Object.assign(promise, {
+        requestId: Promise.resolve(0),
+        send: async (_value: never) => {},
+        ping: async () => {},
+        cancel: async () => {},
+    });
+}
+
 function direct(
     name: string,
     acceptableRootIds?: string[],
@@ -38,10 +47,10 @@ class FakeManifest {
     private resolveWatch: (() => void) | undefined;
 
     public readonly client: IHubAccessManifest = {
-        getDesired: async () => ({ requested: this.requested, revision: this.revision }),
+        getDesired: () => streaming(Promise.resolve({ requested: this.requested, revision: this.revision })),
         watchDesired: (_params, options) => {
             this.watchCount++;
-            this.onMessage = options.onMessage;
+            this.onMessage = () => options?.onMessage?.({});
             const promise = new Promise<Record<string, never>>((resolve) => {
                 this.resolveWatch = () => resolve({});
             });
@@ -53,7 +62,7 @@ class FakeManifest {
             });
         },
         getCurrent: async () => ({ current: {}, revision: 0 }),
-        setCurrent: async ({ patches }) => {
+        setCurrent: ({ patches }) => streaming((async () => {
             for (const patch of patches) {
                 if (patch.op !== 'set' || !patch.path.startsWith('/current/')) continue;
                 const id = unescapePointer(patch.path.slice('/current/'.length));
@@ -63,7 +72,7 @@ class FakeManifest {
             this.revision++;
             this.onMessage?.();
             return { revision: this.revision };
-        },
+        })()),
         watchCurrent: () => idleWatch(),
     };
 
@@ -134,6 +143,33 @@ describe('ApproveClient', () => {
         await waitFor(() => client.requests.get()[0]?.id === 'afterReconnect');
 
         client.dispose();
+    });
+
+    it('combines direct and live delegated roots without filtering on the consumer', async () => {
+        const manifest = new FakeManifest();
+        manifest.requested = {
+            own: direct('another-consumer', ['id:key:self']),
+            delegated: direct('third-consumer', ['id:key:root']),
+            excluded: direct('fourth-consumer', ['id:key:other']),
+        };
+        let roots: readonly string[] = [];
+        const client = new ApproveClient({
+            manifest: manifest.client,
+            ownPrincipalId: 'id:key:self',
+            getDelegationRootIds: async () => roots,
+        });
+        try {
+            await client.refresh();
+            expect(client.requests.get().map((r) => r.id)).toEqual(['own']);
+            roots = ['id:key:root'];
+            await client.refresh();
+            expect(client.requests.get().map((r) => r.id)).toEqual(['own', 'delegated']);
+            roots = [];
+            await client.refresh();
+            expect(client.requests.get().map((r) => r.id)).toEqual(['own']);
+        } finally {
+            client.dispose();
+        }
     });
 
     it('distinguishes an accepted decision from a matching request that remains pending', async () => {

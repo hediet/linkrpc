@@ -1,6 +1,6 @@
 import type { LinkRpcInterfaceSchema, IRequestSender, SigningCallCtx } from '@hediet/linkrpc';
 import { generateTsInterface } from '@hediet/linkrpc';
-import { type DiscoveredListing, fetchSchema, walkHubDetailed } from '@hediet/linkrpc-client';
+import { type DiscoveredListing, fetchSchema, walkHubDetailed } from '@hediet/linkrpc-client-internal';
 
 interface ExploreCommonArgs {
     /** Exact directory-level filters, applied before browsing or searching. */

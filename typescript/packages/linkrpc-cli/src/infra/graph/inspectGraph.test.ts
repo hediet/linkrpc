@@ -12,7 +12,7 @@ import {
     GraphRoot,
 } from "@hediet/linkrpc-infra/graph";
 import type { DiscoveredListing } from "@hediet/linkrpc/hub/common";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import {
     graphDescriptorsFromSchema,
     renderGraphTargetList,

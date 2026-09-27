@@ -1,4 +1,4 @@
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import type { LinkRpcInterfaceSchema } from "@hediet/linkrpc";
 import type { Command } from "commander";
 import type React from "react";

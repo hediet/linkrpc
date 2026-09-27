@@ -1,4 +1,4 @@
-import { fetchDefaults, fetchSchema, type CliChannel } from "@hediet/linkrpc-client";
+import { fetchDefaults, fetchSchema, type CliChannel } from "@hediet/linkrpc-client-internal";
 import { HubDirectoryExplorer } from "@hediet/linkrpc/hub/common";
 import { interfaceTarget, matchesInterface, matchesTarget, targetId, type ViewContribution, type ViewInterface, type ViewOpenContext, type ViewTarget } from "./types";
 

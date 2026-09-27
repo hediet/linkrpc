@@ -16,7 +16,7 @@ import {
     fetchDefaults,
     fetchSchema,
     walkHubDetailed,
-} from "@hediet/linkrpc-client";
+} from "@hediet/linkrpc-client-internal";
 import { validateValueAgainstSchema } from "../validation";
 import { ViewController } from "./ViewController";
 

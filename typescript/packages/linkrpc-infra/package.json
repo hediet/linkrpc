@@ -14,6 +14,10 @@
             "@hediet/source": "./src/index.ts",
             "default": "./dist/index.js"
         },
+        "./approval": {
+            "@hediet/source": "./src/approval/index.ts",
+            "default": "./dist/approval/index.js"
+        },
         "./graph": {
             "@hediet/source": "./src/graph/index.ts",
             "default": "./dist/graph/index.js"
@@ -76,6 +80,7 @@
     "publishConfig": {
         "exports": {
             ".": "./dist/index.js",
+            "./approval": "./dist/approval/index.js",
             "./graph": "./dist/graph/index.js",
             "./graph/source": "./dist/graph/source.js",
             "./inspection": "./dist/inspection/index.js",

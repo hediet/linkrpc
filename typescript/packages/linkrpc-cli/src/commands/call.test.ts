@@ -6,7 +6,7 @@ import {
     LinkRpcConnection,
     TransportPair,
 } from "@hediet/linkrpc";
-import { connectViaTransport } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { callCommand } from "./call";
 
 const streamer = defineInterface(

@@ -38,26 +38,10 @@ import {
     TransportPair,
 } from '@hediet/linkrpc';
 import { hubAccessManifestInterface } from '@hediet/linkrpc/hub/common';
-import {
-    AggregatingHubAccessManifest,
-    type AggregatorSource,
-    HubAccessManifestHost,
-    registerAggregatingManifest,
-    registerHubAccessManifest,
-    runManifestApprover,
-    watchHubDirectoryTree,
-} from '@hediet/linkrpc-hub';
-import {
-    CapabilityProposalIssuer,
-    createHubServiceInterfaces,
-    fetchFullDirectory,
-    Hub,
-    hubRegisterServiceId,
-    registerHubServices,
-    RootOverlay,
-    withForwardedCallGate,
-    withVerifiedSignature,
-} from '@hediet/linkrpc-hub/hub/server';
+import { HubAccessManifestHost, registerHubAccessManifest, runManifestApprover } from '@hediet/linkrpc-hub';
+import { AggregatingHubAccessManifest, type AggregatorSource, registerAggregatingManifest, watchHubDirectoryTree } from '@hediet/linkrpc-infra/approval';
+import { CapabilityProposalIssuer, createHubServiceInterfaces, Hub, hubRegisterServiceId, registerHubServices, RootOverlay, withForwardedCallGate, withVerifiedSignature } from '@hediet/linkrpc-hub/hub/server';
+import { fetchFullDirectory } from '@hediet/linkrpc-infra/approval';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { HubSigningSender } from '@hediet/linkrpc/hub/client';
 

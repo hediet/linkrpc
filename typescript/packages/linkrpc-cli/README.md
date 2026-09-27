@@ -439,7 +439,11 @@ hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 
 These commands resolve the same persistent identity selected by the global
 `--principal` option and endpoint configuration. Approval commands discover and
-validate Hub access manifests through the shared Hub approver client. The
+validate Hub access manifests through the shared observable approval client in
+`@hediet/linkrpc-infra/approval`. The CLI owns formatting and the terminal UI;
+its interactive adapter supplies `createTerminalConsentPrompt` from
+`@hediet/linkrpc-hub` when no prompt is provided. Generic infrastructure callers
+must pass an explicit `ConsentPrompt` to `runInteractive(signal, prompt)`. The
 resolved identity acts as the capability issuer/root: commands only show or
 decide requests whose `acceptableRootIds` allow that root, while minted
 capabilities retain the request consumer as their audience.

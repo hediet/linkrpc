@@ -11,8 +11,8 @@ import {
     LinkRpcConnection,
     TransportPair,
 } from "@hediet/linkrpc";
-import { connectViaTransport } from "@hediet/linkrpc-client";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { createHubDump, createInitialHubDump, lsCommand, type HubDump } from "./ls";
 import type { JsonPatchOperation, JsonValue } from "./jsonPatch";
 import { defaultsCommand } from "./defaults";

@@ -6,7 +6,7 @@ import type {
     TopologyNetworkSnapshot,
 } from "@hediet/linkrpc-infra/inspection";
 import { TopologyNetworkClient } from "@hediet/linkrpc-infra/inspection";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { formatJson } from "../output";
 import { createDisplayForest, type DisplayForestNode } from "./displayForest";
 import { StateJsonlWriter } from "./stateJsonl";

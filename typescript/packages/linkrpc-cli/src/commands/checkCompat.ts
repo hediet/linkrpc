@@ -4,7 +4,7 @@ import {
     type LinkRpcInterfaceSchema as SvcInterfaceSchema,
     type LinkRpcJsonSchema as SvcJsonSchema,
 } from "@hediet/linkrpc";
-import { type CliChannel, fetchSchema } from "@hediet/linkrpc-client";
+import { type CliChannel, fetchSchema } from "@hediet/linkrpc-client-internal";
 
 export interface CheckCompatOptions {
     readonly interfaceId: string;

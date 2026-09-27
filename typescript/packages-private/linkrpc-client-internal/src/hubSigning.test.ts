@@ -1,15 +1,73 @@
 import {
     CapBag,
+    createSeededMemoryPrincipal,
     createSeededSigningIdentity,
     issueCapability,
+    type IRequestSender,
     Principal,
+    type SigningCallCtx,
 } from '@hediet/linkrpc';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, onTestFinished } from 'vitest';
+import type { CliSigning } from './connect';
+import * as principalResolution from './principal';
 import {
     requestReflectionAccess,
     requestTopologyAccess,
+    setupSigning,
     type SigningSession,
 } from './hubSigning';
+
+describe('sign-time delegated capability cache', () => {
+    it.each([
+        { name: 'complete chain', includeParent: true, expired: false, tenant: 'allowed', negotiate: false },
+        { name: 'missing parent', includeParent: false, expired: false, tenant: 'allowed', negotiate: true },
+        { name: 'expired parent', includeParent: true, expired: true, tenant: 'allowed', negotiate: true },
+        { name: 'parent parameter restriction', includeParent: true, expired: false, tenant: 'denied', negotiate: true },
+    ])('checks $name before skipping access negotiation', async ({ includeParent, expired, tenant, negotiate }) => {
+        const root = await createSeededMemoryPrincipal({ seed: 820 });
+        const delegate = await createSeededMemoryPrincipal({ seed: 821 });
+        const consumer = await createSeededMemoryPrincipal({ seed: 822 });
+        const target = {
+            serviceId: { exact: 'calendar' },
+            interfaceId: { exact: 'events' },
+            members: [{ exact: 'list' }],
+        };
+        const parent = await issueCapability(root.identity, {
+            audience: delegate.identity.publicSigningIdentity,
+            permissions: [{ target, canDelegate: true, params: { tenant: { exact: 'allowed' } } }],
+            expiresAtMs: Date.now() + (expired ? -1000 : 60_000),
+        });
+        const child = await issueCapability(delegate.identity, {
+            audience: consumer.identity.publicSigningIdentity,
+            parent,
+            permissions: [{ target, canInvoke: true }],
+        });
+        await consumer.capBag.add(child, ...(includeParent ? [parent] : []));
+        const resolve = vi.spyOn(principalResolution, 'resolvePrincipal').mockResolvedValue({
+            principal: consumer,
+            source: { kind: 'user', id: 'test' },
+        });
+        onTestFinished(() => resolve.mockRestore());
+        const sendRequest = vi.fn<IRequestSender<SigningCallCtx>['sendRequest']>()
+            .mockResolvedValue({ status: 'denied' });
+        const channel: IRequestSender<SigningCallCtx> = {
+            sendRequest,
+            sendNotification: async () => {},
+            sendRequestWithStream: () => { throw new Error('unexpected stream'); },
+            close: () => {},
+        };
+        const signing: CliSigning = {};
+        await setupSigning(channel, signing, { kind: 'user', id: 'test' }, { negotiateHubCaps: true });
+        await signing.capProvider!({
+            method: 'calendar::events::list',
+            signer: consumer.id,
+            params: { tenant },
+            nonce: 'test-nonce',
+            signedAtMs: Date.now(),
+        });
+        expect(sendRequest).toHaveBeenCalledTimes(negotiate ? 1 : 0);
+    });
+});
 
 describe('requestReflectionAccess', () => {
     it('reuses a hydrated persistent reflection capability', async () => {

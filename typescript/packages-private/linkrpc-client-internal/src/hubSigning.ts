@@ -3,6 +3,7 @@ import {
     type CapProviderResult,
     type CallTarget,
     permissionMatchesTarget,
+    permits,
     capabilityFreshAt,
     type IRequestSender,
     type Principal,
@@ -118,7 +119,8 @@ export async function setupSigning(
             const call = _wireMethodToCall(method);
             if (!call) return present;
             if (call.serviceId === '' || call.interfaceId === hubAccessInterface.info.id) return present;
-            if (_capBagCovers(presentCaps, call)) return present;
+            const request: AccessCallRequest = { call, method, params, nonce, signedAtMs, interfaceHash };
+            if (await _capBagCovers(presentCaps, consumerPrincipalId, request)) return present;
 
             // Per-call auto-negotiation is opt-out. When disabled, never trigger
             // a `requestAccess` round-trip behind a call — just present whatever
@@ -129,14 +131,7 @@ export async function setupSigning(
 
             inAccessNegotiation = true;
             try {
-                const granted = await _requestAccessForCall(channel, hubAccessMethod, consumerPrincipalId, {
-                    call,
-                    method,
-                    params,
-                    nonce,
-                    signedAtMs,
-                    interfaceHash,
-                });
+                const granted = await _requestAccessForCall(channel, hubAccessMethod, consumerPrincipalId, request);
 
                 if (granted.length === 0) return present;
 
@@ -335,9 +330,26 @@ function _isOneShotCap(sc: SignedCapability): boolean {
     return sc.permissions.some((p) => p.callBind !== undefined);
 }
 
-/** True when a durable (non-one-shot) cap in the bag authorises `target`. */
-function _capBagCovers(caps: readonly SignedCapability[], target: CallTarget): boolean {
-    return caps.some((sc) => !_isOneShotCap(sc) && sc.permissions.some((p) => permissionMatchesTarget(target, p)));
+/** Check held authority, not remote trust; the receiving gate selects accepted roots. */
+async function _capBagCovers(
+    caps: readonly SignedCapability[],
+    signer: string,
+    request: AccessCallRequest,
+): Promise<boolean> {
+    const durable = caps.filter((capability) => !_isOneShotCap(capability));
+    const result = await permits({
+        target: { ...request.call, interfaceHash: request.interfaceHash },
+        params: request.params,
+        signer,
+        nonce: request.nonce,
+        signedAtMs: request.signedAtMs,
+        // Call-bound capabilities are excluded above.
+        callHash: '',
+    }, durable, () => durable
+        .filter((capability) => capability.parentHash === undefined)
+        .map((capability) => ({ principal: capability.issuer, isPublic: false })),
+    request.signedAtMs + CAP_FRESHNESS_MARGIN_MS);
+    return result.ok;
 }
 
 interface AccessCallRequest {

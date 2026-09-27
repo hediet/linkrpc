@@ -86,6 +86,8 @@ export interface AggregatingManifestOptions {
     readonly watchSources?: (onChange: () => void) => () => void;
     /** Human log sink. */
     readonly log?: (line: string) => void;
+    /** Pending-request read health. Undefined clears a previous error for this source. */
+    readonly onSourceError?: (sourceTag: string, error: string | undefined) => void;
     /** Hard deadline for each source request. Defaults to 5 seconds. */
     readonly timeoutMs?: number;
 }
@@ -147,6 +149,7 @@ export class AggregatingHubAccessManifest {
             if (!nextSource || nextSource.manifest !== watch.source.manifest) {
                 this._closeWatch(watch);
                 this._watches.delete(tag);
+                this._options.onSourceError?.(tag, undefined);
             }
         }
         this._byTag = next;
@@ -214,7 +217,9 @@ export class AggregatingHubAccessManifest {
                     this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
                 );
             } catch (e) {
-                this._options.log?.(`aggregator: getDesired(${s.tag}) failed: ${(e as Error).message}`);
+                const message = `aggregator: getDesired(${s.tag}) failed: ${e instanceof Error ? e.message : String(e)}`;
+                this._options.log?.(message);
+                this._options.onSourceError?.(s.tag, message);
                 continue;
             }
             // Result validation at the consumption boundary: `hubAccessManifest`
@@ -228,12 +233,14 @@ export class AggregatingHubAccessManifest {
             if (!parsed.success) {
                 const issue = parsed.error.issues[0];
                 const where = issue?.path?.join('.') ?? '';
-                this._options.log?.(
+                const message =
                     `aggregator: source '${s.tag}' returned an invalid hubAccessManifest::getDesired document; skipping. `
-                    + `${issue?.message ?? 'schema mismatch'}${where ? ` (at ${where})` : ''}`,
-                );
+                    + `${issue?.message ?? 'schema mismatch'}${where ? ` (at ${where})` : ''}`;
+                this._options.log?.(message);
+                this._options.onSourceError?.(s.tag, message);
                 continue;
             }
+            this._options.onSourceError?.(s.tag, undefined);
             for (const [id, entry] of Object.entries(parsed.data.requested)) {
                 requested[encodeKey(s.tag, id)] = s.preserveOrigin ? entry : stripOrigin(entry);
             }

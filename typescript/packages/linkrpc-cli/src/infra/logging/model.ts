@@ -1,4 +1,4 @@
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { computeInterfaceHash, type JsonValue } from "@hediet/linkrpc";
 import { parse } from "zod/mini";
 import {

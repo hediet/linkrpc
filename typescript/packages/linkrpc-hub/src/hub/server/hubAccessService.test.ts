@@ -20,7 +20,7 @@ import {
     type HubAccessHandlers,
     type RegisterHubAccessOptions,
 } from './hubAccessService';
-import type { DirectoryEntry } from './accessCandidates';
+import type { DirectoryEntry } from '@hediet/linkrpc-infra/approval';
 import { crypto } from '@hediet/linkrpc';
 
 // `InMemoryManagedIdentity.generate` no longer takes a crypto provider (it uses

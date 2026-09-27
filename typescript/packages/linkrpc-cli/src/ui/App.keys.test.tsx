@@ -7,7 +7,7 @@ import { Box, Text, render } from "ink";
 import { derived, observableValue } from "@vscode/observables";
 import { z } from "zod";
 import { defineInterface, LinkRpcConnection, requestType, TransportPair } from "@hediet/linkrpc";
-import { connectViaTransport } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { App, uiLayout } from "./App";
 import { UiModel } from "./UiModel";
 import type { ViewCommand, ViewSession } from "../views/types";

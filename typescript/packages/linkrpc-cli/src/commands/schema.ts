@@ -1,5 +1,5 @@
 import type { MethodSchema, LinkRpcInterfaceSchema as SvcInterfaceSchema } from "@hediet/linkrpc";
-import { type CliChannel, fetchSchema, findMethodInSchema } from "@hediet/linkrpc-client";
+import { type CliChannel, fetchSchema, findMethodInSchema } from "@hediet/linkrpc-client-internal";
 import { formatJson } from "../output";
 
 export interface SchemaCommandOptions {

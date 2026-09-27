@@ -23,26 +23,8 @@ import {
     type PrincipalId,
     type SigningIdentity,
 } from '@hediet/linkrpc';
-import {
-    CapabilityProposalIssuer,
-    Hub,
-    HubConnectionAcceptor,
-    createHubServiceInterfaces,
-    createFlowLogger,
-    createSqliteIdentityKeystore,
-    fetchFullDirectory,
-    registerConnectionTokenBinderService,
-    anonymousHandler,
-    staticTokenHandler,
-    boundTokenHandler,
-    resolveConnectionHandler,
-    type ConnectionHandlerFactory,
-    type RootProvision,
-    type HubServices,
-    type RegisterConnectionTokenBinderOptions,
-    type SqliteIdentityKeystore,
-    type SqliteIdentitySlot,
-} from '../hub/server';
+import { CapabilityProposalIssuer, Hub, HubConnectionAcceptor, createHubServiceInterfaces, createFlowLogger, createSqliteIdentityKeystore, registerConnectionTokenBinderService, anonymousHandler, staticTokenHandler, boundTokenHandler, resolveConnectionHandler, type ConnectionHandlerFactory, type RootProvision, type HubServices, type RegisterConnectionTokenBinderOptions, type SqliteIdentityKeystore, type SqliteIdentitySlot } from '../hub/server';
+import { fetchFullDirectory } from '@hediet/linkrpc-infra/approval';
 import {
     type NodeSocketTransport,
     type NodeWebSocketTransport,

@@ -9,15 +9,25 @@ import {
     type HubAccessManifestRequest,
     type IHubAccessManifest,
 } from '@hediet/linkrpc/hub/common';
-import { describe, expect, it } from 'vitest';
+import { createTerminalConsentPrompt } from '@hediet/linkrpc-hub';
+import { describe, expect, it, vi } from 'vitest';
 import {
-    approvalCommandPermissions,
-    ApprovalCommandClient,
-    bootstrapApprovalCommandCapability,
+    approvalPermissions,
+    bootstrapApprovalCapability,
     encodeApprovalRequestId,
+} from '@hediet/linkrpc-infra/approval';
+import {
+    ApprovalCommandClient,
     formatApprovalDecision,
     formatApprovalRequests,
 } from './approval';
+
+vi.mock('@hediet/linkrpc-hub', () => ({
+    createTerminalConsentPrompt: vi.fn(() => async () => ({
+        grant: false,
+        reason: 'terminal prompt test',
+    })),
+}));
 
 const PERMISSION: Permission = {
     target: {
@@ -90,15 +100,15 @@ describe('approval commands', () => {
     it('bootstraps one exact, durable approval capability and reuses it', async () => {
         const principal = await createSeededMemoryPrincipal({ seed: 100 });
 
-        const first = await bootstrapApprovalCommandCapability(principal);
-        const second = await bootstrapApprovalCommandCapability(principal);
+        const first = await bootstrapApprovalCapability(principal);
+        const second = await bootstrapApprovalCapability(principal);
 
         expect(second).toBe(first);
         expect(principal.capBag.capabilities).toEqual([first]);
         expect(first).toMatchObject({
             issuer: principal.id,
             audience: principal.id,
-            permissions: approvalCommandPermissions,
+            permissions: approvalPermissions,
         });
         expect(first.expiresAtMs).toBeUndefined();
         expect(first.parentHash).toBeUndefined();
@@ -129,7 +139,7 @@ describe('approval commands', () => {
 
     it('scopes bootstrap authority to manifests and directory discovery', () => {
         const permits = (interfaceId: string, member: string) =>
-            approvalCommandPermissions.some((permission) =>
+            approvalPermissions.some((permission) =>
                 permissionMatchesTarget({ serviceId: 'any/service', interfaceId, member }, permission)
             );
 
@@ -308,6 +318,22 @@ describe('approval commands', () => {
         }
     });
 
+    it('rejects modified prepared authority before signing', async () => {
+        const identity = await createSeededSigningIdentity({ seed: 10 });
+        const principal = identity.publicSigningIdentity.principal;
+        const manifest = new FakeManifest();
+        manifest.requested['preview'] = direct('Calendar', principal, [principal]);
+        const client = new ApprovalCommandClient({ manifest: manifest.client, identity });
+        try {
+            const prepared = await client.prepareApproval(encodeApprovalRequestId('preview'));
+            prepared.permissions[0].canDelegate = true;
+            await expect(client.approvePrepared(prepared)).rejects.toThrow(/Prepared approval was modified/);
+            expect(manifest.decisions).toEqual([]);
+        } finally {
+            client.dispose();
+        }
+    });
+
     it('rejects malformed, unknown, and requests that do not accept the CLI root', async () => {
         const identity = await createSeededSigningIdentity({ seed: 4 });
         const manifest = new FakeManifest();
@@ -380,6 +406,30 @@ describe('approval commands', () => {
         )).toContain('matching request is still pending');
     });
 
+    it('supplies the terminal prompt when interactive callers omit it', async () => {
+        const identity = await createSeededSigningIdentity({ seed: 17 });
+        const principal = identity.publicSigningIdentity.principal;
+        const manifest = new FakeManifest();
+        manifest.requested['terminal'] = direct('terminal', principal, [principal]);
+        const client = new ApprovalCommandClient({ manifest: manifest.client, identity });
+        const abort = new AbortController();
+        try {
+            const running = client.runInteractive(abort.signal);
+            await waitFor(() => manifest.decisions.length === 1);
+            abort.abort();
+            await running;
+
+            expect(createTerminalConsentPrompt).toHaveBeenCalled();
+            expect(manifest.decisions).toEqual([{
+                id: 'terminal',
+                value: { status: 'denied', reason: 'terminal prompt test' },
+            }]);
+        } finally {
+            abort.abort();
+            client.dispose();
+        }
+    });
+
     it('wires the interactive prompt to pending requests until aborted', async () => {
         const identity = await createSeededSigningIdentity({ seed: 5 });
         const principal = identity.publicSigningIdentity.principal;
@@ -406,6 +456,60 @@ describe('approval commands', () => {
             }]);
         } finally {
             abort.abort();
+            client.dispose();
+        }
+    });
+
+    it('aborts an active interactive prompt when the client is disposed', async () => {
+        const identity = await createSeededSigningIdentity({ seed: 15 });
+        const principal = identity.publicSigningIdentity.principal;
+        const manifest = new FakeManifest();
+        manifest.requested['interactive'] = direct('interactive', principal, [principal]);
+        const client = new ApprovalCommandClient({ manifest: manifest.client, identity });
+        let promptSignal: AbortSignal | undefined;
+        let finishPrompt!: () => void;
+        const running = client.runInteractive(new AbortController().signal, async (request) => {
+            promptSignal = request.signal;
+            await new Promise<void>((resolve) => { finishPrompt = resolve; });
+            return { grant: true };
+        });
+        try {
+            await waitFor(() => promptSignal !== undefined);
+            client.dispose();
+            await withTimeout(running, 1000);
+            expect(promptSignal?.aborted).toBe(true);
+            finishPrompt();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            expect(manifest.decisions).toEqual([]);
+        } finally {
+            client.dispose();
+            finishPrompt?.();
+        }
+    });
+
+    it('prepares a discovery request with omitted optional members', async () => {
+        const identity = await createSeededSigningIdentity({ seed: 16 });
+        const manifest = new FakeManifest();
+        manifest.requested['discover'] = {
+            kind: 'discover',
+            consumer: { name: 'Calendar agent', principal: 'id:key:calendar-agent' },
+            interfaces: [{ id: 'events' }],
+            acceptableRootIds: [identity.publicSigningIdentity.principal],
+        };
+        const client = new ApprovalCommandClient({
+            manifest: manifest.client,
+            identity,
+            fetchDirectory: async () => [{
+                serviceId: 'calendar',
+                interfaceId: 'events',
+                hash: 'events-v1',
+            }],
+        });
+        try {
+            await expect(client.prepareApproval(encodeApprovalRequestId('discover'))).resolves.toMatchObject({
+                resolvedSlot: { serviceId: 'calendar', satisfiedInterfaces: ['events'] },
+            });
+        } finally {
             client.dispose();
         }
     });

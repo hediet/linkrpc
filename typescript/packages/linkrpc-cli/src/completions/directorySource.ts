@@ -14,7 +14,7 @@
  * by the orchestrator. This keeps cache coordination trivial: one snapshot,
  * one per-interface schema fetch per (sid, iid).
  */
-import { fetchSchema, walkHub } from '@hediet/linkrpc-client';
+import { fetchSchema, walkHub } from '@hediet/linkrpc-client-internal';
 import type { IRequestSender, SigningCallCtx } from '@hediet/linkrpc';
 
 export interface DirectoryEntry {

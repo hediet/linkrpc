@@ -14,7 +14,7 @@ import {
     fetchSchema,
     walkHub,
     type CliChannel,
-} from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
 
 // ---------------------------------------------------------------------------
 // HubSnapshot

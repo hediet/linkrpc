@@ -18,6 +18,18 @@ and MCP bridge under [`typescript/packages/`](./typescript/packages). The Rust
 workspace contains the core, procedural macros, Tokio transports, and examples
 under [`rust/crates/`](./rust/crates).
 
+## Shared approval client
+
+CLI and web adapters share the observable `ApprovalClient` and
+`createApprovalClient` from the published `@hediet/linkrpc-infra/approval` entry
+point. It also owns reusable manifest aggregation, directory discovery,
+permission preparation, and consent types. These APIs are not re-exported by
+the Hub or the private `@hediet/linkrpc-client-internal` package. The Node-only
+`createTerminalConsentPrompt` adapter remains in `@hediet/linkrpc-hub`;
+`ApprovalClient.runInteractive(signal, prompt)` requires an explicit prompt.
+See the [approval client guide](typescript/packages/linkrpc-infra/src/approval/README.md)
+for root/delegated authority, prepared decisions, and lifecycle guidance.
+
 ## Releases
 
 See [package artifacts and releases](docs/releases.md) for stable/next version

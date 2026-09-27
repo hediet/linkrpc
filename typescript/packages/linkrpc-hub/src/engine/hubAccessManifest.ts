@@ -28,9 +28,9 @@ import {
     type SignedCapability,
 } from '@hediet/linkrpc';
 import { hubAccessInterface, hubAccessManifestInterface } from '@hediet/linkrpc/hub/common';
-import { type AccessDirectPermission } from '../hub/server';
+import { type AccessDirectPermission } from '@hediet/linkrpc-infra/approval';
 import { randomUUID } from 'node:crypto';
-import { describePermissions } from './consent';
+import { describePermissions } from '@hediet/linkrpc-infra/approval';
 
 /** One interface a discover slot's chosen service must implement. */
 export interface ManifestInterfaceReq {

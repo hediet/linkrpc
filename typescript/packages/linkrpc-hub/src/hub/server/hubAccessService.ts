@@ -27,18 +27,13 @@
 import {
     type PrincipalId,
     type Pattern,
-    type Permission,
     type SignedCapability,
     type LinkRpcConnection,
 } from '@hediet/linkrpc';
 import { hubAccessInterface } from '@hediet/linkrpc/hub/common';
-import {
-    resolveAccessCandidates,
-    type AccessSlotRequest,
-    type DirectoryEntry,
-    type ResolvedAccessSlot,
-} from './accessCandidates';
-import type { AccessDurationName } from './capabilityProposal';
+import { resolveAccessCandidates, type AccessSlotRequest, type DirectoryEntry, type ResolvedAccessSlot } from '@hediet/linkrpc-infra/approval';
+import type { AccessDurationName } from '@hediet/linkrpc-infra/approval';
+import type { AccessDirectPermission } from '@hediet/linkrpc-infra/approval';
 
 // ---- handler-facing types -----------------------------------------------
 
@@ -95,41 +90,6 @@ export type AccessExtendDecision =
         readonly capabilities?: readonly SignedCapability[];
     }
     | { readonly granted: false; readonly reason?: string };
-
-/**
- * Optional per-permission invocation preview the consumer attaches to a
- * direct ({@link HubAccessHandlers.onAccessRequestDirect}) request. It is
- * **not** a signed authority constraint — it is the data the consent host
- * needs to render an honest "Allow once" prompt and to pre-compute the
- * `callBind.payloadHash` that binds a one-shot capability to exactly this
- * call. `nonce`/`signedAtMs`/`interfaceHash` are the values the consumer
- * will sign with when it actually issues the call.
- */
-export interface AccessCallIntent {
-    /** Fully-qualified method name the consumer intends to call. */
-    readonly method: string;
-    /** Params the consumer intends to send (shown to the user, hashed into callBind). */
-    readonly params?: unknown;
-    /** Schema-version assertion the call will carry. */
-    readonly interfaceHash?: string;
-    /** base64url nonce bytes the consumer will sign with. */
-    readonly nonce: string;
-    /** Unix milliseconds the consumer will sign with. */
-    readonly signedAtMs: number;
-    /** One-line summary for the prompt. */
-    readonly summary?: string;
-    /** Consumer's suggested default consent action. */
-    readonly suggestion?: AccessDuration;
-}
-
-/**
- * An {@link AccessDirectArgs} permission, carrying the verbatim signed
- * {@link Permission} the consumer asked for plus the optional
- * {@link AccessCallIntent} that enables "Allow once" byte-binding.
- */
-export interface AccessDirectPermission extends Permission {
-    readonly callIntent?: AccessCallIntent;
-}
 
 export interface AccessDirectArgs {
     readonly consumer: AccessConsumer;

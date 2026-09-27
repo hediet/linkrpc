@@ -11,11 +11,11 @@ import {
     type StreamSendOpts,
 } from "@hediet/linkrpc";
 import { isHubEndpoint, openHubChannel } from "@hediet/linkrpc/node";
-import { type CliSigning, connect } from "@hediet/linkrpc-client";
-import type { ResolvedEndpoint } from "@hediet/linkrpc-client";
-import { setupSigning } from "@hediet/linkrpc-client";
-import type { SigningSession } from "@hediet/linkrpc-client";
-import { formatPrincipalSource, type PrincipalSpec } from "@hediet/linkrpc-client";
+import { type CliSigning, connect } from "@hediet/linkrpc-client-internal";
+import type { ResolvedEndpoint } from "@hediet/linkrpc-client-internal";
+import { setupSigning } from "@hediet/linkrpc-client-internal";
+import type { SigningSession } from "@hediet/linkrpc-client-internal";
+import { formatPrincipalSource, type PrincipalSpec } from "@hediet/linkrpc-client-internal";
 import { UiModel } from "./UiModel";
 import { App } from "./App";
 import { withStaticHubReflection } from "../commands/staticHubReflection";

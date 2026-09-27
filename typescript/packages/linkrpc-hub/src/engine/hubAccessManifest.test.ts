@@ -2,11 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { Permission, PrincipalId, SignedCapability } from '@hediet/linkrpc';
 import { LinkRpcConnection, InMemoryManagedIdentity, TransportPair } from '@hediet/linkrpc';
 import { hubAccessInterface, hubAccessManifestInterface } from '@hediet/linkrpc/hub/common';
-import {
-    CapabilityProposalIssuer,
-    type AccessCallIntent,
-} from '../hub/server';
-import { computeCallBindHash } from './consent';
+import { CapabilityProposalIssuer } from '../hub/server';
+import { type AccessCallIntent } from '@hediet/linkrpc-infra/approval';
+import { computeCallBindHash } from '@hediet/linkrpc-infra/approval';
 import { HubAccessManifestHost, registerHubAccessManifest } from './hubAccessManifest';
 import { runManifestApprover } from './manifestApprover';
 

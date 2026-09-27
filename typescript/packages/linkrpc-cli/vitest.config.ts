@@ -4,7 +4,7 @@ export default defineConfig({
     resolve: { conditions: ["@hediet/source"] },
     ssr: { resolve: { conditions: ["@hediet/source"] } },
     test: {
-        server: { deps: { inline: ["@hediet/linkrpc", "@hediet/linkrpc-infra", "@hediet/linkrpc-client"] } },
+        server: { deps: { inline: ["@hediet/linkrpc", "@hediet/linkrpc-infra", "@hediet/linkrpc-client-internal"] } },
         include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     },
 });

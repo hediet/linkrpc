@@ -1,4 +1,5 @@
 import { Command, InvalidArgumentError } from 'commander';
+import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
 import { connectionTokenBinderInterface } from '@hediet/linkrpc-hub/hub/server/connection-token-binder';
@@ -37,7 +38,6 @@ import { openDialTransport, openTargetTransport, type DialEndpoint } from './com
 import { mcpForwardCommand } from './commands/mcpForward';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import {
-    bootstrapApprovalCommandCapability,
     createHubApprovalCommandClient,
     formatApprovalDecision,
     formatApprovalRequests,
@@ -49,26 +49,26 @@ import {
     connectViaRootOverlay,
     type CliConnection,
     type ConnectLogOptions,
-} from '@hediet/linkrpc-client';
-import { type HubConfig } from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
+import { type HubConfig } from '@hediet/linkrpc-client-internal';
 import { runHub, type RunningHub } from './engine/runHub';
 import {
     type ResolvedEndpoint,
     resolveTargetEndpoint,
     resolvedEndpointToConfig,
-} from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
 import {
     type SigningSession,
     setupSigning,
     requestReflectionAccess,
     requestTopologyAccess,
-} from '@hediet/linkrpc-client';
-import { logoutCliIdentity } from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
+import { logoutCliIdentity } from '@hediet/linkrpc-client-internal';
 import { MethodRefWithOptHash } from './methodRef';
 import { renderMethodParamHelp } from './methodHelp';
 import { rewriteParamShortcuts } from './paramFlags';
-import { formatPrincipalSource, parsePrincipalSpec, type PrincipalSpec } from '@hediet/linkrpc-client';
-import { findMethodInSchema } from '@hediet/linkrpc-client';
+import { formatPrincipalSource, parsePrincipalSpec, type PrincipalSpec } from '@hediet/linkrpc-client-internal';
+import { findMethodInSchema } from '@hediet/linkrpc-client-internal';
 import { fetchSchemaForMethodRef } from './schemaLookup';
 import {
     loadStaticHubSchema,
@@ -1834,7 +1834,7 @@ function hasEndpointOverrides(values: ContextValues): boolean {
 async function withChannel(
     endpoint: ResolvedEndpoint | undefined,
     principalSpec: PrincipalSpec,
-    fn: (channel: import('@hediet/linkrpc-client').CliChannel) => Promise<void>,
+    fn: (channel: import('@hediet/linkrpc-client-internal').CliChannel) => Promise<void>,
     opts: {
         requestReflectionAccess?: boolean;
         requestTopologyAccess?: { readonly sourceServiceIds?: readonly string[] };
@@ -1933,12 +1933,14 @@ async function withApprovalClient(
 ): Promise<void> {
     await withResolvedSigning(endpoint, principalSpec, async (conn, session) => {
         reportIdentity(session);
-        await bootstrapApprovalCommandCapability(session.principal);
+        await bootstrapApprovalCapability(session.principal);
         const connection = new LinkRpcConnection(conn.rpcChannel);
         const client = createHubApprovalCommandClient(
             connection,
             session.principal.identity,
             log,
+            () => session.principal.capBag.capabilities,
+            () => bootstrapApprovalCapability(session.principal, log),
         );
         try {
             await fn(client);
@@ -1950,7 +1952,7 @@ async function withApprovalClient(
 
 async function withRawConnection(
     endpoint: ResolvedEndpoint | undefined,
-    fn: (channel: import('@hediet/linkrpc-client').CliChannel) => Promise<void>,
+    fn: (channel: import('@hediet/linkrpc-client-internal').CliChannel) => Promise<void>,
 ): Promise<void> {
     if (g_hubConfigPath !== undefined) {
         throw new Error('connection broker commands do not support --config');

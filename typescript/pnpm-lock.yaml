@@ -12,7 +12,7 @@ importers:
         specifier: 2.10.2
         version: 2.10.2
 
-  packages-private/linkrpc-client:
+  packages-private/linkrpc-client-internal:
     dependencies:
       '@hediet/linkrpc':
         specifier: workspace:*
@@ -21,6 +21,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/linkrpc-hub
     devDependencies:
+      '@hediet/linkrpc-infra':
+        specifier: workspace:*
+        version: link:../../packages/linkrpc-infra
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
@@ -144,9 +147,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
-      '@hediet/linkrpc-client':
+      '@hediet/linkrpc-client-internal':
         specifier: workspace:*
-        version: link:../../packages-private/linkrpc-client
+        version: link:../../packages-private/linkrpc-client-internal
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
@@ -177,6 +180,9 @@ importers:
       '@hediet/linkrpc':
         specifier: workspace:*
         version: link:../linkrpc
+      '@hediet/linkrpc-infra':
+        specifier: workspace:*
+        version: link:../linkrpc-infra
       '@vscode/observables':
         specifier: 0.1.1-0
         version: 0.1.1-0
@@ -190,9 +196,6 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
-      '@hediet/linkrpc-infra':
-        specifier: workspace:*
-        version: link:../linkrpc-infra
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.1
@@ -258,9 +261,9 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
     devDependencies:
-      '@hediet/linkrpc-client':
+      '@hediet/linkrpc-client-internal':
         specifier: workspace:*
-        version: link:../../packages-private/linkrpc-client
+        version: link:../../packages-private/linkrpc-client-internal
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43

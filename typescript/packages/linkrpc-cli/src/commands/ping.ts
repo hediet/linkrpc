@@ -1,4 +1,4 @@
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 
 export async function pingCommand(channel: CliChannel): Promise<string> {
     const start = performance.now();

@@ -3,7 +3,7 @@ import { mergeTopologyGraphs } from '@hediet/linkrpc-infra/inspection';
 import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { HubConfigSchema } from '../config';
-import { fetchFullDirectory } from '../hub/server';
+import { fetchFullDirectory } from '@hediet/linkrpc-infra/approval';
 import { SocketServer } from '../hub/server/node';
 import { runHub, type RunningHub } from './runHub';
 

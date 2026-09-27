@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { discoverViewTargets, resolveViewSelection } from "../views/discovery";
 import { getView, views } from "../views/registry";
 import { formatCondition } from "../views/types";

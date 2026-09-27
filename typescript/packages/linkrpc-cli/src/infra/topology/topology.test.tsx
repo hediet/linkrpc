@@ -6,7 +6,7 @@ import {
     bareInterfaceTarget, computeInterfaceHash, LinkRpcConnection, TransportPair, type JsonRpcChannel, type JsonValue,
 } from "@hediet/linkrpc";
 import { topologyInterface, type TopologyGraph } from "@hediet/linkrpc/inspection";
-import { connectViaTransport } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { Command } from "commander";
 import { topologyView } from "./contribution";
 import { TopologyObservation, readTopology, resolveTopologyTarget } from "./model";

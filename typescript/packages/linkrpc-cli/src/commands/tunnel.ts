@@ -1,7 +1,7 @@
 import { ErrorCode, type IncomingCall, type IRequestHandler, type JsonValue, RpcError } from '@hediet/linkrpc';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { hubServiceIdRegistryInterface } from '@hediet/linkrpc/hub/common';
-import type { CliConnection } from '@hediet/linkrpc-client';
+import type { CliConnection } from '@hediet/linkrpc-client-internal';
 
 /**
  * The wire method for the provenance claim front door. Mirrors

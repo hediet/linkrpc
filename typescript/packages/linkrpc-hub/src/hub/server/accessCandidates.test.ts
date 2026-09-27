@@ -7,7 +7,7 @@ import {
     resolveAccessCandidates,
     type AccessSlotRequest,
     type DirectoryEntry,
-} from './accessCandidates';
+} from '@hediet/linkrpc-infra/approval';
 import { hubRegisterServiceId } from './hubRegisterServiceId';
 import { createHubServiceInterfaces } from './hubServices';
 import { Hub } from './routing/routingHub';

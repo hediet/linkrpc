@@ -14,11 +14,11 @@
  * `LINKRPC_ENDPOINT` fallback — the extension passes `{}` so completion targets
  * the endpoint named on the line rather than the extension host's environment.
  */
-import { setupSigning } from '@hediet/linkrpc-client';
-import { parsePrincipalSpec } from '@hediet/linkrpc-client';
-import { connect } from '@hediet/linkrpc-client';
+import { setupSigning } from '@hediet/linkrpc-client-internal';
+import { parsePrincipalSpec } from '@hediet/linkrpc-client-internal';
+import { connect } from '@hediet/linkrpc-client-internal';
 import { isHubEndpoint } from '@hediet/linkrpc/node';
-import { type ResolvedEndpoint } from '@hediet/linkrpc-client';
+import { type ResolvedEndpoint } from '@hediet/linkrpc-client-internal';
 import { complete, type CompleteOptions, type Completion } from './complete';
 import { withFileCache } from './cache';
 import { ChannelDirectorySource, type DirectorySource } from './directorySource';

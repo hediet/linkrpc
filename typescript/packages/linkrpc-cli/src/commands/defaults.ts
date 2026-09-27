@@ -1,4 +1,4 @@
-import { type CliChannel, fetchDefaults } from "@hediet/linkrpc-client";
+import { type CliChannel, fetchDefaults } from "@hediet/linkrpc-client-internal";
 import { formatJson } from "../output";
 
 export interface DefaultsCommandOptions {

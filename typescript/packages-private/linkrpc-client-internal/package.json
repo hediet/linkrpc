@@ -1,5 +1,5 @@
 {
-    "name": "@hediet/linkrpc-client",
+    "name": "@hediet/linkrpc-client-internal",
     "version": "0.0.1",
     "private": true,
     "type": "module",
@@ -18,6 +18,7 @@
         "@hediet/linkrpc-hub": "workspace:*"
     },
     "devDependencies": {
+        "@hediet/linkrpc-infra": "workspace:*",
         "@types/node": "^20.0.0",
         "tsx": "4.22.4",
         "typescript": "^6.0.3",

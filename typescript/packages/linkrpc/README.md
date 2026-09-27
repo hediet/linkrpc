@@ -44,6 +44,63 @@ accepted by the server. `openWebSocket` accepts only standard browser
 subprotocols, cancellation, and timeout options; Node-only upgrade headers
 remain available through `@hediet/linkrpc/node`.
 
+## Issuing delegated capabilities
+
+`issueCapabilities` accepts any `SigningIdentity` and a snapshot of its live
+capability bag. No observable framework or special administrator identity is
+required:
+
+```ts
+import { issueCapabilities } from '@hediet/linkrpc';
+
+const capabilities = await issueCapabilities(principal.identity, {
+  audience: consumerPrincipalId,
+  permissions,
+  capabilities: principal.capBag.capabilities,
+  acceptableRootIds: serviceAcceptedRootIds,
+  expiresAtMs: Date.now() + 60_000,
+});
+```
+
+The result includes newly signed leaves **and every required ancestor**.
+Return, store, and forward the entire array. `HubSigningSender.requestAccess`
+retains all durable returned capabilities, and signing automatically forwards
+the principal's complete bag.
+
+An identity listed in `acceptableRootIds` can issue directly, even when its
+bag is empty or contains irrelevant expired delegations. Otherwise, each
+requested permission needs a cryptographically valid accepted delegation chain
+covering its full scope. Different permissions can use different roots; expiry
+is bounded by all ancestors. Exact/prefix targets, schema pins, call bindings,
+and conservative parameter narrowing are supported. Unsupported scope unions
+are rejected rather than reported as a successful partial grant.
+
+Always supply the service's accepted roots when known. Omitting them prefers
+valid delegated chains but allows self-root fallback; neither that fallback nor
+the synchronous `findCoveringCapabilities` cache hint establishes service trust.
+The service's `permits` check remains authoritative.
+
+For confirmation UIs, use `prepareCapabilityIssuance(identity, options)` with
+the same options. It performs validation without signing and returns
+`{ audience, proposals, issue() }`. Each proposal contains `permissions`,
+`rootIssuer`, and optional `expiresAtMs` and `parentHash`. Display those effective
+grants, then call `plan.issue()` after confirmation. The plan snapshots its
+selected chains and scope; it revalidates them and expiration without changing
+roots or extending the previewed lifetime.
+
+`getDelegationRootIds(identity, capabilities)` discovers authenticated fresh
+delegation-root candidates without minting capabilities. It does not implicitly
+include the identity itself or prove coverage of any requested scope. Combine
+its results with the identity's own principal when filtering accepted roots,
+then use preparation to check the actual requested scope.
+
+Insufficient/unsupported delegation coverage throws `CapabilityIssuanceError`
+with `code: "insufficientAuthority"`. Bootstrap code may catch just that expected
+failure when trying independent root candidates. Invalid requests, expiry and
+signer failures are not classified as insufficient authority. Presenting a
+self-root candidate alongside delegated candidates does not establish trust:
+the receiver still chooses a chain rooted at an issuer it accepts.
+
 ## Interface templates
 
 This bounded v1 adds TypeScript authoring groups over ordinary concrete RPC methods.

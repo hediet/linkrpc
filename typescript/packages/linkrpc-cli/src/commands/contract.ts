@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { exportStaticHubSchema, type ExportStaticHubSchemaOptions } from '@hediet/linkrpc';
-import type { CliChannel } from '@hediet/linkrpc-client';
+import type { CliChannel } from '@hediet/linkrpc-client-internal';
 
 export async function exportContractCommand(
     channel: CliChannel,

@@ -9,7 +9,7 @@ import { SocketServer } from "@hediet/linkrpc-hub/hub/server/node";
 import {
     connect,
     connectViaTransport,
-} from "@hediet/linkrpc-client";
+} from "@hediet/linkrpc-client-internal";
 import type { StaticHubSchema } from "../staticHubSchema";
 import { ConnectionBroker, type BrokerStopReason } from "./connectionBroker";
 

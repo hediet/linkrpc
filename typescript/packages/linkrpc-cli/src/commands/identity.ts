@@ -1,5 +1,5 @@
-import type { PrincipalSource, SigningSession } from '@hediet/linkrpc-client';
-import { formatPrincipalSource } from '@hediet/linkrpc-client';
+import type { PrincipalSource, SigningSession } from '@hediet/linkrpc-client-internal';
+import { formatPrincipalSource } from '@hediet/linkrpc-client-internal';
 import { formatJson } from '../output';
 
 export interface CliIdentity {

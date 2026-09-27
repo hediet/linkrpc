@@ -37,7 +37,7 @@
         "zod": "^4.4.3"
     },
     "devDependencies": {
-        "@hediet/linkrpc-client": "workspace:*",
+        "@hediet/linkrpc-client-internal": "workspace:*",
         "@types/node": "^20.0.0",
         "@vscode/rollup-plugin-esm-url": "1.0.1-11",
         "tsdown": "^0.22.3",

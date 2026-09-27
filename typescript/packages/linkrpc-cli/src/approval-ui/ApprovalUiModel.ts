@@ -2,11 +2,11 @@ import { jcsCanonicalize } from '@hediet/linkrpc';
 import { observableValue, type IObservable, type ISettableObservable } from '@vscode/observables';
 import type {
     ApprovalSnapshot,
-    ApprovalSubscription,
     ApprovalDecisionOutcome,
     PendingApprovalRequest,
     PreparedApproval,
-} from '../commands/approval';
+} from '@hediet/linkrpc-infra/approval';
+import type { ApprovalSubscription } from '../commands/approval';
 
 export type ApprovalUiMode = 'browse' | 'approve' | 'deny' | 'help';
 export type ApprovalUiMessageKind = 'info' | 'success' | 'error';

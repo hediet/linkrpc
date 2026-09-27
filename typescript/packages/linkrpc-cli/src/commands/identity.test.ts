@@ -1,7 +1,7 @@
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { IRequestSender, SigningCallCtx } from '@hediet/linkrpc';
-import { MANAGED_FALLBACK_USER_ID, resolvePrincipal } from '@hediet/linkrpc-client';
+import { MANAGED_FALLBACK_USER_ID, resolvePrincipal } from '@hediet/linkrpc-client-internal';
 import { describe, expect, it } from 'vitest';
 import { formatCliIdentity } from './identity';
 

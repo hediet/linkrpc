@@ -39,17 +39,8 @@ import {
     registerHubAccessManifest,
     runManifestApprover,
 } from '@hediet/linkrpc-hub';
-import {
-    CapabilityProposalIssuer,
-    Hub,
-    hubRegisterServiceId,
-    createHubServiceInterfaces,
-    fetchFullDirectory,
-    registerHubServices,
-    RootOverlay,
-    withForwardedCallGate,
-    withVerifiedSignature,
-} from '@hediet/linkrpc-hub/hub/server';
+import { CapabilityProposalIssuer, Hub, hubRegisterServiceId, createHubServiceInterfaces, registerHubServices, RootOverlay, withForwardedCallGate, withVerifiedSignature } from '@hediet/linkrpc-hub/hub/server';
+import { fetchFullDirectory } from '@hediet/linkrpc-infra/approval';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { HubSigningSender } from '@hediet/linkrpc/hub/client';
 

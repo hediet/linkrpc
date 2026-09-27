@@ -14,7 +14,7 @@ import {
     type ServiceListing,
     type WalkHubOptions,
 } from "@hediet/linkrpc/hub/common";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { formatJson } from "../output";
 import { createDisplayForest, type DisplayForestNode } from "./displayForest";
 import { createJsonPatch, type JsonValue } from "./jsonPatch";

@@ -23,7 +23,7 @@ export default defineConfig({
     deps: {
         alwaysBundle: [
             '@vscode/observables',
-            '@hediet/linkrpc-client',
+            '@hediet/linkrpc-client-internal',
         ],
     },
     outputOptions: {

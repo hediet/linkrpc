@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { z } from "zod";
 import { defineInterface, type JsonValue } from "@hediet/linkrpc";
 import { GraphObjects, GraphRoot, graphRefSchema } from "@hediet/linkrpc-infra/graph";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { graphView, resolveGraphRoots } from "../infra/graph/contribution";
 import { discoverViewTargets, resolveViewSelection, resolveViewTarget } from "../views/discovery";
 import { interfaceTarget, matchesTarget } from "../views/types";

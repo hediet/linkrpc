@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { bareInterfaceTarget, defineInterface, LinkRpcConnection, TransportPair, type JsonRpcChannel, type JsonValue } from "@hediet/linkrpc";
 import { GraphObjects, GraphRoot, graphRefSchema, ImmutableGraphRuntime, InMemoryImmutableGraphStore, standardGraphRuntimeOptions } from "@hediet/linkrpc-infra/graph";
-import { connectViaTransport } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { graphView } from "../infra/graph/contribution";
 import { discoverViewTargets, resolveViewSelection } from "../views/discovery";
 import { GraphSession } from "../infra/graph/session";

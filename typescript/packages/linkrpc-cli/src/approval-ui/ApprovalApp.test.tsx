@@ -3,7 +3,7 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { render, type Instance } from 'ink';
 import type { HubAccessManifestRequest } from '@hediet/linkrpc/hub/common';
-import type { ApprovalSnapshot, PendingApprovalRequest } from '../commands/approval';
+import type { ApprovalSnapshot, PendingApprovalRequest } from '@hediet/linkrpc-infra/approval';
 import { ApprovalApp, approvalDetailLines, safeTerminalText } from './ApprovalApp';
 import { ApprovalUiModel, type ApprovalUiClient } from './ApprovalUiModel';
 

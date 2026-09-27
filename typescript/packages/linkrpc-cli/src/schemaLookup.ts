@@ -3,7 +3,7 @@ import {
     type CliChannel,
     fetchDefaults,
     fetchSchema,
-} from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
 import type { MethodRefWithOptHash } from './methodRef';
 
 /**

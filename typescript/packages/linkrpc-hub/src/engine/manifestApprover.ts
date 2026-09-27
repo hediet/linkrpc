@@ -28,23 +28,13 @@ import {
     type IHubAccessManifest,
 } from '@hediet/linkrpc/hub/common';
 import { autorun } from '@vscode/observables';
-import {
-    type AccessDurationName,
-    type AccessSlotRequest,
-    type CapabilityProposalIssuer,
-    candidatesForSlot,
-    type DirectoryEntry,
-    durationToExp,
-} from '../hub/server';
-import { buildSlotPermissions } from './hubAccessConfig';
-import {
-    type ConsentPrompt,
-    createTerminalConsentPrompt,
-    describePermissions,
-    toSignedPermissions,
-} from './consent';
-import type { AccessDirectPermission } from '../hub/server';
-import { ApproveClient } from './approveClient';
+import { type CapabilityProposalIssuer } from '../hub/server';
+import { type AccessDurationName, type AccessSlotRequest, candidatesForSlot, type DirectoryEntry, durationToExp } from '@hediet/linkrpc-infra/approval';
+import { buildSlotPermissions } from '@hediet/linkrpc-infra/approval';
+import { createTerminalConsentPrompt } from './consent';
+import { type ConsentPrompt, describePermissions, toSignedPermissions } from '@hediet/linkrpc-infra/approval';
+import type { AccessDirectPermission } from '@hediet/linkrpc-infra/approval';
+import { ApproveClient } from '@hediet/linkrpc-infra/approval';
 
 export interface ManifestApproverOptions {
     /**

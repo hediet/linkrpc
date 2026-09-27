@@ -5,7 +5,7 @@ import {
     RpcError,
     TransportPair,
 } from "@hediet/linkrpc";
-import { connectViaTransport, type CliConnection } from "@hediet/linkrpc-client";
+import { connectViaTransport, type CliConnection } from "@hediet/linkrpc-client-internal";
 import { z } from "zod";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseStaticHubSchema, type StaticHubSchema } from "../staticHubSchema";

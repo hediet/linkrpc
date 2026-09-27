@@ -1,6 +1,6 @@
 import { LinkRpcConnection, TransportPair } from "@hediet/linkrpc";
 import { topologyInterface } from "@hediet/linkrpc/inspection";
-import { connectViaTransport } from "@hediet/linkrpc-client";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { render } from "ink";
 import { TopologySession } from "../session";
 import { resolveTopologyTarget } from "../model";

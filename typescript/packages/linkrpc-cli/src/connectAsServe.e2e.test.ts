@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { connectionTokenBinderInterface } from '@hediet/linkrpc-hub/hub/server';
 import { SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
 import { runHub, type RunningHub } from './engine/runHub';
-import { parseHubConfig } from '@hediet/linkrpc-client';
+import { parseHubConfig } from '@hediet/linkrpc-client-internal';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, type DialEndpoint } from './commands/connectAsTransports';
 

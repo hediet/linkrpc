@@ -18,7 +18,7 @@ import {
     TrafficFlowAggregator,
 } from '@hediet/linkrpc-hub';
 import { TopologyClient, TrafficClient } from '@hediet/linkrpc-infra/inspection';
-import type { CliChannel } from '@hediet/linkrpc-client';
+import type { CliChannel } from '@hediet/linkrpc-client-internal';
 import { formatJson } from '../output';
 
 export interface ParticipantWatchOptions {

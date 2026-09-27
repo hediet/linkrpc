@@ -13,9 +13,8 @@ import type {
 import {
     capabilityFreshAt,
     createManagedPrincipal,
-    matchParams,
     methodNameToTarget,
-    permissionMatchesTarget,
+    permits,
     SigningSender,
 } from '../../index';
 import { hubAccessInterface } from './hub.interfaces';
@@ -109,7 +108,7 @@ export function createAutoNegotiatingCapProvider(opts: {
     // bootstrap capability.
     const hubAccessMethod = `${hubAccessInterface.info.id}::requestAccess`;
 
-    return async ({ method, params, nonce, signedAtMs, interfaceHash }) => {
+    return async ({ method, params, signer, nonce, signedAtMs, interfaceHash }) => {
         const fresh = principal.capBag.capabilities.filter((c) =>
             capabilityFreshAt(c, signedAtMs, CAP_FRESHNESS_MARGIN_MS),
         );
@@ -133,7 +132,14 @@ export function createAutoNegotiatingCapProvider(opts: {
         if (call.serviceId === '' || call.interfaceId === hubAccessInterface.info.id) {
             return present;
         }
-        if (capBagCovers(fresh, call, params)) return present;
+        const cached = await permits({
+            target: call, params, signer, nonce, signedAtMs, callHash: '',
+        }, fresh.filter(c => !isOneShotCap(c)),
+        () => fresh.filter(c => c.parentHash === undefined).map(c => ({ principal: c.issuer, isPublic: false })),
+        signedAtMs + CAP_FRESHNESS_MARGIN_MS);
+        // This verifies held authority, not recipient trust (which the gate
+        // decides). A parent addressed to somebody else is never a held leaf.
+        if (cached.ok) return present;
 
         inAccessNegotiation = true;
         try {
@@ -170,17 +176,6 @@ export function createAutoNegotiatingCapProvider(opts: {
 /** A cap is one-shot when any permission pins it to a single call via `callBind`. */
 function isOneShotCap(sc: SignedCapability): boolean {
     return sc.permissions.some((p) => p.callBind !== undefined);
-}
-
-/** True when a durable (non-one-shot) cap in the bag authorises this call. */
-function capBagCovers(caps: readonly SignedCapability[], target: CallTarget, params: unknown): boolean {
-    return caps.some((sc) =>
-        !isOneShotCap(sc) &&
-        sc.permissions.some((p) =>
-            permissionMatchesTarget(target, p) &&
-            (p.params === undefined || matchParams(p.params, params).ok),
-        ),
-    );
 }
 
 interface AccessCallRequest {

@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("ink", () => ({ render: mocks.render }));
-vi.mock("@hediet/linkrpc-client", () => ({
+vi.mock("@hediet/linkrpc-client-internal", () => ({
     connect: mocks.connect,
     setupSigning: mocks.setupSigning,
     formatPrincipalSource: vi.fn(() => "generated test"),

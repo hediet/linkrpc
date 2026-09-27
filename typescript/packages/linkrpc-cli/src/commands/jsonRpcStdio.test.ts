@@ -10,7 +10,7 @@ import {
     JsonRpcTransportPair,
     registerJsonRpcConnectionService,
 } from '@hediet/linkrpc-infra/json-rpc';
-import type { CliConnection } from '@hediet/linkrpc-client';
+import type { CliConnection } from '@hediet/linkrpc-client-internal';
 import { jsonRpcStdioCommand } from './jsonRpcStdio';
 
 describe('jsonRpcStdioCommand', () => {

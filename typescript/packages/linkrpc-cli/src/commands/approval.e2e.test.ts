@@ -26,8 +26,8 @@ import {
     withVerifiedSignature,
 } from '@hediet/linkrpc-hub/hub/server';
 import { describe, expect, it, onTestFinished } from 'vitest';
+import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import {
-    bootstrapApprovalCommandCapability,
     createHubApprovalCommandClient,
 } from './approval';
 
@@ -75,7 +75,7 @@ describe('approval commands across a capability-gated Hub', () => {
         const consumer = HubSigningSender.create(attachGatedLeg(requestHost), consumerPrincipal);
         const inspectionHost = new HubAccessManifestHost({ log: () => { /* quiet */ } });
 
-        await bootstrapApprovalCommandCapability(root);
+        await bootstrapApprovalCapability(root);
         const rootConnection = signedConnection(attachGatedLeg(inspectionHost), root);
         const logs: string[] = [];
         const client = createHubApprovalCommandClient(rootConnection, root.identity, (line) => logs.push(line));
@@ -147,7 +147,7 @@ describe('approval commands across a capability-gated Hub', () => {
         const appPair = new TransportPair();
         overlay.connectParticipant(withVerifiedSignature(appPair.a, { verifySignatures: true }));
 
-        await bootstrapApprovalCommandCapability(untrustedRoot);
+        await bootstrapApprovalCapability(untrustedRoot);
         const connection = signedConnection(appPair.b, untrustedRoot);
         onTestFinished(() => connection.close());
 
@@ -195,7 +195,7 @@ describe('approval commands across a capability-gated Hub', () => {
             serviceId: 'de.hediet/cloud/ext/auth',
         });
 
-        await bootstrapApprovalCommandCapability(root);
+        await bootstrapApprovalCapability(root);
         const rootConnection = signedConnection(publicPair.a, root);
         const logs: string[] = [];
         const client = createHubApprovalCommandClient(rootConnection, root.identity, (line) => logs.push(line));

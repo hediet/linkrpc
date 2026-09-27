@@ -10,6 +10,7 @@ import {
     type SignedCapability,
 } from '../../protocol';
 import { capabilityFreshAt } from '../../identity/capability';
+import { signedHash } from '../../identity/signedObject';
 
 /**
  * The client-facing wire shapes of the hub's capability-negotiation protocol
@@ -71,6 +72,9 @@ export type HubAccessResult =
  * This is the broad-request counterpart to checking whether a cap bag covers
  * one concrete call. Clients use it before opening consent so persisted grants
  * are reused without weakening any service/interface/member pattern.
+ * Returns complete chains, not just matching leaves. This synchronous cache
+ * hint checks scope/topology, not signatures or recipient trust; `permits` is
+ * still the authorization check.
  */
 export function findCoveringCapabilities(
     capabilities: readonly SignedCapability[],
@@ -78,6 +82,8 @@ export function findCoveringCapabilities(
     options: {
         readonly nowMs?: number;
         readonly freshnessMarginMs?: number;
+        /** Restrict reusable leaves to this caller; ancestors may name others. */
+        readonly audience?: string;
     } = {},
 ): readonly SignedCapability[] | undefined {
     if (requested.length === 0) return undefined;
@@ -88,13 +94,30 @@ export function findCoveringCapabilities(
         && capability.permissions.every((permission) => permission.callBind === undefined),
     );
     const matching = new Set<SignedCapability>();
+    const byHash = new Map<string, SignedCapability>(reusable.map(cap => [signedHash("capability", cap), cap]));
 
     for (const request of requested) {
-        const capability = reusable.find((candidate) =>
-            candidate.permissions.some((granted) => permissionCovers(granted, request)),
-        );
-        if (!capability) return undefined;
-        matching.add(capability);
+        let found = false;
+        for (const candidate of reusable) {
+            if (options.audience !== undefined && candidate.audience !== options.audience) continue;
+            const chain: SignedCapability[] = [];
+            let link: SignedCapability | undefined = candidate;
+            while (link && chain.length < 16 && !chain.includes(link)) {
+                const required = chain.length === 0 ? request : { ...request, canInvoke: false, canDelegate: true };
+                if (!link.permissions.some(granted => permissionCovers(granted, required))) break;
+                chain.push(link);
+                if (link.parentHash === undefined) {
+                    chain.forEach(cap => matching.add(cap));
+                    found = true;
+                    break;
+                }
+                const parent = byHash.get(link.parentHash);
+                if (parent?.audience !== link.issuer) break;
+                link = parent;
+            }
+            if (found) break;
+        }
+        if (!found) return undefined;
     }
 
     return [...matching];

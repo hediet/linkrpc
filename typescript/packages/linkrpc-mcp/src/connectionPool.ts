@@ -12,7 +12,7 @@ import {
     connectViaTransport,
     setupSigning,
     type SigningSession,
-} from '@hediet/linkrpc-client';
+} from '@hediet/linkrpc-client-internal';
 import type { HubAccessRequest, HubAccessResult } from '@hediet/linkrpc/hub/common';
 import type { SignedCapability } from '@hediet/linkrpc';
 

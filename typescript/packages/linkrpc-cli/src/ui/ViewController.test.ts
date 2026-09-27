@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { observableValue } from "@vscode/observables";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import type { MethodKey, SchemaState } from "./UiModel";
 import { ViewController } from "./ViewController";
 import type { ViewOpenContext } from "../views/types";

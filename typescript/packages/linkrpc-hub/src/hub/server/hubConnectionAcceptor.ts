@@ -10,7 +10,7 @@ import {
     resolveConnectionHandler,
 } from './connectionHandler';
 import type { LinkRpcConnection } from '@hediet/linkrpc';
-import type { DirectoryEntry } from './accessCandidates';
+import type { DirectoryEntry } from '@hediet/linkrpc-infra/approval';
 import type { AttachedLink, Hub } from './routing/routingHub';
 import type { ITransportServer, Transport } from '@hediet/linkrpc/hub/common';
 

@@ -21,7 +21,8 @@ import {
 import { signObject, signedHash, verifyObject, readSignature } from "./signedObject";
 import type { InterfaceDefinition, MemberMap } from "../connection/interfaceDefinition";
 import type { RequestType } from "../schema/memberTypes";
-import type { PublicSigningIdentity, SigningIdentity } from "./identity";
+import { PublicSigningIdentity, type SigningIdentity } from "./identity";
+import { permissionScopeCovers } from "./permissionCoverage";
 
 // Re-export protocol-level types and pure helpers so existing consumers
 // keep working through `@hediet/linkrpc`'s identity barrel.
@@ -142,7 +143,8 @@ async function verifyChain(
     let anyReason = "no presented capability addresses this call";
     let unacceptedRoot: PrincipalId | undefined;
     for (const leaf of capabilities) {
-        const r = await _verifyLink(leaf, call, opts.expectedAudience, opts.nowMs, maxDepth, true, resolveParent);
+        const r = await _verifyLink(leaf, opts.expectedAudience, opts.nowMs, maxDepth, true, resolveParent,
+            (link, isLeaf) => capabilityPermits(call, link, isLeaf ? "invoke" : "delegate"));
         if (!r.ok) {
             anyReason = r.reason;
             if (leaf.audience === opts.expectedAudience) leafReason = r.reason;
@@ -162,12 +164,12 @@ async function verifyChain(
 
 async function _verifyLink(
     link: SignedCapability,
-    call: Call,
     expectedAudience: PrincipalId,
     nowMs: number,
     depthLeft: number,
     isLeaf: boolean,
     resolveParent: (parentHash: string) => SignedCapability | undefined,
+    checkPermission: (link: SignedCapability, isLeaf: boolean) => { ok: true } | { ok: false; reason: string },
 ): Promise<LinkResult> {
     if (depthLeft <= 0) return { ok: false, reason: "chain too deep" };
 
@@ -177,7 +179,7 @@ async function _verifyLink(
     if (link.expiresAtMs !== undefined && link.expiresAtMs < nowMs) {
         return { ok: false, reason: "expired" };
     }
-    const permitted = capabilityPermits(call, link, isLeaf ? "invoke" : "delegate");
+    const permitted = checkPermission(link, isLeaf);
     if (!permitted.ok) {
         return { ok: false, reason: permitted.reason };
     }
@@ -206,7 +208,7 @@ async function _verifyLink(
     if (signedHash("capability", parent) !== link.parentHash) {
         return { ok: false, reason: "parent hash mismatch" };
     }
-    return _verifyLink(parent, call, link.issuer, nowMs, depthLeft - 1, false, resolveParent);
+    return _verifyLink(parent, link.issuer, nowMs, depthLeft - 1, false, resolveParent, checkPermission);
 }
 
 // ---- authorization: the single entry point -------------------------------
@@ -340,6 +342,226 @@ export async function issueCapability(
             : {}),
     };
     return signCapability(capability, issuer);
+}
+
+export interface IssueCapabilitiesOptions {
+    readonly audience: string | PublicSigningIdentity;
+    readonly permissions: readonly Permission[];
+    /** A snapshot of the issuer's live capability bag, including ancestors. */
+    readonly capabilities: readonly SignedCapability[];
+    readonly expiresAtMs?: number;
+    /**
+     * Trust anchors accepted by the intended recipient service(s). When this
+     * includes the issuer, it can issue directly even with an empty/stale bag.
+     * Omit only when trust is unknown: delegated authority is preferred, with
+     * self-root issuance as a fallback. This does not establish recipient trust.
+     */
+    readonly acceptableRootIds?: readonly string[];
+}
+
+/** Expected coverage failure; signing, malformed requests and expiry errors remain distinct. */
+export class CapabilityIssuanceError extends Error {
+    public override readonly name = "CapabilityIssuanceError";
+
+    constructor(
+        public readonly code: "insufficientAuthority",
+        message: string,
+    ) {
+        super(message);
+    }
+}
+
+/**
+ * Issue complete capability chains from an identity and its current grants.
+ * Each requested clause must be fully covered by delegation authority at every
+ * ancestor, not merely intersect it. Exact/prefix targets and common parameter
+ * narrowing are supported; unsupported coverage is conservatively rejected.
+ *
+ * Different clauses may use different accepted roots. Expiration is capped at
+ * the earliest ancestor expiry. The result contains the new leaves and all
+ * ancestors needed by `permits`; retain and forward the entire array.
+ */
+export async function issueCapabilities(
+    issuer: SigningIdentity,
+    options: IssueCapabilitiesOptions,
+): Promise<SignedCapability[]> {
+    return (await prepareCapabilityIssuance(issuer, options)).issue();
+}
+
+export interface CapabilityIssuanceProposal {
+    readonly permissions: readonly Permission[];
+    readonly rootIssuer: PrincipalId;
+    readonly expiresAtMs?: number;
+    readonly parentHash?: string;
+}
+
+export interface CapabilityIssuancePlan {
+    readonly audience: PrincipalId;
+    /** Effective grants and chosen roots for display before confirmation. */
+    readonly proposals: readonly CapabilityIssuanceProposal[];
+    /**
+     * Revalidate the selected authority and expiry, then sign complete chains.
+     * Never selects a different root or silently extends the previewed lifetime.
+     */
+    issue(): Promise<SignedCapability[]>;
+}
+
+interface PreparedGrant extends CapabilityIssuanceProposal {
+    readonly ancestors: readonly SignedCapability[];
+}
+
+/**
+ * Discover authenticated delegation root candidates without signing anything.
+ * The issuer itself is not implicitly added. Each link must grant delegation;
+ * this does not prove coverage of a requested scope (use preparation for that).
+ */
+export async function getDelegationRootIds(
+    issuer: SigningIdentity,
+    capabilities: readonly SignedCapability[],
+): Promise<readonly PrincipalId[]> {
+    const byHash = _issuanceCapIndex(capabilities);
+    const roots = new Set<PrincipalId>();
+    const nowMs = Date.now();
+    for (const candidate of byHash.values()) {
+        const verified = await _verifyLink(candidate, issuer.publicSigningIdentity.principal, nowMs, 15, false,
+            h => byHash.get(h), link => capabilityFreshAt(link, nowMs)
+                && link.permissions.some(p => p.canDelegate === true && p.target.members.length > 0)
+                ? { ok: true } : { ok: false, reason: "expired or missing delegation authority" });
+        if (verified.ok) roots.add(verified.rootIssuer);
+    }
+    return [...roots];
+}
+
+/**
+ * Plan issuance without creating bearer capabilities or invoking the signer.
+ * Captures immutable internal snapshots of permissions and selected chains, so
+ * changes to a live bag or UI proposal cannot replace the confirmed authority.
+ * `issue()` rechecks that authority after consent. Remote trust-policy changes
+ * are still the recipient's responsibility; this is not a revocation service.
+ */
+export async function prepareCapabilityIssuance(
+    issuer: SigningIdentity,
+    options: IssueCapabilitiesOptions,
+): Promise<CapabilityIssuancePlan> {
+    const nowMs = Date.now();
+    const requestedExpiry = options.expiresAtMs;
+    if (requestedExpiry !== undefined
+        && (!Number.isFinite(requestedExpiry) || requestedExpiry <= nowMs)) {
+        throw new Error("Capability expiration must be a finite future timestamp");
+    }
+    if (options.permissions.length === 0
+        || options.permissions.some(p => (!p.canInvoke && !p.canDelegate) || p.target.members.length === 0)) {
+        throw new Error("At least one non-empty invoke or delegate permission is required");
+    }
+    const principal = issuer.publicSigningIdentity.principal;
+    const audience = typeof options.audience === "string"
+        ? new PublicSigningIdentity(options.audience as PrincipalId)
+        : new PublicSigningIdentity(options.audience.principal);
+    const permissions = structuredClone(options.permissions);
+    const accepted = options.acceptableRootIds === undefined ? undefined : new Set(options.acceptableRootIds);
+    if (accepted?.has(principal)) {
+        return _issuancePlan(issuer, audience, [{
+            permissions, rootIssuer: principal, expiresAtMs: requestedExpiry, ancestors: [],
+        }]);
+    }
+
+    const byHash = _issuanceCapIndex(options.capabilities);
+    const grants: PreparedGrant[] = [];
+    for (const permission of permissions) {
+        let selected: SignedCapability[] | undefined;
+        let rootIssuer: PrincipalId = principal;
+        for (const candidate of byHash.values()) {
+            if (candidate.audience !== principal) continue;
+            const verified = await _verifyLink(candidate, principal, nowMs, 15, false, h => byHash.get(h),
+                link => _delegationCovers(link, [permission], nowMs));
+            if (!verified.ok || (accepted && !accepted.has(verified.rootIssuer))) continue;
+            rootIssuer = verified.rootIssuer;
+            selected = [];
+            for (let link: SignedCapability | undefined = candidate; link;
+                link = link.parentHash === undefined ? undefined : byHash.get(link.parentHash)) {
+                selected.push(link);
+            }
+            break;
+        }
+        if (!selected) {
+            if (accepted === undefined) {
+                grants.push({ permissions: [permission], rootIssuer: principal, expiresAtMs: requestedExpiry, ancestors: [] });
+                continue;
+            }
+            throw new CapabilityIssuanceError("insufficientAuthority",
+                "Insufficient delegation authority: no valid accepted chain fully covers the requested permission");
+        }
+        let expiresAtMs = requestedExpiry;
+        for (const cap of selected) {
+            if (cap.expiresAtMs !== undefined) expiresAtMs = Math.min(expiresAtMs ?? Infinity, cap.expiresAtMs);
+        }
+        grants.push({
+            permissions: [permission], rootIssuer, expiresAtMs, ancestors: selected,
+            parentHash: signedHash("capability", selected[0]),
+        });
+    }
+    return _issuancePlan(issuer, audience, grants);
+}
+
+function _issuanceCapIndex(capabilities: readonly SignedCapability[]): Map<string, SignedCapability> {
+    const byHash = new Map<string, SignedCapability>();
+    for (const cap of capabilities) {
+        // A malformed unrelated entry must not hide usable authority.
+        try {
+            if (hasSignedCapabilityShape(cap)) byHash.set(signedHash("capability", cap), structuredClone(cap));
+        } catch { /* Ignore entries that cannot be content-addressed. */ }
+    }
+    return byHash;
+}
+
+function _delegationCovers(link: SignedCapability, permissions: readonly Permission[], nowMs: number) {
+    return capabilityFreshAt(link, nowMs)
+        && permissions.every(permission => permission.target.members.every(member => link.permissions.some(grant =>
+            grant.canDelegate === true && permissionScopeCovers(grant, {
+                ...permission, target: { ...permission.target, members: [member] },
+            }))))
+        ? { ok: true as const }
+        : { ok: false as const, reason: "expired or insufficient delegation scope" };
+}
+
+function _issuancePlan(
+    issuer: SigningIdentity,
+    audience: PublicSigningIdentity,
+    grants: readonly PreparedGrant[],
+): CapabilityIssuancePlan {
+    const issuerId = issuer.publicSigningIdentity.principal;
+    return {
+        audience: audience.principal,
+        proposals: grants.map(({ ancestors, ...proposal }) => structuredClone(proposal)),
+        async issue() {
+            if (issuer.publicSigningIdentity.principal !== issuerId) throw new Error("Prepared capability issuer changed");
+            const nowMs = Date.now();
+            for (const grant of grants) {
+                if (grant.expiresAtMs !== undefined && grant.expiresAtMs <= nowMs) {
+                    throw new Error("Prepared capability authority expired");
+                }
+                if (grant.ancestors.length > 0) {
+                    const byHash = _issuanceCapIndex(grant.ancestors);
+                    const verified = await _verifyLink(grant.ancestors[0], issuerId, nowMs, 15, false,
+                        h => byHash.get(h), link => _delegationCovers(link, grant.permissions, nowMs));
+                    if (!verified.ok || verified.rootIssuer !== grant.rootIssuer) {
+                        throw new Error("Prepared capability authority is no longer valid");
+                    }
+                }
+            }
+            const result = new Map<string, SignedCapability>();
+            for (const grant of grants) {
+                const leaf = await issueCapability(issuer, {
+                    audience, permissions: grant.permissions, expiresAtMs: grant.expiresAtMs, parent: grant.ancestors[0],
+                });
+                for (const cap of [leaf, ...grant.ancestors]) result.set(signedHash("capability", cap), structuredClone(cap));
+            }
+            if (grants.some(grant => grant.expiresAtMs !== undefined && grant.expiresAtMs <= Date.now())) {
+                throw new Error("Prepared capability authority expired while signing");
+            }
+            return [...result.values()];
+        },
+    };
 }
 
 export type ParamMatcherFor<T> =

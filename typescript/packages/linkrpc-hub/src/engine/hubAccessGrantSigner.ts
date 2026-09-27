@@ -18,8 +18,9 @@
  * {@link HubAccessManifestHost} instead, where a *remote* approver signs.
  */
 import { type SignedCapability, type SigningIdentity } from '@hediet/linkrpc';
-import { CapabilityProposalIssuer, durationToExp } from '../hub/server';
-import { toSignedPermissions } from './consent';
+import { CapabilityProposalIssuer } from '../hub/server';
+import { durationToExp } from '@hediet/linkrpc-infra/approval';
+import { toSignedPermissions } from '@hediet/linkrpc-infra/approval';
 import type { AccessDecider, AccessRequestContext } from './hubAccessConfig';
 
 /** A grant policy's verdict on one request. */

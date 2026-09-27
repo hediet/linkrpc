@@ -15,7 +15,7 @@ import {
     graphPresentationSchema,
 } from "@hediet/linkrpc-infra/graph";
 import type { DiscoveredListing } from "@hediet/linkrpc/hub/common";
-import type { CliChannel } from "@hediet/linkrpc-client";
+import type { CliChannel } from "@hediet/linkrpc-client-internal";
 import { GraphTerminal } from "./inspectGraphTerminal";
 import { GraphTimings, type GraphTiming } from "./inspectGraphTiming";
 import {

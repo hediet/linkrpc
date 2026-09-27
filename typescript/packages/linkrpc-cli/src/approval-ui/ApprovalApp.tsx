@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import type { PendingApprovalRequest } from '../commands/approval';
+import type { PendingApprovalRequest } from '@hediet/linkrpc-infra/approval';
 import {
     approvalDetailLines,
     type ApprovalPresentationLine as DetailLine,

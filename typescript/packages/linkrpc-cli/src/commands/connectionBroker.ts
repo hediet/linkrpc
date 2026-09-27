@@ -4,7 +4,7 @@ import {
     type IRequestHandler,
     type JsonValue,
 } from "@hediet/linkrpc";
-import type { CliConnection } from "@hediet/linkrpc-client";
+import type { CliConnection } from "@hediet/linkrpc-client-internal";
 import type { StaticHubSchema } from "../staticHubSchema";
 import { StaticHubReflection } from "./staticHubReflection";
 import { createForwardingHandler } from "./tunnel";

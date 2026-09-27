@@ -7,7 +7,7 @@ import {
     type ChannelResult as Result,
     TransportPair,
 } from '@hediet/linkrpc';
-import { connectViaTransport } from '@hediet/linkrpc-client';
+import { connectViaTransport } from '@hediet/linkrpc-client-internal';
 import { createForwardingHandler } from './tunnel';
 
 const METHOD = 'svc::progress::run';

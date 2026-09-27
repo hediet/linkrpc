@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HubAccessManifestRequest } from '@hediet/linkrpc/hub/common';
-import type { ApprovalSnapshot, PendingApprovalRequest } from '../commands/approval';
+import type { ApprovalSnapshot, PendingApprovalRequest } from '@hediet/linkrpc-infra/approval';
 import { ApprovalUiModel, type ApprovalUiClient } from './ApprovalUiModel';
 
 describe('ApprovalUiModel', () => {

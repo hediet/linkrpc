@@ -18,17 +18,11 @@
  * property of *this* front-door registration, not of any decider. Defaults to
  * an empty directory (every `request` slot then resolves to `noCandidates`).
  */
-import { type Pattern, type Permission } from '@hediet/linkrpc';
-import {
-    type AccessConsumer,
-    type AccessDirectPermission,
-    type AccessDuration,
-    type AccessSlotBinding,
-    type DirectoryEntry,
-    type HubAccessConfig,
-    type HubAccessHandlers,
-} from '../hub/server';
-import { type ConsentDecision, describePermissions } from './consent';
+import { type Permission } from '@hediet/linkrpc';
+import { buildSlotPermissions } from '@hediet/linkrpc-infra/approval';
+import { type AccessConsumer, type AccessDuration, type AccessSlotBinding, type HubAccessConfig, type HubAccessHandlers } from '../hub/server';
+import { type AccessDirectPermission, type DirectoryEntry } from '@hediet/linkrpc-infra/approval';
+import { type ConsentDecision, describePermissions } from '@hediet/linkrpc-infra/approval';
 import type { SignedCapability } from '@hediet/linkrpc';
 
 /** The normalized request every `hubAccess` shape collapses to before deciding. */
@@ -166,48 +160,4 @@ function capsFromDecision(
         );
     }
     return [...decision.capabilities];
-}
-
-/** Build one permission per requested interface, scoped to `serviceId`. */
-export function buildSlotPermissions(
-    serviceId: string,
-    interfaces: readonly { id: string; hash?: string; }[],
-    members: readonly { interfaceId: string; member: Pattern; }[],
-    present: ReadonlySet<string>,
-): Permission[] {
-    const hashByIface = new Map(interfaces.map((i) => [i.id, i.hash]));
-    const buckets = new Map<string, { interfaceId: string; hash: string | undefined; members: Pattern[]; }>();
-    for (const m of members) {
-        if (!present.has(m.interfaceId)) continue;
-        const hash = hashByIface.get(m.interfaceId);
-        const key = `${m.interfaceId}\u0000${hash ?? ''}`;
-        let bucket = buckets.get(key);
-        if (!bucket) {
-            bucket = { interfaceId: m.interfaceId, hash, members: [] };
-            buckets.set(key, bucket);
-        }
-        bucket.members.push(m.member);
-    }
-    // No member-level requests: grant the whole interface (any member).
-    if (buckets.size === 0) {
-        return [...present].map((interfaceId) => {
-            const hash = hashByIface.get(interfaceId);
-            const target: Permission['target'] = {
-                serviceId: { exact: serviceId },
-                interfaceId: { exact: interfaceId },
-                members: [{ prefix: '' }],
-            };
-            if (hash !== undefined) (target as { interfaceHash?: string }).interfaceHash = hash;
-            return { target, canInvoke: true };
-        });
-    }
-    return [...buckets.values()].map((b) => {
-        const target: Permission['target'] = {
-            serviceId: { exact: serviceId },
-            interfaceId: { exact: b.interfaceId },
-            members: b.members,
-        };
-        if (b.hash !== undefined) (target as { interfaceHash?: string }).interfaceHash = b.hash;
-        return { target, canInvoke: true };
-    });
 }

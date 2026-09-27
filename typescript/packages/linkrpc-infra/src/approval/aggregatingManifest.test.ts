@@ -8,6 +8,15 @@ const PERMISSION: Permission = {
     canInvoke: true,
 };
 
+function streaming<T>(promise: Promise<T>, cancel = async () => {}) {
+    return Object.assign(promise, {
+        requestId: Promise.resolve(0),
+        send: async (_value: never) => {},
+        ping: async () => {},
+        cancel,
+    });
+}
+
 /** A minimal fake manifest whose `getDesired` returns `doc` verbatim (bypassing the wire). */
 function fakeManifest(doc: unknown): IHubAccessManifest {
     const idleStream = Object.assign(Promise.resolve({}), {
@@ -17,25 +26,57 @@ function fakeManifest(doc: unknown): IHubAccessManifest {
         requestId: Promise.resolve(0 as never),
     });
     return {
-        getDesired: async () => doc as never,
+        getDesired: () => streaming(Promise.resolve(doc as never)),
         watchDesired: () => idleStream as never,
         getCurrent: async () => ({ current: {}, revision: 0 }),
-        setCurrent: async () => ({ revision: 0 }),
+        setCurrent: () => streaming(Promise.resolve({ revision: 0 })),
         watchCurrent: () => idleStream as never,
-    } as IHubAccessManifest;
+    };
 }
 
 describe('AggregatingHubAccessManifest — result validation at the boundary', () => {
+    it('reports failed reads and clears their health error after recovery or removal', async () => {
+        let failing = true;
+        const manifest: IHubAccessManifest = {
+            ...fakeManifest({ requested: {}, revision: 0 }),
+            getDesired: () => streaming((async () => {
+                if (failing) throw new Error('discovery denied');
+                return { requested: {}, revision: 1 };
+            })()),
+        };
+        let sources: AggregatorSource[] = [{ tag: 'source', manifest }];
+        const errors = new Map<string, string>();
+        const aggregate = new AggregatingHubAccessManifest({
+            resolveSources: () => sources,
+            onSourceError: (tag, error) => {
+                if (error === undefined) errors.delete(tag);
+                else errors.set(tag, error);
+            },
+        });
+        try {
+            await aggregate.getDesired();
+            expect(errors.get('source')).toContain('discovery denied');
+            failing = false;
+            await aggregate.getDesired();
+            expect(errors.size).toBe(0);
+            failing = true;
+            await aggregate.getDesired();
+            expect(errors.size).toBe(1);
+            sources = [];
+            await aggregate.getDesired();
+            expect(errors.size).toBe(0);
+        } finally {
+            aggregate.dispose();
+        }
+    });
+
     it('cancels and identifies a manifest source that exceeds its timeout', async () => {
         let cancelled = false;
-        const pending = Object.assign(new Promise<never>(() => {}), {
-            cancel: async () => { cancelled = true; },
-            dispose: () => undefined,
-        });
-        const slow = {
+        const pending = streaming(new Promise<never>(() => {}), async () => { cancelled = true; });
+        const slow: IHubAccessManifest = {
             ...fakeManifest({ requested: {}, revision: 0 }),
             getDesired: () => pending,
-        } as IHubAccessManifest;
+        };
         const logs: string[] = [];
         const agg = new AggregatingHubAccessManifest({
             resolveSources: () => [{ tag: 'slow-service', manifest: slow }],

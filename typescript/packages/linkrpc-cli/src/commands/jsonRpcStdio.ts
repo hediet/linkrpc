@@ -5,7 +5,7 @@ import {
     createNdjsonJsonRpcTransport,
     jsonRpcConnectionInterface,
 } from '@hediet/linkrpc-infra/json-rpc';
-import type { CliConnection } from '@hediet/linkrpc-client';
+import type { CliConnection } from '@hediet/linkrpc-client-internal';
 
 export interface JsonRpcStdioOptions {
     readonly local: CliConnection;

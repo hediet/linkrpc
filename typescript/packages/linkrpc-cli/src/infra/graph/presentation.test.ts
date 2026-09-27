@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
-import { connectViaTransport } from '@hediet/linkrpc-client';
+import { connectViaTransport } from '@hediet/linkrpc-client-internal';
 import { graphPresentationInterface, type GraphPresentation } from '@hediet/linkrpc-infra/graph';
 import { LazyGraphSource, registerGraphSource } from '@hediet/linkrpc-infra/graph/source';
 import { GraphLoader } from './inspectGraphModel';

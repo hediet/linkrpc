@@ -50,7 +50,7 @@ const emitGuestAsScript = (): Plugin => ({
 // Three entries: the library `index` / `node` surfaces and the `linkrpc-mcp`
 // CLI (bin). Runtime `dependencies` (@modelcontextprotocol/sdk, quickjs,
 // @hediet/linkrpc*, zod) stay external and resolve from node_modules. The
-// source-only `@hediet/linkrpc-client` dev dep is bundled in.
+// source-only `@hediet/linkrpc-client-internal` dev dep is bundled in.
 //
 // The guest runtime (`src/guest/guestMain.ts`) is referenced via
 // `new URL("./guest/guestMain.ts?esm", import.meta.url)` in sandbox.ts; the
@@ -71,7 +71,7 @@ export default defineConfig({
     dts: true,
     outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
     deps: {
-        alwaysBundle: ['@hediet/linkrpc-client'],
+        alwaysBundle: ['@hediet/linkrpc-client-internal'],
     },
     plugins: [rawString(), esmUrlPlugin(), preserveGuestEsmQuery(), emitGuestAsScript()],
     outputOptions: {

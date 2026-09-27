@@ -51,27 +51,12 @@ export type { RegisterHubServicesOptions, RegisterIdentityServicesOptions } from
 export { createHubServiceInterfaces } from './hubServices';
 export type { HubServices, HubServicesOptions } from './hubServices';
 export { hubRegisterServiceId, RegisteredServiceId } from './hubRegisterServiceId';
-export {
-    candidatesForSlot,
-    fetchFullDirectory,
-    resolveAccessCandidates,
-} from './accessCandidates';
-export type {
-    AccessInterfaceRequirement,
-    AccessMemberRequirement,
-    AccessSlotCandidate,
-    AccessSlotRequest,
-    DirectoryEntry,
-    ResolvedAccessSlot,
-    ResolvedCandidates,
-} from './accessCandidates';
+
+
 export { mintCapability } from './mintCapability';
 export type { MintCapabilityOptions } from './mintCapability';
-export {
-    CapabilityProposalIssuer,
-    durationToExp,
-} from './capabilityProposal';
-export type { CapabilityProposal, ProposeArgs, AccessDurationName } from './capabilityProposal';
+export { CapabilityProposalIssuer } from './capabilityProposal';
+export type { CapabilityProposal, ProposeArgs } from './capabilityProposal';
 export { registerHubAccessService } from './hubAccessService';
 export { registerConnectionTokenBinderService } from './connectionTokenBinderService';
 export type { RegisterConnectionTokenBinderOptions } from './connectionTokenBinderService';
@@ -96,22 +81,7 @@ export type {
     TokenIdentityBinding,
     TokenIdentityStoreOptions,
 } from './tokenIdentityStore';
-export type {
-    AccessConsumer,
-    AccessDecision,
-    AccessCallIntent,
-    AccessDirectArgs,
-    AccessDirectPermission,
-    AccessDirectDecision,
-    AccessDuration,
-    AccessExtendArgs,
-    AccessExtendDecision,
-    AccessExtendMember,
-    AccessRequestArgs,
-    AccessSlotBinding,
-    HubAccessHandlers,
-    RegisterHubAccessOptions,
-} from './hubAccessService';
+export type { AccessConsumer, AccessDecision, AccessDirectArgs, AccessDirectDecision, AccessDuration, AccessExtendArgs, AccessExtendDecision, AccessExtendMember, AccessRequestArgs, AccessSlotBinding, HubAccessHandlers, RegisterHubAccessOptions } from './hubAccessService';
 export { registerHubServiceIdRegistry, withRequestIdContext } from './hubRegister';
 export type { HubRegisterOptions, RegisterCallContext } from './hubRegister';
 export { withVerifiedSignature } from './verifiedSignature';
