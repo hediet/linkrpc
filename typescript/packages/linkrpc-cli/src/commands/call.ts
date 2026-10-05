@@ -52,24 +52,24 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
     if (requestCap && opts.signingSession === undefined) {
         throw new Error('Capability requests require a signed LinkRPC connection.');
     }
-    const validation = requestCap ? 'required' : opts.noValidate ? 'off' : (opts.validation ?? 'required');
-    const schema = validation === 'off' ? undefined : await validateParams(channel, ref, params, 'call', validation);
-    if (requestCap) {
-        if (schema === undefined || opts.signingSession === undefined) {
-            throw new Error('Capability requests require a method schema and signing session.');
-        }
-        const result = await requestCallCapability(channel, opts.signingSession, ref, params, schema, opts);
-        if (opts.capabilityOnly) return result;
-    }
     const onStreamChunk = opts.onStreamChunk ?? writeChunkToStderr;
     try {
+        const validation = requestCap ? 'required' : opts.noValidate ? 'off' : (opts.validation ?? 'required');
+        const schema = validation === 'off' ? undefined : await validateParams(channel, ref, params, 'call', validation);
+        if (requestCap) {
+            if (schema === undefined || opts.signingSession === undefined) {
+                throw new Error('Capability requests require a method schema and signing session.');
+            }
+            const result = await requestCallCapability(channel, opts.signingSession, ref, params, schema, opts);
+            if (opts.capabilityOnly) return result;
+        }
         // Always use the streaming send path: it behaves identically to a plain
         // request when no stream messages arrive, and surfaces them live when
         // the method does stream (e.g. an interactive `login` device-code
         // prompt). The final result is the request's response.
         const call = channel.sendRequestWithStream(ref.getMethodOnWire(), params as never, {
             onStreamMessage: onStreamChunk,
-            ...(requestCap && ref.hash !== undefined ? { interfaceHash: ref.hash } : {}),
+            ...(opts.signingSession !== undefined && ref.hash !== undefined ? { interfaceHash: ref.hash } : {}),
         });
         const result = await call.result;
         return opts.json !== false ? formatJson(result) : String(result);
@@ -211,19 +211,12 @@ function formatRpcError(e: RpcError): Error {
     return new Error(`RPC error ${e.code}: ${e.message}${dataStr}`);
 }
 
-/**
- * Friendly explanation for `permissionRequired` (-32401). Typical when the
- * CLI couldn't acquire a capability via `hubAccess::requestAccess` and the
- * target service gates on caps. The earlier `capability negotiation
- * skipped` warning explains *why* we couldn't get one; this footer tells
- * the user what to do.
- */
 function _formatPermissionRequired(e: RpcError): string {
     return [
         `Permission required: ${e.message}`,
-        '  The hub gates this call on a capability, and none was acquired.',
-        '  If your hub uses an access handler, accept the consent prompt and retry.',
-        '  Otherwise, the hub admin has to issue a capability to this CLI identity',
-        `  (\`hub logout\` then retry to mint a fresh identity).`,
+        '  No usable capability authorizes this call.',
+        '  Retry with --request-cap to request access before calling.',
+        '  Use --allow-param with --request-cap to request a broader parameter scope,',
+        '  or use `caps request <methodRef>` to acquire and store access separately.',
     ].join('\n');
 }

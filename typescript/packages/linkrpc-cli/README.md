@@ -442,6 +442,11 @@ including expired grants. `caps request <methodRef>` requests and stores a
 capability without executing the method. `call --request-cap` ensures the same
 scope is available before executing the call. These explicit operations enable
 signing even in the generic `linkrpc`/`rpc` profile and require a LinkRPC endpoint.
+Without `--request-cap`, `call` never requests new capabilities (including
+reflection access). On initialized Hub sockets/WebSockets it signs with the
+selected identity and presents stored grants, even in the generic profile.
+Missing or unusable grants fail with guidance to retry using `--request-cap`;
+unguarded methods and plain RPC endpoints remain usable without capabilities.
 
 Both request forms share `call`'s method references, `--params`, `--param`, and
 `--p:<name>` shortcuts, including nested argument overrides and dynamic help.
@@ -477,7 +482,7 @@ producer-side custom Zod refinements.
 Schema validation is mandatory for explicit requests: `--no-validate` and
 `--validation off` are rejected. On `call`, `--allow-param` requires
 `--request-cap`. For explicit requests, a method reference's `@hash` also pins
-the permission; inline calls include that hash in their signed metadata.
+the permission; signed calls include that hash in their signed metadata.
 The default requested duration is `persistent`; `--duration shortLived` and
 `--duration longLived` are also supported. The Hub still decides what to grant.
 One-shot approval cannot satisfy a reusable scope and is rejected.

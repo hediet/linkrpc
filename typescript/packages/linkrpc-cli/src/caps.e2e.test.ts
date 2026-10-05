@@ -56,6 +56,18 @@ describe('caps CLI on a gated hub', () => {
             fileURLToPath(new URL('./linkrpc.ts', import.meta.url)), ...common, ...args,
         ], { timeout: 20_000 });
         try {
+            const help = await invoke('call', 'files::test.files::read', '--help');
+            expect(help.stdout).toContain('--request-cap');
+            expect(grants).toBe(0);
+            expect(calls).toEqual([]);
+            for (const profile of [[], ['hub']]) {
+                for (const validation of [[], ['--no-validate']]) {
+                    await expect(invoke(...profile, 'call', 'files::test.files::read',
+                        '--p:path=/docs/a', ...validation)).rejects.toThrow('--request-cap');
+                    expect(grants).toBe(0);
+                    expect(calls).toEqual([]);
+                }
+            }
             const requested = await invoke('caps', 'request', 'files::test.files::read',
                 '--p:path=/docs/a', '--allow-param', 'path={"prefix":"/docs/"}');
             expect(JSON.parse(requested.stdout)).toMatchObject({ status: 'granted', reused: false });
@@ -68,10 +80,17 @@ describe('caps CLI on a gated hub', () => {
                 cap.permissions.some(permission => JSON.stringify(permission.params) === '{"path":{"prefix":"/docs/"}}'),
             )).toBe(true);
 
+            const ordinary = await invoke('call', 'files::test.files::read', '--p:path=/docs/stored');
+            expect(JSON.parse(ordinary.stdout)).toEqual({ path: '/docs/stored' });
+            expect(grants).toBe(grantedCount);
+            await expect(invoke('call', 'files::test.files::read', '--p:path=/other/a'))
+                .rejects.toThrow('--request-cap');
+            expect(grants).toBe(grantedCount);
+
             const called = await invoke('call', 'files::test.files::read', '--request-cap',
                 '--p:path', '/docs/public/b', '--allow-param', 'path={"prefix":"/docs/public/"}');
             expect(JSON.parse(called.stdout)).toEqual({ path: '/docs/public/b' });
-            expect(calls).toEqual(['/docs/public/b']);
+            expect(calls).toEqual(['/docs/stored', '/docs/public/b']);
             expect(grants).toBe(grantedCount);
 
             const reused = await invoke('caps', 'request', 'files::test.files::read',
@@ -80,20 +99,20 @@ describe('caps CLI on a gated hub', () => {
             expect(grants).toBe(grantedCount);
 
             const pinned = await invoke('call', `files::test.files::read@${files.schemaHash}`,
-                '--request-cap', '--p:path=/docs/pinned');
+                '--p:path=/docs/pinned');
             expect(JSON.parse(pinned.stdout)).toEqual({ path: '/docs/pinned' });
             expect(grants).toBe(grantedCount);
 
             await expect(invoke('call', 'files::test.files::read', '--request-cap',
                 '--p:path=/other/a', '--allow-param', 'path={"prefix":"/docs/"}'))
                 .rejects.toThrow('Parameters do not match');
-            expect(calls).toEqual(['/docs/public/b', '/docs/pinned']);
+            expect(calls).toEqual(['/docs/stored', '/docs/public/b', '/docs/pinned']);
             expect(grants).toBe(grantedCount);
 
             await invoke('call', 'files::test.files::read', '--request-cap',
                 '--p:path=/docs/d', '--allow-param', 'path={"prefix":"/"}');
             expect(grants).toBe(grantedCount + 1);
-            expect(calls).toEqual(['/docs/public/b', '/docs/pinned', '/docs/d']);
+            expect(calls).toEqual(['/docs/stored', '/docs/public/b', '/docs/pinned', '/docs/d']);
         } finally {
             socket.dispose();
             await rm(directory, { recursive: true, force: true });

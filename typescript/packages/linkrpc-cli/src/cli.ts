@@ -610,7 +610,7 @@ export async function main(
                 if (rendered.text.length > 0) {
                     process.stdout.write('\n' + rendered.text);
                 }
-            });
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: false, useStoredHubCaps: true });
         } catch (e) {
             process.stdout.write(`\n(Could not fetch method schema: ${(e as Error).message})\n`);
         }
@@ -683,9 +683,11 @@ export async function main(
                 });
                 process.stdout.write(out + '\n');
             }, {
-                requestReflectionAccess: effectiveValidation(profile) !== 'off',
+                requestReflectionAccess: (capabilityOnly || opts.requestCap === true)
+                    && effectiveValidation(profile) !== 'off',
                 requireSigning: capabilityOnly || opts.requestCap === true,
-                autoNegotiatePerCall: capabilityOnly || opts.requestCap === true ? false : undefined,
+                useStoredHubCaps: true,
+                autoNegotiatePerCall: false,
             });
         });
         addCapabilityOptions(cmd);
@@ -1879,6 +1881,7 @@ async function withChannel(
         requestReflectionAccess?: boolean;
         requestTopologyAccess?: { readonly sourceServiceIds?: readonly string[] };
         requireSigning?: boolean;
+        useStoredHubCaps?: boolean;
         autoNegotiatePerCall?: boolean;
     } = {},
 ): Promise<void> {
@@ -1900,7 +1903,9 @@ async function withChannel(
             await fn(channel);
             return;
         }
-        if (g_invocation?.profile === 'rpc' && !opts.requireSigning) {
+        const useStoredHubCaps = opts.useStoredHubCaps === true
+            && (acquired.running !== undefined || isHubEndpoint(acquired.ep));
+        if (g_invocation?.profile === 'rpc' && !opts.requireSigning && !useStoredHubCaps) {
             await fn(channel);
             return;
         }

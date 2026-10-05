@@ -1,10 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import {
     defineInterface,
     requestType,
     LinkRpcConnection,
     TransportPair,
+    ErrorCode,
+    RpcError,
 } from "@hediet/linkrpc";
 import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import { callCommand } from "./call";
@@ -20,6 +22,7 @@ const streamer = defineInterface(
             z.object({}),
             z.object({ ok: z.boolean() }),
         ),
+        denied: requestType(z.object({}), z.object({ ok: z.boolean() })),
     },
 );
 
@@ -32,6 +35,7 @@ function makeChannel() {
             return { done: true };
         },
         plain: async () => ({ ok: true }),
+        denied: () => { throw new RpcError('Capability missing', ErrorCode.permissionRequired); },
     });
     server.enableReflection();
     const conn = connectViaTransport(pair.a);
@@ -45,6 +49,26 @@ function makeChannel() {
 }
 
 describe("callCommand streaming", () => {
+    it('explains how to request access when the call is denied', async () => {
+        const { channel, dispose } = makeChannel();
+        try {
+            await expect(callCommand(channel, { methodRef: 'test.streamer::denied', paramsArg: '{}' }))
+                .rejects.toThrow('--request-cap');
+        } finally { dispose(); }
+    });
+
+    it('explains how to request access when schema lookup is denied', async () => {
+        const { channel, dispose } = makeChannel();
+        try {
+            const send = vi.spyOn(channel, 'sendRequestWithStream').mockImplementation(() => {
+                throw new RpcError('Schema access missing', ErrorCode.permissionRequired);
+            });
+            await expect(callCommand(channel, { methodRef: 'test.streamer::plain', paramsArg: '{}' }))
+                .rejects.toThrow('--request-cap');
+            expect(send.mock.calls[0][0]).toBe('hubrpc.schemas::get');
+        } finally { dispose(); }
+    });
+
     it("forwards server stream chunks to onStreamChunk and returns the final result", async () => {
         const { channel, dispose } = makeChannel();
         try {
