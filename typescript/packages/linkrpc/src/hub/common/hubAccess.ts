@@ -5,12 +5,12 @@
 
 import {
     type ParamMatcher,
-    type Pattern,
     type Permission,
     type SignedCapability,
 } from '../../protocol';
 import { capabilityFreshAt } from '../../identity/capability';
 import { signedHash } from '../../identity/signedObject';
+import { permissionScopeCovers } from '../../identity/permissionCoverage';
 
 /**
  * The client-facing wire shapes of the hub's capability-negotiation protocol
@@ -37,7 +37,7 @@ export interface HubAccessPermission {
     readonly canInvoke?: boolean;
     /** Default false. Set true to let the consumer re-delegate this authority. */
     readonly canDelegate?: boolean;
-    readonly params?: Record<string, unknown>;
+    readonly params?: Record<string, ParamMatcher>;
 }
 
 /** A batched, explicit access request — possibly many permissions in one prompt. */
@@ -129,48 +129,8 @@ function permissionCovers(
 ): boolean {
     if (requested.canInvoke && !granted.canInvoke) return false;
     if (requested.canDelegate && !granted.canDelegate) return false;
-    if (!patternCovers(granted.target.serviceId, requested.target.serviceId, '/')) return false;
-    if (!patternCovers(granted.target.interfaceId, requested.target.interfaceId, '.')) return false;
-    if (
-        granted.target.interfaceHash !== undefined
-        && granted.target.interfaceHash !== requested.target.interfaceHash
-    ) {
-        return false;
-    }
-    if (!requested.target.members.every((requestedMember) =>
-        granted.target.members.some((grantedMember) =>
-            patternCovers(grantedMember, requestedMember, ''),
-        ),
-    )) {
-        return false;
-    }
-
-    if (requested.params === undefined) return granted.params === undefined;
-    if (granted.params === undefined) return true;
-    return paramsEqual(granted.params, requested.params);
-}
-
-function patternCovers(granted: Pattern, requested: HubAccessPattern, delimiter: string): boolean {
-    if ('exact' in granted) {
-        return 'exact' in requested && granted.exact === requested.exact;
-    }
-    if (granted.prefix === '') return true;
-    if ('exact' in requested) {
-        return requested.exact === granted.prefix
-            || requested.exact.startsWith(granted.prefix + delimiter);
-    }
-    if (requested.prefix === granted.prefix) return true;
-    return delimiter === ''
-        ? requested.prefix.startsWith(granted.prefix)
-        : requested.prefix.startsWith(granted.prefix + delimiter);
-}
-
-function paramsEqual(
-    granted: Record<string, ParamMatcher>,
-    requested: Record<string, unknown>,
-): boolean {
-    // HubAccessPermission keeps this field dependency-light as `unknown`, but
-    // broad explicit requests carry the same ParamMatcher wire shapes as a
-    // Permission. Exact equality is the only safe coverage claim here.
-    return JSON.stringify(granted) === JSON.stringify(requested);
+    return permissionScopeCovers(granted, {
+        ...requested,
+        target: { ...requested.target, members: [...requested.target.members] },
+    });
 }

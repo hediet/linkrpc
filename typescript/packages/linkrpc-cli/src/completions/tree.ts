@@ -146,8 +146,37 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--params', takesValue: true, valueType: 'free' },
                 { name: '--param', takesValue: true, valueType: 'free' },
                 { name: '--no-validate', takesValue: false },
+                { name: '--request-cap', takesValue: false },
+                { name: '--allow-param', takesValue: true, valueType: 'free' },
+                { name: '--duration', takesValue: true, valueType: 'free' },
             ],
         },
+    {
+        name: 'caps',
+        description: 'List stored capabilities or request access for a call.',
+        positionals: [],
+        options: [],
+        subcommands: [
+            {
+                name: 'list',
+                description: 'List stored capabilities.',
+                positionals: [],
+                options: [{ name: '--json', takesValue: false }],
+            },
+            {
+                name: 'request',
+                description: 'Request a capability without executing a call.',
+                positionals: [{ name: 'methodRef', type: 'methodRef' }],
+                options: [
+                    { name: '--params', takesValue: true, valueType: 'free' },
+                    { name: '--param', takesValue: true, valueType: 'free' },
+                    { name: '--no-validate', takesValue: false },
+                    { name: '--allow-param', takesValue: true, valueType: 'free' },
+                    { name: '--duration', takesValue: true, valueType: 'free' },
+                ],
+            },
+        ],
+    },
     {
             name: 'notify',
             description: 'Fire a notification (no response).',

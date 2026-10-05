@@ -114,15 +114,14 @@ async function _dynamicCandidates(
 ): Promise<Completion[]> {
     const slot = ctx.slot;
 
-    // `--p:<name>` shortcut: only meaningful under `call` / `notify`, and
-    // only when the user has already typed the methodRef positional.
+    // Offer parameter shortcuts after a method-reference positional.
     // Triggers on flag-name slots (user typed `-...`) AND on the
     // post-positional gap (slot `none`) so an empty TAB after the methodRef
     // still surfaces the param flags.
     const inFlagOrEmptySlot = slot.kind === 'flag-name'
         || (slot.kind === 'none' && (prefix === '' || prefix.startsWith('-')));
     if (inFlagOrEmptySlot
-        && (ctx.subcommand?.name === 'call' || ctx.subcommand?.name === 'notify')
+        && ctx.subcommand?.positionals[0]?.type === 'methodRef'
         && ctx.seenPositionals.length >= 1) {
         const methodRef = ctx.seenPositionals[0];
         const ref = _parseMethodRefForCompletion(methodRef);

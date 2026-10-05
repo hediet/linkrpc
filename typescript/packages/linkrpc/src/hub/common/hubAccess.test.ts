@@ -46,6 +46,31 @@ describe('findCoveringCapabilities', () => {
         })).toEqual([capability]);
     });
 
+    it('reuses broader parameter scopes independent of key and enum order', () => {
+        const capability = cap({ ...requested[0].target, members: [...requested[0].target.members] });
+        capability.permissions[0].params = {
+            path: { prefix: '/docs/' }, mode: { enum: ['json', 'text'] },
+            tags: { subsetOf: ['a', 'b'] }, value: { any: true },
+        };
+        const permission: HubAccessPermission = {
+            ...requested[0],
+            params: {
+                value: { exact: 42 }, mode: { enum: ['text', 'json'] },
+                path: { prefix: '/docs/public/' }, tags: { subsetOf: ['a'] },
+            },
+        };
+        expect(findCoveringCapabilities([capability], [permission], { nowMs: NOW })).toEqual([capability]);
+        expect(findCoveringCapabilities([capability], [{
+            ...permission, params: { ...permission.params, path: { prefix: '/' } },
+        }], { nowMs: NOW })).toBeUndefined();
+        expect(findCoveringCapabilities([capability], [{
+            ...permission, params: { ...permission.params, mode: { enum: ['xml'] } },
+        }], { nowMs: NOW })).toBeUndefined();
+        expect(findCoveringCapabilities([capability], [{
+            ...permission, params: { ...permission.params, extra: { any: true } },
+        }], { nowMs: NOW })).toBeUndefined();
+    });
+
     it('rejects sibling, stale, narrower, and one-shot grants', () => {
         const target = {
             serviceId: { prefix: 'embedded/parent/child' } as const,

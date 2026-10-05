@@ -1,10 +1,11 @@
-import { Command, InvalidArgumentError } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
 import { connectionTokenBinderInterface } from '@hediet/linkrpc-hub/hub/server/connection-token-binder';
 import { tapTransport } from '@hediet/linkrpc-hub/hub/server/transit';
 import { callCommand, notifyCommand } from './commands/call';
+import { listCaps } from './commands/caps';
 import { executeBatch, parseBatchArgs } from './commands/batch';
 import {
     disconnectBroker,
@@ -615,10 +616,29 @@ export async function main(
         }
     };
 
-    program
-        .command('call [methodRef]')
+    const call = program.command('call [methodRef]');
+    const caps = program.command('caps').description('List stored capabilities or request access for a call.');
+    caps.command('list')
+        .description('List capabilities stored for the selected principal (including expired grants).')
+        .option('--json', 'machine-readable JSON output')
+        .action(async (opts: { json?: boolean }) => {
+            await withResolvedSigning(endpoint, getPrincipalSpec(), async (_conn, session) => {
+                process.stdout.write(listCaps(session, opts.json === true) + '\n');
+            });
+        });
+    const capsRequest = caps.command('request [methodRef]')
+        .description('Request and store a capability without invoking the method.');
+
+    const addCapabilityOptions = (cmd: Command): Command => cmd
+        .option('--allow-param <kv...>', 'top-level key=matcher JSON (exact, enum, prefix, subsetOf, any)')
+        .addOption(new Option('--duration <duration>', 'requested grant lifetime')
+            .choices(['shortLived', 'longLived', 'persistent']).default('persistent'));
+
+    const configureCall = (cmd: Command, capabilityOnly: boolean): void => {
+        cmd
         .description(
-            'Invoke a request. `<methodRef>` is `[svc::][iface::]method[@hash]`. '
+            (capabilityOnly ? 'Request a capability without executing a call. ' : 'Invoke a request. ')
+            + '`<methodRef>` is `[svc::][iface::]method[@hash]`. '
             + 'Use `--p:<name> <value>` (or `--p:<name>=<value>`) as a shortcut for '
             + '`--param <name>=<value>`. Run `hub call <methodRef> --help` to see the '
             + 'method-specific `--p:` flags derived from the live schema.',
@@ -640,7 +660,13 @@ export async function main(
                 process.stderr.write(cmd.helpInformation());
                 process.exit(2);
             }
-            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+            if (!capabilityOnly && opts.allowParam !== undefined && opts.requestCap !== true) {
+                throw new Error('--allow-param requires --request-cap.');
+            }
+            if (!capabilityOnly && cmd.getOptionValueSource('duration') === 'cli' && opts.requestCap !== true) {
+                throw new Error('--duration requires --request-cap.');
+            }
+            await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
                 const validation = opts.validate === false
                     ? 'off'
                     : effectiveValidation(profile);
@@ -649,10 +675,24 @@ export async function main(
                     paramsArg: opts.params,
                     paramOverrides: opts.param,
                     validation,
+                    allowParams: opts.allowParam,
+                    requestCap: opts.requestCap,
+                    capabilityOnly,
+                    signingSession: session,
+                    duration: opts.duration,
                 });
                 process.stdout.write(out + '\n');
-            }, { requestReflectionAccess: effectiveValidation(profile) !== 'off' });
+            }, {
+                requestReflectionAccess: effectiveValidation(profile) !== 'off',
+                requireSigning: capabilityOnly || opts.requestCap === true,
+                autoNegotiatePerCall: capabilityOnly || opts.requestCap === true ? false : undefined,
+            });
         });
+        addCapabilityOptions(cmd);
+    };
+    configureCall(call, false);
+    call.option('--request-cap', 'ensure a stored capability covers the requested scope before calling');
+    configureCall(capsRequest, true);
 
     program
         .command('notify [methodRef]')
@@ -1834,10 +1874,12 @@ function hasEndpointOverrides(values: ContextValues): boolean {
 async function withChannel(
     endpoint: ResolvedEndpoint | undefined,
     principalSpec: PrincipalSpec,
-    fn: (channel: import('@hediet/linkrpc-client-internal').CliChannel) => Promise<void>,
+    fn: (channel: import('@hediet/linkrpc-client-internal').CliChannel, session?: SigningSession) => Promise<void>,
     opts: {
         requestReflectionAccess?: boolean;
         requestTopologyAccess?: { readonly sourceServiceIds?: readonly string[] };
+        requireSigning?: boolean;
+        autoNegotiatePerCall?: boolean;
     } = {},
 ): Promise<void> {
     const acquired = await acquireConnection(endpoint);
@@ -1854,16 +1896,18 @@ async function withChannel(
             acquired.ep.kind === 'ws-no-init'
             || (acquired.ep.kind === 'socket' && acquired.ep.brokerMode === 'raw')
         ) {
+            if (opts.requireSigning) throw new Error('Capability requests require a LinkRPC endpoint.');
             await fn(channel);
             return;
         }
-        if (g_invocation?.profile === 'rpc') {
+        if (g_invocation?.profile === 'rpc' && !opts.requireSigning) {
             await fn(channel);
             return;
         }
 
         const session = await setupSigning(conn.channel, conn.signing, principalSpec, {
             negotiateHubCaps: acquired.running !== undefined || isHubEndpoint(acquired.ep),
+            autoNegotiatePerCall: opts.autoNegotiatePerCall,
         });
         reportIdentity(session);
         // Up-front, batched reflection grant across all services. One consent
@@ -1892,7 +1936,7 @@ async function withChannel(
                 );
             }
         }
-        await fn(channel);
+        await fn(channel, session);
     } finally {
         conn.close();
         acquired.running?.dispose();

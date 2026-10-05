@@ -16,6 +16,21 @@ describe('rewriteParamShortcuts', () => {
             .toEqual(['call', 'foo', '--param', 'to=a@b.c']);
     });
 
+    it('shares shortcuts with caps request and inline capability requests', () => {
+        expect(rewriteParamShortcuts([
+            'caps', 'request', 'files::fs::read', '--p:path=/docs/a',
+            '--allow-param', 'path={"prefix":"/docs/"}',
+        ])).toEqual([
+            'caps', 'request', 'files::fs::read', '--param', 'path=/docs/a',
+            '--allow-param', 'path={"prefix":"/docs/"}',
+        ]);
+        expect(rewriteParamShortcuts([
+            'call', 'files::fs::read', '--request-cap', '--p:path', '/docs/a',
+        ])).toEqual([
+            'call', 'files::fs::read', '--request-cap', '--param', 'path=/docs/a',
+        ]);
+    });
+
     it('expands --p:name value (two tokens) to --param name=value', () => {
         expect(rewriteParamShortcuts(['call', 'foo', '--p:to', 'a@b.c']))
             .toEqual(['call', 'foo', '--param', 'to=a@b.c']);

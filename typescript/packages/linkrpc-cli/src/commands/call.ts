@@ -2,7 +2,8 @@ import { ErrorCode, type JsonValue, RpcError } from '@hediet/linkrpc';
 import { MethodRefWithOptHash } from '../methodRef';
 import { formatJson, readParamsArg } from '../output';
 import { mergeParams } from '../paramParsing';
-import { type CliChannel, findMethodInSchema } from '@hediet/linkrpc-client-internal';
+import { type CliChannel, type SigningSession, findMethodInSchema } from '@hediet/linkrpc-client-internal';
+import { requestCallCapability, type RequestCallCapabilityOptions } from './caps';
 import { formatSuggestion, HubSnapshot } from '../suggest';
 import {
     describeObjectParams,
@@ -13,7 +14,7 @@ import {
 import type { LinkRpcInterfaceSchema as SvcInterfaceSchema, MethodSchema } from '@hediet/linkrpc';
 import { fetchSchemaForMethodRef } from '../schemaLookup';
 
-export interface CallCommandOptions {
+export interface CallCommandOptions extends RequestCallCapabilityOptions {
     /** Full `[svc::][iface::]method[@hash]` reference. */
     readonly methodRef: string;
     /** Raw `--params <json>` value, or "-" for stdin. */
@@ -24,6 +25,9 @@ export interface CallCommandOptions {
     /** Schema lookup policy. `noValidate` takes precedence when set. */
     readonly validation?: 'auto' | 'required' | 'off';
     readonly json?: boolean;
+    readonly requestCap?: boolean;
+    readonly capabilityOnly?: boolean;
+    readonly signingSession?: SigningSession;
     /**
      * Invoked for every server→client stream message (`$stream::send`) that
      * arrives while the call is in flight. Defaults to writing each chunk to
@@ -38,8 +42,25 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
     const baseParams = readParamsArg(opts.paramsArg);
     const params = mergeParams({ base: baseParams, overrides: opts.paramOverrides });
 
-    const validation = opts.noValidate ? 'off' : (opts.validation ?? 'required');
-    if (validation !== 'off') await validateParams(channel, ref, params, 'call', validation);
+    const requestCap = opts.requestCap === true || opts.capabilityOnly === true;
+    if (!requestCap && opts.allowParams !== undefined) {
+        throw new Error('--allow-param requires --request-cap.');
+    }
+    if (requestCap && (opts.noValidate || opts.validation === 'off')) {
+        throw new Error('Capability requests require schema validation; remove --no-validate/--validation off.');
+    }
+    if (requestCap && opts.signingSession === undefined) {
+        throw new Error('Capability requests require a signed LinkRPC connection.');
+    }
+    const validation = requestCap ? 'required' : opts.noValidate ? 'off' : (opts.validation ?? 'required');
+    const schema = validation === 'off' ? undefined : await validateParams(channel, ref, params, 'call', validation);
+    if (requestCap) {
+        if (schema === undefined || opts.signingSession === undefined) {
+            throw new Error('Capability requests require a method schema and signing session.');
+        }
+        const result = await requestCallCapability(channel, opts.signingSession, ref, params, schema, opts);
+        if (opts.capabilityOnly) return result;
+    }
     const onStreamChunk = opts.onStreamChunk ?? writeChunkToStderr;
     try {
         // Always use the streaming send path: it behaves identically to a plain
@@ -48,6 +69,7 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
         // prompt). The final result is the request's response.
         const call = channel.sendRequestWithStream(ref.getMethodOnWire(), params as never, {
             onStreamMessage: onStreamChunk,
+            ...(requestCap && ref.hash !== undefined ? { interfaceHash: ref.hash } : {}),
         });
         const result = await call.result;
         return opts.json !== false ? formatJson(result) : String(result);
@@ -88,7 +110,7 @@ async function validateParams(
     params: unknown,
     verb: 'call' | 'notify',
     validation: 'auto' | 'required',
-): Promise<void> {
+): Promise<SvcInterfaceSchema | undefined> {
     let schema: SvcInterfaceSchema | undefined;
     try {
         schema = await fetchSchemaForMethodRef(channel, ref);
@@ -105,27 +127,28 @@ async function validateParams(
     }
     if (schema === undefined) {
         if (validation === 'auto') return;
-        await _failWithSuggestion(channel, ref, verb);
+        return _failWithSuggestion(channel, ref, verb);
     }
     const method = findMethodInSchema(schema, ref.methodName);
     if (!method) {
-        await _failWithSuggestion(channel, ref, verb);
+        return _failWithSuggestion(channel, ref, verb);
     }
-    if (verb === 'call' && method!.result === undefined) {
+    if (verb === 'call' && method.result === undefined) {
         throw new Error(
             `${ref.getMethodOnWire()} is a notification member; use \`notify\` instead of \`call\`.`,
         );
     }
-    if (verb === 'notify' && method!.result !== undefined) {
+    if (verb === 'notify' && method.result !== undefined) {
         throw new Error(
             `${ref.getMethodOnWire()} is a request member; use \`call\` instead of \`notify\`.`,
         );
     }
-    const paramsSchema = method!.params;
+    const paramsSchema = method.params;
     const reason = validateValueAgainstSchema(params, paramsSchema, schema.components?.schemas ?? {});
     if (reason !== undefined) {
-        throw new Error(_formatParamValidationError(ref, schema, method!, params, reason));
+        throw new Error(_formatParamValidationError(ref, schema, method, params, reason));
     }
+    return schema;
 }
 
 function _formatParamValidationError(

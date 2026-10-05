@@ -435,6 +435,61 @@ frame, and each remote frame is written as one JSON line:
 hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 ```
 
+### Capabilities
+
+`caps list [--json]` lists the selected principal's stored capabilities,
+including expired grants. `caps request <methodRef>` requests and stores a
+capability without executing the method. `call --request-cap` ensures the same
+scope is available before executing the call. These explicit operations enable
+signing even in the generic `linkrpc`/`rpc` profile and require a LinkRPC endpoint.
+
+Both request forms share `call`'s method references, `--params`, `--param`, and
+`--p:<name>` shortcuts, including nested argument overrides and dynamic help.
+Concrete arguments become exact constraints by default. Repeat
+`--allow-param 'key=<matcher JSON>'` to relax individual **top-level** parameters:
+
+```sh
+linkrpc --endpoint "$ENDPOINT" caps list --json
+
+# Request permission without reading the file:
+linkrpc --endpoint "$ENDPOINT" caps request files::fs::read \
+  --p:path=/workspace/readme.txt \
+  --allow-param 'path={"prefix":"/workspace/"}'
+
+# Ensure permission for that scope, then read a file:
+linkrpc --endpoint "$ENDPOINT" call files::fs::read --request-cap \
+  --p:path=/workspace/another.txt \
+  --allow-param 'path={"prefix":"/workspace/"}'
+```
+
+Matchers are `{"exact":value}`, `{"enum":[value,...]}`,
+`{"prefix":"string-prefix"}`, `{"subsetOf":["allowed","array","items"]}`,
+or `{"any":true}`. Constraints must be compatible with the reflected,
+Zod-derived method schema, and the concrete example arguments must satisfy
+both that schema and every constraint. Required and unknown keys are checked.
+Nested matcher paths are unsupported by the capability protocol.
+`any` allows every JSON value, so it is accepted only for unconstrained schema
+properties; use `prefix`/`enum`/`subsetOf` for typed properties. A prefix cannot
+be proven compatible with a finite enum or a formatted string; use an enum
+of valid values instead. Remote reflection cannot reproduce arbitrary
+producer-side custom Zod refinements.
+
+Schema validation is mandatory for explicit requests: `--no-validate` and
+`--validation off` are rejected. On `call`, `--allow-param` requires
+`--request-cap`. For explicit requests, a method reference's `@hash` also pins
+the permission; inline calls include that hash in their signed metadata.
+The default requested duration is `persistent`; `--duration shortLived` and
+`--duration longLived` are also supported. The Hub still decides what to grant.
+One-shot approval cannot satisfy a reusable scope and is rejected.
+
+Fresh durable grants for the selected principal are reused when they cover
+the **entire requested scope**, not merely the example call. Broader prefixes,
+enum sets, subset sets, and unconstrained grants can cover narrower requests.
+New grants are saved through the principal's existing capability bag and are
+available to later invocations using the same identity. Denial or an insufficient
+grant fails without executing the method. `caps request` outputs the granted
+capabilities and a `reused` flag; `call --request-cap` retains normal call output.
+
 ### Identity and approvals
 
 These commands resolve the same persistent identity selected by the global

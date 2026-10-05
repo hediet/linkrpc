@@ -1,0 +1,102 @@
+import { execFile } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import {
+    defineInterface, KeypairSigningIdentity, requestType, TransportPair,
+} from '@hediet/linkrpc';
+import { createHubAccessConfig, HubAccessGrantSigner } from '@hediet/linkrpc-hub';
+import {
+    createHubServiceInterfaces, Hub, hubRegisterServiceId, registerHubAccessService,
+    registerHubServices, RootOverlay, withForwardedCallGate, withVerifiedSignature,
+} from '@hediet/linkrpc-hub/hub/server';
+import { SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
+
+const exec = promisify(execFile);
+const files = defineInterface({ id: 'test.files' }, {
+    read: requestType(z.object({ path: z.string() }), z.object({ path: z.string() })),
+});
+
+describe('caps CLI on a gated hub', () => {
+    it('parses shared shortcuts, persists grants and reuses broad scopes across processes', async () => {
+        const directory = await mkdtemp(join(tmpdir(), 'linkrpc-caps-cli-'));
+        const issuer = await KeypairSigningIdentity.generateNew();
+        const hub = new Hub();
+        createHubServiceInterfaces(hub);
+        const service = hubRegisterServiceId(hub, 'files');
+        const calls: string[] = [];
+        service.connection.register(files, {
+            read: ({ path }) => { calls.push(path); return { path }; },
+        }, { serviceId: 'files' });
+        service.connection.enableReflection({ serviceId: 'files' });
+        let grants = 0;
+        const access = createHubAccessConfig(new HubAccessGrantSigner(issuer, () => {
+            grants++;
+            return { result: 'permitted' };
+        }).decide);
+        const socket = await SocketServer.start();
+        socket.setConnectionHandler(transport => {
+            const pair = new TransportPair();
+            const upstream = hub.attach(withForwardedCallGate(pair.b, {
+                requireCapability: true,
+                acceptedRootIssuers: () => [{ principal: issuer.publicSigningIdentity.principal, isPublic: true }],
+            }));
+            const overlay = new RootOverlay({ uplink: pair.a });
+            registerHubServices(overlay.root, upstream, { hubServiceId: 'hub' });
+            registerHubAccessService(overlay.root, access);
+            overlay.connectParticipant(withVerifiedSignature(transport, { verifySignatures: true }));
+        });
+        const common = ['--endpoint', `unix:${socket.endpoint}`, '--principal', `file:${join(directory, 'identity.json')}`];
+        const invoke = (...args: string[]) => exec(process.execPath, [
+            '--import', 'tsx', '--conditions=@hediet/source',
+            fileURLToPath(new URL('./linkrpc.ts', import.meta.url)), ...common, ...args,
+        ], { timeout: 20_000 });
+        try {
+            const requested = await invoke('caps', 'request', 'files::test.files::read',
+                '--p:path=/docs/a', '--allow-param', 'path={"prefix":"/docs/"}');
+            expect(JSON.parse(requested.stdout)).toMatchObject({ status: 'granted', reused: false });
+            expect(calls).toEqual([]);
+            const grantedCount = grants;
+            expect(grantedCount).toBeGreaterThan(0);
+
+            const listed = JSON.parse((await invoke('caps', 'list', '--json')).stdout);
+            expect(listed.capabilities.some((cap: { permissions: { params?: unknown }[] }) =>
+                cap.permissions.some(permission => JSON.stringify(permission.params) === '{"path":{"prefix":"/docs/"}}'),
+            )).toBe(true);
+
+            const called = await invoke('call', 'files::test.files::read', '--request-cap',
+                '--p:path', '/docs/public/b', '--allow-param', 'path={"prefix":"/docs/public/"}');
+            expect(JSON.parse(called.stdout)).toEqual({ path: '/docs/public/b' });
+            expect(calls).toEqual(['/docs/public/b']);
+            expect(grants).toBe(grantedCount);
+
+            const reused = await invoke('caps', 'request', 'files::test.files::read',
+                '--p:path=/docs/c', '--allow-param', 'path={"prefix":"/docs/"}');
+            expect(JSON.parse(reused.stdout)).toMatchObject({ status: 'granted', reused: true });
+            expect(grants).toBe(grantedCount);
+
+            const pinned = await invoke('call', `files::test.files::read@${files.schemaHash}`,
+                '--request-cap', '--p:path=/docs/pinned');
+            expect(JSON.parse(pinned.stdout)).toEqual({ path: '/docs/pinned' });
+            expect(grants).toBe(grantedCount);
+
+            await expect(invoke('call', 'files::test.files::read', '--request-cap',
+                '--p:path=/other/a', '--allow-param', 'path={"prefix":"/docs/"}'))
+                .rejects.toThrow('Parameters do not match');
+            expect(calls).toEqual(['/docs/public/b', '/docs/pinned']);
+            expect(grants).toBe(grantedCount);
+
+            await invoke('call', 'files::test.files::read', '--request-cap',
+                '--p:path=/docs/d', '--allow-param', 'path={"prefix":"/"}');
+            expect(grants).toBe(grantedCount + 1);
+            expect(calls).toEqual(['/docs/public/b', '/docs/pinned', '/docs/d']);
+        } finally {
+            socket.dispose();
+            await rm(directory, { recursive: true, force: true });
+        }
+    }, 60_000);
+});
