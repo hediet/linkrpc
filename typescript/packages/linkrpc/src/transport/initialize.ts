@@ -36,7 +36,10 @@ export async function runInitializeHandshake(
     role: InitializeRole,
     options: RunInitializeHandshakeOptions = {},
 ): Promise<{ readonly token?: string; }> {
-    const signal = options.signal;
+    const completed = new AbortController();
+    const signal = options.signal
+        ? AbortSignal.any([options.signal, completed.signal])
+        : completed.signal;
     if (signal?.aborted) throw cancellationError(signal);
     let onAbort: (() => void) | undefined;
     const aborted = new Promise<never>((_resolve, reject) => {
@@ -44,9 +47,10 @@ export async function runInitializeHandshake(
         signal?.addEventListener('abort', onAbort, { once: true });
     });
     try {
-        return await Promise.race([performInitializeHandshake(transport, role, options), aborted]);
+        return await Promise.race([performInitializeHandshake(transport, role, { ...options, signal }), aborted]);
     } finally {
         signal?.removeEventListener('abort', onAbort!);
+        completed.abort();
     }
 }
 
@@ -62,11 +66,11 @@ async function performInitializeHandshake(
             protocolVersion: INITIALIZE_PROTOCOL_VERSION,
             ...(role.token !== undefined ? { token: role.token } : {}),
         };
-        void transport.send({
+        const sent = Promise.resolve().then(() => transport.send({
             jsonrpc: '2.0', id: INITIALIZE_REQUEST_ID, method: INITIALIZE_METHOD,
             params: params as unknown as JsonValue,
-        });
-        const message = await reply;
+        }));
+        const [, message] = await Promise.all([sent, reply]);
         if (isRequest(message) || !('id' in message) || message.id !== INITIALIZE_REQUEST_ID) {
             throw new Error('hubrpc::initialize: unexpected reply to handshake');
         }
@@ -83,14 +87,14 @@ async function performInitializeHandshake(
     const accepted = await role.isTokenAccepted(params.token);
     if (options.signal?.aborted) throw cancellationError(options.signal);
     if (!accepted) {
-        void transport.send({
+        await transport.send({
             jsonrpc: '2.0', id: first.id,
             error: { code: ErrorCode.invalidRequest, message: 'unauthenticated' },
         });
         throw new Error('hubrpc::initialize: unauthenticated');
     }
     const result: InitializeResult = { protocolVersion: INITIALIZE_PROTOCOL_VERSION };
-    void transport.send({ jsonrpc: '2.0', id: first.id, result: result as unknown as JsonValue });
+    await transport.send({ jsonrpc: '2.0', id: first.id, result: result as unknown as JsonValue });
     return { token: params.token };
 }
 
