@@ -267,6 +267,17 @@ Every endpoint is a valid `new URL()` — safe in env vars and logs:
 | `cmd:?command=…` / `cmd:?argv=…&argv=…`   | spawn-as-server (`--endpoint-cmd`)         |
 | `cmd-stdio:?command=…` / `?argv=…&argv=…` | spawn over stdio (`--endpoint-cmd-stdio`)  |
 
+`cmd:` children can use `startEndpoint({ onConnection })` without parsing any
+transport flags: the parent injects `LINKRPC_ENDPOINT` and `LINKRPC_TOKEN`.
+The CLI accepts one authenticated callback connection and exposes the child's
+interfaces directly. It does not wait for a hub service-namespace claim.
+The existing root overlay still supplies namespace (`local`) and optional
+provisioned-identity services for hub-aware children. Full routing-hub startup
+remains a separate `connectViaLocalHub` helper.
+Child stdout/stderr are diagnostics and appear on the CLI's stderr; parent stdout
+remains reserved for command results. Startup fails if the child exits, cannot
+spawn, or does not connect within 10 seconds.
+
 The command payload is either a single verbatim string (`?command=node%20server.js`,
 split by the OS shell) or repeated, structure-preserving `argv` params
 (`?argv=node&argv=server.js`).
@@ -411,7 +422,7 @@ initial document:
 | `call <method> [--param k=v]... [--params <json>\|-]` | Invoke a request. Method is form 1/2/3 (`send`, `iface::send`, `svc::iface::send`). Validates params against the live schema by default; pass `--no-validate` to skip. Use `@hash` on the method ref (e.g. `iface::send@a3f2b1`) to look up a pinned schema version for local validation. Reads stdin for `--params -`. |
 | `notify <method> ...`                                 | Fire-and-forget notification. Same flags as `call`.                                                                                                                                                                                                                                                                     |
 | `batch --call <method> ... [--notify <method> ...]`   | Run multiple calls and notifications sequentially on one connection. `--params`, repeatable `--param`, and `--no-validate` apply to the preceding operation. Fails fast unless `--continue-on-error` is set. Results are one JSON array; stream chunks are labeled on stderr. |
-| `connection create [--timeout 30s] [--ttl 5min] [--schema source]` | Open the configured remote once in a detached broker and print its authenticated local `unix:` / `npipe:` endpoint. `--timeout` is transport inactivity; `--ttl` is an absolute lifetime. `--schema` overlays static LinkRPC reflection from a local JSON file or an HTTP(S) URL. |
+| `connection create --timeout <duration\|inf> [--ttl <duration\|inf>] [--schema source]` | Open the configured remote once in a detached broker and print its authenticated local `unix:` / `npipe:` endpoint. Explicitly supply at least one of `--timeout` (transport inactivity) or `--ttl` (absolute lifetime). Omitted limits are `inf`. `--schema` overlays static LinkRPC reflection from a local JSON file or an HTTP(S) URL. |
 | `connection status`                                   | Read lifecycle and buffer status from the broker configured by the effective endpoint. |
 | `connection notifications [--after n] [--wait 25s] [--follow]` | Read incoming remote notifications from the broker's bounded buffer. `--follow` emits one JSON object per line and can run alongside calls. |
 | `connection destroy`                                  | Stop the configured connection broker through its local overlay. |
@@ -489,6 +500,45 @@ hub batch \
 ```
 
 ### Persistent connections
+
+Every `connection create` (including the legacy `connect` alias and context-owned
+connections) requires an explicit `--timeout` or `--ttl`. Stored context limits
+do not satisfy this requirement or supply omitted limits: each omitted limit is
+`inf`. Both flags accept durations such as `250ms`, `30s`, `5min`, or `2h`, or the
+literal `inf`. Finite limits must fit a Node timer (1 through 2147483647 ms).
+Unlimited limits schedule no timer; status reports their `timeoutMs`/`ttlMs` as
+the JSON string `"inf"`, while finite values remain millisecond numbers.
+Broker startup has a separate 60-second readiness deadline; `inf` does not
+disable startup error detection.
+Command-environment endpoints also retain their existing 10-second deadline for
+the spawned application to connect back. This is distinct from the transport
+initialize handshake and the broker's lifetime limits. A slow application must
+establish its endpoint before that deadline. Startup failures report the broker's
+underlying error, including the last 16384 characters of command-environment child
+stdout/stderr, rather than only the broker process's exit code.
+
+Use a folder context to own the broker without environment overrides:
+
+```sh
+rpc --endpoint-cmd "node ./server.js" connection create --timeout inf --new-context .
+rpc call example::ping --no-validate
+rpc context remove --context .
+```
+
+Only `connection create --new-context <selector>` assigns ownership. Removing
+that context, replacing its endpoint/token/config, or unsetting the owned endpoint
+or token stops the owned broker before saving the mutation. This also applies to
+persisted `--context-set` overrides. Unrelated edits and temporary overrides do
+not stop it. Saving an existing endpoint or deriving another context with
+`--new-context` does not transfer or duplicate ownership.
+
+Already-stopped local brokers permit cleanup. Authentication, RPC, permission,
+and other shutdown errors fail explicitly and preserve the context for retry.
+The shutdown RPC has a five-second response deadline.
+If saving fails after shutdown, the old context remains available for cleanup.
+Contexts created by older versions have no ownership metadata and are not
+automatically stopped. An unlimited broker without an owning context must be
+stopped explicitly with `connection destroy`.
 
 `connection create` keeps one remote transport open in a detached process. It prints the
 actual local socket endpoint; store that endpoint in `LINKRPC_ENDPOINT` for later

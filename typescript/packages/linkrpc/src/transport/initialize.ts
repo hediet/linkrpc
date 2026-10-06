@@ -36,7 +36,25 @@ export async function runInitializeHandshake(
     role: InitializeRole,
     options: RunInitializeHandshakeOptions = {},
 ): Promise<{ readonly token?: string; }> {
-    if (options.signal?.aborted) throw new Error('hubrpc::initialize: handshake cancelled');
+    const signal = options.signal;
+    if (signal?.aborted) throw cancellationError(signal);
+    let onAbort: (() => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(cancellationError(signal!));
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+    try {
+        return await Promise.race([performInitializeHandshake(transport, role, options), aborted]);
+    } finally {
+        signal?.removeEventListener('abort', onAbort!);
+    }
+}
+
+async function performInitializeHandshake(
+    transport: IMessageTransport,
+    role: InitializeRole,
+    options: RunInitializeHandshakeOptions,
+): Promise<{ readonly token?: string; }> {
     const timeoutMs = options.handshakeTimeoutMs ?? DEFAULT_HANDSHAKE_TIMEOUT_MS;
     if (role.kind === 'client') {
         const reply = nextMessage(transport, timeoutMs, options.signal);
@@ -62,7 +80,9 @@ export async function runInitializeHandshake(
         throw new Error('hubrpc::initialize: expected initialize as the first message');
     }
     const params = (first.params ?? {}) as Partial<InitializeParams>;
-    if (!(await role.isTokenAccepted(params.token))) {
+    const accepted = await role.isTokenAccepted(params.token);
+    if (options.signal?.aborted) throw cancellationError(options.signal);
+    if (!accepted) {
         void transport.send({
             jsonrpc: '2.0', id: first.id,
             error: { code: ErrorCode.invalidRequest, message: 'unauthenticated' },
@@ -84,7 +104,7 @@ function nextMessage(transport: IMessageTransport, timeoutMs: number, signal?: A
         };
         const abort = () => {
             cleanup();
-            reject(new Error('hubrpc::initialize: handshake cancelled'));
+            reject(cancellationError(signal!));
         };
         const timer = setTimeout(() => {
             cleanup();
@@ -94,4 +114,10 @@ function nextMessage(transport: IMessageTransport, timeoutMs: number, signal?: A
         signal?.addEventListener('abort', abort, { once: true });
         transport.setListener(message => { cleanup(); resolve(message); });
     });
+}
+
+function cancellationError(signal: AbortSignal): Error {
+    return signal.reason instanceof Error && signal.reason.name !== 'AbortError'
+        ? signal.reason
+        : new Error('hubrpc::initialize: handshake cancelled');
 }

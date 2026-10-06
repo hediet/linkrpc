@@ -101,6 +101,108 @@ signer failures are not classified as insufficient authority. Presenting a
 self-root candidate alongside delegated candidates does not establish trust:
 the receiver still chooses a chain rooted at an issuer it accepts.
 
+## Node endpoint startup
+
+`startEndpoint` from `@hediet/linkrpc/node` composes the existing channel,
+transport, and initialize-handshake APIs into a single application entry point.
+The application parses its own `--endpoint` option and passes its value as
+`endpoint`; when omitted, `LINKRPC_ENDPOINT` is used. There is no implicit
+default transport.
+
+```ts
+import { LinkRpcConnection, startEndpoint } from '@hediet/linkrpc/node';
+
+const endpoint = await startEndpoint({
+  // endpoint: parsedArgs.endpoint, // application-owned argument parsing
+  onConnection(peer) {
+    const connection = new LinkRpcConnection(peer.channel);
+    // connection.register(myInterface, myImplementation);
+    // Or wrap peer.channel with SigningSender.wrapChannel before constructing
+    // the connection. Authentication does not install signing or capabilities.
+    void peer.closed.then(() => {
+      // Release application resources associated with this peer.
+    });
+  },
+  onError: error => console.error(error),
+});
+
+// During application shutdown:
+endpoint.dispose();
+await endpoint.closed;
+```
+
+| Endpoint | Behavior |
+| --- | --- |
+| `stdio` or `stdio:` | Serve one trusted channel over this process's stdin/stdout, without an initialize handshake |
+| `ws://host:port/path` or `wss://host:port/path` | Dial an existing LinkRPC WebSocket endpoint |
+| `unix:/absolute/path.sock` | Dial an existing Unix socket |
+| `npipe://./pipe/name` | Dial an existing Windows named pipe |
+| Bare socket/pipe path | Dial using the existing legacy socket-path syntax |
+| `listen:ws://127.0.0.1:0/path` | Listen for WebSockets; port `0` allocates a free port |
+| `listen:unix:/absolute/path.sock` | Listen on a Unix socket |
+| `listen:npipe://./pipe/name` | Listen on a Windows named pipe |
+
+`LINKRPC_ENDPOINT=stdio:` replaces application-specific stdio flags. Never write
+logs to stdout in this mode; use stderr. Disposing the endpoint detaches its
+stream listeners and pauses stdin if no other data listeners remain, but never
+ends/destroys the process-owned streams.
+
+Tokens resolve in order: explicit `token` option, URI `?token=...`,
+`LINKRPC_TOKEN`, then the empty string. Every listener requires a **nonempty**
+token; accepted peers must present it in the existing LinkRPC initialize
+handshake before `onConnection` runs. Dialing sends the resolved token.
+Stdio is a trusted parent/child link and does not authenticate. Plain `ws:`
+does not encrypt tokens or traffic: use loopback/private sockets or terminate
+TLS at a trusted reverse proxy. Listening with `wss:` is deliberately unsupported.
+Command-spawning and `ws-no-init:` endpoints are not supported by this helper.
+Socket listeners do not unlink an occupied path; bind failures reject rather
+than disrupting an existing listener.
+
+The exact public contract is:
+
+```ts
+interface StartEndpointOptions {
+  readonly endpoint?: string;
+  readonly token?: string;
+  readonly onConnection: (connection: EndpointConnection) => void | Promise<void>;
+  readonly onError?: (error: Error) => void;
+}
+interface EndpointConnection {
+  readonly channel: Channel<undefined, unknown>;
+  readonly closed: Promise<void>;
+  dispose(): void;
+}
+interface StartedEndpoint {
+  readonly endpoint: string;
+  readonly closed: Promise<void>;
+  dispose(): void;
+}
+function startEndpoint(options: StartEndpointOptions): Promise<StartedEndpoint>;
+```
+
+The returned `endpoint` is a dialable address with the actual bound port and no
+token (or `stdio:`). `onConnection` runs once for stdio/dial mode and once per
+authenticated listener peer. Install services promptly; an asynchronous callback
+is for setup, not a task that runs for the endpoint's lifetime.
+Incoming requests, notifications, and their input streams are queued until that
+peer's `onConnection` completes, including messages received immediately after
+authentication. Responses and output streams for setup-time outbound calls remain
+live. Authentication acknowledges the transport, not application registration;
+callers can issue requests immediately without racing handler installation.
+Setup callbacks must not mutually wait for requests served only after the other
+peer's setup completes. Failed setup closes the peer and discards queued messages.
+
+Startup errors (including a failed initial callback) reject `startEndpoint`.
+Listener peer handshake/setup failures close that peer and call `onError`, while
+the listener remains available. Runtime listener errors call `onError` and close
+the endpoint. If omitted, `onError` uses `process.emitWarning`; callbacks must not
+throw. A normal peer disconnect resolves its `closed` promise and rejects pending
+RPC calls. In dial/stdio mode it also resolves the endpoint's `closed` promise.
+Listener disposal closes all peers, cancels pending handshakes, and waits for the
+server and in-flight setup callbacks before resolving `closed`. Disposal is
+idempotent. The helper installs no signal handlers, performs no reconnection, and
+never calls `process.exit`.
+
 ## Interface templates
 
 This bounded v1 adds TypeScript authoring groups over ordinary concrete RPC methods.

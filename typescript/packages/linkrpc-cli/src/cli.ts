@@ -9,13 +9,14 @@ import { executeBatch, parseBatchArgs } from './commands/batch';
 import {
     disconnectBroker,
     getBrokerStatus,
+    stopConnectionBroker,
     readBrokerNotifications,
 } from './commands/connectionBrokerClient';
 import {
     runConnectionBroker,
     spawnConnectionBroker,
 } from './commands/connectionBrokerProcess';
-import { parseDuration } from './duration';
+import { parseDuration, parseConnectionLimit, parseConnectionLimitMilliseconds, type ConnectionLimit } from './duration';
 import { checkCompatCommand, formatVerdict } from './commands/checkCompat';
 import { codegenCommand } from './commands/codegen';
 import { exportContractCommand } from './commands/contract';
@@ -78,6 +79,7 @@ import {
     ContextStore,
     type ContextReference,
     type ContextValues,
+    type StoredContext,
     type ValidationMode,
     formatContextReference,
 } from './contexts';
@@ -734,8 +736,8 @@ Batch options:
     connection
         .command('create')
         .description('Create a detached persistent connection and print its local endpoint.')
-        .option('--timeout <duration>', 'exit after this much transport inactivity')
-        .option('--ttl <duration>', 'hard maximum broker lifetime')
+        .option('--timeout <duration>', 'transport inactivity limit (duration or inf; omitted: inf)')
+        .option('--ttl <duration>', 'hard lifetime limit (duration or inf; omitted: inf)')
         .option(
             '--notification-limit <count>',
             'maximum buffered incoming notifications',
@@ -746,6 +748,9 @@ Batch options:
             ttl?: string;
             notificationLimit?: number;
         }) => {
+            if (opts.timeout === undefined && opts.ttl === undefined) {
+                throw new Error('connection create requires an explicit --timeout or --ttl (use inf for unlimited)');
+            }
             if (g_hubConfigPath !== undefined) {
                 throw new Error('connection create does not support --config; use an endpoint URI or command endpoint');
             }
@@ -755,15 +760,15 @@ Batch options:
             if (schemaSource !== undefined) {
                 await loadStaticHubSchema(schemaSource);
             }
-            const timeout = opts.timeout ?? g_invocation?.values.connectionTimeout ?? '30s';
-            const ttl = opts.ttl ?? g_invocation?.values.connectionTtl ?? '5min';
+            const timeout = opts.timeout ?? 'inf';
+            const ttl = opts.ttl ?? 'inf';
             const notificationLimit = opts.notificationLimit
                 ?? g_invocation?.values.notificationLimit
                 ?? 1_000;
             const brokerEndpoint = await spawnConnectionBroker({
                 remote: needEndpoint(endpoint),
-                timeoutMs: parseDuration(timeout),
-                ttlMs: parseDuration(ttl),
+                timeoutMs: parseConnectionLimit(timeout),
+                ttlMs: parseConnectionLimit(ttl),
                 notificationLimit,
                 schemaSource,
             });
@@ -894,7 +899,7 @@ Batch options:
 
     context
         .command('remove')
-        .description('Remove the selected context from the global store.')
+        .description('Stop any owned connection and remove the selected context from the global store.')
         .action(async () => {
             if (g_contextStore === undefined || g_invocation === undefined) {
                 throw new Error('context resolver is unavailable');
@@ -915,17 +920,15 @@ Batch options:
         .command('_connection-broker')
         .description('(internal) Run a persistent connection broker.')
         .requiredOption('--remote-endpoint <uri>')
-        .requiredOption('--timeout-ms <milliseconds>', '', (value) =>
-            parsePositiveInteger(value, '--timeout-ms'))
-        .requiredOption('--ttl-ms <milliseconds>', '', (value) =>
-            parsePositiveInteger(value, '--ttl-ms'))
+        .requiredOption('--timeout-ms <milliseconds-or-inf>', '', parseConnectionLimitMilliseconds)
+        .requiredOption('--ttl-ms <milliseconds-or-inf>', '', parseConnectionLimitMilliseconds)
         .option('--notification-limit <count>', '', (value) =>
             parsePositiveInteger(value, '--notification-limit'), 1_000)
         .option('--schema <path-or-url>')
         .action(async (opts: {
             remoteEndpoint: string;
-            timeoutMs: number;
-            ttlMs: number;
+            timeoutMs: ConnectionLimit;
+            ttlMs: ConnectionLimit;
             notificationLimit: number;
             schema?: string;
         }) => {
@@ -1607,8 +1610,9 @@ async function createContextFromInvocation(
     store: ContextStore,
     reference: Exclude<ContextReference, { readonly kind: 'empty'; }>,
     values: ContextValues,
+    ownedConnection?: StoredContext['ownedConnection'],
 ): Promise<void> {
-    await store.replace(reference, values, { createOnly: true });
+    await store.replace(reference, values, { createOnly: true, ownedConnection });
     process.stderr.write(`linkrpc: created context ${formatContextReference(reference)}.\n`);
 }
 
@@ -1633,7 +1637,7 @@ async function createConnectionContext(
     await createContextFromInvocation(store, reference, {
         ...rest,
         ...connectionEndpoint,
-    });
+    }, { endpoint: brokerEndpoint });
 }
 
 function splitEndpointToken(endpoint: string): Pick<ContextValues, 'endpoint' | 'endpointToken'> {
@@ -1647,15 +1651,6 @@ function splitEndpointToken(endpoint: string): Pick<ContextValues, 'endpoint' | 
         endpoint: `${formatEndpointUri(withoutToken)}${separator}token=%`,
         endpointToken: token,
     };
-}
-
-async function stopConnectionBroker(endpoint: string): Promise<void> {
-    const connection = await connectEndpoint(parseEndpointUri(endpoint));
-    try {
-        await disconnectBroker(connection.channel);
-    } finally {
-        connection.close();
-    }
 }
 
 function mutableReference(
@@ -2136,8 +2131,17 @@ function parseInterfaceRef(raw: string): { id: string; hash: string | undefined;
 }
 
 export function runCli(executableName: 'linkrpc' | 'rpc' | 'hub'): void {
-    main(process.argv.slice(2), executableName).catch((e: unknown) => {
-        process.stderr.write(`linkrpc: ${formatCliError(e)}\n`);
+    main(process.argv.slice(2), executableName).catch(async (e: unknown) => {
+        const message = formatCliError(e);
+        process.stderr.write(`linkrpc: ${message}\n`);
+        if (process.argv[2] === '_connection-broker') {
+            await new Promise<void>((resolve, reject) => {
+                process.stdout.write(JSON.stringify({ error: message }) + '\n', error => {
+                    if (error) reject(error);
+                    else resolve();
+                });
+            });
+        }
         process.exit(1);
     });
 }

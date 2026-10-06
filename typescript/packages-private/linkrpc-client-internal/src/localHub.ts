@@ -158,6 +158,8 @@ export interface StartLocalOverlayOptions {
      * and freely claimable through `hubGrantedServiceId::register`.
      */
     readonly grantedNamespace: string;
+    /** Max time to wait for the child to connect. Defaults to 10 seconds. */
+    readonly readyTimeoutMs?: number;
 }
 
 /**
@@ -175,19 +177,43 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
 
     const socketPath = SocketServer.allocSocketPath();
     const token = randomBytes(16).toString('hex');
-    const socketServer = await SocketServer.start({ endpoint: socketPath });
+    const socketServer = await SocketServer.start({
+        endpoint: socketPath,
+        isTokenAccepted: async candidate => candidate === token,
+    });
 
+    let acceptedPeer = false;
     const accepted = new Promise<NodeSocketTransport>((resolve) => {
-        socketServer.setConnectionHandler((t) => resolve(t));
+        socketServer.setConnectionHandler(t => {
+            if (acceptedPeer) {
+                t.dispose();
+                return;
+            }
+            acceptedPeer = true;
+            resolve(t);
+        });
     });
 
-    const child = spawnCommand(opts.command, {
-        // The child speaks linkrpc over the socket, so its stdio stays free for
-        // diagnostics — inherit it so a child that fails to start is visible.
-        stdio: ['ignore', 'inherit', 'inherit'],
-        env: { ...process.env, ...opts.env, LINKRPC_ENDPOINT: socketPath, LINKRPC_TOKEN: token },
-        ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
-    });
+    let child: ReturnType<typeof spawnCommand>;
+    try {
+        child = spawnCommand(opts.command, {
+            // Keep parent stdout reserved for CLI/broker output.
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: { ...process.env, ...opts.env, LINKRPC_ENDPOINT: socketPath, LINKRPC_TOKEN: token },
+            ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+        });
+    } catch (error) {
+        socketServer.dispose();
+        throw error;
+    }
+    child.stdout?.pipe(process.stderr, { end: false });
+    child.stderr?.pipe(process.stderr, { end: false });
+    let startupOutput = '';
+    const captureStartupOutput = (chunk: Buffer): void => {
+        startupOutput = (startupOutput + chunk.toString()).slice(-16_384);
+    };
+    child.stdout?.on('data', captureStartupOutput);
+    child.stderr?.on('data', captureStartupOutput);
 
     const pair = new TransportPair();
     const overlay = new RootOverlay({ uplink: pair.a });
@@ -196,7 +222,10 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
         registerIdentityServices(overlay.root, { resolveIdentity });
     }
 
+    let disposed = false;
     const dispose = (): void => {
+        if (disposed) return;
+        disposed = true;
         if (!child.killed) child.kill();
         overlay.dispose();
         pair.a.dispose();
@@ -209,17 +238,38 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
         }
     };
 
-    const childTransport = await Promise.race([
-        accepted,
-        new Promise<never>((_resolve, reject) => {
-            child.once('exit', (code) =>
-                reject(new Error(`overlay: cmd-env child exited (code ${code ?? '?'}) before connecting`)),
-            );
-        }),
-    ]).catch((err: unknown) => {
+    let onExit!: (code: number | null) => void;
+    let onError!: (error: Error) => void;
+    let timer!: ReturnType<typeof setTimeout>;
+    let childTransport: NodeSocketTransport;
+    try {
+        childTransport = await Promise.race([
+            accepted,
+            new Promise<never>((_resolve, reject) => {
+                onExit = code => reject(new Error(`overlay: cmd-env child exited (code ${code ?? '?'}) before connecting`));
+                onError = reject;
+                child.once('close', onExit);
+                child.once('error', onError);
+                timer = setTimeout(() => reject(new Error('overlay: timed out waiting for cmd-env child to connect')),
+                    opts.readyTimeoutMs ?? 10_000);
+            }),
+        ]);
+    } catch (error) {
         dispose();
-        throw err;
-    });
+        if (startupOutput.trim().length > 0) {
+            throw new Error(
+                `${error instanceof Error ? error.message : String(error)}\nChild startup output (last 16384 characters):\n${startupOutput.trim()}`,
+                { cause: error },
+            );
+        }
+        throw error;
+    } finally {
+        clearTimeout(timer);
+        child.removeListener('close', onExit);
+        child.removeListener('error', onError);
+        child.stdout?.removeListener('data', captureStartupOutput);
+        child.stderr?.removeListener('data', captureStartupOutput);
+    }
 
     overlay.connectParticipant(childTransport);
     return { uplink: pair.b, dispose };

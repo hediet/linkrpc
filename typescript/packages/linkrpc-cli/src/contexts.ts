@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, open, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { stopConnectionBroker } from './commands/connectionBrokerClient';
 
 export type ValidationMode = 'auto' | 'required' | 'off';
 
@@ -33,6 +34,7 @@ export interface StoredContext {
     readonly key: string;
     readonly reference: Exclude<ContextReference, { readonly kind: 'empty'; }>;
     readonly values: ContextValues;
+    readonly ownedConnection?: { readonly endpoint: string };
     readonly createdAt: string;
     readonly updatedAt: string;
 }
@@ -164,12 +166,14 @@ export class ContextStore {
                 throw new Error(`context ${formatContextReference(reference)} already exists`);
             }
             const now = new Date().toISOString();
+            const mergedValues = existing === undefined
+                ? normalizeContextValues(values)
+                : mergeContextValues(existing.values, values);
             const context: StoredContext = {
                 key,
                 reference,
-                values: existing === undefined
-                    ? normalizeContextValues(values)
-                    : mergeContextValues(existing.values, values),
+                values: mergedValues,
+                ...retainedOwnership(existing, mergedValues),
                 createdAt: existing?.createdAt ?? now,
                 updatedAt: now,
             };
@@ -190,8 +194,14 @@ export class ContextStore {
     public async replace(
         reference: Exclude<ContextReference, { readonly kind: 'empty'; }>,
         values: ContextValues,
-        options: { readonly createOnly?: boolean } = {},
+        options: {
+            readonly createOnly?: boolean;
+            readonly ownedConnection?: StoredContext['ownedConnection'];
+        } = {},
     ): Promise<StoredContext> {
+        if (options.ownedConnection !== undefined && options.createOnly !== true) {
+            throw new Error('connection ownership can only be assigned to a new context');
+        }
         reference = normalizeContextReference(reference);
         return this._mutate((contexts) => {
             const key = contextKey(reference);
@@ -204,6 +214,9 @@ export class ContextStore {
                 key,
                 reference,
                 values: normalizeContextValues(values),
+                ...(options.ownedConnection === undefined
+                    ? retainedOwnership(existing, values)
+                    : { ownedConnection: options.ownedConnection }),
                 createdAt: existing?.createdAt ?? now,
                 updatedAt: now,
             };
@@ -225,9 +238,11 @@ export class ContextStore {
             }
             const values = { ...existing.values } as Record<keyof ContextValues, unknown>;
             for (const item of keys) delete values[item];
+            const { ownedConnection: _ownedConnection, ...rest } = existing;
             const context: StoredContext = {
-                ...existing,
+                ...rest,
                 values: normalizeContextValues(values as ContextValues),
+                ...retainedOwnership(existing, values as ContextValues),
                 updatedAt: new Date().toISOString(),
             };
             contexts.set(key, context);
@@ -312,13 +327,49 @@ export class ContextStore {
         const release = await acquireContextStoreLock(this._file);
         try {
             const contexts = await this._read();
+            const previous = new Map(contexts);
             const result = update(contexts);
-            if (result.changed) await this._write(contexts);
+            if (result.changed) {
+                for (const [key, existing] of previous) {
+                    if (existing.ownedConnection === undefined) continue;
+                    const next = contexts.get(key);
+                    if (
+                        next?.ownedConnection?.endpoint === existing.ownedConnection.endpoint
+                    ) {
+                        continue;
+                    }
+                    try {
+                        await stopConnectionBroker(existing.ownedConnection.endpoint, true);
+                    } catch (error) {
+                        throw new Error(
+                            `failed to stop connection owned by context ${formatContextReference(existing.reference)}; context was not changed: ${error instanceof Error ? error.message : String(error)}`,
+                            { cause: error },
+                        );
+                    }
+                }
+                await this._write(contexts);
+            }
             return result.value;
         } finally {
             await release();
         }
     }
+}
+
+function retainedOwnership(
+    existing: StoredContext | undefined,
+    b: ContextValues,
+): Pick<StoredContext, 'ownedConnection'> {
+    const a = existing?.values;
+    return existing?.ownedConnection !== undefined
+        && a !== undefined
+        && a.endpoint === b.endpoint
+        && a.endpointToken === b.endpointToken
+        && a.endpointCmd === b.endpointCmd
+        && a.endpointCmdStdio === b.endpointCmdStdio
+        && a.config === b.config
+        ? { ownedConnection: existing.ownedConnection }
+        : {};
 }
 
 export function mergeContextValues(
@@ -511,10 +562,18 @@ function parseStoredContext(value: unknown): StoredContext {
     if (raw.key !== contextKey(reference)) {
         throw new Error(`context key mismatch for ${formatContextReference(reference)}`);
     }
+    if (raw.ownedConnection !== undefined && (
+        typeof raw.ownedConnection !== 'object'
+        || raw.ownedConnection === null
+        || typeof raw.ownedConnection.endpoint !== 'string'
+    )) {
+        throw new Error('invalid context connection ownership');
+    }
     return {
         key: raw.key,
         reference,
         values: normalizeContextValues(raw.values),
+        ...(raw.ownedConnection === undefined ? {} : { ownedConnection: raw.ownedConnection }),
         createdAt: raw.createdAt,
         updatedAt: raw.updatedAt,
     };
