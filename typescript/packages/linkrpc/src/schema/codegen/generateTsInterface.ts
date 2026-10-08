@@ -178,7 +178,7 @@ function _schemaType(
         const properties = (s['properties'] as Record<string, LinkRpcJsonSchema> | undefined) ?? {};
         const required = new Set((s['required'] as string[] | undefined) ?? []);
         const members = Object.entries(properties).map(([name, property]) =>
-            `${_propKey(name)}${required.has(name) ? '' : '?'}: ${_schemaType(property, components, payloads)};`,
+            `${_propKey(name)}${required.has(name) ? '' : '?'}: ${_schemaType(property, components, payloads)}${required.has(name) ? '' : ' | undefined'};`,
         );
         const objectType = `{ ${members.join(' ')} }`;
         const additional = s['additionalProperties'];

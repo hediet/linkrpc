@@ -964,6 +964,9 @@ you get tooling for free:
 - **`isAssignable(a, b)`** — structural compatibility: is every value of interface `A` accepted by `B`?
 - **`generateTsInterface(schema)`** — emit a `.ts` client/server typing from a schema fetched at runtime.
 
+Generated recursive payload types include `undefined` for optional properties, matching
+Zod's `.optional()` output even with TypeScript's `exactOptionalPropertyTypes` enabled.
+
 ## Transports & entry points
 
 The core (`@hediet/linkrpc`) is environment-agnostic. Platform transports live behind subpath
