@@ -140,6 +140,8 @@ export interface OpenHubChannelOptions {
      * ignore it, so an empty token is valid there.
      */
     readonly token?: string;
+    /** Queue incoming requests until resumeRequests; outbound responses remain live. */
+    readonly deferRequests?: boolean;
 }
 
 /**
@@ -161,6 +163,8 @@ export type HubChannel = Channel<undefined, unknown> & {
     onClose(listener: () => void): IDisposable;
     /** Close the underlying socket. */
     close(): void;
+    /** Release incoming requests after installing application handlers. */
+    resumeRequests(): void;
 };
 
 /**
@@ -193,12 +197,13 @@ export async function openHubChannel(
     };
 
     const { transport, destroy } = await _openHubTransport(endpoint, token, fireClose);
-    const rpc = JsonRpcChannel.createWithClose(transport);
+    const rpc = JsonRpcChannel.createWithClose(transport, { deferRequests: options.deferRequests });
     closeChannel = rpc.close;
     if (closed) rpc.close();
     return Object.assign(rpc.channel, {
         endpoint,
         token,
+        resumeRequests: rpc.resumeRequests,
         onClose: (listener: () => void) => {
             if (closed) {
                 queueMicrotask(listener);
@@ -236,14 +241,18 @@ async function _openHubTransport(
 ): Promise<{ transport: IMessageTransport<JsonRpcMessage, JsonRpcMessage>; destroy: () => void; }> {
     if (_isWebSocketEndpoint(endpoint)) {
         const ws = await openWebSocket(endpoint);
-        const transport = new WebSocketTransport(ws, onClose);
+        const closed = new AbortController();
+        const transport = new WebSocketTransport(ws, () => {
+            closed.abort(new Error('hubrpc::initialize: transport closed during handshake'));
+            onClose();
+        });
         const destroy = () => {
             try {
                 ws.close();
             } catch { /* ignore */ }
         };
         try {
-            await runInitializeHandshake(transport, { kind: 'client', token });
+            await runInitializeHandshake(transport, { kind: 'client', token }, { signal: closed.signal });
         } catch (err) {
             transport.dispose();
             destroy();

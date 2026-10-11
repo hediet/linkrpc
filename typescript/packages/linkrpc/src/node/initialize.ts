@@ -17,6 +17,7 @@ export interface ConnectNdjsonOptions {
     /** Includes handshake messages; may contain credentials. */
     readonly trace?: MessageTransportTrace;
     readonly handshakeTimeoutMs?: number;
+    readonly signal?: AbortSignal;
 }
 
 export interface ConnectedNdjson {
@@ -27,15 +28,12 @@ export interface ConnectedNdjson {
 /** Construct NDJSON and complete the shared transport initialization handshake. */
 export async function connectNdjson(opts: ConnectNdjsonOptions): Promise<ConnectedNdjson> {
     const role = opts.initialize;
-    let rejectClosedHandshake: ((error: Error) => void) | undefined;
-    const closedDuringHandshake = role
-        ? new Promise<never>((_resolve, reject) => { rejectClosedHandshake = reject; })
-        : undefined;
+    const closed = new AbortController();
     const baseTransport = new NdjsonTransport(opts.input, opts.output, () => {
         try {
             opts.onClose?.();
         } finally {
-            rejectClosedHandshake?.(new Error('hubrpc::initialize: transport closed during handshake'));
+            closed.abort(new Error('hubrpc::initialize: transport closed during handshake'));
         }
     });
     const transport = opts.trace === undefined
@@ -43,16 +41,12 @@ export async function connectNdjson(opts: ConnectNdjsonOptions): Promise<Connect
         : traceMessageTransport(baseTransport, opts.trace);
     if (!role) return { transport };
     try {
-        const { token } = await Promise.race([
-            runInitializeHandshake(transport, role, {
-                ...(opts.handshakeTimeoutMs !== undefined ? { handshakeTimeoutMs: opts.handshakeTimeoutMs } : {}),
-            }),
-            closedDuringHandshake!,
-        ]);
-        rejectClosedHandshake = undefined;
+        const { token } = await runInitializeHandshake(transport, role, {
+            handshakeTimeoutMs: opts.handshakeTimeoutMs,
+            signal: opts.signal ? AbortSignal.any([closed.signal, opts.signal]) : closed.signal,
+        });
         return { transport, ...(token !== undefined ? { token } : {}) };
     } catch (err) {
-        rejectClosedHandshake = undefined;
         transport.dispose();
         throw err;
     }

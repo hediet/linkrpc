@@ -24,7 +24,7 @@ import { tapTransport } from '@hediet/linkrpc-hub/hub/server/transit';
 import { spawnCommand } from '@hediet/linkrpc-hub/spawn';
 import * as net from 'node:net';
 import type { ResolvedEndpoint } from './endpoint';
-import { startLocalHub, startLocalOverlay } from './localHub';
+import { LOCAL_NAMESPACE, startLocalHub, startLocalOverlay } from './localHub';
 
 // `spawnCommand` is owned by the shared hub engine; the CLI re-exports it so
 // existing `./connect` import sites keep working. (Socket-path allocation now
@@ -146,10 +146,9 @@ async function _connectCmdStdio(
 }
 
 /**
- * Start a private in-process hub, spawn the child as a participant, then
- * connect to the hub's socket. The child registers its services against the
- * hub exactly as it would against a remote one; we tear the hub + child down
- * when the connection closes.
+ * Spawn one child and connect directly through its root overlay. A plain
+ * endpoint needs no namespace claim; hub-aware children can still use the
+ * overlay's namespace and identity services.
  */
 async function _connectCmdEnv(
     command: EndpointCommand,
@@ -158,13 +157,13 @@ async function _connectCmdEnv(
     cwd: string | undefined,
     log?: ConnectLogOptions,
 ): Promise<CliConnection> {
-    return connectViaLocalHub({ command, provisionSlot, env, cwd, log });
+    return connectViaRootOverlay({ command, provisionSlot, env, cwd, log, grantedNamespace: LOCAL_NAMESPACE });
 }
 
 /**
  * Spawn a child under an in-process local hub (`startLocalHub`) and connect
- * to that hub over a socket. Backs the standard `cmd-env` endpoint path; the
- * hub + child are torn down when the connection closes.
+ * to that hub over a socket. Unlike the standard `cmd-env` endpoint path, this
+ * explicitly waits for a namespace claim. The hub and child close together.
  */
 export async function connectViaLocalHub(opts: {
     readonly command: EndpointCommand;

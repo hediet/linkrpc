@@ -7,8 +7,8 @@ import { runInitializeHandshake } from './initialize';
  * Shared by the Node and browser entries so either can reach a ws/wss hub
  * without depending on `@hediet/linkrpc-hub`.
  *
- * Uses the platform-global `WebSocket` (Node 22+, browsers), so no `ws`
- * package dependency is required on the client side.
+ * Accepts native client and Node `ws` server sockets without a runtime `ws`
+ * dependency in the browser entry.
  *
  * Takes ownership of the socket: {@link dispose} closes it, and a peer
  * close / error fires `onClose` exactly once.
@@ -19,11 +19,11 @@ export class WebSocketTransport implements IMessageTransport<JsonRpcMessage, Jso
     private _closed = false;
 
     constructor(
-        private readonly _ws: WebSocket,
+        private readonly _ws: WebSocket | import('ws').WebSocket,
         private readonly _onClose?: () => void,
     ) {
         _ws.binaryType = 'arraybuffer';
-        _ws.addEventListener('message', (event: MessageEvent) => {
+        _ws.addEventListener('message', (event: { readonly data: unknown }) => {
             const data = event.data;
             const text = typeof data === 'string' ?
                 data :
@@ -55,7 +55,7 @@ export class WebSocketTransport implements IMessageTransport<JsonRpcMessage, Jso
 
     public send(message: JsonRpcMessage): void {
         if (this._closed) return;
-        if (this._ws.readyState !== WebSocket.OPEN) return;
+        if (this._ws.readyState !== 1 /* OPEN */) return;
         this._ws.send(JSON.stringify(message));
     }
 

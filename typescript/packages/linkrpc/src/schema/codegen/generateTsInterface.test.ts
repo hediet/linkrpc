@@ -730,7 +730,7 @@ connection.register(cdpRuntime, {
         schema.hash = computeInterfaceHash(schema);
         const source = generateTsInterface(schema, { preserveWireSchema: true });
         expect(source).toContain("type A = { b: B; };");
-        expect(source).toContain("type B = { a?: A; };");
+        expect(source).toContain("type B = { a?: A | undefined; };");
         expect(source).toContain("const ASchema: z.ZodType<A> = z.lazy");
         expect(source).toContain("const BSchema: z.ZodType<B> = z.lazy");
         const generated = await _evalGenerated(source);
@@ -831,6 +831,65 @@ const invalidRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, false] }
 `);
     }, TYPECHECK_TIMEOUT_MS);
 
+    it("compiles recursive optional payloads with exact optional property types", async () => {
+        const schema: LinkRpcInterfaceSchema = {
+            id: "test.recursive-optionals",
+            hash: "",
+            methods: {
+                inspect: {
+                    params: { $ref: "#/components/schemas/ValueDescription" },
+                    result: { type: "boolean" },
+                },
+            },
+            components: {
+                schemas: {
+                    ValueDescription: {
+                        type: "object",
+                        properties: {
+                            kind: { type: "string" },
+                            identity: { anyOf: [{ type: "string" }, { type: "null" }] },
+                            result: {
+                                anyOf: [
+                                    { $ref: "#/components/schemas/ValueDescription" },
+                                    { type: "null" },
+                                ],
+                            },
+                            metadata: {
+                                type: "object",
+                                properties: { label: { type: "string" } },
+                                required: ["label"],
+                                additionalProperties: { type: "string" },
+                            },
+                        },
+                        required: ["kind"],
+                        additionalProperties: false,
+                    },
+                },
+            },
+        };
+        schema.hash = computeInterfaceHash(schema);
+        const source = generateTsInterface(schema, { preserveWireSchema: true });
+        _expectTypeChecks(`${source}
+const absent: ValueDescription = { kind: "value" };
+const explicitUndefined: ValueDescription = {
+    kind: "value", identity: undefined, result: undefined, metadata: undefined,
+};
+const nested: ValueDescription = { kind: "value", identity: null, result: absent };
+const inferred: z.infer<typeof ValueDescriptionSchema> = explicitUndefined;
+// @ts-expect-error required fields do not accept undefined
+const invalidRequired: ValueDescription = { kind: undefined };
+// @ts-expect-error recursive optional fields retain their payload type
+const invalidResult: ValueDescription = { kind: "value", result: "wrong" };
+// @ts-expect-error optional object intersections retain their property type
+const invalidMetadata: ValueDescription = { kind: "value", metadata: { label: 123 } };
+`, { exactOptionalPropertyTypes: true });
+        const generated = await _evalGenerated(source);
+        expect(generated.schemaHash).toBe(schema.hash);
+        expect(generated.members.inspect.paramsSchema.safeParse({
+            kind: "value", identity: undefined, result: undefined, metadata: undefined,
+        }).success).toBe(true);
+    }, TYPECHECK_TIMEOUT_MS);
+
     it("allocates distinct safe names for colliding recursive components", () => {
         const recursiveObject = (ref: string): LinkRpcJsonSchema => ({
             type: "object",
@@ -875,7 +934,7 @@ const invalidRest: Node = { ...optionalFieldsMayBeAbsent, restPair: [1, false] }
     }, TYPECHECK_TIMEOUT_MS);
 });
 
-function _expectTypeChecks(source: string): void {
+function _expectTypeChecks(source: string, compilerOptions: ts.CompilerOptions = {}): void {
     const fileName = fileURLToPath(new URL("./generated-type-test.ts", import.meta.url)).replace(/\\/g, "/");
     const options: ts.CompilerOptions = {
         target: ts.ScriptTarget.ES2022,
@@ -884,6 +943,7 @@ function _expectTypeChecks(source: string): void {
         strict: true,
         skipLibCheck: true,
         noEmit: true,
+        ...compilerOptions,
     };
     const host = ts.createCompilerHost(options);
     const getSourceFile = host.getSourceFile.bind(host);

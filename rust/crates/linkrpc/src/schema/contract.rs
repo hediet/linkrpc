@@ -26,7 +26,13 @@ impl From<&LinkRpcInterfaceSchema> for InterfaceRef {
 }
 
 /// Owned address specification used by tooling and code generation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    content = "value",
+    rename_all = "camelCase",
+    deny_unknown_fields
+)]
 pub enum InterfaceAddress {
     Root,
     Service(String),

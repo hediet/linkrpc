@@ -18,6 +18,12 @@ and MCP bridge under [`typescript/packages/`](./typescript/packages). The Rust
 workspace contains the core, procedural macros, Tokio transports, and examples
 under [`rust/crates/`](./rust/crates).
 
+The published Rust `linkrpc` crate also ships the generic
+[`linkrpc-codegen` CLI](rust/docs/codegen-cli.md): LinkRPC definitions become
+shared Rust types, interface clients/providers, named bindings, and optional
+facades. Protocol adapters only produce definitions; Rust generation stays in
+LinkRPC.
+
 ## Shared approval client
 
 CLI and web adapters share the observable `ApprovalClient` and

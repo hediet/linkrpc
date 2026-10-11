@@ -6,6 +6,7 @@ import {
 } from "@hediet/linkrpc";
 import type { CliConnection } from "@hediet/linkrpc-client-internal";
 import type { StaticHubSchema } from "../staticHubSchema";
+import { validateConnectionLimit, type ConnectionLimit } from "../duration";
 import { StaticHubReflection } from "./staticHubReflection";
 import { createForwardingHandler } from "./tunnel";
 
@@ -19,8 +20,8 @@ export interface ConnectionBrokerOptions {
     readonly remoteEndpoint: string;
     readonly mode: "linkrpc" | "raw";
     readonly startedAt: number;
-    readonly timeoutMs: number;
-    readonly ttlMs: number;
+    readonly timeoutMs: ConnectionLimit;
+    readonly ttlMs: ConnectionLimit;
     readonly notificationLimit?: number;
     readonly now?: () => number;
     readonly onStop?: (reason: BrokerStopReason) => void;
@@ -75,6 +76,8 @@ export class ConnectionBroker {
         private readonly _remote: CliConnection,
         private readonly _options: ConnectionBrokerOptions,
     ) {
+        validateConnectionLimit(_options.timeoutMs);
+        validateConnectionLimit(_options.ttlMs);
         this._now = _options.now ?? Date.now;
         this._notificationLimit = _options.notificationLimit ?? 1_000;
         this._startedAt = _options.startedAt;
@@ -88,11 +91,13 @@ export class ConnectionBroker {
             handleNotification: (call) => this._bufferNotification(call),
         });
         this._resetTimeout();
-        this._ttlTimer = setTimeout(
-            () => this._stop("ttl"),
-            Math.max(0, this._options.ttlMs - (this._now() - this._startedAt)),
-        );
-        this._ttlTimer.unref?.();
+        if (this._options.ttlMs !== "inf") {
+            this._ttlTimer = setTimeout(
+                () => this._stop("ttl"),
+                Math.max(0, this._options.ttlMs - (this._now() - this._startedAt)),
+            );
+            this._ttlTimer.unref?.();
+        }
     }
 
     public attach(local: CliConnection): void {
@@ -257,6 +262,7 @@ export class ConnectionBroker {
         if (this._timeoutTimer !== undefined) {
             clearTimeout(this._timeoutTimer);
         }
+        if (this._options.timeoutMs === "inf") return;
         this._timeoutTimer = setTimeout(() => this._stop("timeout"), this._options.timeoutMs);
         this._timeoutTimer.unref?.();
     }

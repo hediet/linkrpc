@@ -407,6 +407,10 @@ pnpm --filter @hediet/linkrpc-infra test:interop
 
 These tests execute the generated TypeScript interfaces and their validators against
 an unmodified Node inspector and the pinned `vscode-json-languageserver`.
+The workspace overrides this test server's `vscode-languageserver` dependency to
+`10.1.2`, which is available in the downstream Azure release feed; its original
+`7.0.0` dependency returns 404 there. The live LSP test checks compatibility with
+the overridden version.
 They exercise evaluation and CDP events, LSP initialization, document symbols,
 diagnostics, and graceful shutdown. The tests spawn only local processes and
 clean them up; schema or server downloads are not performed during the tests.

@@ -68,16 +68,16 @@ export interface CmdStdioEndpoint {
 }
 
 /**
- * Spawn a child against a freshly-started *local hub*: the parent listens on a
- * private socket, hands the child its address + token via `LINKRPC_ENDPOINT` /
- * `LINKRPC_TOKEN`, and the child dials in as a hub participant (registering its
- * services), exactly as it would against a remote hub.
+ * Spawn a child against a private socket, handing it the address and token via
+ * `LINKRPC_ENDPOINT` / `LINKRPC_TOKEN`. The child dials back; the parent reaches
+ * its interfaces directly, without requiring a hub namespace claim. A root
+ * overlay also serves namespace/identity helpers for hub-aware children.
  */
 export interface CmdEnvEndpoint {
     readonly kind: 'cmd-env';
     readonly command: EndpointCommand;
     /**
-     * When set, the local hub provisions (or reuses) a *persistent* managed
+     * When set, the root overlay provisions (or reuses) a *persistent* managed
      * identity under this slot id, so the child's HPKE wrap/unwrap keys survive
      * across runs (sealed archives re-open).
      */

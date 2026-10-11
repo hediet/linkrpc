@@ -6,6 +6,7 @@
 // entry plus the node-only helpers below, and the emitted `.d.ts` chunk graph
 // has `index` as a clear dominator of `node`.
 export * from './index';
+export { startEndpoint, type StartEndpointOptions, type StartedEndpoint, type EndpointConnection } from './node/endpoint';
 export { connectToCmdStdio, openStdioChannel, serveOnStdio, type StdioChannel } from './node/stdio';
 export {
     connectToHub,

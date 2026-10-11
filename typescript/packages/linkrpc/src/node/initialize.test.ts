@@ -1,11 +1,62 @@
 import { PassThrough } from 'node:stream';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     connectNdjson,
     INITIALIZE_METHOD,
     LINKRPC_INITIALIZE_METHOD_ALIAS,
+    runInitializeHandshake,
+    type InitializeRole,
 } from './initialize';
 import type { JsonRpcMessage } from '../protocol/jsonRpc';
+import type { IMessageTransport } from '../transport/messageTransport';
+
+describe('handshake write failures', () => {
+    const roles: InitializeRole[] = [
+        { kind: 'client' },
+        { kind: 'server', isTokenAccepted: async () => true },
+        { kind: 'server', isTokenAccepted: async () => false },
+    ];
+    it.each(roles)('propagates async write errors for role %#', async role => {
+        vi.useFakeTimers();
+        let listener: ((message: JsonRpcMessage) => void) | undefined;
+        const failure = new Error('write EPIPE');
+        const transport: IMessageTransport = {
+            send: () => Promise.reject(failure),
+            setListener(value) { listener = value; },
+            dispose() {},
+        };
+        try {
+            const pending = runInitializeHandshake(transport, role);
+            const rejected = expect(pending).rejects.toBe(failure);
+            if (role.kind === 'server') {
+                listener!({ jsonrpc: '2.0', id: 0, method: INITIALIZE_METHOD, params: { protocolVersion: 1 } });
+            }
+            await rejected;
+            expect(listener).toBeUndefined();
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('cleans up the pending reply when sending throws synchronously', async () => {
+        vi.useFakeTimers();
+        let listener: ((message: JsonRpcMessage) => void) | undefined;
+        const failure = new Error('transport closed');
+        const transport: IMessageTransport = {
+            send() { throw failure; },
+            setListener(value) { listener = value; },
+            dispose() {},
+        };
+        try {
+            await expect(runInitializeHandshake(transport, { kind: 'client' })).rejects.toBe(failure);
+            expect(listener).toBeUndefined();
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});
 
 /** A pair of streams wired back-to-back: what a sends, b receives. */
 function streamPair(): { aIn: PassThrough; aOut: PassThrough; } {
@@ -19,6 +70,33 @@ function collect(stream: PassThrough): () => string {
 }
 
 describe('connectNdjson handshake', () => {
+    it('cancels while authentication is pending and never sends a late acceptance', async () => {
+        const input = new PassThrough();
+        const output = new PassThrough();
+        const replies = collect(output);
+        let authenticate!: (accepted: boolean) => void;
+        const authentication = new Promise<boolean>(resolve => { authenticate = resolve; });
+        let entered!: () => void;
+        const checking = new Promise<void>(resolve => { entered = resolve; });
+        const pending = connectNdjson({
+            input, output,
+            initialize: { kind: 'server', isTokenAccepted: () => { entered(); return authentication; } },
+        });
+        input.write(JSON.stringify({
+            jsonrpc: '2.0', id: 0, method: INITIALIZE_METHOD,
+            params: { protocolVersion: 1, token: 'secret' },
+        }) + '\n');
+        await checking;
+        input.end();
+        await expect(pending).rejects.toThrow('closed during handshake');
+        authenticate(true);
+        await new Promise(resolve => setImmediate(resolve));
+        expect(replies()).toBe('');
+        expect(input.listenerCount('data')).toBe(0);
+        input.destroy();
+        output.destroy();
+    });
+
     it('completes a client/server initialize and binds the token', async () => {
         const aToB = new PassThrough({ encoding: 'utf8' });
         const bToA = new PassThrough({ encoding: 'utf8' });

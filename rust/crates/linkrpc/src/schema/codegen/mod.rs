@@ -56,22 +56,29 @@ mod code_writer;
 mod contract;
 mod generator;
 mod ident;
+mod package;
 
 use crate::schema::interface_schema::LinkRpcInterfaceSchema;
 use std::collections::BTreeMap;
 
 pub use crate::schema::contract::InterfaceAddress;
 pub use contract::{generate_rust_contract, GeneratedRustContract};
+pub use package::{
+    generate_rust_package, GenerateRustFacade, GenerateRustFacadeMember, GenerateRustModule,
+    GenerateRustPackage, GeneratedRustPackage,
+};
 
 /// A named immutable, typed target emitted alongside the reusable interface.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerateRustBinding {
     pub name: String,
     pub address: InterfaceAddress,
 }
 
 /// Options controlling [`generate_rust_interface`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerateRustOptions {
     /// Crate path used to reference linkrpc runtime items in generated code
     /// (`RpcCall`, `JsonRpcError`, `error_codes`). Defaults to `"linkrpc"`.

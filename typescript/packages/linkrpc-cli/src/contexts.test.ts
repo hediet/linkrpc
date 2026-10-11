@@ -1,7 +1,8 @@
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as brokerClient from './commands/connectionBrokerClient';
 import {
     ContextStore,
     formatContextReference,
@@ -11,6 +12,7 @@ import {
 const cleanups: string[] = [];
 
 afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(cleanups.splice(0).map((folder) => rm(folder, { recursive: true, force: true })));
 });
 
@@ -29,6 +31,62 @@ async function fixture() {
 }
 
 describe('ContextStore', () => {
+    it.each(['set', 'replace', 'unset', 'remove'] as const)(
+        'stops owned connections before persisting %s', async operation => {
+            const f = await fixture();
+            const store = new ContextStore({ file: f.storeFile, cwd: f.project });
+            const reference = { kind: 'id', id: 'owner' } as const;
+            const ownedConnection = { endpoint: 'owned-broker' };
+            await store.replace(reference, { endpoint: 'owned-endpoint', endpointToken: 'secret' }, {
+                createOnly: true, ownedConnection,
+            });
+            const before = await readFile(f.storeFile, 'utf8');
+            const stop = vi.spyOn(brokerClient, 'stopConnectionBroker').mockImplementation(async endpoint => {
+                expect(endpoint).toBe(ownedConnection.endpoint);
+                expect(await readFile(f.storeFile, 'utf8')).toBe(before);
+            });
+            switch (operation) {
+                case 'set': await store.set(reference, { endpoint: 'replacement' }); break;
+                case 'replace': await store.replace(reference, {}); break;
+                case 'unset': await store.unset(reference, ['endpointToken']); break;
+                case 'remove': await store.remove(reference); break;
+            }
+            expect(stop).toHaveBeenCalledExactlyOnceWith('owned-broker', true);
+            expect((await store.select({ selector: 'id:owner', allowMissing: true })).context?.ownedConnection)
+                .toBeUndefined();
+        },
+    );
+
+    it('retains ownership on unrelated changes and equivalent endpoint writes', async () => {
+        const f = await fixture();
+        const store = new ContextStore({ file: f.storeFile, cwd: f.project });
+        const reference = { kind: 'id', id: 'owner' } as const;
+        const values = { endpoint: 'owned-endpoint?token=%', endpointToken: 'secret' };
+        const ownedConnection = { endpoint: 'owned-broker' };
+        await store.replace(reference, values, { createOnly: true, ownedConnection });
+        const stop = vi.spyOn(brokerClient, 'stopConnectionBroker').mockResolvedValue();
+        await store.set(reference, { validation: 'off' });
+        await store.unset(reference, ['validation']);
+        await store.set(reference, { endpoint: values.endpoint });
+        await store.replace(reference, values);
+        expect((await store.select({ selector: 'id:owner' })).context?.ownedConnection).toEqual(ownedConnection);
+        expect(stop).not.toHaveBeenCalled();
+    });
+
+    it('preserves the stored context when shutdown fails', async () => {
+        const f = await fixture();
+        const store = new ContextStore({ file: f.storeFile, cwd: f.project });
+        const reference = { kind: 'id', id: 'owner' } as const;
+        await store.replace(reference, { endpoint: 'owned-endpoint' }, {
+            createOnly: true, ownedConnection: { endpoint: 'owned-broker' },
+        });
+        const before = await readFile(f.storeFile, 'utf8');
+        vi.spyOn(brokerClient, 'stopConnectionBroker').mockRejectedValue(new Error('permission denied'));
+        await expect(store.set(reference, { endpoint: 'replacement' })).rejects
+            .toThrow('context was not changed: permission denied');
+        expect(await readFile(f.storeFile, 'utf8')).toBe(before);
+    });
+
     it('uses the immutable empty context when no path or root context exists', async () => {
         const f = await fixture();
         const store = new ContextStore({ file: f.storeFile, cwd: f.child });
