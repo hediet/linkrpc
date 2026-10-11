@@ -16,6 +16,7 @@ export interface ContextValues {
     readonly provisionIdentity?: boolean;
     readonly provisionIdentitySlot?: string;
     readonly principal?: string;
+    readonly sign?: boolean;
     readonly schema?: string;
     readonly validation?: ValidationMode;
     readonly connectionTimeout?: string;
@@ -480,6 +481,9 @@ function normalizeContextReference(reference: ContextReference): ContextReferenc
 }
 
 function normalizeContextValues(values: ContextValues): ContextValues {
+    if (values.sign !== undefined && typeof values.sign !== 'boolean') {
+        throw new Error('context sign must be a boolean');
+    }
     return JSON.parse(JSON.stringify(values)) as ContextValues;
 }
 

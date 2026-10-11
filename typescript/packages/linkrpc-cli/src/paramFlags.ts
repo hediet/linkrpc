@@ -89,6 +89,7 @@ const CAPABILITY_SHORTCUTS = new Map([
 function rewriteCapabilityShortcuts(argv: readonly string[]): string[] {
     const out: string[] = [];
     const constrained = new Set<string>();
+    const assigned = new Set<string>();
     let precedingParam: string | undefined;
     for (let i = 0; i < argv.length; i++) {
         const token = argv[i];
@@ -147,13 +148,16 @@ function rewriteCapabilityShortcuts(argv: readonly string[]): string[] {
                 const assignment = value.indexOf('=');
                 if (assignment <= 0) continue;
                 const key = value.slice(0, assignment);
-                if (constrained.has(key)) {
+                if (constrained.has(key) && (flag === '--cap:allow-param' || assigned.has(key))) {
                     throw new Error(flag === '--param'
                         ? `Cannot reassign parameter ${key} after an explicit capability constraint.`
                         : `Duplicate --cap:allow-param for ${key}.`);
                 }
                 if (flag === '--cap:allow-param') constrained.add(key);
-                else precedingParam = key;
+                else {
+                    assigned.add(key);
+                    precedingParam = key;
+                }
             }
             continue;
         }

@@ -67,6 +67,8 @@ const ENDPOINT_GLOBAL_OPTIONS: readonly FlagDef[] = [
     { name: '--validation', takesValue: true, valueType: 'free' },
     { name: '--use-env', takesValue: false },
     { name: '--no-use-env', takesValue: false },
+    { name: '--sign', takesValue: false },
+    { name: '--no-sign', takesValue: false },
     { name: '--provision-identity', takesValue: false },
     { name: '--provision-identity-slot', takesValue: true, valueType: 'free' },
     {
@@ -159,31 +161,6 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
                 ...CAPABILITY_OPTIONS,
             ],
         },
-    {
-        name: 'caps',
-        description: 'List stored capabilities or request access for a call.',
-        positionals: [],
-        options: [],
-        subcommands: [
-            {
-                name: 'list',
-                description: 'List stored capabilities.',
-                positionals: [],
-                options: [{ name: '--json', takesValue: false }],
-            },
-            {
-                name: 'request',
-                description: 'Request a capability without executing a call.',
-                positionals: [{ name: 'methodRef', type: 'methodRef' }],
-                options: [
-                    { name: '--params', takesValue: true, valueType: 'free' },
-                    { name: '--param', takesValue: true, valueType: 'free' },
-                    { name: '--no-validate', takesValue: false },
-                    ...CAPABILITY_OPTIONS,
-                ],
-            },
-        ],
-    },
     {
             name: 'notify',
             description: 'Fire a notification (no response).',
@@ -336,6 +313,31 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
 ];
 
 const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
+    {
+        name: 'caps',
+        description: 'List stored capabilities or request access for a call.',
+        positionals: [],
+        options: [],
+        subcommands: [
+            {
+                name: 'list',
+                description: 'List stored capabilities.',
+                positionals: [],
+                options: [{ name: '--json', takesValue: false }],
+            },
+            {
+                name: 'request',
+                description: 'Request a capability without executing a call.',
+                positionals: [{ name: 'methodRef', type: 'methodRef' }],
+                options: [
+                    { name: '--params', takesValue: true, valueType: 'free' },
+                    { name: '--param', takesValue: true, valueType: 'free' },
+                    { name: '--no-validate', takesValue: false },
+                    ...CAPABILITY_OPTIONS,
+                ],
+            },
+        ],
+    },
     {
         name: 'topology',
         description: 'Inspect the merged transport topology.',

@@ -63,28 +63,33 @@ describe('caps CLI on a gated hub', () => {
             for (const profile of [[], ['hub']]) {
                 for (const validation of [[], ['--no-validate']]) {
                     await expect(invoke(...profile, 'call', 'files::test.files::read',
-                        '--p:path=/docs/a', ...validation)).rejects.toThrow('--cap:request');
+                        '--p:path=/docs/a', ...validation)).rejects.toThrow(
+                        profile.length === 0 ? 'missing $hubrpc envelope' : '--cap:request',
+                    );
                     expect(grants).toBe(0);
                     expect(calls).toEqual([]);
                 }
             }
-            const requested = await invoke('caps', 'request', 'files::test.files::read',
+            const requested = await invoke('hub', 'caps', 'request', 'files::test.files::read',
                 '--p:path=/docs/a', '--cap:allow-prefix=/docs/', '--cap:duration=persistent');
             expect(JSON.parse(requested.stdout)).toMatchObject({ status: 'granted', reused: false });
             expect(calls).toEqual([]);
             const grantedCount = grants;
             expect(grantedCount).toBeGreaterThan(0);
 
-            const listed = JSON.parse((await invoke('caps', 'list', '--json')).stdout);
+            const listed = JSON.parse((await invoke('hub', 'caps', 'list', '--json')).stdout);
             expect(listed.capabilities.some((cap: { permissions: { params?: unknown }[] }) =>
                 cap.permissions.some(permission => JSON.stringify(permission.params) === '{"path":{"prefix":"/docs/"}}'),
             )).toBe(true);
 
-            const ordinary = await invoke('call', 'files::test.files::read', '--p:path=/docs/stored');
+            await expect(invoke('call', 'files::test.files::read', '--p:path=/docs/stored'))
+                .rejects.toThrow('missing $hubrpc envelope');
+            expect(grants).toBe(grantedCount);
+            const ordinary = await invoke('call', 'files::test.files::read', '--sign', '--validation=required', '--p:path=/docs/stored');
             expect(JSON.parse(ordinary.stdout)).toEqual({ path: '/docs/stored' });
             expect(grants).toBe(grantedCount);
             await expect(invoke('call', 'files::test.files::read', '--p:path=/other/a'))
-                .rejects.toThrow('--cap:request');
+                .rejects.toThrow('missing $hubrpc envelope');
             expect(grants).toBe(grantedCount);
 
             const called = await invoke('call', 'files::test.files::read', '--cap:request',
@@ -93,13 +98,13 @@ describe('caps CLI on a gated hub', () => {
             expect(calls).toEqual(['/docs/stored', '/docs/public/b']);
             expect(grants).toBe(grantedCount);
 
-            const reused = await invoke('caps', 'request', 'files::test.files::read',
+            const reused = await invoke('hub', 'caps', 'request', 'files::test.files::read',
                 '--p:path=/docs/c', '--cap:allow-param', 'path={"prefix":"/docs/"}');
             expect(JSON.parse(reused.stdout)).toMatchObject({ status: 'granted', reused: true });
             expect(grants).toBe(grantedCount);
 
             const pinned = await invoke('call', `files::test.files::read@${files.schemaHash}`,
-                '--p:path=/docs/pinned');
+                '--sign', '--p:path=/docs/pinned');
             expect(JSON.parse(pinned.stdout)).toEqual({ path: '/docs/pinned' });
             expect(grants).toBe(grantedCount);
 
@@ -107,6 +112,12 @@ describe('caps CLI on a gated hub', () => {
                 '--p:path=/other/a', '--cap:allow-param', 'path={"prefix":"/docs/"}'))
                 .rejects.toThrow('Parameters do not match');
             expect(calls).toEqual(['/docs/stored', '/docs/public/b', '/docs/pinned']);
+            expect(grants).toBe(grantedCount);
+
+            await expect(invoke('call', 'files::test.files::read', '--cap:request',
+                '--no-sign', '--p:path=/docs/d')).rejects.toThrow('require signing');
+            await expect(invoke('hub', 'call', 'files::test.files::read',
+                '--no-sign', '--p:path=/docs/d')).rejects.toThrow('missing $hubrpc envelope');
             expect(grants).toBe(grantedCount);
 
             await invoke('call', 'files::test.files::read', '--cap:request',

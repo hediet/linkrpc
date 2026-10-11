@@ -81,12 +81,23 @@ describe('complete (static-only)', () => {
     });
 
     it('completes capability commands and inline request flags', async () => {
-        const caps = 'linkrpc caps ';
+        const caps = 'linkrpc hub caps ';
         expect((await complete({ line: caps, point: caps.length })).map(c => c.text)).toEqual(['list', 'request']);
         const inline = 'linkrpc call --cap:r';
         expect((await complete({ line: inline, point: inline.length })).map(c => c.text)).toEqual(['--cap:request']);
-        const request = 'linkrpc caps request --cap:allow-p';
+        const request = 'linkrpc hub caps request --cap:allow-p';
         expect((await complete({ line: request, point: request.length })).map(c => c.text)).toEqual(['--cap:allow-param', '--cap:allow-prefix']);
+    });
+
+    it.each(['linkrpc', 'rpc', 'hub', 'linkrpc hub', 'rpc hub'])('offers signing overrides in %s', async executable => {
+        const line = `${executable} call --`;
+        const flags = (await complete({ line, point: line.length })).map(c => c.text);
+        expect(flags).toContain('--sign');
+        expect(flags).toContain('--no-sign');
+        expect(flags).toContain('--cap:request');
+        const root = `${executable} `;
+        const commands = (await complete({ line: root, point: root.length })).map(c => c.text);
+        expect(commands.includes('caps')).toBe(executable.includes('hub'));
     });
 
     it('includes parent options on nested commands', async () => {

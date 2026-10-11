@@ -94,6 +94,17 @@ export function validationDefault(profile: CliProfile): 'auto' | 'required' {
     return profile === 'hub' ? 'required' : 'auto';
 }
 
+export function resolveSigning(
+    profile: CliProfile,
+    values: Pick<ContextValues, 'sign'>,
+    requiresSigning = false,
+): boolean {
+    if (requiresSigning && values.sign === false) {
+        throw new Error('Capability operations require signing; remove --no-sign or override the context with --sign.');
+    }
+    return values.sign ?? (requiresSigning || profile === 'hub');
+}
+
 export function resolveInvocationEndpoint(
     invocation: ResolvedInvocationContext,
     provisioningHandledElsewhere = false,

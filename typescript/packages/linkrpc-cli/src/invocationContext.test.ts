@@ -9,10 +9,28 @@ import {
     resolveInvocationContext,
     resolveInvocationEndpoint,
     validationDefault,
+    resolveSigning,
     type ResolvedInvocationContext,
 } from './invocationContext';
 
 const cleanups: string[] = [];
+
+describe('signing profile defaults and explicit overrides', () => {
+    for (const profile of ['rpc', 'hub'] as const) {
+        for (const sign of [undefined, true, false]) {
+            for (const requiresSigning of [false, true]) {
+                it(`${profile}, sign=${sign}, capability operation=${requiresSigning}`, () => {
+                    if (requiresSigning && sign === false) {
+                        expect(() => resolveSigning(profile, { sign }, requiresSigning)).toThrow('require signing');
+                    } else {
+                        expect(resolveSigning(profile, { sign }, requiresSigning))
+                            .toBe(sign ?? (requiresSigning || profile === 'hub'));
+                    }
+                });
+            }
+        }
+    }
+});
 
 afterEach(async () => {
     await Promise.all(cleanups.splice(0).map((folder) => rm(folder, { recursive: true, force: true })));
@@ -41,6 +59,28 @@ async function fixture() {
 }
 
 describe('resolveInvocationContext', () => {
+    it.each(['rpc', 'hub'] as const)('persists signing and applies CLI overrides over context for %s', async profile => {
+        const f = await fixture();
+        const ref = await f.store.resolveReference(':root');
+        if (ref.kind === 'empty') throw new Error('unexpected empty context');
+        await f.store.set(ref, { sign: true, validation: 'required' });
+        const loaded = await resolveInvocationContext({ profile, store: f.store, selector: ':root', env: {} });
+        expect(resolveSigning(profile, loaded.values)).toBe(true);
+        expect(loaded.values.validation).toBe('required');
+        const disabled = await resolveInvocationContext({
+            profile, store: f.store, selector: ':root',
+            cliOverrides: { sign: false, validation: 'auto' }, env: {},
+        });
+        expect(resolveSigning(profile, disabled.values)).toBe(false);
+        expect(disabled.values.validation).toBe('auto');
+        expect(() => resolveSigning(profile, disabled.values, true)).toThrow('require signing');
+        await f.store.set(ref, { sign: false });
+        const enabled = await resolveInvocationContext({
+            profile, store: new ContextStore({ file: f.file, cwd: f.child }), selector: ':root',
+            cliOverrides: { sign: true }, env: {},
+        });
+        expect(resolveSigning(profile, enabled.values, true)).toBe(true);
+    });
     it('applies environment endpoint overrides by default for the hub profile', async () => {
         const f = await fixture();
         const result = await resolveInvocationContext({

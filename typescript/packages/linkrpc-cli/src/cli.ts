@@ -89,6 +89,7 @@ import {
     resolveInvocationContext,
     resolveInvocationEndpoint,
     validationDefault,
+    resolveSigning,
 } from './invocationContext';
 import { resolveCliInvocation } from './cliInvocation';
 import { withStaticHubReflection } from './commands/staticHubReflection';
@@ -160,6 +161,8 @@ export async function main(
         )
         .option('--use-env', 'allow LINKRPC_* / legacy HUBRPC_* endpoint variables to override context')
         .option('--no-use-env', 'ignore LINKRPC_* / legacy HUBRPC_* endpoint variables')
+        .option('--sign', 'enable Hub signing and stored capabilities (Hub profile default)')
+        .option('--no-sign', 'disable Hub signing and stored capabilities (RPC profile default)')
         .option(
             '--provision-identity',
             'with --endpoint-cmd: provision & reuse a persistent identity (slot derived from cwd + command)',
@@ -610,15 +613,17 @@ export async function main(
                 if (rendered.text.length > 0) {
                     process.stdout.write('\n' + rendered.text);
                 }
-            }, { requestReflectionAccess: false, autoNegotiatePerCall: false, useStoredHubCaps: true });
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: false });
         } catch (e) {
             process.stdout.write(`\n(Could not fetch method schema: ${(e as Error).message})\n`);
         }
     };
 
     const call = program.command('call [methodRef]');
-    const caps = program.command('caps').description('List stored capabilities or request access for a call.');
-    caps.command('list')
+    const caps = profile === 'hub'
+        ? program.command('caps').description('List stored capabilities or request access for a call.')
+        : undefined;
+    caps?.command('list')
         .description('List capabilities stored for the selected principal (including expired grants).')
         .option('--json', 'machine-readable JSON output')
         .action(async (opts: { json?: boolean }) => {
@@ -626,7 +631,7 @@ export async function main(
                 process.stdout.write(listCaps(session, opts.json === true) + '\n');
             });
         });
-    const capsRequest = caps.command('request [methodRef]')
+    const capsRequest = caps?.command('request [methodRef]')
         .description('Request and store a capability without invoking the method.');
 
     const addCapabilityOptions = (cmd: Command): Command => cmd
@@ -672,10 +677,12 @@ export async function main(
             if (!capabilityOnly && cmd.getOptionValueSource('cap:duration') === 'cli' && !requestCap) {
                 throw new Error('--cap:duration requires --cap:request.');
             }
+            resolveSigning(profile, g_invocation?.values ?? {}, capabilityOnly || requestCap);
+            const validation = opts.validate === false ? 'off' : effectiveValidation(profile);
+            if ((capabilityOnly || requestCap) && validation === 'off') {
+                throw new Error('Capability requests require schema validation; remove --no-validate/--validation off.');
+            }
             await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
-                const validation = opts.validate === false
-                    ? 'off'
-                    : effectiveValidation(profile);
                 const out = await callCommand(channel, {
                     methodRef,
                     paramsArg: opts.params,
@@ -690,9 +697,8 @@ export async function main(
                 process.stdout.write(out + '\n');
             }, {
                 requestReflectionAccess: (capabilityOnly || requestCap)
-                    && effectiveValidation(profile) !== 'off',
+                    && validation !== 'off',
                 requireSigning: capabilityOnly || requestCap,
-                useStoredHubCaps: true,
                 autoNegotiatePerCall: false,
             });
         });
@@ -700,7 +706,7 @@ export async function main(
     };
     configureCall(call, false);
     call.option('--cap:request', 'ensure a stored capability covers the requested scope before calling');
-    configureCall(capsRequest, true);
+    if (capsRequest !== undefined) configureCall(capsRequest, true);
 
     program
         .command('notify [methodRef]')
@@ -1621,6 +1627,7 @@ function collectContextOverrides(program: Command, actionCommand: Command): Cont
     copyExplicit(program, opts, result, 'provisionIdentity');
     copyExplicit(program, opts, result, 'provisionIdentitySlot');
     copyExplicit(program, opts, result, 'principal');
+    copyExplicit(program, opts, result, 'sign');
     copyExplicit(program, opts, result, 'schema');
     copyExplicit(program, opts, result, 'validation');
 
@@ -1806,6 +1813,7 @@ function contextValueFlag(key: keyof ContextValues): string {
         provisionIdentity: 'provision-identity',
         provisionIdentitySlot: 'provision-identity-slot',
         principal: 'principal',
+        sign: 'sign',
         schema: 'schema',
         validation: 'validation',
         connectionTimeout: 'connection-timeout',
@@ -1827,6 +1835,7 @@ function parseContextValueKey(value: string): keyof ContextValues {
         provisionIdentity: true,
         provisionIdentitySlot: true,
         principal: true,
+        sign: true,
         schema: true,
         validation: true,
         connectionTimeout: true,
@@ -1887,10 +1896,10 @@ async function withChannel(
         requestReflectionAccess?: boolean;
         requestTopologyAccess?: { readonly sourceServiceIds?: readonly string[] };
         requireSigning?: boolean;
-        useStoredHubCaps?: boolean;
         autoNegotiatePerCall?: boolean;
     } = {},
 ): Promise<void> {
+    const sign = resolveSigning(g_invocation?.profile ?? 'rpc', g_invocation?.values ?? {}, opts.requireSigning);
     const acquired = await acquireConnection(endpoint);
     // When `--config` runs an in-process hub, that hub already logs its routed
     // traffic (richer than the client leg) — so only tap the wire for a direct
@@ -1905,13 +1914,13 @@ async function withChannel(
             acquired.ep.kind === 'ws-no-init'
             || (acquired.ep.kind === 'socket' && acquired.ep.brokerMode === 'raw')
         ) {
-            if (opts.requireSigning) throw new Error('Capability requests require a LinkRPC endpoint.');
+            if (opts.requireSigning || g_invocation?.values.sign === true) {
+                throw new Error('Signing requires an initialized LinkRPC endpoint.');
+            }
             await fn(channel);
             return;
         }
-        const useStoredHubCaps = opts.useStoredHubCaps === true
-            && (acquired.running !== undefined || isHubEndpoint(acquired.ep));
-        if (g_invocation?.profile === 'rpc' && !opts.requireSigning && !useStoredHubCaps) {
+        if (!sign) {
             await fn(channel);
             return;
         }
@@ -1959,6 +1968,7 @@ async function withResolvedSigning(
     principalSpec: PrincipalSpec,
     fn: (connection: CliConnection, session: SigningSession) => Promise<void>,
 ): Promise<void> {
+    resolveSigning(g_invocation?.profile ?? 'rpc', g_invocation?.values ?? {}, true);
     const acquired = await acquireConnection(endpoint);
     if (
         acquired.ep.kind === 'ws-no-init'

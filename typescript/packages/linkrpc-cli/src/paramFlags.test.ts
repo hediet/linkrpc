@@ -50,6 +50,14 @@ describe('rewriteParamShortcuts', () => {
         ]);
     });
 
+    it('allows explicit named constraints before their first parameter assignment', () => {
+        expect(rewriteParamShortcuts([
+            '--cap:allow-param', 'path={"prefix":"/docs/"}', '--p:path=/docs/a',
+        ])).toEqual([
+            '--cap:allow-param', 'path={"prefix":"/docs/"}', '--param', 'path=/docs/a',
+        ]);
+    });
+
     it.each([
         ['--cap:allow-prefix=/docs/'],
         ['--params', '{"path":"/docs/a"}', '--cap:allow-prefix=/docs/'],

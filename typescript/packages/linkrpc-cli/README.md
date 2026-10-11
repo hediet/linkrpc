@@ -183,6 +183,36 @@ linkrpc hub --endpoint ws://localhost:7700 call app::api::get
 linkrpc hub call app::api::get --endpoint ws://localhost:7700
 ```
 
+Profiles are presets, not restrictions on shared call behavior. Signing defaults
+to off in `linkrpc`/`rpc` and on in `linkrpc hub`/`rpc hub`/`hub`.
+Use `--sign` or `--no-sign` to override that default. `--principal` chooses
+the identity; it does not by itself enable signing. Signed calls present stored
+grants; unsigned calls do not load or present the capability bag.
+`caps` management is available only in the Hub profile, but shared `call`
+supports `--cap:request` and the `--cap:allow-*` options in both profiles.
+
+Setting precedence is explicit CLI overrides, then enabled environment
+overrides, then saved context values, then profile defaults. Environment
+overrides currently supply endpoint/token settings, not signing settings.
+`--sign`/`--no-sign` are saved with `context set` or `--context-set` and can be
+removed with `context set --unset sign`. The existing environment-selection
+policy remains: an explicit `--context` suppresses the Hub's default environment
+override unless `--use-env` is supplied.
+
+`--cap:request` enables signing when the signing setting is unspecified; it
+does not change validation/environment defaults or switch command profiles.
+An explicit or saved `sign: false` conflicts with capability operations;
+override it with `--sign`. `--cap:request --validation off` is also rejected.
+These calls illustrate equivalent settings:
+
+```sh
+linkrpc hub call files::fs::read --cap:request --p:path=/docs/a
+linkrpc call files::fs::read --cap:request --validation required --use-env --p:path=/docs/a
+
+# Reuse stored grants through the generic profile, without requesting:
+linkrpc call files::fs::read --sign --validation required --p:path=/docs/a
+```
+
 Use `--validation auto|required|off` to override a profile default.
 
 ## Contexts
@@ -437,14 +467,15 @@ hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 
 ### Capabilities
 
-`caps list [--json]` lists the selected principal's stored capabilities,
+`linkrpc hub caps list [--json]` lists the selected principal's stored capabilities,
 including expired grants. `caps request <methodRef>` requests and stores a
 capability without executing the method. `call --cap:request` ensures the same
 scope is available before executing the call. These explicit operations enable
-signing even in the generic `linkrpc`/`rpc` profile and require a LinkRPC endpoint.
+signing even for generic-profile `call` and require a LinkRPC endpoint.
 Without `--cap:request`, `call` never requests new capabilities (including
-reflection access). On initialized Hub sockets/WebSockets it signs with the
-selected identity and presents stored grants, even in the generic profile.
+reflection access). When signing is enabled, it signs with the selected
+identity and presents stored grants. Generic calls remain unsigned unless
+`--sign` or a saved signing setting enables signing.
 Missing or unusable grants fail with guidance to retry using `--cap:request`;
 unguarded methods and plain RPC endpoints remain usable without capabilities.
 
@@ -454,10 +485,10 @@ Concrete arguments become exact constraints by default. Repeat
 `--cap:allow-param 'key=<matcher JSON>'` to relax individual **top-level** parameters:
 
 ```sh
-linkrpc --endpoint "$ENDPOINT" caps list --json
+linkrpc hub --endpoint "$ENDPOINT" caps list --json
 
 # Request permission without reading the file:
-linkrpc --endpoint "$ENDPOINT" caps request files::fs::read \
+linkrpc hub --endpoint "$ENDPOINT" caps request files::fs::read \
   --p:path=/workspace/readme.txt \
   --cap:allow-param 'path={"prefix":"/workspace/"}'
 

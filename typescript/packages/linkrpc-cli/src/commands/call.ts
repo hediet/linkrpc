@@ -217,6 +217,6 @@ function _formatPermissionRequired(e: RpcError): string {
         '  No usable capability authorizes this call.',
         '  Retry with --cap:request to request access before calling.',
         '  Use --cap:allow-param with --cap:request to request a broader parameter scope,',
-        '  or use `caps request <methodRef>` to acquire and store access separately.',
+        '  or use `linkrpc hub caps request <methodRef>` to acquire and store access separately.',
     ].join('\n');
 }
