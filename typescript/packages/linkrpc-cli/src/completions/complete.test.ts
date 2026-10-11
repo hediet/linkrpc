@@ -83,10 +83,10 @@ describe('complete (static-only)', () => {
     it('completes capability commands and inline request flags', async () => {
         const caps = 'linkrpc caps ';
         expect((await complete({ line: caps, point: caps.length })).map(c => c.text)).toEqual(['list', 'request']);
-        const inline = 'linkrpc call --request';
-        expect((await complete({ line: inline, point: inline.length })).map(c => c.text)).toEqual(['--request-cap']);
-        const request = 'linkrpc caps request --allow';
-        expect((await complete({ line: request, point: request.length })).map(c => c.text)).toEqual(['--allow-param']);
+        const inline = 'linkrpc call --cap:r';
+        expect((await complete({ line: inline, point: inline.length })).map(c => c.text)).toEqual(['--cap:request']);
+        const request = 'linkrpc caps request --cap:allow-p';
+        expect((await complete({ line: request, point: request.length })).map(c => c.text)).toEqual(['--cap:allow-param', '--cap:allow-prefix']);
     });
 
     it('includes parent options on nested commands', async () => {

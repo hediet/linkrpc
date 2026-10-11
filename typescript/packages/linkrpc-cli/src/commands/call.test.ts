@@ -53,7 +53,7 @@ describe("callCommand streaming", () => {
         const { channel, dispose } = makeChannel();
         try {
             await expect(callCommand(channel, { methodRef: 'test.streamer::denied', paramsArg: '{}' }))
-                .rejects.toThrow('--request-cap');
+                .rejects.toThrow('--cap:request');
         } finally { dispose(); }
     });
 
@@ -64,7 +64,7 @@ describe("callCommand streaming", () => {
                 throw new RpcError('Schema access missing', ErrorCode.permissionRequired);
             });
             await expect(callCommand(channel, { methodRef: 'test.streamer::plain', paramsArg: '{}' }))
-                .rejects.toThrow('--request-cap');
+                .rejects.toThrow('--cap:request');
             expect(send.mock.calls[0][0]).toBe('hubrpc.schemas::get');
         } finally { dispose(); }
     });

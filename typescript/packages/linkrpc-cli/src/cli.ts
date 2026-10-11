@@ -630,8 +630,12 @@ export async function main(
         .description('Request and store a capability without invoking the method.');
 
     const addCapabilityOptions = (cmd: Command): Command => cmd
-        .option('--allow-param <kv...>', 'top-level key=matcher JSON (exact, enum, prefix, subsetOf, any)')
-        .addOption(new Option('--duration <duration>', 'requested grant lifetime')
+        .option('--cap:allow-param <kv...>', 'top-level key=matcher JSON (exact, enum, prefix, subsetOf, any)')
+        .option('--cap:allow-prefix <prefix>', 'allow a string prefix for the immediately preceding parameter')
+        .option('--cap:allow-any', 'allow any JSON value for the immediately preceding parameter')
+        .option('--cap:allow-enum <json>', 'allow one value from a JSON array for the preceding parameter')
+        .option('--cap:allow-subset <json>', 'allow an array of items from a JSON string array for the preceding parameter')
+        .addOption(new Option('--cap:duration <duration>', 'requested grant lifetime')
             .choices(['shortLived', 'longLived', 'persistent']).default('persistent'));
 
     const configureCall = (cmd: Command, capabilityOnly: boolean): void => {
@@ -660,11 +664,13 @@ export async function main(
                 process.stderr.write(cmd.helpInformation());
                 process.exit(2);
             }
-            if (!capabilityOnly && opts.allowParam !== undefined && opts.requestCap !== true) {
-                throw new Error('--allow-param requires --request-cap.');
+            const requestCap = opts['cap:request'] === true;
+            const allowParams = opts['cap:allowParam'];
+            if (!capabilityOnly && allowParams !== undefined && !requestCap) {
+                throw new Error('--cap:allow-param requires --cap:request.');
             }
-            if (!capabilityOnly && cmd.getOptionValueSource('duration') === 'cli' && opts.requestCap !== true) {
-                throw new Error('--duration requires --request-cap.');
+            if (!capabilityOnly && cmd.getOptionValueSource('cap:duration') === 'cli' && !requestCap) {
+                throw new Error('--cap:duration requires --cap:request.');
             }
             await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
                 const validation = opts.validate === false
@@ -675,17 +681,17 @@ export async function main(
                     paramsArg: opts.params,
                     paramOverrides: opts.param,
                     validation,
-                    allowParams: opts.allowParam,
-                    requestCap: opts.requestCap,
+                    allowParams,
+                    requestCap,
                     capabilityOnly,
                     signingSession: session,
-                    duration: opts.duration,
+                    duration: opts['cap:duration'],
                 });
                 process.stdout.write(out + '\n');
             }, {
-                requestReflectionAccess: (capabilityOnly || opts.requestCap === true)
+                requestReflectionAccess: (capabilityOnly || requestCap)
                     && effectiveValidation(profile) !== 'off',
-                requireSigning: capabilityOnly || opts.requestCap === true,
+                requireSigning: capabilityOnly || requestCap,
                 useStoredHubCaps: true,
                 autoNegotiatePerCall: false,
             });
@@ -693,7 +699,7 @@ export async function main(
         addCapabilityOptions(cmd);
     };
     configureCall(call, false);
-    call.option('--request-cap', 'ensure a stored capability covers the requested scope before calling');
+    call.option('--cap:request', 'ensure a stored capability covers the requested scope before calling');
     configureCall(capsRequest, true);
 
     program

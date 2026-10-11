@@ -82,6 +82,15 @@ const HUB_GLOBAL_OPTIONS: readonly FlagDef[] = [
     { name: '--config', takesValue: true, valueType: 'free' },
 ];
 
+const CAPABILITY_OPTIONS: readonly FlagDef[] = [
+    { name: '--cap:allow-param', takesValue: true, valueType: 'free' },
+    { name: '--cap:duration', takesValue: true, valueType: 'free' },
+    { name: '--cap:allow-prefix', takesValue: true, valueType: 'free' },
+    { name: '--cap:allow-any', takesValue: false },
+    { name: '--cap:allow-enum', takesValue: true, valueType: 'free' },
+    { name: '--cap:allow-subset', takesValue: true, valueType: 'free' },
+];
+
 const SHARED_COMMANDS: readonly SubcommandDef[] = [
     {
             name: 'ls',
@@ -146,9 +155,8 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--params', takesValue: true, valueType: 'free' },
                 { name: '--param', takesValue: true, valueType: 'free' },
                 { name: '--no-validate', takesValue: false },
-                { name: '--request-cap', takesValue: false },
-                { name: '--allow-param', takesValue: true, valueType: 'free' },
-                { name: '--duration', takesValue: true, valueType: 'free' },
+                { name: '--cap:request', takesValue: false },
+                ...CAPABILITY_OPTIONS,
             ],
         },
     {
@@ -171,8 +179,7 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
                     { name: '--params', takesValue: true, valueType: 'free' },
                     { name: '--param', takesValue: true, valueType: 'free' },
                     { name: '--no-validate', takesValue: false },
-                    { name: '--allow-param', takesValue: true, valueType: 'free' },
-                    { name: '--duration', takesValue: true, valueType: 'free' },
+                    ...CAPABILITY_OPTIONS,
                 ],
             },
         ],

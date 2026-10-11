@@ -7,6 +7,8 @@ import {
 import { connectViaTransport, type SigningSession } from '@hediet/linkrpc-client-internal';
 import { callCommand } from './call';
 import { createParamMatchers, listCaps } from './caps';
+import { rewriteParamShortcuts } from '../paramFlags';
+import { mergeParams } from '../paramParsing';
 
 const files = defineInterface({ id: 'test.files' }, {
     read: requestType(z.object({
@@ -17,6 +19,33 @@ const params = { path: '/docs/a', mode: 'text', tags: ['a'] };
 const allowParams = ['path={"prefix":"/docs/"}', 'mode={"enum":["text","json"]}', 'tags={"subsetOf":["a","b"]}'];
 
 describe('capability parameter constraints', () => {
+    it.each([
+        { param: '/docs/a', flag: '--cap:allow-prefix=/docs/', schema: { type: 'string' as const }, expected: { prefix: '/docs/' } },
+        { param: 'text', flag: '--cap:allow-enum=["text","json"]', schema: { enum: ['text', 'json'] }, expected: { enum: ['text', 'json'] } },
+        { param: '["read"]', flag: '--cap:allow-subset=["read","write"]', schema: { type: 'array' as const, items: { type: 'string' as const } }, expected: { subsetOf: ['read', 'write'] } },
+        { param: '{"nested":42}', flag: '--cap:allow-any', schema: true, expected: { any: true } },
+        { param: '[]', flag: '--cap:allow-subset=[]', schema: { type: 'array' as const, items: { type: 'string' as const } }, expected: { subsetOf: [] } },
+    ])('validates normalized shortcut $flag with the same matcher path', ({ param, flag, schema, expected }) => {
+        const normalized = rewriteParamShortcuts([`--p:value=${param}`, flag]);
+        const params = mergeParams({ overrides: [normalized[1]] });
+        expect(createParamMatchers(params, [normalized[3]], {
+            type: 'object', properties: { value: schema }, required: ['value'], additionalProperties: false,
+        })).toEqual({ value: expected });
+    });
+
+    it.each([
+        { param: '42', flag: '--cap:allow-prefix=a', schema: { type: 'number' as const } },
+        { param: 'text', flag: '--cap:allow-enum=["text",42]', schema: { type: 'string' as const } },
+        { param: 'text', flag: '--cap:allow-enum=["json"]', schema: { type: 'string' as const } },
+        { param: 'text', flag: '--cap:allow-any', schema: { type: 'string' as const } },
+        { param: '["read"]', flag: '--cap:allow-subset=["write"]', schema: { type: 'array' as const, items: { type: 'string' as const } } },
+        { param: '/else/a', flag: '--cap:allow-prefix=/docs/', schema: { type: 'string' as const } },
+    ])('rejects invalid normalized shortcut $flag', ({ param, flag, schema }) => {
+        const normalized = rewriteParamShortcuts([`--p:value=${param}`, flag]);
+        expect(() => createParamMatchers(mergeParams({ overrides: [normalized[1]] }), [normalized[3]], {
+            type: 'object', properties: { value: schema }, required: ['value'], additionalProperties: false,
+        })).toThrow();
+    });
     const methodSchema = {
         type: 'object' as const,
         properties: {
@@ -71,9 +100,9 @@ describe('capability parameter constraints', () => {
         ['tags={"prefix":"a"}', 'scope does not match'],
         ['path={"any":true}', 'scope does not match'],
         ['unknown={"exact":"x"}', 'scope does not match'],
-        ['path={"prefix":42}', 'Invalid --allow-param'],
-        ['path={"prefix":"/docs/","any":true}', 'Invalid --allow-param'],
-        ['path={"enum":[]}', 'Invalid --allow-param'],
+        ['path={"prefix":42}', 'Invalid --cap:allow-param'],
+        ['path={"prefix":"/docs/","any":true}', 'Invalid --cap:allow-param'],
+        ['path={"enum":[]}', 'Invalid --cap:allow-param'],
         ['path.nested={"any":true}', 'top-level'],
         ['path={"prefix":"/elsewhere/"}', 'Parameters do not match'],
         ['mode={"enum":["json"]}', 'Parameters do not match'],
@@ -142,7 +171,7 @@ async function fixture() {
     };
 }
 
-describe('caps request and call --request-cap', () => {
+describe('caps request and call --cap:request', () => {
     it('stores a scope without calling and reuses it for inline calls', async () => {
         const f = await fixture();
         try {
@@ -244,7 +273,7 @@ describe('caps request and call --request-cap', () => {
             expect(f.read).not.toHaveBeenCalled();
             await expect(callCommand(f.channel, {
                 methodRef: 'files::test.files::read', allowParams,
-            })).rejects.toThrow('requires --request-cap');
+            })).rejects.toThrow('requires --cap:request');
             await expect(callCommand(f.channel, {
                 methodRef: 'files::test.files::read', requestCap: true, noValidate: true,
             })).rejects.toThrow('require schema validation');

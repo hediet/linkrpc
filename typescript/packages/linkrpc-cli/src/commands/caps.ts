@@ -77,12 +77,12 @@ export function createParamMatchers(
     const seen = new Set<string>();
     for (const raw of allowParams) {
         const { path, value } = parseParamOverride(raw);
-        if (path.length !== 1) throw new Error('--allow-param only supports top-level parameter names.');
+        if (path.length !== 1) throw new Error('--cap:allow-param only supports top-level parameter names.');
         const key = path[0];
-        if (seen.has(key)) throw new Error(`Duplicate --allow-param for ${key}.`);
+        if (seen.has(key)) throw new Error(`Duplicate --cap:allow-param for ${key}.`);
         seen.add(key);
         const parsed = matcherSchema.safeParse(value);
-        if (!parsed.success) throw new Error(`Invalid --allow-param ${key}: ${parsed.error.message}`);
+        if (!parsed.success) throw new Error(`Invalid --cap:allow-param ${key}: ${parsed.error.message}`);
         matchers[key] = parsed.data;
     }
     const properties = Object.fromEntries(
@@ -91,7 +91,7 @@ export function createParamMatchers(
     if (!isAssignable({
         type: 'object', properties, required: Object.keys(properties), additionalProperties: false,
     }, schema, { schemas: components })) {
-        throw new Error('--allow-param scope does not match the method parameter schema.');
+        throw new Error('--cap:allow-param scope does not match the method parameter schema.');
     }
     const validator = schemaToZod(schema, components);
     const samples = [actual];
@@ -105,7 +105,7 @@ export function createParamMatchers(
         if (!validated.success) throw new Error(`Capability parameter schema validation failed: ${validated.error.message}`);
     }
     const matched = matchParams(matchers, actual);
-    if (!matched.ok) throw new Error(`Parameters do not match --allow-param: ${matched.reason}`);
+    if (!matched.ok) throw new Error(`Parameters do not match --cap:allow-param: ${matched.reason}`);
     return matchers;
 }
 

@@ -26,6 +26,10 @@ const FLAG_PREFIX = '--p:';
  * mutates the input.
  */
 export function rewriteParamShortcuts(argv: readonly string[]): string[] {
+    return rewriteCapabilityShortcuts(expandParamShortcuts(argv));
+}
+
+function expandParamShortcuts(argv: readonly string[]): string[] {
     const out: string[] = [];
     let stopExpanding = false;
 
@@ -71,6 +75,90 @@ export function rewriteParamShortcuts(argv: readonly string[]): string[] {
         }
         out.push('--param', `${name}=${peek}`);
         i += 1;
+    }
+    return out;
+}
+
+const CAPABILITY_SHORTCUTS = new Map([
+    ['--cap:allow-prefix', 'prefix'],
+    ['--cap:allow-any', 'any'],
+    ['--cap:allow-enum', 'enum'],
+    ['--cap:allow-subset', 'subsetOf'],
+]);
+
+function rewriteCapabilityShortcuts(argv: readonly string[]): string[] {
+    const out: string[] = [];
+    const constrained = new Set<string>();
+    let precedingParam: string | undefined;
+    for (let i = 0; i < argv.length; i++) {
+        const token = argv[i];
+        if (token === '--') {
+            out.push(...argv.slice(i));
+            break;
+        }
+        const eq = token.indexOf('=');
+        const flag = eq < 0 ? token : token.slice(0, eq);
+        const matcher = CAPABILITY_SHORTCUTS.get(flag);
+        if (matcher !== undefined) {
+            if (precedingParam === undefined) {
+                throw new Error(`${flag} must immediately follow a --param or --p:<name> assignment.`);
+            }
+            if (precedingParam.includes('.')) throw new Error(`${flag} only supports top-level parameter names.`);
+            if (constrained.has(precedingParam)) throw new Error(`Duplicate --cap:allow-param for ${precedingParam}.`);
+            let value: unknown = true;
+            if (matcher === 'any') {
+                if (eq >= 0) throw new Error('--cap:allow-any takes no value.');
+            } else {
+                const raw = eq >= 0 ? token.slice(eq + 1) : argv[++i];
+                if (raw === undefined || (eq < 0 && raw.startsWith('--'))) {
+                    throw new Error(`${flag} requires a value.`);
+                }
+                if (matcher === 'prefix') {
+                    value = raw;
+                } else {
+                    try { value = JSON.parse(raw); }
+                    catch { throw new Error(`${flag} requires a JSON array.`); }
+                    if (!Array.isArray(value)
+                        || (matcher === 'enum' && value.length === 0)
+                        || (matcher === 'subsetOf' && !value.every(item => typeof item === 'string'))) {
+                        throw new Error(`${flag} requires ${matcher === 'enum' ? 'a non-empty JSON array' : 'a JSON string array'}.`);
+                    }
+                }
+            }
+            constrained.add(precedingParam);
+            out.push('--cap:allow-param', `${precedingParam}=${JSON.stringify({ [matcher]: value })}`);
+            continue;
+        }
+        if (flag === '--param' || flag === '--cap:allow-param') {
+            const values: string[] = [];
+            if (eq >= 0) {
+                values.push(token.slice(eq + 1));
+                out.push(token);
+            } else {
+                out.push(token);
+                while (argv[i + 1] !== undefined && !argv[i + 1].startsWith('-')) {
+                    const value = argv[++i];
+                    values.push(value);
+                    out.push(value);
+                }
+            }
+            precedingParam = undefined;
+            for (const value of values) {
+                const assignment = value.indexOf('=');
+                if (assignment <= 0) continue;
+                const key = value.slice(0, assignment);
+                if (constrained.has(key)) {
+                    throw new Error(flag === '--param'
+                        ? `Cannot reassign parameter ${key} after an explicit capability constraint.`
+                        : `Duplicate --cap:allow-param for ${key}.`);
+                }
+                if (flag === '--cap:allow-param') constrained.add(key);
+                else precedingParam = key;
+            }
+            continue;
+        }
+        precedingParam = undefined;
+        out.push(token);
     }
     return out;
 }

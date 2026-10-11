@@ -439,19 +439,19 @@ hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 
 `caps list [--json]` lists the selected principal's stored capabilities,
 including expired grants. `caps request <methodRef>` requests and stores a
-capability without executing the method. `call --request-cap` ensures the same
+capability without executing the method. `call --cap:request` ensures the same
 scope is available before executing the call. These explicit operations enable
 signing even in the generic `linkrpc`/`rpc` profile and require a LinkRPC endpoint.
-Without `--request-cap`, `call` never requests new capabilities (including
+Without `--cap:request`, `call` never requests new capabilities (including
 reflection access). On initialized Hub sockets/WebSockets it signs with the
 selected identity and presents stored grants, even in the generic profile.
-Missing or unusable grants fail with guidance to retry using `--request-cap`;
+Missing or unusable grants fail with guidance to retry using `--cap:request`;
 unguarded methods and plain RPC endpoints remain usable without capabilities.
 
 Both request forms share `call`'s method references, `--params`, `--param`, and
 `--p:<name>` shortcuts, including nested argument overrides and dynamic help.
 Concrete arguments become exact constraints by default. Repeat
-`--allow-param 'key=<matcher JSON>'` to relax individual **top-level** parameters:
+`--cap:allow-param 'key=<matcher JSON>'` to relax individual **top-level** parameters:
 
 ```sh
 linkrpc --endpoint "$ENDPOINT" caps list --json
@@ -459,12 +459,12 @@ linkrpc --endpoint "$ENDPOINT" caps list --json
 # Request permission without reading the file:
 linkrpc --endpoint "$ENDPOINT" caps request files::fs::read \
   --p:path=/workspace/readme.txt \
-  --allow-param 'path={"prefix":"/workspace/"}'
+  --cap:allow-param 'path={"prefix":"/workspace/"}'
 
 # Ensure permission for that scope, then read a file:
-linkrpc --endpoint "$ENDPOINT" call files::fs::read --request-cap \
+linkrpc --endpoint "$ENDPOINT" call files::fs::read --cap:request \
   --p:path=/workspace/another.txt \
-  --allow-param 'path={"prefix":"/workspace/"}'
+  --cap:allow-param 'path={"prefix":"/workspace/"}'
 ```
 
 Matchers are `{"exact":value}`, `{"enum":[value,...]}`,
@@ -479,12 +479,42 @@ be proven compatible with a finite enum or a formatted string; use an enum
 of valid values instead. Remote reflection cannot reproduce arbitrary
 producer-side custom Zod refinements.
 
+Instead of naming the key in `--cap:allow-param`, attach a shortcut immediately
+after a `--param key=value` or `--p:key=value` assignment:
+
+```sh
+linkrpc hub call files::fs::read --cap:request \
+  --p:path=/workspace/readme.txt --cap:allow-prefix=/workspace/
+```
+
+| Shortcut | Matcher | Meaning |
+| --- | --- | --- |
+| `--cap:allow-prefix <string>` | `prefix` | Any string beginning with the prefix |
+| `--cap:allow-any` | `any` | Any JSON value; requires an unconstrained schema property |
+| `--cap:allow-enum <JSON array>` | `enum` | One entire value from a non-empty array of alternatives |
+| `--cap:allow-subset <JSON string array>` | `subsetOf` | An array containing only allowed strings; empty arrays, repetitions, and any ordering are allowed |
+
+Each parameter can have only one explicit constraint. Mixing shortcuts with
+`--cap:allow-param` for the same key, repeating constraints, or reassigning a
+constrained parameter is an error. Shortcuts do not attach to `--params` JSON
+or across intervening options. With variadic `--param`, a shortcut attaches
+to the last assignment. The same schema and example-value validation applies
+to shortcuts and explicit matchers.
+
+Value-taking options support both `--option=value` and `--option value`.
+Parameter assignment itself still uses `key=value`, e.g.
+`--param path=/docs/a` or `--param=path=/docs/a`. Use the equals form for
+dash-prefixed values. Quote JSON and strings containing spaces.
+`--cap:request` and `--cap:allow-any` are switches with no value.
+The older `--request-cap`, `--allow-param`, and `--duration` spellings have
+been replaced by the `--cap:` options.
+
 Schema validation is mandatory for explicit requests: `--no-validate` and
-`--validation off` are rejected. On `call`, `--allow-param` requires
-`--request-cap`. For explicit requests, a method reference's `@hash` also pins
+`--validation off` are rejected. On `call`, `--cap:allow-param` requires
+`--cap:request`. For explicit requests, a method reference's `@hash` also pins
 the permission; signed calls include that hash in their signed metadata.
-The default requested duration is `persistent`; `--duration shortLived` and
-`--duration longLived` are also supported. The Hub still decides what to grant.
+The default requested duration is `persistent`; `--cap:duration shortLived` and
+`--cap:duration longLived` are also supported. The Hub still decides what to grant.
 One-shot approval cannot satisfy a reusable scope and is rejected.
 
 Fresh durable grants for the selected principal are reused when they cover
@@ -493,7 +523,7 @@ enum sets, subset sets, and unconstrained grants can cover narrower requests.
 New grants are saved through the principal's existing capability bag and are
 available to later invocations using the same identity. Denial or an insufficient
 grant fails without executing the method. `caps request` outputs the granted
-capabilities and a `reused` flag; `call --request-cap` retains normal call output.
+capabilities and a `reused` flag; `call --cap:request` retains normal call output.
 
 ### Identity and approvals
 

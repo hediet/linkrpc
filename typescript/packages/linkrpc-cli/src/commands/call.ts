@@ -44,7 +44,7 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
 
     const requestCap = opts.requestCap === true || opts.capabilityOnly === true;
     if (!requestCap && opts.allowParams !== undefined) {
-        throw new Error('--allow-param requires --request-cap.');
+        throw new Error('--cap:allow-param requires --cap:request.');
     }
     if (requestCap && (opts.noValidate || opts.validation === 'off')) {
         throw new Error('Capability requests require schema validation; remove --no-validate/--validation off.');
@@ -215,8 +215,8 @@ function _formatPermissionRequired(e: RpcError): string {
     return [
         `Permission required: ${e.message}`,
         '  No usable capability authorizes this call.',
-        '  Retry with --request-cap to request access before calling.',
-        '  Use --allow-param with --request-cap to request a broader parameter scope,',
+        '  Retry with --cap:request to request access before calling.',
+        '  Use --cap:allow-param with --cap:request to request a broader parameter scope,',
         '  or use `caps request <methodRef>` to acquire and store access separately.',
     ].join('\n');
 }
