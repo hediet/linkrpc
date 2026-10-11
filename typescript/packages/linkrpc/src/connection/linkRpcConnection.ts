@@ -416,6 +416,23 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
         };
     }
 
+    /** Wire methods currently accepted by this connection, including preset bindings. */
+    public listRegisteredMethods(): readonly { readonly method: string; readonly definition: MemberType }[] {
+        const methods: { method: string; definition: MemberType }[] = [];
+        for (const entry of this._registry.values()) {
+            const prefix = entry.serviceId ? `${entry.serviceId}::${entry.iface.info.id}::` : `${entry.iface.info.id}::`;
+            for (const [name, definition] of Object.entries(entry.iface.members) as [string, MemberType][]) {
+                methods.push({ method: `${prefix}${name}`, definition });
+            }
+        }
+        for (const { prefix, entry } of this._bareBindings.values()) {
+            for (const [name, definition] of Object.entries(entry.iface.members) as [string, MemberType][]) {
+                methods.push({ method: `${prefix}${name}`, definition });
+            }
+        }
+        return methods;
+    }
+
     /** Snapshot of every interface currently registered on this connection. */
     public listRegisteredInterfaces(): readonly {
         readonly serviceId: string;
@@ -821,7 +838,7 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
             } else {
                 const notify = (params: unknown) => {
                     this._validateOutboundParamsFor(member, wireMethod, params);
-                    void this.channel.sendNotification(
+                    return this.channel.sendNotification(
                         wireMethod,
                         params as JsonValue | undefined,
                         sendOpts,
@@ -829,7 +846,8 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                 };
                 // Preserve native notifications' async rejection and bare
                 // notifications' synchronous validation errors.
-                proxy[name] = barePrefix === undefined ? async (params: unknown) => notify(params) : notify;
+                proxy[name] = barePrefix === undefined ? async (params: unknown) => notify(params)
+                    : (params: unknown) => { void notify(params); };
             }
         }
         return iface.nestClient(proxy);

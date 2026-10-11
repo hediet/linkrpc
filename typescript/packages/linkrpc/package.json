@@ -18,6 +18,14 @@
             "@hediet/source": "./src/index.ts",
             "default": "./dist/index.js"
         },
+        "./http/client": {
+            "@hediet/source": "./src/http/client.ts",
+            "default": "./dist/http/client.js"
+        },
+        "./http/server": {
+            "@hediet/source": "./src/http/server.ts",
+            "default": "./dist/http/server.js"
+        },
         "./hub/client": {
             "@hediet/source": "./src/hub/client/index.ts",
             "default": "./dist/hub/client/index.js"
@@ -78,6 +86,8 @@
     "publishConfig": {
         "exports": {
             ".": "./dist/index.js",
+            "./http/client": "./dist/http/client.js",
+            "./http/server": "./dist/http/server.js",
             "./hub/client": "./dist/hub/client/index.js",
             "./hub/common": "./dist/hub/common/index.js",
             "./inspection": "./dist/inspection/index.js",

@@ -14,6 +14,16 @@ A transport MUST NOT be assumed to order messages *across* directions. A transpo
 
 > **Note.** The transport carries opaque JSON messages; it has no knowledge of methods, ids, or layers. All correlation is at the message layer.
 
+### 1.1 Request-level HTTP adapter
+
+The TypeScript implementation also provides a
+[request-level HTTP adapter](../typescript/packages/linkrpc/docs/http.md).
+This is not a conformant general-purpose bidirectional transport as defined
+above: methods and parameters are mapped onto HTTP requests, and independent
+reverse calls are unsupported. Request-scoped streams use the existing
+LinkRPC stream messages over an NDJSON response and separate input POSTs.
+Its HTTP conventions do not change the native message-transport bindings.
+
 ## 2. NDJSON binding (byte streams)
 
 The newline-delimited JSON binding runs over any reliable ordered byte stream — a Unix-domain socket, a Windows named pipe, or a process's stdin/stdout pair. It is the primary binding.

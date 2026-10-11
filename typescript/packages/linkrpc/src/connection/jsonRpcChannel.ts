@@ -69,14 +69,14 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     public static createWithClose<TInCtx = undefined>(
         transport: ChannelTransport<TInCtx>,
         options: { readonly deferRequests?: boolean } = {},
-    ): { channel: Channel<TInCtx, unknown>; close: () => void; resumeRequests: () => void; } {
+    ): { channel: Channel<TInCtx, unknown>; close: (error?: Error) => void; resumeRequests: () => void; } {
         const jrc = new JsonRpcChannel<TInCtx>(transport, options.deferRequests === true);
         const channel = new Channel<TInCtx, unknown>(
             jrc,
             (h) => jrc.setRequestHandler(h),
             (observer) => jrc.setWireMessageObserver(observer),
         );
-        return { channel, close: () => jrc.close(), resumeRequests: () => jrc.resumeRequests() };
+        return { channel, close: error => jrc.close(error), resumeRequests: () => jrc.resumeRequests() };
     }
 
     private _nextId = 1;
@@ -148,13 +148,16 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
             this._pending.set(String(id), { resolve, reject });
         });
         this._observeOutbound(req, opts);
-        try {
-            await this._transport.send(req);
-        } catch (error) {
-            this._pending.delete(String(id));
-            this._observeSendFailure(id, error);
-            throw error;
-        }
+        void (async () => {
+            try {
+                await this._transport.send(req);
+            } catch (error) {
+                const pending = this._pending.get(String(id));
+                this._pending.delete(String(id));
+                this._observeSendFailure(id, error);
+                pending?.reject(error instanceof Error ? error : new Error(String(error)));
+            }
+        })();
         return promise;
     }
 
@@ -199,7 +202,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         const ping = setInterval(() => {
             void this._sendStream(id, StreamDir.toCallee, {
                 control: { type: StreamControlType.ping },
-            });
+            }).catch(error => this.close(error));
         }, KEEPALIVE_PING_INTERVAL_MS);
         (ping as { unref?: () => void; }).unref?.();
         const stopPing = (): void => {
@@ -262,7 +265,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
             const p = new Promise<void>((resolve, reject) => pending.set(nonce, { resolve, reject }));
             void this._sendStream(requestId, outboundDir, {
                 control: { type: StreamControlType.ping, nonce },
-            });
+            }).catch(error => this.close(error));
             return p;
         };
         const onControl = (control: { type: string; nonce?: string; }): void => {
@@ -270,7 +273,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
                 // Auto-answer: echo the nonce back the way our controls travel.
                 void this._sendStream(requestId, outboundDir, {
                     control: { type: StreamControlType.pong, nonce: control.nonce },
-                });
+                }).catch(error => this.close(error));
             } else if (control.type === StreamControlType.pong && control.nonce !== undefined) {
                 const waiter = pending.get(control.nonce);
                 if (waiter) {
@@ -312,9 +315,8 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         await this._transport.send(n);
     }
 
-    public close(): void {
+    public close(error: Error = new RpcError('Connection closed', ErrorCode.peerDisconnected)): void {
         if (this._closeError) return;
-        const error = new RpcError('Connection closed', ErrorCode.peerDisconnected);
         this._closeError = error;
         this._deferredMessages.length = 0;
         for (const abort of this._incomingAborts.values()) abort.abort(error);

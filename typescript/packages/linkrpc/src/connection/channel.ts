@@ -141,14 +141,14 @@ export interface IRequestSender<TOutCtx = undefined> {
 export interface RawStreamingCall {
     readonly result: Promise<JsonValue>;
     /** Emit a client→server (`toCallee`) stream message correlated with this call. */
-    send(payload: JsonValue): void;
+    send(payload: JsonValue): void | Promise<void>;
     /**
      * Ask the callee to abort this in-flight request (a `toCallee`
      * `cancel` control). Advisory: the request settles via its normal
      * response (typically a `cancelled` error). `reason` is an open-set
      * diagnostic string (see `StreamControlReason`).
      */
-    cancel(reason?: string): void;
+    cancel(reason?: string): void | Promise<void>;
     /**
      * Stop tracking this request locally and reject {@link result}. This does
      * not notify the callee; call {@link cancel} first when remote work should

@@ -54,6 +54,8 @@ export default defineConfig({
         'index': 'src/index.ts',
         'node': 'src/node.ts',
         'web': 'src/web.ts',
+        'http/client': 'src/http/client.ts',
+        'http/server': 'src/http/server.ts',
         'inspection/index': 'src/inspection/index.ts',
         'hub/common/index': 'src/hub/common/index.ts',
         'hub/client/index': 'src/hub/client/index.ts',

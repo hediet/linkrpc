@@ -7,6 +7,16 @@ message on the wire is a valid JSON-RPC message, and linkrpc adds just enough on
 strongly-typed services share one connection — an addressing grammar, built-in reflection,
 content-addressed interface identity, and optional layers for signing and capabilities.
 
+## HTTP clients and servers
+
+The browser-compatible `@hediet/linkrpc/http/client` and separate
+`@hediet/linkrpc/http/server` entries support convention-routed HTTP calls with
+shared or per-request server connections, typed errors, and bidirectional
+request-scoped streaming using a response stream plus `$stream::send` POSTs.
+It works with browser Fetch without streaming uploads. See
+[HTTP connections](./docs/http.md) for complete server/client examples,
+routing conventions, authentication, and deployment limits.
+
 ## Direct browser hub connections
 
 The `@hediet/linkrpc/web` entry exports the native `WebSocketTransport`,
