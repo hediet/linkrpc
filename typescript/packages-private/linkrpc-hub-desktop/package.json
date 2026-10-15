@@ -1,0 +1,24 @@
+{
+    "name": "@hediet/linkrpc-hub-desktop",
+    "version": "0.0.1",
+    "private": true,
+    "description": "Tray icon and management window for the per-user LinkRPC hub.",
+    "type": "module",
+    "main": "./dist/main/main.js",
+    "scripts": {
+        "build": "tsdown",
+        "start": "node node_modules/electron/install.js && electron .",
+        "typecheck": "tsc -p tsconfig.json --noEmit"
+    },
+    "dependencies": {
+        "@hediet/linkrpc-hub-daemon": "workspace:*",
+        "@vscode/observables": "^0.1.1-10",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "electron": "44.7.2",
+        "tsdown": "^0.22.3",
+        "typescript": "^6.0.3"
+    }
+}

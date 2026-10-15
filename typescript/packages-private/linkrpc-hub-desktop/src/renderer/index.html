@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+    <title>LinkRPC Hub</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header id="header"></header>
+    <div id="banners"></div>
+    <main>
+        <section class="card" id="services"></section>
+        <section class="card" id="logs" hidden></section>
+        <div class="columns">
+            <section class="card" id="hub"></section>
+            <section class="card" id="startup"></section>
+        </div>
+        <section class="card" id="config"></section>
+    </main>
+    <script src="renderer.js"></script>
+</body>
+</html>

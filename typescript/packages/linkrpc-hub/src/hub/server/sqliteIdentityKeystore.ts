@@ -74,6 +74,8 @@ export interface SqliteIdentitySlot extends IdentitySlot {
 
 export interface SqliteIdentityKeystore extends IdentityKeystore {
     slotById(id: SlotId): SqliteIdentitySlot;
+    /** Close the database if this keystore opened it (`dbPath`); a shared `db` stays open. */
+    close(): void;
 }
 
 export interface SqliteIdentityKeystoreOptions {
@@ -133,7 +135,7 @@ export function createSqliteIdentityKeystore(
 ): SqliteIdentityKeystore {
     const db = opts.db ?? new (_getDatabaseSync())(_requireDbPath(opts));
     db.exec(_SCHEMA);
-    return new _SqliteKeystore(db);
+    return new _SqliteKeystore(db, opts.db === undefined);
 }
 
 function _requireDbPath(opts: SqliteIdentityKeystoreOptions): string {
@@ -234,9 +236,20 @@ class _SqliteKeystore implements SqliteIdentityKeystore {
     private readonly _stmts: _Stmts;
     private readonly _slots = new Map<SlotId, _SqliteSlot>();
 
-    constructor(db: DatabaseSync) {
-        this._stmts = new _Stmts(db);
+    constructor(
+        private readonly _db: DatabaseSync,
+        private readonly _ownsDb: boolean,
+    ) {
+        this._stmts = new _Stmts(_db);
     }
+
+    public close(): void {
+        if (!this._ownsDb || this._closed) return;
+        this._closed = true;
+        this._db.close();
+    }
+
+    private _closed = false;
 
     public slotById(id: SlotId): SqliteIdentitySlot {
         return this._slot(id);
