@@ -21,7 +21,7 @@ export interface StartHubDaemonOptions {
 
 interface LocalEndpoint {
     readonly path: string;
-    readonly token: string;
+    readonly token: string | undefined;
 }
 
 /**
@@ -57,8 +57,8 @@ export class HubDaemon {
     public readonly done: Promise<void>;
 
     private readonly _configFile: ConfigFile;
-    private readonly _app: LocalEndpoint;
-    private readonly _management: LocalEndpoint;
+    private readonly _appPath: string;
+    private readonly _management: LocalEndpoint & { readonly token: string; };
     private readonly _services = new Map<string, ServiceSupervisor>();
     private readonly _statusListeners = new Set<() => void>();
     private readonly _serviceHost: ServiceHost;
@@ -85,7 +85,7 @@ export class HubDaemon {
     ) {
         this.done = new Promise(resolve => { this._resolveDone = resolve; });
         this._configFile = new ConfigFile(home.configFile, home.configSchemaFile);
-        this._app = { path: home.allocEndpoint('hub'), token: _token() };
+        this._appPath = home.allocEndpoint('hub');
         this._management = { path: home.allocEndpoint('management'), token: _token() };
         this._serviceHost = {
             openSocket: (name, service, onConnectionCountChanged) => this._openServiceSocket(name, service, onConnectionCountChanged),
@@ -98,7 +98,7 @@ export class HubDaemon {
             pid: process.pid,
             version: this.version,
             startedAt: this.startedAt,
-            endpoint: this._app.path,
+            endpoint: this._appPath,
             configFile: this.home.configFile,
             logFile: this.home.logFile,
             config: { revision: this._appliedRevision, appliedAt: this._appliedAt, error: this._configError },
@@ -166,10 +166,9 @@ export class HubDaemon {
         }
         await this._serialize(() => this._apply(config));
         await this._startManagementServer();
-        writePrivateJson(this.home.discoveryFile, this._discovery(this._app));
         writePrivateJson(this.home.managementFile, this._discovery(this._management));
         this._watcher = this._configFile.watch(() => void this.reload());
-        this._log.line(`ready: hub endpoint ${this._app.path}`);
+        this._log.line(`ready: hub endpoint ${this._appPath}`);
     }
 
     private async _reload(force: boolean): Promise<void> {
@@ -194,7 +193,7 @@ export class HubDaemon {
     }
 
     private async _apply(config: DaemonConfig): Promise<void> {
-        const hubKey = stableKey(config.hub);
+        const hubKey = stableKey({ hub: config.hub, localEndpoint: config.localEndpoint });
         if (hubKey !== this._hubKey || !this._hub) {
             if (this._hub) this._log.line('hub settings changed; restarting the hub and all services');
             await this._disposeAllServices();
@@ -202,9 +201,10 @@ export class HubDaemon {
             this._hub = undefined;
             this._hubKey = hubKey;
             try {
-                this._hub = await this._startHub(config.hub);
+                this._hub = await this._startHub(config);
                 this._hubStartedAt = Date.now();
                 this._hubError = undefined;
+                writePrivateJson(this.home.discoveryFile, this._discovery({ path: this._appPath, token: config.localEndpoint.token }));
             } catch (error) {
                 this._hubError = _message(error);
                 this._log.line(`the hub failed to start: ${this._hubError}`);
@@ -253,12 +253,18 @@ export class HubDaemon {
         this._changed();
     }
 
-    private _startHub(hubConfig: HubConfig): Promise<RunningHub> {
+    private _startHub({ hub: hubConfig, localEndpoint }: DaemonConfig): Promise<RunningHub> {
         const config: HubConfig = {
             ...hubConfig,
             listeners: [
                 ...hubConfig.listeners,
-                { type: 'socket', path: this._app.path, handlers: [{ token: 'static', value: this._app.token }] },
+                {
+                    type: 'socket',
+                    path: this._appPath,
+                    handlers: [localEndpoint.token !== undefined
+                        ? { token: 'static', value: localEndpoint.token }
+                        : { token: 'anonymous' }],
+                },
             ],
         };
         return runHub({
@@ -344,7 +350,12 @@ export class HubDaemon {
     }
 
     private _discovery(endpoint: LocalEndpoint): EndpointDiscovery {
-        return { version: 1, pid: process.pid, endpoint: endpoint.path, token: endpoint.token };
+        return {
+            version: 1,
+            pid: process.pid,
+            endpoint: endpoint.path,
+            ...(endpoint.token !== undefined ? { token: endpoint.token } : {}),
+        };
     }
 
     private _serialize(op: () => Promise<void>): Promise<void> {

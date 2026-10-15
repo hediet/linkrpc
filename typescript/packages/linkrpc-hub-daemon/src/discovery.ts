@@ -12,7 +12,8 @@ export const EndpointDiscoverySchema = z.object({
     pid: z.number().int(),
     /** Named pipe (Windows) or Unix socket path. */
     endpoint: z.string().min(1),
-    token: z.string().min(1),
+    /** Absent when the endpoint requires no token. */
+    token: z.string().min(1).optional(),
 });
 export type EndpointDiscovery = z.infer<typeof EndpointDiscoverySchema>;
 

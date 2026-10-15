@@ -37,9 +37,21 @@ const ServicesSchema = z.record(
     ManagedServiceSchema,
 ).default({});
 
+/** The daemon's application endpoint (named pipe / Unix socket). */
+const LocalEndpointSchema = z.object({
+    /**
+     * Token clients must present. By default there is none: the endpoint is
+     * reachable only by the OS user (pipe ACL / private socket directory).
+     */
+    token: z.string().min(1).optional(),
+}).strict().default({});
+
+export type LocalEndpointConfig = z.output<typeof LocalEndpointSchema>;
+
 /** The daemon config file: a hub config plus supervised `services`. */
 export interface DaemonConfig {
     readonly hub: HubConfig;
+    readonly localEndpoint: LocalEndpointConfig;
     readonly services: Readonly<Record<string, ManagedService>>;
 }
 
@@ -70,10 +82,12 @@ export function parseDaemonConfig(raw: unknown): DaemonConfig {
     }
     const record = raw as Record<string, unknown>;
     let hub: HubConfig;
+    let localEndpoint: LocalEndpointConfig;
     let parsedServices: Record<string, z.output<typeof ManagedServiceSchema>>;
     try {
         const { $schema: _editorSchema, ...hubFields } = parseHubConfig({ ...record, forwardChecking: record.forwardChecking ?? false });
         hub = hubFields;
+        localEndpoint = LocalEndpointSchema.parse(record.localEndpoint);
         parsedServices = ServicesSchema.parse(record.services);
     } catch (error) {
         if (error instanceof z.ZodError) throw new Error(z.prettifyError(error));
@@ -90,7 +104,7 @@ export function parseDaemonConfig(raw: unknown): DaemonConfig {
         owners.set(serviceId, name);
         services[name] = { ...service, serviceId };
     }
-    return { hub, services };
+    return { hub, localEndpoint, services };
 }
 
 /** How applying `next` over a running `previous` service must proceed. */
@@ -132,7 +146,7 @@ export function setServiceEnabledInText(text: string, name: string, enabled: boo
 export function daemonConfigJsonSchema(): unknown {
     const hubSchema = hubConfigJsonSchema() as { properties?: Record<string, Record<string, unknown>>; };
     const servicesSchema = z.toJSONSchema(
-        z.object({ services: ServicesSchema }),
+        z.object({ services: ServicesSchema, localEndpoint: LocalEndpointSchema }),
         { target: 'draft-2020-12', io: 'input' },
     ) as { properties: Record<string, unknown>; };
     const forwardChecking = hubSchema.properties?.forwardChecking;
@@ -141,6 +155,7 @@ export function daemonConfigJsonSchema(): unknown {
         properties: {
             ...hubSchema.properties,
             ...(forwardChecking ? { forwardChecking: { ...forwardChecking, default: false } } : {}),
+            localEndpoint: servicesSchema.properties.localEndpoint,
             services: servicesSchema.properties.services,
         },
     };
