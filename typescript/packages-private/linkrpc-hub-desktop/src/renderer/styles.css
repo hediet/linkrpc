@@ -1,0 +1,231 @@
+:root {
+    color-scheme: light dark;
+    --bg: #f5f5f7;
+    --card: #ffffff;
+    --fg: #1f2328;
+    --muted: #656d76;
+    --border: #d8dee4;
+    --accent: #0969da;
+    --ok: #1a7f37;
+    --warn: #9a6700;
+    --bad: #cf222e;
+    --idle: #6e7781;
+    --badge-bg: rgba(110, 119, 129, 0.12);
+    font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #1e1e1e;
+        --card: #252526;
+        --fg: #e6edf3;
+        --muted: #9198a1;
+        --border: #3c3c3c;
+        --accent: #4493f8;
+        --ok: #3fb950;
+        --warn: #d29922;
+        --bad: #f85149;
+        --idle: #8b949e;
+        --badge-bg: rgba(139, 148, 158, 0.16);
+    }
+}
+
+* { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+}
+
+header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 20px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+header .spacer { flex: 1; }
+
+main {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding: 16px 20px 24px;
+}
+
+.columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+}
+
+.card h2 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+}
+
+.card h2 .spacer { flex: 1; }
+
+#banners:empty { display: none; }
+
+#banners {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 20px 0;
+}
+
+.banner {
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid;
+    white-space: pre-wrap;
+}
+
+.banner.error { color: var(--bad); border-color: var(--bad); }
+.banner.info { color: var(--muted); border-color: var(--border); }
+
+button {
+    font: inherit;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--fg);
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.small { padding: 2px 8px; font-size: 12px; }
+
+.pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: var(--badge-bg);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.pill::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.state-running, .state-connected { color: var(--ok); }
+.state-starting, .state-backoff, .state-stopping, .state-connecting { color: var(--warn); }
+.state-failed { color: var(--bad); }
+.state-stopped, .state-disabled { color: var(--idle); }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+th {
+    font-weight: 500;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+tr:last-child td { border-bottom: none; }
+tr.selected td { background: var(--badge-bg); }
+
+td .name { font-weight: 600; }
+td .sub, .muted { color: var(--muted); font-size: 12px; }
+td.actions { text-align: right; white-space: nowrap; }
+td.actions > * { margin-left: 6px; }
+
+dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    margin: 0 0 10px;
+}
+
+dt { color: var(--muted); }
+dd { margin: 0; overflow-wrap: anywhere; }
+
+code, pre, textarea {
+    font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+    font-size: 12px;
+}
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+label.toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+
+pre.log {
+    margin: 0;
+    max-height: 320px;
+    overflow: auto;
+    padding: 8px;
+    border-radius: 6px;
+    background: var(--bg);
+    white-space: pre-wrap;
+}
+
+pre.log .stderr { color: var(--bad); }
+pre.log .daemon { color: var(--accent); }
+
+textarea {
+    width: 100%;
+    min-height: 260px;
+    resize: vertical;
+    padding: 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+    tab-size: 4;
+}
+
+.empty {
+    padding: 12px 0;
+    color: var(--muted);
+}

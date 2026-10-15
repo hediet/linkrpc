@@ -50,7 +50,7 @@ import type {
 } from '../config';
 import { spawnCommand } from '../spawn';
 import { HubAccessManifestHost, registerHubAccessManifest } from './hubAccessManifest';
-import { hubAccessManifestInterface } from '@hediet/linkrpc/hub/common';
+import { hubAccessManifestInterface, mapTransport } from '@hediet/linkrpc/hub/common';
 import { runManifestApprover } from './manifestApprover';
 import { endpointCommand, endpointLabel, forwardStdin, killChild, pipeChildLogs } from './cmdEndpoint';
 import { configureParticipants } from './configuredParticipants';
@@ -90,6 +90,11 @@ export interface RunHubOptions {
      * transit observer and pays no cost.
      */
     readonly logMessages?: boolean;
+    /**
+     * Directory holding persistent managed identities and the admin identity.
+     * Defaults to the per-user `linkrpc/provisioned-identities` directory.
+     */
+    readonly identityStoreDir?: string;
 }
 
 /** A bound listener, reported for logging / `serve` startup output. */
@@ -104,6 +109,29 @@ export interface RunningHub {
     readonly listeners: readonly ListenerInfo[];
     /** Private local socket (allow-all) for in-process CLI clients. */
     readonly controlEndpoint: { readonly path: string; readonly token: string; };
+    /**
+     * Open a private socket whose peers join this hub with `provision` (granted
+     * namespace, managed identity, …) under the hub's forward-checking gate —
+     * the same admission a `cmd-env` child gets. Disposed with the hub.
+     */
+    openParticipantSocket(options: ParticipantSocketOptions): Promise<ParticipantSocket>;
+    dispose(): void;
+}
+
+export interface ParticipantSocketOptions {
+    /** Named pipe / UDS path. Defaults to a freshly allocated path. */
+    readonly path?: string;
+    readonly provision: ProvisionConfig;
+    /** Fired whenever a peer connects to or disconnects from this socket. */
+    readonly onConnectionCountChanged?: (count: number) => void;
+}
+
+export interface ParticipantSocket {
+    readonly path: string;
+    /** Token handed to the peer; peers are admitted by socket reachability. */
+    readonly token: string;
+    /** `LINKRPC_ENDPOINT` / `LINKRPC_TOKEN` for a child dialing this socket. */
+    readonly env: { readonly LINKRPC_ENDPOINT: string; readonly LINKRPC_TOKEN: string; };
     dispose(): void;
 }
 
@@ -130,9 +158,20 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
     // Shared managed-identity provisioner: maps an identity slot to a lazily
     // loaded, cached persistent identity. Used by handlers (config + bound
     // tokens) and cmd-env endpoints alike.
-    const identities = new IdentityProvisioner();
+    const identityStoreDir = opts.identityStoreDir ?? _provisionDir();
+    const identities = new IdentityProvisioner(identityStoreDir);
+    disposers.push(() => identities.dispose());
 
-    const forwardChecking = await _setupForwardChecking(hub, config, log, disposers, tokenStore);
+    const forwardChecking = await _setupForwardChecking(
+        hub, config, log, disposers, tokenStore, identityStoreDir,
+    );
+    const participantSockets: ParticipantSocketFactory = {
+        hub,
+        forwardChecking,
+        hubServiceId: config.hubServiceId,
+        tokenStore,
+        identities,
+    };
 
     if (flowLogger) disposers.push(() => flowLogger.dispose());
 
@@ -214,12 +253,24 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
 
         for (const { label, ep } of planned) {
             if (ep.kind !== 'cmd-env') continue;
-            await _wireCmdEnvEndpoint(
-                hub, label, ep, log, interactive, forwardChecking, config.hubServiceId, tokenStore, identities, disposers,
-            );
+            await _wireCmdEnvEndpoint(participantSockets, label, ep, log, interactive, disposers);
         }
 
-        return { hub, listeners, controlEndpoint, dispose };
+        const openSockets = new Set<() => void>();
+        disposers.push(() => {
+            for (const disposeSocket of [...openSockets]) disposeSocket();
+        });
+        const openParticipantSocket = async (options: ParticipantSocketOptions): Promise<ParticipantSocket> => {
+            const socket = await _openParticipantSocket(participantSockets, options);
+            const disposeSocket = (): void => {
+                if (!openSockets.delete(disposeSocket)) return;
+                socket.dispose();
+            };
+            openSockets.add(disposeSocket);
+            return { ...socket, dispose: disposeSocket };
+        };
+
+        return { hub, listeners, controlEndpoint, openParticipantSocket, dispose };
     } catch (e) {
         dispose();
         throw e;
@@ -256,6 +307,7 @@ async function _setupForwardChecking(
     log: (line: string) => void,
     disposers: Array<() => void>,
     tokenStore: TokenIdentityStore,
+    identityStoreDir: string,
 ): Promise<ForwardCheckingState | undefined> {
     const fc = config.forwardChecking;
     const verifySignatures = fc === true ? true : fc === false ? false : fc.verifySignatures;
@@ -280,7 +332,7 @@ async function _setupForwardChecking(
     if (approverEnabled) {
         const persisted = await loadOrCreateIdentity({
             id: config.adminIdentitySlot,
-            storeDir: _provisionDir(),
+            storeDir: identityStoreDir,
         });
         admin = KeypairSigningIdentity.fromKeypair(persisted.keypair);
         adminId = admin.publicSigningIdentity.principal;
@@ -577,8 +629,14 @@ function _buildHandlers(
  * the same principal — see {@link _migrateLegacy}.
  */
 class IdentityProvisioner {
-    private readonly _dir = _provisionDir();
     private _keystore: SqliteIdentityKeystore | undefined;
+
+    constructor(private readonly _dir: string) { }
+
+    /** Close the keystore; slots resolved afterwards fail. */
+    public dispose(): void {
+        this._keystore?.close();
+    }
 
     /**
      * A lazily-resolved managed identity plus its per-identity storage for
@@ -663,15 +721,11 @@ function _healthHandler(healthPath: string): http.RequestListener {
 // -- host-specific cmd-env participants -----------------------------------
 
 async function _wireCmdEnvEndpoint(
-    hub: Hub,
+    sockets: ParticipantSocketFactory,
     label: string,
     ep: Extract<EndpointConfig, { kind: 'cmd-env'; }>,
     log: (line: string) => void,
     interactive: boolean,
-    forwardChecking: ForwardCheckingState | undefined,
-    hubServiceId: string,
-    tokenStore: TokenIdentityStore,
-    identities: IdentityProvisioner,
     disposers: Array<() => void>,
 ): Promise<void> {
     if (ep.defaultRoute) {
@@ -683,37 +737,17 @@ async function _wireCmdEnvEndpoint(
     // The child claims its own prefix dynamically. Static route conflicts were
     // checked before any configured participant was started.
     const namespace = ep.grantedServiceId ?? ep.routeServiceIds[0];
-
-    const socketPath = SocketServer.allocSocketPath();
-    const token = randomBytes(16).toString('hex');
-    const server = await SocketServer.start({ endpoint: socketPath });
-    // Gate the child's forwarded calls exactly like an inbound peer's, so
-    // capability enforcement covers spawned services too.
-    const gate = _buildGate(forwardChecking, hubServiceId);
-    // The dial-in child is admitted unconditionally (no inbound token to gate)
-    // and provisioned with this endpoint's fixed root services: granted
-    // namespace, managed identity, and — when configured — the token-minting
-    // front door (also offered on `${hubServiceId}::connectionTokenBinder` via
-    // `_registerCentralConnectionTokenBinder`).
-    const provision: RootProvision = {
-        ...(namespace !== undefined ? { grantedServiceIdNamespace: namespace } : {}),
-        ...(ep.managedIdentity !== undefined
-            ? identities.slotFor(ep.managedIdentity.slot)
-            : {}),
-        ...(ep.connectionTokenBinder !== undefined
-            ? { connectionTokenBinder: _binderOptions(ep.connectionTokenBinder, tokenStore) }
-            : {}),
-    };
-    const acceptor = new HubConnectionAcceptor<NodeSocketTransport>({
-        server,
-        hub,
-        ...gate,
-        handlers: [anonymousHandler(provision)],
+    const socket = await _openParticipantSocket(sockets, {
+        provision: {
+            grantedServiceId: namespace,
+            managedIdentity: ep.managedIdentity,
+            connectionTokenBinder: ep.connectionTokenBinder,
+        },
     });
 
     const child = spawnCommand(endpointCommand(ep), {
         stdio: interactive ? ['pipe', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, ...ep.env, LINKRPC_ENDPOINT: socketPath, LINKRPC_TOKEN: token },
+        env: { ...process.env, ...ep.env, ...socket.env },
         ...(ep.cwd !== undefined ? { cwd: ep.cwd } : {}),
     });
     pipeChildLogs(child, label, log, { includeStdout: true });
@@ -721,10 +755,56 @@ async function _wireCmdEnvEndpoint(
 
     disposers.push(() => {
         killChild(child);
-        acceptor.dispose();
-        server.dispose();
-        _unlinkSocket(socketPath);
+        socket.dispose();
     });
+}
+
+/** Hub-scoped state needed to admit provisioned participants on private sockets. */
+interface ParticipantSocketFactory {
+    readonly hub: Hub;
+    readonly forwardChecking: ForwardCheckingState | undefined;
+    readonly hubServiceId: string;
+    readonly tokenStore: TokenIdentityStore;
+    readonly identities: IdentityProvisioner;
+}
+
+async function _openParticipantSocket(
+    factory: ParticipantSocketFactory,
+    options: ParticipantSocketOptions,
+): Promise<ParticipantSocket> {
+    const socketPath = options.path ?? SocketServer.allocSocketPath();
+    const token = randomBytes(16).toString('hex');
+    const provision = _provisionFromConfig(options.provision, factory.tokenStore, factory.identities);
+    const server = await SocketServer.start({ endpoint: socketPath });
+    let connections = 0;
+    const observed = mapTransport(server, (transport: NodeSocketTransport) => {
+        options.onConnectionCountChanged?.(++connections);
+        transport.onDidClose(() => options.onConnectionCountChanged?.(--connections));
+        return transport;
+    });
+    // Gate the child's forwarded calls exactly like an inbound peer's, so
+    // capability enforcement covers spawned services too. The peer is admitted
+    // unconditionally (no inbound token to gate) and provisioned with the fixed
+    // root services: granted namespace, managed identity, and — when
+    // configured — the token-minting front door (also offered on
+    // `${hubServiceId}::connectionTokenBinder` via
+    // `_registerCentralConnectionTokenBinder`).
+    const acceptor = new HubConnectionAcceptor<NodeSocketTransport>({
+        server: observed,
+        hub: factory.hub,
+        ..._buildGate(factory.forwardChecking, factory.hubServiceId),
+        handlers: [anonymousHandler(provision)],
+    });
+    return {
+        path: socketPath,
+        token,
+        env: { LINKRPC_ENDPOINT: socketPath, LINKRPC_TOKEN: token },
+        dispose: () => {
+            acceptor.dispose();
+            server.dispose();
+            _unlinkSocket(socketPath);
+        },
+    };
 }
 
 // -- identity / namespace helpers ----------------------------------------

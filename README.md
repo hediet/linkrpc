@@ -18,6 +18,12 @@ and MCP bridge under [`typescript/packages/`](./typescript/packages). The Rust
 workspace contains the core, procedural macros, Tokio transports, and examples
 under [`rust/crates/`](./rust/crates).
 
+The [per-user hub daemon](typescript/packages/linkrpc-hub-daemon) runs a hub in
+the background at login, supervises configured services from a hot-reloaded
+config file, and lets local applications connect through a private socket. The
+[desktop app](typescript/packages-private/linkrpc-hub-desktop) manages it from a
+tray icon.
+
 The published Rust `linkrpc` crate also ships the generic
 [`linkrpc-codegen` CLI](rust/docs/codegen-cli.md): LinkRPC definitions become
 shared Rust types, interface clients/providers, named bindings, and optional

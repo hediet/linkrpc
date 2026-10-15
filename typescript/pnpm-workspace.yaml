@@ -7,3 +7,4 @@ overrides:
 
 allowBuilds:
   esbuild: false
+  electron: true

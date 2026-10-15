@@ -55,6 +55,8 @@ export {
 } from './engine/configuredParticipants';
 export {
     type ListenerInfo,
+    type ParticipantSocket,
+    type ParticipantSocketOptions,
     type RunHubOptions,
     runHub,
     type RunningHub,
