@@ -214,10 +214,10 @@ export class HubDaemon {
             this._changed();
         }
         const removed = [...this._services.keys()].filter(name => !Object.hasOwn(config.services, name));
-        await Promise.all([
-            ...removed.map(name => this._removeService(name)),
-            ...Object.entries(config.services).map(([name, service]) => this._applyService(name, service)),
-        ]);
+        // Stop removed services first: a renamed service must release its resources (ports, devices)
+        // before its successor starts.
+        await Promise.all(removed.map(name => this._removeService(name)));
+        await Promise.all(Object.entries(config.services).map(([name, service]) => this._applyService(name, service)));
     }
 
     private async _applyService(name: string, service: ManagedService): Promise<void> {
