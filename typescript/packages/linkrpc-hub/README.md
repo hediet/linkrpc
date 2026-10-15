@@ -16,35 +16,90 @@ minted and printed at startup.
 
 ## Hosting a Node participant
 
-`hostParticipant` runs a service on a single connection. In `stdio` mode it
-registers services at the connection root, suitable for a hub `cmd-stdio`
-endpoint. In `hub` mode it connects to an existing hub, claims the namespace
-granted to this connection, and passes that service ID to `setup`:
+`hostParticipant` composes the Node `startEndpoint` API with service registration
+and per-connection cleanup. An application-specific `--stdio` flag can force
+stdio; otherwise the endpoint defaults to `LINKRPC_ENDPOINT`:
 
 ```ts
 import { hostParticipant } from '@hediet/linkrpc-hub/participant-host';
 
 const host = await hostParticipant({
-    transport: process.argv.includes('--stdio')
+    endpoint: process.argv.includes('--stdio')
         ? { type: 'stdio' }
-        : { type: 'hub', endpoint: process.env.LINKRPC_ENDPOINT!, token: process.env.LINKRPC_TOKEN },
-    setup: ({ connection, serviceId, signal }) => {
-        // Register your interfaces with { serviceId } in hub mode, or at
-        // the root (without serviceId) in stdio mode.
-        // Return a disposable for watchers or other external resources.
+        : { type: 'fromEnv' },
+    registrationMode: 'all',
+    setup: ({ services, connection, serviceId, signal }) => {
+        services.register(myInterface, myImplementation);
+        // Return a disposable for connection-owned resources.
     },
 });
 await host.done;
 ```
 
-`host.dispose()` closes the connection and awaits cleanup. An `AbortSignal`
-passed to `hostParticipant` also stops it. A requested hub `serviceId` must
-lie within the provenance-granted namespace; out-of-grant claims reject
-instead of silently falling back to another authority. When the hub
-provisions a managed identity overlay, set `managedIdentity: true` to sign
-outbound calls. Do not set it for plain socket/token connections without
-that overlay. This helper does not spawn a hub or retry connections; callers
-control those lifecycles independently.
+Omitting `endpoint` is equivalent to `{ type: 'fromEnv' }`. An explicit
+`{ endpoint: 'ws://localhost:7878', token: '...' }` uses the existing endpoint/token
+options. Endpoint URIs, tokens, authentication, and listener behavior follow
+[Node endpoint startup](../linkrpc/README.md#node-endpoint-startup):
+
+| `LINKRPC_ENDPOINT` | Behavior |
+| --- | --- |
+| `stdio:` | Serve this process's stdin/stdout |
+| `ws://host:port/path` or `wss://host/path` | Dial an existing endpoint |
+| `unix:/path.sock` or `npipe://./pipe/name` | Dial a local socket or named pipe |
+| `listen:ws://127.0.0.1:7878/rpc` | Accept WebSocket peers |
+| `listen:unix:/path.sock` or `listen:npipe://./pipe/name` | Accept local peers |
+
+There is no implicit endpoint if the environment is unset. Explicit stdio
+ignores `LINKRPC_ENDPOINT`. Never write logs to stdout in stdio mode; use stderr.
+Listeners require a nonempty token. Token precedence is explicit `token`, URI
+token, then `LINKRPC_TOKEN`. WebSocket listeners use `ws:`; terminate TLS externally.
+
+`registrationMode` is required and controls `services.register`:
+
+| Mode | No granted namespace | Granted namespace available |
+| --- | --- | --- |
+| `all` | Register at root | Claim namespace; register at root **and** the granted service ID |
+| `root` | Register at root | Register at root without querying or claiming a namespace |
+| `grantedServiceId` | Fail before `setup` | Claim namespace; register only at the granted service ID |
+
+Discovery is independent of transport, including stdio. Only a remote
+method-not-found response to namespace discovery or an empty grant counts as
+absence. Other errors, including failed claims, propagate instead of silently
+falling back to root. An optional top-level `serviceId` selects a descendant of
+the granted namespace; it rejects outside the grant, without a grant, or in
+`root` mode.
+
+`services.register` uses the same implementation at each selected address and
+returns one disposable for all registrations. If registration fails, partial
+registrations are rolled back. Service description/root-principal metadata
+applies only to the named registration and requires a granted service ID.
+Root exposure is explicit policy, not a replacement for application authorization.
+The underlying `connection` remains available for explicit registration and
+reflection (for example, `connection.enableReflection()`).
+
+`setup` runs once per connection: once for dialing/stdio, or once per accepted
+listener peer. Its `serviceId` is the claimed namespace, if any, and its `signal`
+aborts on peer disconnect or host shutdown, including during setup. Keep
+process-wide resources outside `setup`. Inbound application calls wait until
+setup completes; namespace discovery remains live to avoid mutual startup waits.
+
+`host.endpoint` contains the resolved address without credentials, including
+the actual port when listening on port `0`. `host.done` waits for endpoint
+shutdown and cleanup; a listener remains active when an individual peer leaves.
+`await host.dispose()` closes all peers and awaits cleanup. A supplied
+`AbortSignal` also stops the host. Listener peer failures are reported through
+`onError` (default: `process.emitWarning`) without stopping other peers. Cleanup
+failures are reported and also reject `host.done` on shutdown.
+
+When the peer provisions a managed identity overlay, set the top-level
+`managedIdentity: true` to sign outbound calls. A granted namespace alone does
+not imply this overlay exists. The helper does not spawn a hub, retry connections,
+install process signal handlers, or exit the process.
+
+Migrating from the earlier API: replace `transport` with `endpoint` and the
+required `registrationMode`; move `serviceId`/`managedIdentity` to the top level.
+Use the connection, namespace, and signal from `setup`, not from the host handle,
+since a listener can own multiple connections.
 
 ## CLI
 

@@ -1,210 +1,246 @@
-import { LinkRpcConnection } from '@hediet/linkrpc';
-import { hubFromConnection } from '@hediet/linkrpc/hub/client';
-import { createManagedSigningChannel } from '@hediet/linkrpc/hub/common';
 import {
-    connectToHub,
-    openHubChannel,
-    openStdioChannel,
-} from '@hediet/linkrpc/node';
+    ErrorCode, LinkRpcConnection, RpcError,
+    type InterfaceDeclarations, type InterfaceDefinition, type InterfaceHandlers, type InterfaceRegistration, type MemberMap,
+    type RegisterOptions,
+} from '@hediet/linkrpc';
+import { hubFromConnection } from '@hediet/linkrpc/hub/client';
+import { createManagedSigningChannel, hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
+import { startEndpoint, type EndpointConnection, type StartEndpointOptions, type StartedEndpoint } from '@hediet/linkrpc/node';
 
-export type ParticipantTransport =
+export type ParticipantEndpoint =
     | { readonly type: 'stdio'; }
-    | {
-        readonly type: 'hub';
-        /** Hub socket or WebSocket endpoint. */
-        readonly endpoint: string;
-        /** Hub transport token; omitted means an empty token. */
-        readonly token?: string;
-        /**
-         * Claim this descendant of the provenance-granted namespace instead
-         * of the entire namespace. Claims outside that grant are not attempted.
-         */
-        readonly serviceId?: string;
-        /**
-         * Use the hub's managed-identity overlay to sign outbound calls.
-         * Requires a hub connection provisioned with managed identity; leave
-         * unset for ordinary socket/token connections without that overlay.
-         */
-        readonly managedIdentity?: boolean;
-    };
-
-export interface ParticipantHostContext {
-    readonly connection: LinkRpcConnection;
-    /** Undefined on stdio: services are registered at the connection root. */
-    readonly serviceId: string | undefined;
-    /** Aborted on caller cancellation, peer disconnect, or disposal. */
-    readonly signal: AbortSignal;
-}
+    | { readonly type: 'fromEnv'; }
+    | (Required<Pick<StartEndpointOptions, 'endpoint'>> & Pick<StartEndpointOptions, 'token'>);
 
 export interface ParticipantHostOptions {
-    readonly transport: ParticipantTransport;
+    /** Defaults to fromEnv. Explicit stdio ignores LINKRPC_ENDPOINT. */
+    readonly endpoint?: ParticipantEndpoint;
+    readonly registrationMode: 'all' | 'root' | 'grantedServiceId';
+    /** Optionally claim a descendant of the granted namespace. Invalid claims reject. */
+    readonly serviceId?: string;
+    /** Requires a peer provisioned with the managed-identity overlay. */
+    readonly managedIdentity?: boolean;
     readonly signal?: AbortSignal;
-    /**
-     * Register services on this connection. Called after the hub namespace is
-     * claimed, if using the hub transport. Return a cleanup handle for any
-     * external resources (watchers, subscriptions, timers, etc.).
-     */
+    readonly onError?: StartEndpointOptions['onError'];
+    /** Called once per peer. Return cleanup for resources owned by this connection. */
     readonly setup: (
         context: ParticipantHostContext,
     ) => void | { dispose(): void } | AsyncDisposable
         | Promise<void | { dispose(): void } | AsyncDisposable>;
 }
 
-export interface ParticipantHostHandle extends ParticipantHostContext {
-    /** Resolves after shutdown and setup cleanup on EOF, socket close, or abort. */
+export interface ParticipantHostContext {
+    readonly connection: LinkRpcConnection;
+    readonly services: ParticipantServices;
+    /** The claimed namespace, or undefined for root-only registration. */
+    readonly serviceId: string | undefined;
+    /** Aborted on peer disconnect or host shutdown, including during setup. */
+    readonly signal: AbortSignal;
+}
+
+export interface ParticipantHostHandle {
+    /** Resolved endpoint without credentials, including the bound listener port. */
+    readonly endpoint: string;
+    /** Resolves after endpoint shutdown and all per-peer cleanup. */
     readonly done: Promise<void>;
-    /** Idempotently stop hosting and await setup cleanup. */
     dispose(): Promise<void>;
 }
 
-/**
- * Host a participant once, either over the process's stdio or on an existing
- * hub. Each call owns exactly one connection; reconnecting callers can invoke
- * it again with a fresh connection and fresh setup resources.
- */
 export async function hostParticipant(options: ParticipantHostOptions): Promise<ParticipantHostHandle> {
     options.signal?.throwIfAborted();
-    const { transport } = options;
-    const stdinEvents = ['data', 'end', 'close', 'error'] as const;
-    const stdinListenersBefore = transport.type === 'stdio'
-        ? stdinEvents.map((event) => new Set(process.stdin.listeners(event)))
-        : undefined;
-    const channel = transport.type === 'stdio'
-        ? await openStdioChannel()
-        : undefined;
-    // openStdioChannel currently has no close hook for its stdin listeners.
-    // Keep only those it installed, leaving any other stdin consumers alone.
-    const stdinListenersAdded = stdinListenersBefore?.map((before, index) => ({
-        event: stdinEvents[index],
-        listeners: process.stdin.listeners(stdinEvents[index]).filter((listener) => !before.has(listener)),
-    }));
-    const releaseStdin = () => {
-        if (!stdinListenersAdded) return;
-        for (const { event, listeners } of stdinListenersAdded) {
-            for (const listener of listeners) {
-                process.stdin.removeListener(event, listener as (...args: unknown[]) => void);
-            }
-        }
-        if (process.stdin.listenerCount('data') === 0) process.stdin.pause();
+    if (options.registrationMode !== 'all' && options.registrationMode !== 'root' && options.registrationMode !== 'grantedServiceId') {
+        throw new Error('registrationMode must be all, root, or grantedServiceId.');
+    }
+    if (options.registrationMode === 'root' && options.serviceId !== undefined) {
+        throw new Error('serviceId requires all or grantedServiceId registration mode.');
+    }
+    const peers = new Set<ParticipantPeer>();
+    const cleanupErrors: unknown[] = [];
+    let endpoint: StartedEndpoint | undefined;
+    let stopping = false;
+    const stop = () => {
+        stopping = true;
+        endpoint?.dispose();
+        for (const peer of peers) peer.dispose();
     };
-    const hubChannel = transport.type === 'hub' && transport.managedIdentity
-        ? await openHubChannel({ endpoint: transport.endpoint, token: transport.token ?? '' })
-        : undefined;
-    let connection: LinkRpcConnection;
-    let onClose: (listener: () => void) => { dispose(): void };
-    let closeTransport: () => void;
+    options.signal?.addEventListener('abort', stop, { once: true });
+    const selection = options.endpoint;
+    const endpointOptions = selection === undefined || ('type' in selection && selection.type === 'fromEnv')
+        ? {}
+        : 'type' in selection ? { endpoint: 'stdio:' } : selection;
     try {
-        if (channel) {
-            connection = new LinkRpcConnection(channel);
-            onClose = channel.onClose;
-            closeTransport = () => {
-                connection.close();
-                releaseStdin();
-            };
-        } else if (hubChannel) {
-            const abortBootstrap = () => hubChannel.close();
-            options.signal?.addEventListener('abort', abortBootstrap, { once: true });
-            let signed: Awaited<ReturnType<typeof createManagedSigningChannel>>;
-            try {
-                options.signal?.throwIfAborted();
-                signed = await createManagedSigningChannel(hubChannel);
-            } finally {
-                options.signal?.removeEventListener('abort', abortBootstrap);
-            }
-            connection = new LinkRpcConnection(signed.channel);
-            onClose = hubChannel.onClose;
-            closeTransport = () => {
-                connection.close();
-                hubChannel.close();
-            };
-        } else if (transport.type === 'hub') {
-            const handle = await connectToHub({
-                endpoint: transport.endpoint,
-                token: transport.token ?? '',
-            });
-            connection = handle.connection;
-            onClose = handle.onClose;
-            closeTransport = () => handle.close();
-        } else {
-            throw new Error('Unsupported participant transport');
+        endpoint = await startEndpoint({
+            ...endpointOptions,
+            onError: options.onError,
+            onConnection: async source => {
+                const peer = new ParticipantPeer(source, options);
+                peers.add(peer);
+                void peer.done.then(
+                    () => peers.delete(peer),
+                    error => {
+                        cleanupErrors.push(error);
+                        peers.delete(peer);
+                        const report = options.onError ?? (error => process.emitWarning(error));
+                        try {
+                            report(error instanceof Error ? error : new Error(String(error)));
+                        } catch (reportError) {
+                            process.emitWarning(new Error('hostParticipant onError callback threw', { cause: reportError }));
+                        }
+                    },
+                );
+                if (stopping) peer.dispose();
+                await peer.ready;
+            },
+        });
+        if (stopping) {
+            stop();
+            options.signal?.throwIfAborted();
         }
     } catch (error) {
-        hubChannel?.close();
-        channel?.sender.close();
-        releaseStdin();
+        stop();
+        await Promise.allSettled([...peers].map(peer => peer.done));
+        options.signal?.removeEventListener('abort', stop);
         throw error;
     }
+    const done = endpoint.closed.then(async () => {
+        stop();
+        await Promise.allSettled([...peers].map(peer => peer.done));
+        if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Participant cleanup failed');
+    }).finally(() => options.signal?.removeEventListener('abort', stop));
+    return { endpoint: endpoint.endpoint, done, dispose: () => { stop(); return done; } };
+}
 
-    const controller = new AbortController();
-    let setupResult: Awaited<ReturnType<ParticipantHostOptions['setup']>>;
-    let setupPending: Promise<void> | undefined;
-    let disposed: Promise<void> | undefined;
-    let resolveClosed!: () => void;
-    const closed = new Promise<void>((resolve) => { resolveClosed = resolve; });
-    const dispose = (): Promise<void> => {
-        if (disposed) return disposed;
-        controller.abort();
-        resolveClosed();
-        disposed = (async () => {
-            await setupPending?.catch(() => { /* the startup path propagates setup errors */ });
-            if (setupResult && Symbol.asyncDispose in setupResult) {
-                await setupResult[Symbol.asyncDispose]();
-            } else if (setupResult && 'dispose' in setupResult) {
-                setupResult.dispose();
-            }
-        })().finally(() => {
-            closeSubscription.dispose();
-            options.signal?.removeEventListener('abort', onAbort);
-        });
-        closeTransport();
-        return disposed;
-    };
-    const onAbort = () => { void dispose(); };
-    const closeSubscription = onClose(onAbort);
-    options.signal?.addEventListener('abort', onAbort, { once: true });
+/** Registers each implementation at the addresses selected by the host policy. */
+export class ParticipantServices {
+    private readonly _registrations = new Set<InterfaceRegistration>();
+    private _disposed = false;
 
-    try {
-        controller.signal.throwIfAborted();
-        options.signal?.throwIfAborted();
-        let serviceId: string | undefined;
-        if (transport.type === 'hub') {
-            const hub = hubFromConnection(connection);
-            if (transport.serviceId === undefined) {
-                serviceId = (await hub.claimGrantedServiceIdNamespace()).serviceId;
-            } else {
-                const grant = (await hub.getConnectionInfo()).grantedServiceIdNamespace;
-                controller.signal.throwIfAborted();
-                if (!grant || (
-                    transport.serviceId !== grant
-                    && !transport.serviceId.startsWith(`${grant}/`)
-                )) {
-                    throw new Error(
-                        `Requested serviceId "${transport.serviceId}" is outside the hub-granted namespace "${grant}"`,
-                    );
-                }
-                await hub.registerServiceIdNamespace(transport.serviceId);
-                serviceId = transport.serviceId;
+    constructor(
+        private readonly _connection: LinkRpcConnection,
+        private readonly _mode: ParticipantHostOptions['registrationMode'],
+        public readonly serviceId: string | undefined,
+    ) {}
+
+    public register<TDef extends InterfaceDefinition<MemberMap, InterfaceDeclarations>>(
+        iface: TDef,
+        handlers: InterfaceHandlers<TDef>,
+        options: Omit<RegisterOptions, 'serviceId'> = {},
+    ): InterfaceRegistration {
+        if (this._disposed) throw new Error('Participant services are disposed');
+        const registrations: InterfaceRegistration[] = [];
+        try {
+            if (this.serviceId !== undefined) {
+                registrations.push(this._connection.register(iface, handlers, { ...options, serviceId: this.serviceId }));
+            } else if (options.serviceDescription !== undefined || options.rootPrincipalSets !== undefined) {
+                throw new Error('Service metadata requires a granted service ID');
             }
-            controller.signal.throwIfAborted();
+            if (this._mode !== 'grantedServiceId') {
+                registrations.push(this._connection.register(iface, handlers));
+            }
+        } catch (error) {
+            for (const registration of registrations) registration.dispose();
+            throw error;
         }
+        const registration: InterfaceRegistration = {
+            dispose: () => {
+                for (const item of registrations) item.dispose();
+                this._registrations.delete(registration);
+            },
+        };
+        this._registrations.add(registration);
+        return registration;
+    }
 
-        const context: ParticipantHostContext = {
-            connection,
-            serviceId,
-            signal: controller.signal,
-        };
-        setupPending = Promise.resolve().then(async () => {
-            setupResult = await options.setup(context);
+    public dispose(): void {
+        this._disposed = true;
+        for (const registration of this._registrations) registration.dispose();
+    }
+}
+
+class ParticipantPeer {
+    private readonly _abort = new AbortController();
+    private _connection: LinkRpcConnection | undefined;
+    private _services: ParticipantServices | undefined;
+    private _setupResult: Awaited<ReturnType<ParticipantHostOptions['setup']>> = undefined;
+    public readonly ready: Promise<void>;
+    public readonly done: Promise<void>;
+
+    constructor(
+        private readonly _source: EndpointConnection,
+        private readonly _options: ParticipantHostOptions,
+    ) {
+        this.ready = Promise.resolve().then(() => this._setup());
+        this.done = _source.closed.then(async () => {
+            this._abort.abort();
+            try {
+                await this.ready;
+            } catch {
+                // Startup errors are propagated by onConnection; cleanup still runs.
+            }
+            try {
+                if (this._setupResult && Symbol.asyncDispose in this._setupResult) {
+                    await this._setupResult[Symbol.asyncDispose]();
+                } else if (this._setupResult) {
+                    this._setupResult.dispose();
+                }
+            } finally {
+                this._services?.dispose();
+                this._connection?.close();
+            }
         });
-        await setupPending;
-        controller.signal.throwIfAborted();
-        return {
-            ...context,
-            done: closed.then(() => dispose()),
-            dispose,
-        };
-    } catch (error) {
-        await dispose();
-        throw error;
+    }
+
+    public dispose(): void {
+        this._abort.abort();
+        this._source.dispose();
+    }
+
+    private async _setup(): Promise<void> {
+        try {
+            this._abort.signal.throwIfAborted();
+            // A participant does not grant namespaces. Let peer discovery receive
+            // method-not-found even when both peers are still bootstrapping.
+            this._source.resumeRequests([`${hubGrantedServiceIdInterface.info.id}::get`]);
+            const channel = this._options.managedIdentity
+                ? (await createManagedSigningChannel(this._source.channel)).channel
+                : this._source.channel;
+            const connection = this._connection = new LinkRpcConnection(channel);
+            const serviceId = await this._claimNamespace(connection);
+            this._abort.signal.throwIfAborted();
+            const services = this._services = new ParticipantServices(connection, this._options.registrationMode, serviceId);
+            this._setupResult = await this._options.setup({
+                connection, services, serviceId, signal: this._abort.signal,
+            });
+            this._abort.signal.throwIfAborted();
+        } catch (error) {
+            this.dispose();
+            throw error;
+        }
+    }
+
+    private async _claimNamespace(connection: LinkRpcConnection): Promise<string | undefined> {
+        if (this._options.registrationMode === 'root') return undefined;
+        const hub = hubFromConnection(connection);
+        let grant: string | undefined;
+        try {
+            grant = (await hub.getConnectionInfo()).grantedServiceIdNamespace || undefined;
+        } catch (error) {
+            if (!(error instanceof RpcError && error.origin === 'remote' && error.code === ErrorCode.methodNotFound)) {
+                throw error;
+            }
+        }
+        this._abort.signal.throwIfAborted();
+        if (grant === undefined) {
+            if (this._options.registrationMode === 'grantedServiceId' || this._options.serviceId !== undefined) {
+                throw new Error('Peer did not grant a service ID namespace');
+            }
+            return undefined;
+        }
+        const serviceId = this._options.serviceId ?? grant;
+        if (serviceId !== grant && !serviceId.startsWith(`${grant}/`)) {
+            throw new Error(`Requested serviceId "${serviceId}" is outside the hub-granted namespace "${grant}"`);
+        }
+        await hub.registerServiceIdNamespace(serviceId);
+        return serviceId;
     }
 }

@@ -65,18 +65,20 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
      * Wrap a transport with lifecycle hooks. deferRequests queues requests,
      * notifications, and their input streams until resumeRequests is called.
      * Responses and output streams remain live for setup-time outbound calls.
+     * Passing method names to resumeRequests releases only those non-streaming
+     * requests, leaving notifications and input streams deferred.
      */
     public static createWithClose<TInCtx = undefined>(
         transport: ChannelTransport<TInCtx>,
         options: { readonly deferRequests?: boolean } = {},
-    ): { channel: Channel<TInCtx, unknown>; close: (error?: Error) => void; resumeRequests: () => void; } {
+    ): { channel: Channel<TInCtx, unknown>; close: (error?: Error) => void; resumeRequests: (methods?: readonly string[]) => void; } {
         const jrc = new JsonRpcChannel<TInCtx>(transport, options.deferRequests === true);
         const channel = new Channel<TInCtx, unknown>(
             jrc,
             (h) => jrc.setRequestHandler(h),
             (observer) => jrc.setWireMessageObserver(observer),
         );
-        return { channel, close: error => jrc.close(error), resumeRequests: () => jrc.resumeRequests() };
+        return { channel, close: error => jrc.close(error), resumeRequests: methods => jrc.resumeRequests(methods) };
     }
 
     private _nextId = 1;
@@ -110,6 +112,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     private _wireObserver: WireMessageObserver | undefined;
     private _closeError: Error | undefined;
     private readonly _deferredMessages: MessageWithCtx<TInCtx>[] = [];
+    private readonly _resumedMethods = new Set<string>();
 
     public setRequestHandler(handler: IRequestHandler<TInCtx> | undefined): void {
         this._handler = handler;
@@ -128,11 +131,24 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         this._transport.setListener((m) => this._onMessage(m));
     }
 
-    public resumeRequests(): void {
-        while (this._deferredMessages.length > 0) {
-            this._dispatchMessage(this._deferredMessages.shift()!);
+    public resumeRequests(methods?: readonly string[]): void {
+        if (methods === undefined) {
+            while (this._deferredMessages.length > 0) {
+                this._dispatchMessage(this._deferredMessages.shift()!);
+            }
+            this._requestsDeferred = false;
+        } else {
+            for (const method of methods) this._resumedMethods.add(method);
+            for (let i = 0; i < this._deferredMessages.length;) {
+                const message = this._deferredMessages[i];
+                if (isRequest(message) && this._resumedMethods.has(message.method)) {
+                    this._deferredMessages.splice(i, 1);
+                    this._dispatchMessage(message);
+                } else {
+                    i++;
+                }
+            }
         }
-        this._requestsDeferred = false;
     }
 
     public async sendRequest(
@@ -337,6 +353,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         if (
             this._requestsDeferred
             && !isResponse(m)
+            && !(isRequest(m) && this._resumedMethods.has(m.method))
             && !(isNotification(m) && m.method === STREAM_METHOD
                 && (m.params as StreamSendParams | undefined)?.dir === StreamDir.toCaller)
         ) {

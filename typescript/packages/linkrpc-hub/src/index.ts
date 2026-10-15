@@ -66,7 +66,8 @@ export {
     type ParticipantHostContext,
     type ParticipantHostHandle,
     type ParticipantHostOptions,
-    type ParticipantTransport,
+    type ParticipantEndpoint,
+    ParticipantServices,
 } from './participantHost';
 export {
     createIdentityKeystore,

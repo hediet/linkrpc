@@ -27,6 +27,12 @@ export interface EndpointConnection extends IDisposable {
     readonly channel: Channel<undefined, unknown>;
     /** Resolves on peer disconnect or disposal; pending RPC calls are rejected. */
     readonly closed: Promise<void>;
+    /**
+     * Release selected non-streaming bootstrap requests during onConnection.
+     * Without arguments, release all requests. Notifications and input streams
+     * remain queued until all requests are released.
+     */
+    resumeRequests(methods?: readonly string[]): void;
 }
 
 export interface StartedEndpoint extends IDisposable {
@@ -69,7 +75,7 @@ async function _startSingle(
     endpoint: string,
     source: Channel<undefined, unknown> & {
         close(): void;
-        resumeRequests(): void;
+        resumeRequests(methods?: readonly string[]): void;
         onClose(listener: () => void): IDisposable;
     },
     options: StartEndpointOptions,
@@ -78,7 +84,9 @@ async function _startSingle(
     const closed = new Promise<void>(resolve => { finish = resolve; });
     const subscription = source.onClose(finish);
     void closed.then(() => subscription.dispose());
-    const connection: EndpointConnection = { channel: source, closed, dispose: () => source.close() };
+    const connection: EndpointConnection = {
+        channel: source, closed, dispose: () => source.close(), resumeRequests: source.resumeRequests,
+    };
     try {
         await options.onConnection(connection);
         source.resumeRequests();
@@ -263,7 +271,10 @@ class ListenerPeer implements IDisposable {
         const rpc = JsonRpcChannel.createWithClose(this._transport!, { deferRequests: true });
         this._closeChannel = rpc.close;
         this._resumeRequests = rpc.resumeRequests;
-        return { channel: rpc.channel, closed: this.closed, dispose: () => this.dispose() };
+        return {
+            channel: rpc.channel, closed: this.closed, dispose: () => this.dispose(),
+            resumeRequests: rpc.resumeRequests,
+        };
     }
 
     public resumeRequests(): void {

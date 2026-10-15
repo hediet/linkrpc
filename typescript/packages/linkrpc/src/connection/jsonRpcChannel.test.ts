@@ -4,6 +4,35 @@ import { TransportPair } from '../transport/messageTransport';
 import { JsonRpcChannel } from './jsonRpcChannel';
 
 describe('JsonRpcChannel deferred request handling', () => {
+    it('releases only selected bootstrap requests before releasing application traffic', async () => {
+        const pair = new TransportPair();
+        const local = JsonRpcChannel.createWithClose(pair.a, { deferRequests: true });
+        const remote = JsonRpcChannel.createWithClose(pair.b);
+        const events: string[] = [];
+        local.channel.setRequestHandler({
+            handleRequest: async call => {
+                events.push(call.method);
+                return { result: call.method };
+            },
+            handleNotification: call => { events.push(`notification:${call.method}`); },
+        });
+        try {
+            const application = remote.channel.sender.sendRequest('application', {});
+            const discovery = remote.channel.sender.sendRequest('discovery', {});
+            await remote.channel.sender.sendNotification('discovery', {});
+            local.resumeRequests(['discovery']);
+            expect(await discovery).toBe('discovery');
+            expect(await remote.channel.sender.sendRequest('discovery', {})).toBe('discovery');
+            expect(events).toEqual(['discovery', 'discovery']);
+            local.resumeRequests();
+            expect(await application).toBe('application');
+            expect(events).toEqual(['discovery', 'discovery', 'application', 'notification:discovery']);
+        } finally {
+            local.close();
+            remote.close();
+        }
+    });
+
     it('keeps outbound response and output-stream processing live during setup', async () => {
         const pair = new TransportPair();
         const local = JsonRpcChannel.createWithClose(pair.a, { deferRequests: true });

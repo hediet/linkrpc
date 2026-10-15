@@ -164,7 +164,7 @@ export type HubChannel = Channel<undefined, unknown> & {
     /** Close the underlying socket. */
     close(): void;
     /** Release incoming requests after installing application handlers. */
-    resumeRequests(): void;
+    resumeRequests(methods?: readonly string[]): void;
 };
 
 /**

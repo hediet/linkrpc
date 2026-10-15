@@ -180,6 +180,7 @@ interface StartEndpointOptions {
 interface EndpointConnection {
   readonly channel: Channel<undefined, unknown>;
   readonly closed: Promise<void>;
+  resumeRequests(methods?: readonly string[]): void;
   dispose(): void;
 }
 interface StartedEndpoint {
@@ -200,7 +201,13 @@ authentication. Responses and output streams for setup-time outbound calls remai
 live. Authentication acknowledges the transport, not application registration;
 callers can issue requests immediately without racing handler installation.
 Setup callbacks must not mutually wait for requests served only after the other
-peer's setup completes. Failed setup closes the peer and discards queued messages.
+peer's setup completes. For non-streaming bootstrap protocols, call
+`peer.resumeRequests(['someInterface::discover'])` to release only those requests
+while application traffic remains queued. This also releases matching requests
+already received. Notifications and input streams stay queued until setup
+finishes (or `resumeRequests()` is called without arguments). Install any required
+bootstrap handlers before releasing their requests; absent handlers produce
+method-not-found responses. Failed setup closes the peer and discards queued messages.
 
 Startup errors (including a failed initial callback) reject `startEndpoint`.
 Listener peer handshake/setup failures close that peer and call `onError`, while

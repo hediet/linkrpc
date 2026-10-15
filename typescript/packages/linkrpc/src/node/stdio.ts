@@ -59,7 +59,7 @@ export type StdioChannel = Channel<undefined, unknown> & {
     /** Detach from stdin/stdout without closing these process-owned streams. */
     close(): void;
     /** Release incoming requests after installing application handlers. */
-    resumeRequests(): void;
+    resumeRequests(methods?: readonly string[]): void;
 };
 
 export async function openStdioChannel(options: { readonly deferRequests?: boolean } = {}): Promise<StdioChannel> {
