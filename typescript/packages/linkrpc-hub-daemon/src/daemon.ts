@@ -57,7 +57,7 @@ export class HubDaemon {
     public readonly done: Promise<void>;
 
     private readonly _configFile: ConfigFile;
-    private readonly _appPath: string;
+    private _appPath: string;
     private readonly _management: LocalEndpoint & { readonly token: string; };
     private readonly _services = new Map<string, ServiceSupervisor>();
     private readonly _statusListeners = new Set<() => void>();
@@ -85,7 +85,7 @@ export class HubDaemon {
     ) {
         this.done = new Promise(resolve => { this._resolveDone = resolve; });
         this._configFile = new ConfigFile(home.configFile, home.configSchemaFile);
-        this._appPath = home.allocEndpoint('hub');
+        this._appPath = home.defaultAppEndpoint;
         this._management = { path: home.allocEndpoint('management'), token: _token() };
         this._serviceHost = {
             openSocket: (name, service, onConnectionCountChanged) => this._openServiceSocket(name, service, onConnectionCountChanged),
@@ -199,7 +199,9 @@ export class HubDaemon {
             await this._disposeAllServices();
             this._hub?.dispose();
             this._hub = undefined;
+            fs.rmSync(this.home.discoveryFile, { force: true });
             this._hubKey = hubKey;
+            this._appPath = config.localEndpoint.path ?? this.home.defaultAppEndpoint;
             try {
                 this._hub = await this._startHub(config);
                 this._hubStartedAt = Date.now();

@@ -171,4 +171,11 @@ describe('autostart', () => {
         expect(HubHome.resolve({}, 'win32', 'C:\\Users\\me').instanceName).toBe('linkrpc-hub');
         expect(HubHome.at('/tmp/other', 'linux').instanceName).toMatch(/^linkrpc-hub-[0-9a-f]{8}$/);
     });
+
+    it('uses fixed per-user application endpoints', () => {
+        expect(HubHome.resolve({ XDG_RUNTIME_DIR: '/run/user/1000' }, 'linux', '/home/me').defaultAppEndpoint)
+            .toBe('/run/user/1000/linkrpc-hub/hub.sock');
+        expect(HubHome.resolve({}, 'win32', 'C:\\Users\\me').defaultAppEndpoint)
+            .toMatch(/^\\\\\.\\pipe\\linkrpc-hub-[A-Za-z0-9._-]+$/);
+    });
 });

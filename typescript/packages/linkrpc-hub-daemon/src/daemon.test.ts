@@ -201,6 +201,23 @@ describe('HubDaemon', () => {
         expect((await echo('a')).text).toBe('a:hi');
     });
 
+    it('listens on a fixed endpoint that the config can change', async () => {
+        expect(daemon!.status().endpoint).toBe(home.defaultAppEndpoint);
+        const custom = process.platform === 'win32'
+            ? `\\\\.\\pipe\\linkrpc-hub-test-${path.basename(dir)}`
+            : path.join(home.runtimeDir, 'custom.sock');
+        writeConfig({ localEndpoint: { path: custom }, services: { a: service({ ECHO_PREFIX: 'a:' }) } });
+        await running('a');
+        expect(daemon!.status().endpoint).toBe(custom);
+        expect(JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).endpoint).toBe(custom);
+        const hub = await connectToHub({ endpoint: custom, token: '' });
+        try {
+            expect((await hub.connection.service('a').get(echoInterface).echo({ text: 'x' })).text).toBe('a:x');
+        } finally {
+            hub.close();
+        }
+    });
+
     it('owns its home exclusively and cleans up on shutdown', async () => {
         await expect(HubDaemon.start({ home })).rejects.toBeInstanceOf(AlreadyRunningError);
         writeConfig({ services: { a: service({}) } });
