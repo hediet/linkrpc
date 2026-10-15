@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { connectToHub } from '@hediet/linkrpc/node';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { connectToHubManagement, connectToLocalHub, type DaemonStatus, type ServiceStatus } from './client';
 import { HubDaemon } from './daemon';
@@ -179,6 +180,25 @@ describe('HubDaemon', () => {
         } finally {
             connection.close();
         }
+    });
+
+    it('needs no token by default and enforces a configured one', async () => {
+        writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
+        await running('a');
+        expect(JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).token).toBeUndefined();
+        const endpoint = daemon!.status().endpoint;
+        const plain = await connectToHub({ endpoint, token: '' });
+        try {
+            expect((await plain.connection.service('a').get(echoInterface).echo({ text: 'x' })).text).toBe('a:x');
+        } finally {
+            plain.close();
+        }
+
+        writeConfig({ localEndpoint: { token: 'secret' }, services: { a: service({ ECHO_PREFIX: 'a:' }) } });
+        await waitFor(() => JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).token === 'secret', 'the token to apply');
+        await running('a');
+        await expect(connectToHub({ endpoint, token: '' })).rejects.toThrow();
+        expect((await echo('a')).text).toBe('a:hi');
     });
 
     it('owns its home exclusively and cleans up on shutdown', async () => {

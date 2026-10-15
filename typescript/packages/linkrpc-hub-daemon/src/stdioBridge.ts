@@ -31,7 +31,7 @@ export async function bridgeStdioToLocalHub(options: StdioBridgeOptions): Promis
         input: socket,
         output: socket,
         onClose: () => close(),
-        initialize: { kind: 'client', token: discovery.token },
+        initialize: { kind: 'client', token: discovery.token ?? '' },
     });
     const { transport: stdio } = await connectNdjson({
         input: options.input,

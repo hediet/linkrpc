@@ -64,6 +64,20 @@ Every other top-level field is a regular [hub config](../linkrpc-hub/README.md)
 `forwardChecking` defaults to `false`: the endpoints are private to the OS user,
 which is the trust boundary of a per-user hub.
 
+### Application endpoint
+
+Applications connect to a named pipe (Windows) or a Unix socket in a directory
+only the user can access. No token is required: other OS users cannot open the
+pipe/socket for writing. To require one anyway (for example, to give access
+only to tools that know it), set:
+
+```jsonc
+"localEndpoint": { "token": "my-secret" }
+```
+
+The discovery file then contains the token, so `connectToLocalHub` keeps working.
+Changing it restarts the hub.
+
 ### What a change restarts
 
 | Change | Effect |
@@ -112,8 +126,9 @@ const github = hub.connection.service('github').get(githubInterface);
 
 `connectToLocalHub` uses `LINKRPC_ENDPOINT` when set (for managed services) and
 otherwise the running daemon's discovery file (`hub.json` in the state
-directory), which contains the endpoint and token. Other languages can read the
-same file: `{ "version": 1, "pid": …, "endpoint": "<pipe or socket path>", "token": "…" }`.
+directory), which contains the endpoint (and the token, if one is configured).
+Other languages can read the same file:
+`{ "version": 1, "pid": …, "endpoint": "<pipe or socket path>", "token"?: "…" }`.
 
 ### Hosts that spawn stdio services
 
@@ -173,10 +188,10 @@ endpoint published in `management.json`: status and a status stream, config
 read/validated write (with revision check), reload, service enable/restart/logs,
 and shutdown. `connectToHubManagement()` connects to it.
 
-Both discovery files are written with user-only permissions. Any process of the
-same OS user can read them, so the management endpoint separates concerns
-(managed services do not receive its token) rather than enforcing a security
-boundary within one user account.
+Both discovery files are written with user-only permissions. The management
+endpoint keeps a generated token, which the CLI and tray read from
+`management.json`; it separates concerns (managed services do not receive it)
+rather than enforcing a security boundary within one user account.
 
 ## CLI
 

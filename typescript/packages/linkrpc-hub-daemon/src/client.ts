@@ -31,7 +31,7 @@ export async function connectToLocalHub(options: ConnectToLocalHubOptions = {}):
     if (!discovery) {
         throw new Error(`The local LinkRPC hub is not running (no ${resolvedHome.discoveryFile}).`);
     }
-    return connectToHub({ ...connectOptions, endpoint: discovery.endpoint, token: discovery.token });
+    return connectToHub({ ...connectOptions, endpoint: discovery.endpoint, token: discovery.token ?? '' });
 }
 
 export interface HubManagementConnection {
@@ -46,7 +46,7 @@ export async function connectToHubManagement(home: HubHome = HubHome.resolve()):
     if (!discovery) {
         throw new Error(`The local LinkRPC hub is not running (no ${home.managementFile}).`);
     }
-    const handle = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token });
+    const handle = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token ?? '' });
     return {
         management: handle.connection.get(hubDaemonManagementInterface),
         onClose: listener => handle.onClose(listener),
