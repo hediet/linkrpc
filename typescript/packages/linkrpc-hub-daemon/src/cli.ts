@@ -12,6 +12,7 @@ import { HubDaemon } from './daemon';
 import type { DaemonStatus } from './managementInterface';
 import { HubHome } from './paths';
 import { AlreadyRunningError } from './singleInstance';
+import { bridgeStdioToLocalHub } from './stdioBridge';
 import { runWithKeepAlive } from './watchdog';
 
 const program = new Command('linkrpc-hub-daemon')
@@ -108,6 +109,13 @@ program.command('reload')
         const status = await management.reloadConfig({});
         console.log(status.config.error ? `The config is invalid: ${status.config.error}` : 'Config applied.');
     }));
+
+program.command('bridge-stdio')
+    .description('pipe newline-delimited JSON-RPC on stdin/stdout (no handshake) to the running hub')
+    .action(async () => {
+        await bridgeStdioToLocalHub({ home: home(), input: process.stdin, output: process.stdout });
+        process.exit(0);
+    });
 
 const autostart = program.command('autostart').description('start the hub at login');
 autostart.command('enable').description('start the hub at login').action(async () => {

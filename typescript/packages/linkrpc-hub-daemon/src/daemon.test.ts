@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { connectToHubManagement, connectToLocalHub, type DaemonStatus, type ServiceStatus } from './client';
 import { HubDaemon } from './daemon';
 import { HubHome } from './paths';
 import { AlreadyRunningError } from './singleInstance';
+import { bridgeStdioToLocalHub } from './stdioBridge';
 // @ts-expect-error -- plain ESM test fixture without declarations
 import { echoInterface } from './test/echoInterface.mjs';
 
@@ -122,6 +124,26 @@ describe('HubDaemon', () => {
         writeConfig({ services: { once: { command: printArgs, readiness: 'spawned', restart: 'never', description: 'edited' } } });
         await waitFor(() => serviceStatus('once')?.description === 'edited', 'the description to apply');
         expect(serviceStatus('once')).toMatchObject({ state: 'stopped', lastExit: exited.lastExit });
+    });
+
+    it('bridges handshake-free stdio JSON-RPC to the hub unchanged', async () => {
+        writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
+        const { pid } = await running('a');
+        const input = new PassThrough();
+        const output = new PassThrough();
+        const bridged = bridgeStdioToLocalHub({ home, input, output });
+        const response = new Promise<unknown>(resolve => {
+            let buffered = '';
+            output.on('data', (chunk: Buffer) => {
+                buffered += chunk.toString('utf8');
+                const newline = buffered.indexOf('\n');
+                if (newline >= 0) resolve(JSON.parse(buffered.slice(0, newline)));
+            });
+        });
+        input.write(JSON.stringify({ jsonrpc: '2.0', id: 'vscode-1', method: 'a::test.echo::echo', params: { text: 'hi' } }) + '\n');
+        expect(await response).toEqual({ jsonrpc: '2.0', id: 'vscode-1', result: { text: 'a:hi', pid } });
+        input.end();
+        await bridged;
     });
 
     it('serves the management API', async () => {
