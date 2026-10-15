@@ -4,6 +4,7 @@ import {
     createSeededSigningIdentity,
     issueCapability,
     type IRequestSender,
+    permits,
     Principal,
     type SigningCallCtx,
 } from '@hediet/linkrpc';
@@ -66,6 +67,53 @@ describe('sign-time delegated capability cache', () => {
             signedAtMs: Date.now(),
         });
         expect(sendRequest).toHaveBeenCalledTimes(negotiate ? 1 : 0);
+    });
+});
+
+describe('self-root capability', () => {
+    it('authorizes calls only where the principal is an accepted root, even beside a covering foreign grant', async () => {
+        const foreignRoot = await createSeededMemoryPrincipal({ seed: 830 });
+        const consumer = await createSeededMemoryPrincipal({ seed: 831 });
+        const target = { serviceId: { prefix: '' }, interfaceId: { exact: 'hubrpc.directory' }, members: [{ prefix: '' }] };
+        await consumer.capBag.add(await issueCapability(foreignRoot.identity, {
+            audience: consumer.identity.publicSigningIdentity,
+            permissions: [{ target, canInvoke: true }],
+        }));
+        const resolve = vi.spyOn(principalResolution, 'resolvePrincipal').mockResolvedValue({
+            principal: consumer,
+            source: { kind: 'user', id: 'test' },
+        });
+        onTestFinished(() => resolve.mockRestore());
+        const sendRequest = vi.fn<IRequestSender<SigningCallCtx>['sendRequest']>();
+        const channel: IRequestSender<SigningCallCtx> = {
+            sendRequest,
+            sendNotification: async () => {},
+            sendRequestWithStream: () => { throw new Error('unexpected stream'); },
+            close: () => {},
+        };
+        const signing: CliSigning = {};
+        await setupSigning(channel, signing, { kind: 'user', id: 'test' }, { negotiateHubCaps: true });
+        const signedAtMs = Date.now();
+        const presented = await signing.capProvider!({
+            method: 'pc::hubrpc.directory::list',
+            signer: consumer.id,
+            params: {},
+            nonce: 'self-root-nonce',
+            signedAtMs,
+        });
+        expect(sendRequest).not.toHaveBeenCalled();
+
+        const gate = (acceptedRoot: string) => permits({
+            target: { serviceId: 'pc', interfaceId: 'hubrpc.directory', member: 'list' },
+            params: {},
+            signer: consumer.id,
+            nonce: 'self-root-nonce',
+            signedAtMs,
+            callHash: '',
+        }, presented.capabilities ?? [], () => [{ principal: acceptedRoot, isPublic: true }], signedAtMs);
+        expect((await gate(consumer.id)).ok).toBe(true);
+        expect((await gate(foreignRoot.id)).ok).toBe(true);
+        expect((await gate((await createSeededMemoryPrincipal({ seed: 832 })).id)).ok).toBe(false);
     });
 });
 

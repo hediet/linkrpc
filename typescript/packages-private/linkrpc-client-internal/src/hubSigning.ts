@@ -2,6 +2,7 @@ import {
     type CapProvider,
     type CapProviderResult,
     type CallTarget,
+    issueCapability,
     permissionMatchesTarget,
     permits,
     capabilityFreshAt,
@@ -102,8 +103,15 @@ export async function setupSigning(
     const consumerPrincipalId = principal.id;
 
     if (opts.negotiateHubCaps) {
+        // The principal may itself be a capability root of the hub (its
+        // `rootPrincipalIds`). Present a self-issued capability alongside the
+        // bag: receivers only accept chains rooted at issuers they trust, so it
+        // is inert elsewhere. It stays out of the bag, so coverage checks and
+        // access negotiation still consider only delegated grants.
+        const selfRoot = _issueSelfRootCapability(principal);
         let inAccessNegotiation = false;
         const provider: CapProvider = async ({ method, params, nonce, signedAtMs, interfaceHash }) => {
+            const self = await selfRoot;
             let presentCaps = principal.capBag.capabilities;
             // Drop any cached cap that is expired (or expiring within the
             // safety margin) at this call's sign time. Without this, a stale
@@ -113,7 +121,7 @@ export async function setupSigning(
             presentCaps = presentCaps.filter((c) =>
                 capabilityFreshAt(c, signedAtMs, CAP_FRESHNESS_MARGIN_MS),
             );
-            const present: HubCapProviderResult = presentCaps.length > 0 ? { capabilities: presentCaps } : {};
+            const present: HubCapProviderResult = { capabilities: [...presentCaps, self] };
             if (inAccessNegotiation) return {} satisfies HubCapProviderResult;
 
             const call = _wireMethodToCall(method);
@@ -144,12 +152,7 @@ export async function setupSigning(
                 const durable = principal.capBag.capabilities.filter((c) =>
                     capabilityFreshAt(c, signedAtMs, CAP_FRESHNESS_MARGIN_MS),
                 );
-                if (oneShot.length > 0) {
-                    return { capabilities: [...durable, ...oneShot] };
-                }
-                return durable.length > 0
-                    ? { capabilities: durable }
-                    : ({} satisfies HubCapProviderResult);
+                return { capabilities: [...durable, ...oneShot, self] };
             } catch (err) {
                 process.stderr.write(
                     `linkrpc: capability negotiation skipped (${(err as Error).message})\n`,
@@ -328,6 +331,17 @@ function _wireMethodToCall(wireMethod: string): CallTarget | undefined {
 /** A cap is one-shot when any permission is pinned to a single call via `callBind`. */
 function _isOneShotCap(sc: SignedCapability): boolean {
     return sc.permissions.some((p) => p.callBind !== undefined);
+}
+
+/** `principal` grants itself every call; only a receiver trusting it as a root honors this. */
+function _issueSelfRootCapability(principal: Principal): Promise<SignedCapability> {
+    return issueCapability(principal.identity, {
+        audience: principal.identity.publicSigningIdentity,
+        permissions: [{
+            target: { serviceId: { prefix: '' }, interfaceId: { prefix: '' }, members: [{ prefix: '' }] },
+            canInvoke: true,
+        }],
+    });
 }
 
 /** Check held authority, not remote trust; the receiving gate selects accepted roots. */

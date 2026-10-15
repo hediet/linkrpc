@@ -595,6 +595,12 @@ only when the selected identity is a configured trusted root.
 Discovery diagnostics are written to stderr, including every manifest source
 and its pending-request count; `--json` stdout remains machine-readable.
 
+Hub calls (`call`, `ls`, …) additionally present a self-issued capability for
+every call. A Hub accepts it only where the identity is a configured trusted
+root, so a root needs no approval for its own calls; elsewhere it is ignored
+and stored or requested grants apply as before. A Hub answers a trusted root's
+access request at once, without parking it for approval.
+
 ```sh
 hub --endpoint unix:/run/hub.sock?token=abc identity show --json
 hub --endpoint unix:/run/hub.sock?token=abc approval requests --json

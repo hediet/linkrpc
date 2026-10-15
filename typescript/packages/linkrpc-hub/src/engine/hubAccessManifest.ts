@@ -190,6 +190,11 @@ export class HubAccessManifestHost {
             extend: async (params, _ctx, stream) => {
                 const consumerPrincipalId = params.consumer.principal;
                 const permissions = extendPermissions(params.serviceId, params.added);
+                const granted = params.added.map((a) => ({ interfaceId: a.interfaceId, member: a.member }));
+                if (this._isAcceptableRoot(consumerPrincipalId)) {
+                    this._log(`hubAccess::extend "${params.consumer.name}" is an accepted root; it authorizes itself`);
+                    return { status: 'granted', serviceId: params.serviceId, granted, capabilities: [] };
+                }
                 this._log(
                     `hubAccess::extend "${params.consumer.name}" (node=${consumerPrincipalId}) `
                     + `service=${params.serviceId}`,
@@ -210,7 +215,7 @@ export class HubAccessManifestHost {
                 return {
                     status: 'granted',
                     serviceId: params.serviceId,
-                    granted: params.added.map((a) => ({ interfaceId: a.interfaceId, member: a.member })),
+                    granted,
                     capabilities: [...decision.capabilities],
                 };
             },
@@ -220,6 +225,10 @@ export class HubAccessManifestHost {
                 const permissions = params.permissions as AccessDirectPermission[];
                 if (permissions.length === 0) {
                     return { status: 'denied', reason: 'no permissions requested' };
+                }
+                if (this._isAcceptableRoot(consumerPrincipalId)) {
+                    this._log(`hubAccess::requestAccess "${params.consumer.name}" is an accepted root; it authorizes itself`);
+                    return { status: 'granted', capabilities: [] };
                 }
                 this._log(
                     `hubAccess::requestAccess "${params.consumer.name}" (node=${consumerPrincipalId}) `
@@ -242,6 +251,16 @@ export class HubAccessManifestHost {
                 return { status: 'granted', capabilities: [...decision.capabilities] };
             },
         });
+    }
+
+    /**
+     * An accepted root issues its own capabilities, so its direct requests are
+     * granted at once without capabilities: there is nobody it must ask. The
+     * claimed principal is not authenticated here, which is harmless: the
+     * answer confers no authority, the gate still verifies every call.
+     */
+    private _isAcceptableRoot(principalId: string): boolean {
+        return this._acceptableRootIds.includes(principalId);
     }
 
     /** Park a desired entry and await the approver's decision (via `setCurrent`). */

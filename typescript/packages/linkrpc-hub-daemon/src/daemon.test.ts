@@ -41,10 +41,10 @@ describe('HubDaemon', () => {
         return status?.state === 'running' ? status : undefined;
     }, `${name} to run`);
     const writeConfig = (config: object) => fs.writeFileSync(home.configFile, JSON.stringify(config, null, 4));
-    const echo = async (serviceId: string): Promise<{ text: string; pid: number; }> => {
+    const echo = async (name: string): Promise<{ text: string; pid: number; }> => {
         const hub = await connectToLocalHub({ home });
         try {
-            return await hub.connection.service(serviceId).get(echoInterface).echo({ text: 'hi' });
+            return await hub.connection.service(`hub/${name}`).get(echoInterface).echo({ text: 'hi' });
         } finally {
             hub.close();
         }
@@ -141,7 +141,7 @@ describe('HubDaemon', () => {
                 if (newline >= 0) resolve(JSON.parse(buffered.slice(0, newline)));
             });
         });
-        input.write(JSON.stringify({ jsonrpc: '2.0', id: 'vscode-1', method: 'a::test.echo::echo', params: { text: 'hi' } }) + '\n');
+        input.write(JSON.stringify({ jsonrpc: '2.0', id: 'vscode-1', method: 'hub/a::test.echo::echo', params: { text: 'hi' } }) + '\n');
         expect(await response).toEqual({ jsonrpc: '2.0', id: 'vscode-1', result: { text: 'a:hi', pid } });
         input.end();
         await bridged;
@@ -189,7 +189,7 @@ describe('HubDaemon', () => {
         const endpoint = daemon!.status().endpoint;
         const plain = await connectToHub({ endpoint, token: '' });
         try {
-            expect((await plain.connection.service('a').get(echoInterface).echo({ text: 'x' })).text).toBe('a:x');
+            expect((await plain.connection.service('hub/a').get(echoInterface).echo({ text: 'x' })).text).toBe('a:x');
         } finally {
             plain.close();
         }
@@ -212,7 +212,7 @@ describe('HubDaemon', () => {
         expect(JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).endpoint).toBe(custom);
         const hub = await connectToHub({ endpoint: custom, token: '' });
         try {
-            expect((await hub.connection.service('a').get(echoInterface).echo({ text: 'x' })).text).toBe('a:x');
+            expect((await hub.connection.service('hub/a').get(echoInterface).echo({ text: 'x' })).text).toBe('a:x');
         } finally {
             hub.close();
         }
