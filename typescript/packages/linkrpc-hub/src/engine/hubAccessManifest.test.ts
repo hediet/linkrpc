@@ -87,6 +87,18 @@ describe('HubAccessManifestHost (hubAccess registered directly → manifest out)
         const host = new HubAccessManifestHost({ log: quiet });
         expect(host.resolve('nope', { grant: false })).toBe(false);
     });
+
+    it('grants an accepted root at once without capabilities; it issues its own', async () => {
+        const { host, client, dispose } = wire([PRINCIPAL]);
+        expect(await requestAccess(client)).toEqual({ status: 'granted', capabilities: [] });
+        expect(await client.get(hubAccessInterface).extend({
+            consumer: { name: 'tester', principal: PRINCIPAL },
+            serviceId: 'greeter',
+            added: [{ interfaceId: 'greeter', member: { exact: 'hello' } }],
+        })).toEqual({ status: 'granted', serviceId: 'greeter', granted: [{ interfaceId: 'greeter', member: { exact: 'hello' } }], capabilities: [] });
+        expect(host.getDesired().entries).toHaveLength(0);
+        dispose();
+    });
 });
 
 describe('runManifestApprover (over a connection)', () => {

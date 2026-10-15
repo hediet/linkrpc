@@ -54,7 +54,7 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 | `enabled` | `true` | `false` keeps the service configured but stopped |
 | `restart` | `on-failure` | `always`, `on-failure`, or `never` |
 | `readiness` | `connected` | Running once connected to the hub, or once `spawned` |
-| `serviceId` | service name | Namespace the service may claim on the hub |
+| `serviceId` | `<hubServiceId>/<name>` | Namespace the service may claim on the hub (default `hub/<name>`) |
 | `managedIdentity` | `true` | Provision a persistent identity (slot `service:<name>`) |
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
 | `stopTimeoutMs` | `5000` | Grace period before the process tree is killed |
@@ -63,6 +63,18 @@ Every other top-level field is a regular [hub config](../linkrpc-hub/README.md)
 (listeners, endpoints, `forwardChecking`, …). Unlike a standalone hub,
 `forwardChecking` defaults to `false`: the endpoints are private to the OS user,
 which is the trust boundary of a per-user hub.
+
+To require capabilities instead, trust an identity as capability root:
+
+```jsonc
+"forwardChecking": true,
+// e.g. the linkrpc CLI identity (`hub identity show --endpoint <endpoint>`)
+"rootPrincipalIds": ["id:key:…"]
+```
+
+Every forwarded call must then be signed and carry a capability rooted at a
+trusted root. The CLI signing as that identity authorizes itself; other
+callers' access requests wait until it approves them (`hub approval ui`).
 
 ### Application endpoint
 
@@ -113,11 +125,21 @@ import { hostParticipant } from '@hediet/linkrpc-hub/participant-host';
 
 const host = await hostParticipant({
     registrationMode: 'grantedServiceId',
-    setup: ({ services }) => services.register(myInterface, myImplementation),
+    setup: ({ connection, services, serviceId }) => {
+        services.register(myInterface, myImplementation);
+        // Listed by the hub directory (`hub ls`): the root directory refers to
+        // the per-service one.
+        connection.enableReflection();
+        connection.enableReflection({ serviceId });
+    },
 });
 await host.done; // the hub disconnected: exit
 process.exit(0);
 ```
+
+The hub's directory includes a service only through a
+`<serviceId>::hubrpc.directory` entry in the participant's root directory, so
+reflection is needed at both places.
 
 **Exit when the hub connection closes.** Closing the connection is the portable
 stop request (POSIX services additionally receive `SIGTERM`); after
@@ -131,7 +153,7 @@ and everything goes to the daemon log file.
 import { connectToLocalHub } from '@hediet/linkrpc-hub-daemon/client';
 
 const hub = await connectToLocalHub();
-const github = hub.connection.service('github').get(githubInterface);
+const github = hub.connection.service('hub/github').get(githubInterface);
 ```
 
 `connectToLocalHub` uses `LINKRPC_ENDPOINT` when set (for managed services) and
@@ -144,18 +166,18 @@ Other languages can read the same file:
 
 `linkrpc-hub-daemon bridge-stdio` connects its stdin/stdout (newline-delimited
 JSON-RPC, no handshake) to the running hub as a client. A host that routes a
-service ID to a spawned stdio child can thereby forward that ID to this hub,
-e.g. the VS Code team-tools extension:
+service ID prefix to a spawned stdio child can thereby forward this whole hub,
+e.g. the VS Code team-tools extension (the key is the `hubServiceId`):
 
 ```jsonc
 "vscode-team-tools.hubRpc.services": {
-    "stream-deck": { "cmd": "/path/to/node", "args": ["/path/to/linkrpc-hub-daemon/dist/cli.js", "bridge-stdio"] }
+    "hub": { "cmd": "/path/to/node", "args": ["/path/to/linkrpc-hub-daemon/dist/cli.js", "bridge-stdio"] }
 }
 ```
 
-Requests arrive fully qualified (`stream-deck::…`) and are routed by this hub;
-add one entry per service ID. The bridge exits when either side closes, and the
-host respawns it on the next call (for example after the hub restarted).
+Requests arrive fully qualified (`hub/github::…`) and are routed by this hub.
+The bridge exits when either side closes, and the host respawns it on the next
+call (for example after the hub restarted).
 
 ## Locations
 

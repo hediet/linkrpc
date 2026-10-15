@@ -19,13 +19,20 @@ describe('daemon config', () => {
               "managedIdentity": true,
               "readiness": "connected",
               "restart": "on-failure",
-              "serviceId": "echo",
+              "serviceId": "hub/echo",
               "startTimeoutMs": 30000,
               "stopTimeoutMs": 5000,
             },
             "forwardChecking": false,
           }
         `);
+    });
+
+    it('nests service IDs under the hub service ID by default', () => {
+        const config = parseDaemonConfigText(`{ "hubServiceId": "pc", "services": {
+            "a": { "command": ["x"] },
+            "b": { "command": ["x"], "serviceId": "custom" } } }`);
+        expect([config.services.a!.serviceId, config.services.b!.serviceId]).toEqual(['pc/a', 'custom']);
     });
 
     it('reports syntax errors with their position', () => {

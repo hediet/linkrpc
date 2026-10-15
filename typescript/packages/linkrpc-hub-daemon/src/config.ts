@@ -20,7 +20,10 @@ export const ManagedServiceSchema = z.object({
      * (`connected`, for LinkRPC services) or as soon as it spawned.
      */
     readiness: z.enum(['connected', 'spawned']).default('connected'),
-    /** Namespace the service may claim on the hub. Defaults to its name. */
+    /**
+     * Namespace the service may claim on the hub. Defaults to
+     * `<hubServiceId>/<name>`, so one prefix addresses the whole hub.
+     */
     serviceId: z.string().min(1).optional(),
     /** Provision a persistent managed identity (slot `service:<name>`). */
     managedIdentity: z.boolean().default(true),
@@ -101,7 +104,7 @@ export function parseDaemonConfig(raw: unknown): DaemonConfig {
     const services: Record<string, ManagedService> = {};
     const owners = new Map<string, string>();
     for (const [name, service] of Object.entries(parsedServices)) {
-        const serviceId = service.serviceId ?? name;
+        const serviceId = service.serviceId ?? `${hub.hubServiceId}/${name}`;
         const owner = owners.get(serviceId);
         if (owner !== undefined) {
             throw new Error(`services '${owner}' and '${name}' both claim serviceId '${serviceId}'`);
@@ -170,8 +173,9 @@ export function daemonConfigJsonSchema(): unknown {
 export const DEFAULT_CONFIG_TEXT = `{
     "$schema": "./config.schema.json",
     // Services the hub starts at login and keeps running. Each service gets
-    // LINKRPC_ENDPOINT and LINKRPC_TOKEN and may claim the service ID named
-    // after it. Saving this file applies changes; only changed services restart.
+    // LINKRPC_ENDPOINT and LINKRPC_TOKEN and may claim the service ID
+    // <hubServiceId>/<name> (default hub/<name>). Saving this file applies
+    // changes; only changed services restart.
     "services": {
         // "example": {
         //     "command": ["node", "/path/to/service.js"],
