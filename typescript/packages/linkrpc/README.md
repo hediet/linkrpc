@@ -116,8 +116,14 @@ the receiver still chooses a chain rooted at an issuer it accepts.
 `startEndpoint` from `@hediet/linkrpc/node` composes the existing channel,
 transport, and initialize-handshake APIs into a single application entry point.
 The application parses its own `--endpoint` option and passes its value as
-`endpoint`; when omitted, `LINKRPC_ENDPOINT` is used. There is no implicit
-default transport.
+`endpoint`; when omitted, `LINKRPC_ENDPOINT` is used, falling back to the legacy
+`HUBRPC_ENDPOINT` when the former is unset. The token comes from the same
+environment family: `LINKRPC_TOKEN` or `HUBRPC_TOKEN`. This prevents sending a
+token for a different hub when both families are present. An explicitly empty
+endpoint does not fall back, and an empty token remains empty. There is no
+implicit default transport. `openHubChannel` and `connectToHub` use the same
+resolution; `getHubEnvironment` exposes it for integrations and
+`requireHubEndpoint` validates that an endpoint is configured.
 
 ```ts
 import { LinkRpcConnection, startEndpoint } from '@hediet/linkrpc/node';
@@ -158,7 +164,7 @@ stream listeners and pauses stdin if no other data listeners remain, but never
 ends/destroys the process-owned streams.
 
 Tokens resolve in order: explicit `token` option, URI `?token=...`,
-`LINKRPC_TOKEN`, then the empty string. Every listener requires a **nonempty**
+the selected environment family's token, then the empty string. Every listener requires a **nonempty**
 token; accepted peers must present it in the existing LinkRPC initialize
 handshake before `onConnection` runs. Dialing sends the resolved token.
 Stdio is a trusted parent/child link and does not authenticate. Plain `ws:`

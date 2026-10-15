@@ -12,6 +12,7 @@ import { requestType } from '../schema/memberTypes';
 import { startEndpoint, type EndpointConnection, type StartedEndpoint } from './endpoint';
 import { runInitializeHandshake } from './initialize';
 import { WebSocketTransport } from './webSocketClientTransport';
+import { connectToHub, openHubChannel } from './hubClient';
 
 const echo = defineInterface({ id: 'endpoint.echo' }, {
     ping: requestType(z.string(), z.string()),
@@ -207,6 +208,31 @@ describe('startEndpoint', () => {
         endpoints.push(await startEndpoint({
             endpoint: 'listen:ws://127.0.0.1:0?token=secret', onConnection: serve,
         }));
+    });
+
+    it.each(['endpoint', 'channel', 'client'])('supports legacy environment through the %s API', async api => {
+        const server = await listen('listen:ws://127.0.0.1:0');
+        vi.stubEnv('LINKRPC_ENDPOINT', undefined);
+        vi.stubEnv('LINKRPC_TOKEN', 'wrong-family-token');
+        vi.stubEnv('HUBRPC_ENDPOINT', server.endpoint);
+        vi.stubEnv('HUBRPC_TOKEN', 'secret');
+        if (api === 'endpoint') {
+            let connection!: LinkRpcConnection;
+            endpoints.push(await startEndpoint({
+                onConnection: peer => { connection = new LinkRpcConnection(peer.channel); },
+            }));
+            expect(await connection.get(echo).ping('legacy')).toBe('LEGACY');
+        } else if (api === 'channel') {
+            const channel = await openHubChannel();
+            try {
+                expect(await new LinkRpcConnection(channel).get(echo).ping('legacy')).toBe('LEGACY');
+            } finally { channel.close(); }
+        } else {
+            const client = await connectToHub();
+            try {
+                expect(await client.connection.get(echo).ping('legacy')).toBe('LEGACY');
+            } finally { client.close(); }
+        }
     });
 
     it('dials legacy bare socket paths', async () => {
