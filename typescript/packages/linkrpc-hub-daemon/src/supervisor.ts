@@ -110,12 +110,14 @@ export class ServiceSupervisor {
             this._onDidChange();
             return Promise.resolve();
         }
+        this._logDaemon(service.enabled ? 'enabled' : 'disabled');
         return this.sync();
     }
 
     public restart(): Promise<void> {
         return this._enqueue(async () => {
             if (!this._service.enabled) throw new Error(`service '${this.name}' is disabled`);
+            this._logDaemon('restart requested');
             await this._stop('stopped');
             this._consecutiveFailures = 0;
             await this._launch();
