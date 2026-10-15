@@ -115,6 +115,23 @@ otherwise the running daemon's discovery file (`hub.json` in the state
 directory), which contains the endpoint and token. Other languages can read the
 same file: `{ "version": 1, "pid": …, "endpoint": "<pipe or socket path>", "token": "…" }`.
 
+### Hosts that spawn stdio services
+
+`linkrpc-hub-daemon bridge-stdio` connects its stdin/stdout (newline-delimited
+JSON-RPC, no handshake) to the running hub as a client. A host that routes a
+service ID to a spawned stdio child can thereby forward that ID to this hub,
+e.g. the VS Code team-tools extension:
+
+```jsonc
+"vscode-team-tools.hubRpc.services": {
+    "stream-deck": { "cmd": "/path/to/node", "args": ["/path/to/linkrpc-hub-daemon/dist/cli.js", "bridge-stdio"] }
+}
+```
+
+Requests arrive fully qualified (`stream-deck::…`) and are routed by this hub;
+add one entry per service ID. The bridge exits when either side closes, and the
+host respawns it on the next call (for example after the hub restarted).
+
 ## Locations
 
 | | Windows | macOS | Linux |
@@ -168,6 +185,7 @@ linkrpc-hub-daemon [--home <dir>] <command>
 
   run [--keep-alive] [--quiet]     run in the foreground
   start | stop | restart | status [--json] | reload
+  bridge-stdio                     pipe stdio JSON-RPC to the running hub
   autostart enable|disable|status
   service enable|disable|restart <name>
   service logs <name> [-n <lines>]

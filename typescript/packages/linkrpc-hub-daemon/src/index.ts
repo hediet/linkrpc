@@ -14,6 +14,7 @@ export {
 export { ConfigConflictError, ConfigFile } from './configFile';
 export { HubDaemon, type StartHubDaemonOptions } from './daemon';
 export { AlreadyRunningError } from './singleInstance';
+export { bridgeStdioToLocalHub, type StdioBridgeOptions } from './stdioBridge';
 export { queryDaemonStatus, startDaemon, type StartDaemonOptions, stopDaemon } from './control';
 export { runWithKeepAlive } from './watchdog';
 export { cliScript } from './packageInfo';
