@@ -11,6 +11,8 @@ export { startEndpoint, type StartEndpointOptions, type StartedEndpoint, type En
 export { connectToCmdStdio, openStdioChannel, serveOnStdio, type StdioChannel } from './node/stdio';
 export {
     connectToHub,
+    getHubEnvironment,
+    requireHubEndpoint,
     type ConnectToHubOptions,
     type HubChannel,
     type HubClientHandle,

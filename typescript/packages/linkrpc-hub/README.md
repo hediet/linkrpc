@@ -51,8 +51,10 @@ options. Endpoint URIs, tokens, authentication, and listener behavior follow
 
 There is no implicit endpoint if the environment is unset. Explicit stdio
 ignores `LINKRPC_ENDPOINT`. Never write logs to stdout in stdio mode; use stderr.
+The legacy `HUBRPC_ENDPOINT` / `HUBRPC_TOKEN` pair is also supported when
+`LINKRPC_ENDPOINT` is unset; endpoint and token environment families are not mixed.
 Listeners require a nonempty token. Token precedence is explicit `token`, URI
-token, then `LINKRPC_TOKEN`. WebSocket listeners use `ws:`; terminate TLS externally.
+token, then the selected environment token. WebSocket listeners use `ws:`; terminate TLS externally.
 
 `registrationMode` is required and controls `services.register`:
 

@@ -37,10 +37,24 @@ export const LINKRPC_ENDPOINT_VAR = 'LINKRPC_ENDPOINT';
 /** Env var the hub publishes for its shared attribution token. */
 export const LINKRPC_TOKEN_VAR = 'LINKRPC_TOKEN';
 
+export function getHubEnvironment(): { readonly endpoint: string | undefined; readonly token: string | undefined } {
+    const endpoint = process.env[LINKRPC_ENDPOINT_VAR];
+    if (endpoint !== undefined) return { endpoint, token: process.env[LINKRPC_TOKEN_VAR] };
+    const legacyEndpoint = process.env.HUBRPC_ENDPOINT;
+    if (legacyEndpoint !== undefined) return { endpoint: legacyEndpoint, token: process.env.HUBRPC_TOKEN };
+    return { endpoint: undefined, token: process.env[LINKRPC_TOKEN_VAR] ?? process.env.HUBRPC_TOKEN };
+}
+
+export function requireHubEndpoint(endpoint: string | undefined = getHubEnvironment().endpoint): string {
+    const value = endpoint?.trim();
+    if (!value) throw new Error('LINKRPC_ENDPOINT (or HUBRPC_ENDPOINT) is not set; specify an endpoint.');
+    return value;
+}
+
 export interface ConnectToHubOptions {
-    /** Defaults to `process.env.LINKRPC_ENDPOINT`. */
+    /** Defaults to LINKRPC_ENDPOINT, or the legacy HUBRPC_ENDPOINT. */
     readonly endpoint?: string;
-    /** Defaults to `process.env.LINKRPC_TOKEN`. */
+    /** Defaults to the token from the selected environment variable family. */
     readonly token?: string;
     /**
      * Initial {@link Principal} (identity + persistent caps) for outbound
@@ -100,7 +114,7 @@ export interface HubClientHandle {
 
 /**
  * Open a connection to a running linkrpc hub. Reads `LINKRPC_ENDPOINT` and
- * `LINKRPC_TOKEN` from the environment unless overridden. Sends the single-
+ * `LINKRPC_TOKEN` (or the legacy HUBRPC pair) from the environment unless overridden. Sends the single-
  * line `{"hello":1,"token":"..."}` preamble that the hub's socket server
  * requires, then wraps the socket in an `LinkRpcConnection`.
  *
@@ -132,10 +146,10 @@ export async function connectToHub(options: ConnectToHubOptions = {}): Promise<H
 
 /** Options for {@link openHubChannel}. Subset of {@link ConnectToHubOptions}. */
 export interface OpenHubChannelOptions {
-    /** Defaults to `process.env.LINKRPC_ENDPOINT`. */
+    /** Defaults to LINKRPC_ENDPOINT, or the legacy HUBRPC_ENDPOINT. */
     readonly endpoint?: string;
     /**
-     * Defaults to `process.env.LINKRPC_TOKEN`, or `''` when unset. The token
+     * Defaults to the selected environment family's token, or `''` when unset. The token
      * is sent in the hello preamble; provenance-authenticated hubs (hubv2)
      * ignore it, so an empty token is valid there.
      */
@@ -175,11 +189,9 @@ export type HubChannel = Channel<undefined, unknown> & {
 export async function openHubChannel(
     options: OpenHubChannelOptions = {},
 ): Promise<HubChannel> {
-    const endpoint = options.endpoint ?? process.env[LINKRPC_ENDPOINT_VAR];
-    const token = options.token ?? process.env[LINKRPC_TOKEN_VAR] ?? '';
-    if (!endpoint) {
-        throw new Error(`${LINKRPC_ENDPOINT_VAR} is not set; cannot connect to linkrpc hub.`);
-    }
+    const environment = getHubEnvironment();
+    const endpoint = requireHubEndpoint(options.endpoint ?? environment.endpoint);
+    const token = options.token ?? environment.token ?? '';
 
     const closeListeners = new Set<() => void>();
     let closed = false;

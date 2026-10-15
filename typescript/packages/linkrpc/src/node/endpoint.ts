@@ -7,15 +7,15 @@ import { formatEndpointUri, parseEndpointUri, type SocketEndpoint, type WsEndpoi
 import { JsonRpcChannel } from '../connection/jsonRpcChannel';
 import type { IDisposable } from '../disposable';
 import type { IMessageTransport } from '../transport/messageTransport';
-import { LINKRPC_ENDPOINT_VAR, LINKRPC_TOKEN_VAR, openHubChannel } from './hubClient';
+import { getHubEnvironment, requireHubEndpoint, openHubChannel } from './hubClient';
 import { connectNdjson, runInitializeHandshake } from './initialize';
 import { openStdioChannel } from './stdio';
 import { WebSocketTransport } from './webSocketClientTransport';
 
 export interface StartEndpointOptions {
-    /** Overrides LINKRPC_ENDPOINT. Use `listen:` to accept rather than dial. */
+    /** Overrides LINKRPC_ENDPOINT / HUBRPC_ENDPOINT. Use `listen:` to accept rather than dial. */
     readonly endpoint?: string;
-    /** Overrides the URI token, then LINKRPC_TOKEN. Required for listeners. */
+    /** Overrides the URI token, then the selected environment token. Required for listeners. */
     readonly token?: string;
     /** Install services/signing. Inbound requests wait for completion; outbound calls remain live. */
     readonly onConnection: (connection: EndpointConnection) => void | Promise<void>;
@@ -49,8 +49,8 @@ export interface StartedEndpoint extends IDisposable {
  * peers, reports them via onError, and continues accepting other connections.
  */
 export async function startEndpoint(options: StartEndpointOptions): Promise<StartedEndpoint> {
-    const configured = (options.endpoint ?? process.env[LINKRPC_ENDPOINT_VAR])?.trim();
-    if (!configured) throw new Error(`${LINKRPC_ENDPOINT_VAR} is not set; specify an endpoint.`);
+    const environment = getHubEnvironment();
+    const configured = requireHubEndpoint(options.endpoint ?? environment.endpoint);
     if (configured === 'stdio' || configured === 'stdio:') {
         return _startSingle('stdio:', await openStdioChannel({ deferRequests: true }), options);
     }
@@ -59,7 +59,7 @@ export async function startEndpoint(options: StartEndpointOptions): Promise<Star
     if (target.kind !== 'socket' && target.kind !== 'ws') {
         throw new Error('startEndpoint supports stdio, socket, and LinkRPC WebSocket endpoints only.');
     }
-    const token = options.token ?? target.token ?? process.env[LINKRPC_TOKEN_VAR] ?? '';
+    const token = options.token ?? target.token ?? environment.token ?? '';
     const endpoint = formatEndpointUri({ ...target, token: undefined });
     if (!listening) {
         const channel = await openHubChannel({
