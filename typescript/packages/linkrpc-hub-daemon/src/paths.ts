@@ -99,6 +99,19 @@ export class HubHome {
     }
 
     /**
+     * The fixed application endpoint unless `localEndpoint.path` overrides it.
+     * Windows pipes share one machine-wide namespace, so the name includes the
+     * user; Unix sockets live in the user's private runtime directory.
+     */
+    public get defaultAppEndpoint(): string {
+        if (this._platform === 'win32') {
+            const user = os.userInfo().username.replace(/[^A-Za-z0-9._-]/g, '_');
+            return `\\\\.\\pipe\\${this.instanceName}-${user}`;
+        }
+        return this._unixSocketPath('hub.sock');
+    }
+
+    /**
      * The single-instance lock endpoint. Fixed per home so that a second daemon
      * for the same home fails to bind it.
      */

@@ -66,17 +66,27 @@ which is the trust boundary of a per-user hub.
 
 ### Application endpoint
 
-Applications connect to a named pipe (Windows) or a Unix socket in a directory
-only the user can access. No token is required: other OS users cannot open the
-pipe/socket for writing. To require one anyway (for example, to give access
-only to tools that know it), set:
+Applications connect to a fixed, per-user endpoint (shown by `status`):
+
+- Windows: the named pipe `\\.\pipe\linkrpc-hub-<username>`
+- macOS/Linux: `hub.sock` in the user's private runtime directory
+
+No token is required: other OS users cannot open the pipe/socket for writing.
+Both can be changed:
 
 ```jsonc
-"localEndpoint": { "token": "my-secret" }
+"localEndpoint": {
+    "path": "\\\\.\\pipe\\my-hub",   // or a Unix socket path
+    "token": "my-secret"             // optional; clients must present it
+}
 ```
 
-The discovery file then contains the token, so `connectToLocalHub` keeps working.
-Changing it restarts the hub.
+The discovery file always reflects the active endpoint (and the token, if any),
+so `connectToLocalHub` keeps working. Changing `localEndpoint` restarts the hub.
+
+On Windows, pipe names are machine-wide: another local user could create the
+pipe first and receive clients that connect by name. On shared machines, rely
+on the discovery file (written only by the daemon) or configure a token.
 
 ### What a change restarts
 
@@ -153,7 +163,8 @@ host respawns it on the next call (for example after the hub restarted).
 | --- | --- | --- | --- |
 | Config | `%LOCALAPPDATA%\linkrpc\hub\config.json` | `~/Library/Application Support/linkrpc/hub/config.json` | `$XDG_CONFIG_HOME/linkrpc/hub/config.json` |
 | State, log, discovery | `%LOCALAPPDATA%\linkrpc\hub` | same directory | `$XDG_STATE_HOME/linkrpc/hub` |
-| Sockets | random named pipes | `…/hub/run` | `$XDG_RUNTIME_DIR/linkrpc-hub` |
+| App endpoint | `\\.\pipe\linkrpc-hub-<username>` | `…/hub/run/hub.sock` | `$XDG_RUNTIME_DIR/linkrpc-hub/hub.sock` |
+| Other sockets | random named pipes | `…/hub/run` | `$XDG_RUNTIME_DIR/linkrpc-hub` |
 
 `--home <dir>` (or `LINKRPC_HUB_HOME`) puts everything in one directory, e.g.
 for tests or a second independent hub; its autostart entries are named

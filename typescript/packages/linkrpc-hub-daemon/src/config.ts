@@ -40,6 +40,11 @@ const ServicesSchema = z.record(
 /** The daemon's application endpoint (named pipe / Unix socket). */
 const LocalEndpointSchema = z.object({
     /**
+     * Named pipe (Windows, `\\.\pipe\name`) or Unix socket path. Defaults to a
+     * fixed per-user name (see `linkrpc-hub-daemon status`).
+     */
+    path: z.string().min(1).optional(),
+    /**
      * Token clients must present. By default there is none: the endpoint is
      * reachable only by the OS user (pipe ACL / private socket directory).
      */
