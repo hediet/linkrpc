@@ -87,7 +87,6 @@ import {
 import {
     type CliProfile,
     type ResolvedInvocationContext,
-    mutationReference,
     resolveInvocationContext,
     resolveInvocationEndpoint,
     validationDefault,
@@ -237,7 +236,6 @@ export async function main(
         | undefined;
     program.hook('preAction', async (_thisCommand, actionCommand) => {
         const commandPath = getCommandPath(actionCommand);
-        const allowMissingContext = commandPath === 'context set';
         const store = new ContextStore();
         const cliOverrides = collectContextOverrides(program, actionCommand);
         const selector = explicitOption<string>(program, 'context');
@@ -249,7 +247,6 @@ export async function main(
             ...(selector !== undefined ? { selector } : {}),
             cliOverrides,
             ...(useEnvironment !== undefined ? { useEnvironment } : {}),
-            allowMissingContext,
         });
         if (profile === 'rpc' && g_invocation.values.config !== undefined) {
             throw new Error('--config is only available in the hub profile');
@@ -262,9 +259,12 @@ export async function main(
             if (Object.keys(cliOverrides).length === 0) {
                 throw new Error('--context-set requires at least one context-capable override');
             }
+            if (g_invocation.selected.context === undefined) {
+                throw new Error('No context exists to update. Use --new-context . to create one.');
+            }
             pendingContextSet = {
                 store,
-                reference: await mutationReference(store, g_invocation.selected),
+                reference: mutableReference(g_invocation.selected.reference),
                 values: cliOverrides,
             };
         }
@@ -926,16 +926,21 @@ Batch options:
     context
         .command('set')
         .description(
-            'Set explicit context-capable flags on the active context; creates a cwd context when none exists.',
+            'Set explicit context-capable flags on an existing context, or create one with --new-context.',
         )
         .option('--unset <key...>', 'remove one or more stored context values')
         .action(async (opts: { unset?: string[] }) => {
             if (g_contextStore === undefined || g_invocation === undefined) {
                 throw new Error('context resolver is unavailable');
             }
-            const target = explicitOption<string>(program, 'context') !== undefined
-                ? mutableReference(g_invocation.selected.reference)
-                : await mutationReference(g_contextStore, g_invocation.selected);
+            if (preparedNewContext !== undefined) {
+                if ((opts.unset?.length ?? 0) > 0) throw new Error('--unset cannot be used with --new-context');
+                return;
+            }
+            if (g_invocation.selected.context === undefined) {
+                throw new Error('No context exists to update. Use hub context set --new-context . with your desired flags.');
+            }
+            const target = mutableReference(g_invocation.selected.reference);
             const overrides = g_invocation.cliOverrides;
             const unset = (opts.unset ?? []).map(parseContextValueKey);
             if (Object.keys(overrides).length === 0 && unset.length === 0) {

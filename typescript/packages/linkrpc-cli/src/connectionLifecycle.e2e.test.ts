@@ -144,6 +144,22 @@ describe('connection lifecycle CLI', { timeout: 180_000 }, () => {
         await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
     });
 
+    it('requires --new-context for creation and prints actionable guidance', async () => {
+        const f = await fixture();
+        const missing = await f.run(['context', 'set', '--context', '.', '--endpoint', f.endpoint]);
+        expect(missing.code).not.toBe(0);
+        expect(missing.stderr).toContain('does not exist');
+        expect(missing.stderr).toContain('--new-context');
+        expect(await f.store.list()).toEqual([]);
+        await f.ok(['context', 'set', '--new-context', '.', '--endpoint', f.endpoint]);
+        expect((await f.store.select()).context?.values.endpoint).toBe(f.endpoint);
+        await f.ok(['context', 'set', '--context', '.', '--validation', 'off']);
+        expect((await f.store.select()).context?.values.validation).toBe('off');
+        const duplicate = await f.run(['context', '--new-context', '.']);
+        expect(duplicate.code).not.toBe(0);
+        expect(duplicate.stderr).toContain('already exists');
+    });
+
     it('requires an explicit limit even with stored limits and --new-context', async () => {
         const f = await fixture();
         await f.store.set({ kind: 'id', id: 'limits' }, {
@@ -209,7 +225,7 @@ describe('connection lifecycle CLI', { timeout: 180_000 }, () => {
     it('does not stop saved/shared endpoints when their contexts are removed', async () => {
         const f = await fixture();
         const broker = await f.create(['--timeout', 'inf']);
-        await f.ok(['context', 'set', '--context', 'id:shared', '--endpoint', broker]);
+        await f.ok(['context', 'set', '--new-context', 'id:shared', '--endpoint', broker]);
         await f.ok(['context', 'remove', '--context', 'id:shared']);
         expect(JSON.parse(await f.ok(['--endpoint', broker, 'connection', 'status'])))
             .toMatchObject({ timeoutMs: 'inf' });

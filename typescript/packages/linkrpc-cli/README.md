@@ -236,8 +236,8 @@ the Hub profile's normal environment endpoint overlay. Every context value can
 still be overridden by a command-line option.
 
 ```sh
-# Set endpoint and principal on the nearest context, creating one for cwd if needed.
-hub context set --endpoint 'wss://hub.example?token=%' \
+# Explicitly create a context for cwd with endpoint and principal defaults.
+hub context set --new-context . --endpoint 'wss://hub.example?token=%' \
   --endpoint-token secret --principal user:work
 
 # Create a named context from the effective values only after the call succeeds.
@@ -253,8 +253,15 @@ hub context remove --context .
 hub call app::api::get --context :empty --endpoint ws://localhost:7700
 ```
 
-Context creation and mutation are explicit: use `context set`,
-`--context-set`, or `--new-context <selector>`. Context values, including
+Context creation is explicit: use `--new-context <selector>` (for example,
+`hub context --new-context .` to create a folder context from effective defaults).
+`--context <selector>` only selects an existing context; missing-context errors
+show how to create it. `context set` and `--context-set` update existing contexts
+and do not implicitly create a cwd context. Use `context set --new-context <selector>`
+to create one with initial defaults. Combining `--context existing` with
+`--new-context new` derives the new context from an existing one; it never creates
+the selected source context.
+Context values, including
 endpoint tokens, are currently stored inline and unencrypted. Principals are
 stored by selector (`managed`, `user:<id>`, or `file:<path>`); their private
 keys remain in the existing identity store.

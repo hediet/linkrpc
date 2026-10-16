@@ -235,7 +235,7 @@ export class ContextStore {
             const key = contextKey(reference);
             const existing = contexts.get(key);
             if (existing === undefined) {
-                throw new Error(`context ${formatContextReference(reference)} does not exist`);
+                throw missingContextError(reference);
             }
             const values = { ...existing.values } as Record<keyof ContextValues, unknown>;
             for (const item of keys) delete values[item];
@@ -279,7 +279,7 @@ export class ContextStore {
         }
         const context = contexts.get(contextKey(reference));
         if (context === undefined && !allowMissing) {
-            throw new Error(`context ${formatContextReference(reference)} does not exist`);
+            throw missingContextError(reference);
         }
         return { reference, context, selectedBy, explicitlySelected };
     }
@@ -456,6 +456,11 @@ async function acquireContextStoreLock(file: string): Promise<() => Promise<void
         }
         await new Promise((resolve) => setTimeout(resolve, 25));
     }
+}
+
+function missingContextError(reference: ContextReference): Error {
+    const selector = JSON.stringify(formatContextReference(reference));
+    return new Error(`context ${formatContextReference(reference)} does not exist. Create it with --new-context ${selector} instead of --context ${selector}, or run: hub context --new-context ${selector}`);
 }
 
 export function contextKey(reference: ContextReference): string {
