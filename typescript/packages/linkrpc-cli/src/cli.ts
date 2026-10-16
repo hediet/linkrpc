@@ -1,4 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
+import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
+import { managedEndpointsInterface, HubHome, readEndpointDiscovery } from '@hediet/linkrpc-hub-daemon/client';
+import { contextNamespace, registerServices, useLocalManagement } from './commands/services';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
@@ -155,6 +158,8 @@ export async function main(
             'create a new context from the effective command values; fails if it already exists',
         )
         .option('--schema <path-or-url>', 'static schema catalog used for discovery and validation')
+        .option('--daemon-service <id>', 'daemon management service ID on the selected Hub')
+        .option('--namespace <name>', 'managed endpoint namespace (defaults to selected context)')
         .option(
             '--validation <mode>',
             'schema validation mode: auto, required, or off',
@@ -283,6 +288,10 @@ export async function main(
                 values: g_invocation.values,
             };
         }
+        if (commandPath.startsWith('services ') && preparedNewContext !== undefined) {
+            await createContextFromInvocation(preparedNewContext.store, preparedNewContext.reference, g_invocation.values);
+            pendingNewContext = undefined;
+        }
 
         endpoint = commandUsesEndpoint(commandPath) || hasEndpointOverrides(cliOverrides)
             ? resolveInvocationEndpoint(g_invocation, actionCommand.name() === 'tunnel')
@@ -314,6 +323,26 @@ export async function main(
             );
             pendingNewContext = undefined;
         }
+    });
+
+    if (profile === 'hub') registerServices(program, {
+        namespace: () => {
+            if (!g_invocation) throw new Error('Context resolver is unavailable');
+            return g_invocation.values.namespace ?? contextNamespace(preparedNewContext?.reference ?? g_invocation.selected.reference);
+        },
+        use: async (startLocal, action) => {
+            if (endpoint === undefined && g_hubConfigPath === undefined) {
+                return useLocalManagement(startLocal, client => action(client, true));
+            }
+            let result: Awaited<ReturnType<typeof action>> | undefined;
+            await withChannel(endpoint, getPrincipalSpec(), async channel => {
+                const connection = new LinkRpcConnection(channel);
+                const serviceId = g_invocation?.values.daemonService
+                    ?? `${(await connection.get(hubGrantedServiceIdInterface).getHubServiceId({})).hubServiceId}/daemon`;
+                result = await action(connection.get(managedEndpointsInterface, { serviceId }), false);
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+            return result!;
+        },
     });
 
     program
@@ -1638,6 +1667,8 @@ function collectContextOverrides(program: Command, actionCommand: Command): Cont
     copyExplicit(program, opts, result, 'sign');
     copyExplicit(program, opts, result, 'schema');
     copyExplicit(program, opts, result, 'validation');
+    copyExplicit(program, opts, result, 'daemonService');
+    copyExplicit(program, opts, result, 'namespace');
 
     if (getCommandPath(actionCommand) === 'connection create') {
         const actionOpts = actionCommand.opts();
@@ -1803,6 +1834,8 @@ function printContextValues(
 
 function contextValueFlag(key: keyof ContextValues): string {
     const names: Record<keyof ContextValues, string> = {
+        daemonService: 'daemon-service',
+        namespace: 'namespace',
         endpoint: 'endpoint',
         endpointCmd: 'endpoint-cmd',
         endpointCmdStdio: 'endpoint-cmd-stdio',
@@ -1825,6 +1858,8 @@ function contextValueFlag(key: keyof ContextValues): string {
 
 function parseContextValueKey(value: string): keyof ContextValues {
     const entry = (Object.keys({
+        daemonService: true,
+        namespace: true,
         endpoint: true,
         endpointCmd: true,
         endpointCmdStdio: true,
@@ -2100,6 +2135,19 @@ async function acquireConnection(
             ep: { kind: 'socket', path: running.controlEndpoint.path, token: running.controlEndpoint.token },
             running,
         };
+    }
+    if (endpoint === undefined && g_invocation?.profile === 'hub') {
+        await useLocalManagement(false, async client => {
+            const namespace = g_invocation?.values.namespace
+                ?? contextNamespace(g_invocation!.selected.reference);
+            const endpoints = await client.list({ namespace });
+            if (!endpoints.some(value => value.runtime.state === 'running')) {
+                throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
+            }
+        });
+        const discovery = readEndpointDiscovery(HubHome.resolve().discoveryFile);
+        if (!discovery) throw new Error('The local Hub stopped before connecting');
+        return { ep: { kind: 'socket', path: discovery.endpoint, token: discovery.token } };
     }
     return { ep: needEndpoint(endpoint) };
 }

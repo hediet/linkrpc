@@ -7,6 +7,8 @@ import { stopConnectionBroker } from './commands/connectionBrokerClient';
 export type ValidationMode = 'auto' | 'required' | 'off';
 
 export interface ContextValues {
+    readonly daemonService?: string;
+    readonly namespace?: string;
     readonly endpoint?: string;
     readonly endpointCmd?: string;
     readonly endpointCmdStdio?: string;

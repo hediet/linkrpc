@@ -27,6 +27,35 @@ linkrpc-hub-daemon config path        # the file to edit
 
 ## Configuring services
 
+### Dynamically managed endpoints
+
+The [CLI's `hub services` commands](../linkrpc-cli/README.md#daemon-owned-endpoints-hub-services)
+use `linkrpc.managedEndpoints` on the private management socket or the routed
+Hub service `<hubServiceId>/daemon`. Local clients and remote clients use the
+same API; the daemon owns processes, connection retries, output, and lifecycle.
+The routed interface is subject to the selected Hub's admission/capability
+policy. It permits execution as the daemon's OS user: do not expose a trusted
+local listener to untrusted networks without configuring those policies.
+
+The API exposes `info`, `list`, `create`, `start`, `stop`, `remove`, `configure`,
+`attach` (server stream), and instance-guarded `input`. Attach cancellation never
+stops an endpoint. Output retention is bounded to 1000 chunks per endpoint;
+recently completed ephemeral instances retain a bounded replay window.
+These instance IDs identify endpoint definitions, not individual automatic
+restart attempts.
+
+Dynamic endpoints are keyed by `(namespace, id)` and publish under
+`<hubServiceId>/services/<sha256(namespace)>/<id>`. Persistent definitions and
+desired state are atomically saved in `endpoints.json` in the daemon state
+directory. They are separate from the legacy configured services below, whose
+defaults remain unchanged. Dynamic endpoints default to ephemeral and
+`restart: never`; persistent restarting endpoints enable OS user-login startup.
+Explicit stop persists desired=false. Daemon shutdown does not overwrite it.
+Hub configuration reload preserves dynamic definitions in memory and restarts
+their workloads when the Hub itself must be replaced.
+
+### Config file
+
 The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 `config.schema.json` next to it gives editors completion and validation.
 

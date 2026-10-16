@@ -1,0 +1,157 @@
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { createHash } from 'node:crypto';
+import { z } from 'zod';
+import { defineInterface, requestType, LinkRpcConnection, type InterfaceClient } from '@hediet/linkrpc';
+import { connectToHub, formatEndpointUri } from '@hediet/linkrpc/node';
+import { SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HubDaemon } from './daemon';
+import { HubHome } from './paths';
+import { readEndpointDiscovery } from './discovery';
+import { managedEndpointsInterface, type EndpointEvent, type EndpointStatus } from './endpointInterface';
+
+const cleanup: (() => Promise<unknown> | void)[] = [];
+afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
+
+async function fixture() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lr-endpoints-'));
+    cleanup.push(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10 }));
+    const home = HubHome.at(dir);
+    const autostart = vi.fn(async () => {});
+    let daemon = await HubDaemon.start({ home, enableAutostart: autostart });
+    cleanup.push(() => daemon.shutdown());
+    const connect = async () => {
+        const discovery = readEndpointDiscovery(home.managementFile)!;
+        const handle = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token! });
+        cleanup.push(() => handle.close());
+        return handle.connection.get(managedEndpointsInterface);
+    };
+    const restart = async () => {
+        await daemon.shutdown();
+        daemon = await HubDaemon.start({ home, enableAutostart: autostart });
+        return connect();
+    };
+    return { home, connect, restart, autostart, daemon };
+}
+
+async function status(client: InterfaceClient<typeof managedEndpointsInterface>, id: string, state: EndpointStatus['runtime']['state']) {
+    let result: EndpointStatus | undefined;
+    await vi.waitFor(async () => {
+        result = (await client.list({ namespace: 'test' })).find(value => value.id === id);
+        expect(result?.runtime.state).toBe(state);
+    }, { timeout: 15_000 });
+    return result!;
+}
+
+const processSource = (script = 'setInterval(() => {}, 1000)') => ({
+    kind: 'process' as const, command: [process.execPath, '-e', script], readiness: 'spawned' as const, env: {},
+});
+const defaults = { namespace: 'test', id: 'main', persistent: false, restart: 'never' as const };
+const address = { namespace: 'test', id: 'main' };
+
+describe('managed endpoint RPC', { timeout: 30_000 }, () => {
+    it('isolates namespaces, rejects duplicates, and removes ephemeral endpoints on stop', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        await client.create({ ...defaults, source: processSource() });
+        await client.create({ ...defaults, namespace: 'other', source: processSource() });
+        await status(client, 'main', 'running');
+        await expect(client.create({ ...defaults, source: processSource() })).rejects.toThrow(/already exists/);
+        await client.stop(address);
+        expect(await client.list({ namespace: 'test' })).toEqual([]);
+        expect((await client.list({ namespace: 'other' })).map(value => value.id)).toEqual(['main']);
+    });
+
+    it('streams output and stdin, survives attach cancellation, and guards stale input', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        const created = await client.create({ ...defaults, source: processSource('process.stdin.on("data", d => process.stdout.write(d))') });
+        await status(client, 'main', 'running');
+        const events: EndpointEvent[] = [];
+        const watch = client.attach({ ...address, after: 0, instanceId: created.instanceId }, { onMessage: event => { events.push(event); } });
+        const ended = watch.catch(() => {});
+        await client.input({ ...address, instanceId: created.instanceId, input: { type: 'stdin', data: 'roundtrip\n' } });
+        await vi.waitFor(() => expect(events.some(event => event.type === 'output' && event.text.includes('roundtrip'))).toBe(true));
+        await watch.cancel();
+        await ended;
+        await status(client, 'main', 'running');
+        await expect(client.input({ ...address, instanceId: 'stale', input: { type: 'stdin', data: 'no' } })).rejects.toThrow(/changed/);
+    });
+
+    it('retains final output for a fast ephemeral process by instance ID', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        const created = await client.create({ ...defaults, source: processSource('console.log("final output")') });
+        await vi.waitFor(async () => expect(await client.list({ namespace: 'test' })).toEqual([]));
+        const events: EndpointEvent[] = [];
+        await client.attach({ ...address, after: 0, instanceId: created.instanceId }, { onMessage: event => { events.push(event); } });
+        expect(events.flatMap(event => event.type === 'output' && event.stream === 'stdout' ? [event.text] : []).join('')).toBe('final output\n');
+        expect(events.at(-1)).toEqual({ type: 'removed' });
+    });
+
+    it('restores desired persistent restart policies but remembers explicit stop', async () => {
+        const f = await fixture();
+        let client = await f.connect();
+        for (const id of ['resume', 'stop', 'never']) {
+            await client.create({ ...defaults, id, source: processSource(), persistent: true, restart: id === 'never' ? 'never' : 'on-failure' });
+            await status(client, id, 'running');
+        }
+        await client.stop({ namespace: 'test', id: 'stop' });
+        client = await f.restart();
+        await status(client, 'resume', 'running');
+        expect((await client.list({ namespace: 'test' })).map(value => [value.id, value.desired, value.runtime.state])).toEqual([
+            ['resume', true, 'running'], ['stop', false, 'disabled'], ['never', false, 'disabled'],
+        ]);
+        expect(f.autostart).toHaveBeenCalledTimes(2);
+        await client.start({ namespace: 'test', id: 'never' });
+        await status(client, 'never', 'running');
+    });
+
+    it('exposes the same API through the Hub and keeps existing management clients across reload', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        await client.create({ ...defaults, source: processSource() });
+        const first = await status(client, 'main', 'running');
+        const remote = await connectToHub({ endpoint: f.home.defaultAppEndpoint, token: '' });
+        cleanup.push(() => remote.close());
+        const routed = remote.connection.get(managedEndpointsInterface, { serviceId: 'hub/daemon' });
+        expect((await routed.list({ namespace: 'test' }))[0]?.instanceId).toBe(first.instanceId);
+        fs.writeFileSync(f.home.configFile, JSON.stringify({ localEndpoint: { token: 'changed' } }));
+        await f.daemon.reload();
+        const second = await status(client, 'main', 'running');
+        expect(second.runtime.pid).not.toBe(first.runtime.pid);
+    });
+
+    it('forwards connections transparently and reconnects after unexpected disconnection', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        const server = await SocketServer.start();
+        cleanup.push(() => server.dispose());
+        let current: { dispose(): void } | undefined;
+        const echo = defineInterface({ id: 'test.managed.echo' }, { echo: requestType(z.string(), z.string()) });
+        const serviceId = `hub/services/${createHash('sha256').update('test').digest('hex')}/main`;
+        server.setConnectionHandler(transport => {
+            current = transport;
+            const connection = LinkRpcConnection.fromTransport(transport);
+            connection.register(echo, { echo: value => value }, { serviceId });
+        });
+        await client.create({
+            ...defaults, restart: 'on-failure',
+            source: { kind: 'connection', endpoint: formatEndpointUri({ kind: 'socket', path: server.endpoint }) },
+        });
+        await status(client, 'main', 'running');
+        const hub = await connectToHub({ endpoint: f.home.defaultAppEndpoint, token: '' });
+        cleanup.push(() => hub.close());
+        expect(await hub.connection.get(echo, { serviceId }).echo('forwarded')).toBe('forwarded');
+        current!.dispose();
+        await vi.waitFor(async () => {
+            const endpoint = (await client.list({ namespace: 'test' }))[0]!;
+            expect(endpoint.runtime.state).toBe('running');
+            expect(endpoint.runtime.restarts).toBe(1);
+        }, { timeout: 10_000 });
+        await client.stop(address);
+        expect(await client.list({ namespace: 'test' })).toEqual([]);
+    });
+});

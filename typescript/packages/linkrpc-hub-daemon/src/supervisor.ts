@@ -20,6 +20,7 @@ export interface ServiceHost {
         onConnectionCountChanged: (count: number) => void,
     ): Promise<ServiceSocket>;
     log(name: string, line: string): void;
+    output?(name: string, stream: 'stdout' | 'stderr' | 'daemon', text: string): void;
 }
 
 export interface ServiceSocket {
@@ -97,6 +98,17 @@ export class ServiceSupervisor {
         return this._logs.lines(limit);
     }
 
+    public input(input: { type: 'stdin'; data: string } | { type: 'signal'; signal: 'SIGINT' | 'SIGTERM' }): void {
+        const child = this._process?.child;
+        if (!child) throw new Error('The process is not running');
+        if (input.type === 'stdin') {
+            if (!child.stdin?.writable) throw new Error('The process stdin is closed');
+            child.stdin.write(input.data);
+        } else if (!child.kill(input.signal)) {
+            throw new Error(`Could not send ${input.signal}`);
+        }
+    }
+
     /** Start or stop to match `enabled`. */
     public sync(): Promise<void> {
         return this._enqueue(() => (this._service.enabled ? this._launch() : this._stop('disabled')));
@@ -159,7 +171,7 @@ export class ServiceSupervisor {
             child = crossSpawn(executable!, args, {
                 env: { ...process.env, ...service.env, ...this._socket.env },
                 ...(service.cwd !== undefined ? { cwd: service.cwd } : {}),
-                stdio: ['ignore', 'pipe', 'pipe'],
+                stdio: ['pipe', 'pipe', 'pipe'],
                 windowsHide: true,
                 detached: SPAWN_DETACHED,
             });
@@ -168,7 +180,7 @@ export class ServiceSupervisor {
             return;
         }
         const exited = new Promise<ExitInfo>(resolve => {
-            child.once('exit', (code, signal) => resolve({ code, signal }));
+            child.once('close', (code, signal) => resolve({ code, signal }));
             child.once('error', error => {
                 if (child.pid === undefined) resolve({ code: null, signal: null, error: error.message });
                 else this._logDaemon(`process error: ${error.message}`);
@@ -179,6 +191,7 @@ export class ServiceSupervisor {
             child[stream]?.on('data', (chunk: string) => this._appendOutput(stream, chunk));
         }
         this._process = { child, exited };
+        child.stdin?.on('error', error => this._logDaemon(`stdin failed: ${error.message}`));
         this._error = undefined;
         this._setState('starting');
         if (service.readiness === 'spawned') {
@@ -309,10 +322,12 @@ export class ServiceSupervisor {
     }
 
     private _appendOutput(stream: 'stdout' | 'stderr', chunk: string): void {
+        this._host.output?.(this.name, stream, chunk);
         for (const line of this._logs.append(stream, chunk)) this._host.log(this.name, line);
     }
 
     private _logDaemon(text: string): void {
+        this._host.output?.(this.name, 'daemon', text + '\n');
         this._logs.append('daemon', text + '\n');
         this._host.log(this.name, text);
     }

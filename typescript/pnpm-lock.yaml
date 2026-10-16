@@ -153,6 +153,9 @@ importers:
       '@hediet/linkrpc-hub':
         specifier: workspace:*
         version: link:../linkrpc-hub
+      '@hediet/linkrpc-hub-daemon':
+        specifier: workspace:*
+        version: link:../linkrpc-hub-daemon
       '@hediet/linkrpc-infra':
         specifier: workspace:*
         version: link:../linkrpc-infra

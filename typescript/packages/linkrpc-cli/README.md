@@ -9,6 +9,89 @@ interfaces (`hubrpc.defaults`, `hubrpc.directory`, `hubrpc.schemas`) are
 used to discover what the endpoint exposes. Generic RPC commands work with any
 reflected interface; compiled-in views add specialized CLI and TUI renderers.
 
+## Daemon-owned endpoints (`hub services`)
+
+`hub services` manages processes and existing connections **through the daemon
+management RPC API**, including on the local machine. The CLI may bootstrap a
+local per-user daemon, but never supervises the managed workload itself.
+
+```sh
+# Create a context explicitly and run attached in the foreground:
+hub services run --new-context . -- node server.js
+
+# Another terminal in this context:
+hub services list
+hub ls
+hub services logs --follow
+
+# Detach an attached pipe console with Ctrl+] followed by Enter.
+# Or launch detached from the outset:
+hub services run --id worker --detach -- node worker.js
+hub services attach --id worker
+hub services stop --id worker
+
+# Retain a definition and resume it at user login:
+hub services run --id worker --persistent --restart on-failure --detach -- node worker.js
+hub services configure --id worker --restart always
+hub services stop --id worker     # stays stopped, including after login
+hub services start --id worker
+hub services remove --id worker
+
+# Connect rather than spawn (URI is interpreted on the daemon host):
+hub services connect --id peer --target-endpoint ws://localhost:7000 --restart on-failure
+```
+
+`--id` defaults to `main`. Namespace defaults to the selected context's canonical
+folder path (case-normalized on Windows), or its named/root context identity.
+Override it with `--namespace`. `--context` only selects an existing context;
+`--new-context .` creates one before the attached command starts. A namespace
+does not determine a remote working directory.
+
+Definitions default to ephemeral: they disappear after stop, completion, or
+terminal failure. `--persistent` retains a definition. `--restart` is `never`
+(default), `on-failure`, or `always`; for connections, disconnect counts as
+failure. Persistent restarting endpoints resume after daemon/OS restart unless
+explicitly stopped. Creating/configuring one enables daemon startup **at user
+login** when necessary, with a notice. Persistent `never` definitions remain
+stopped after daemon restart.
+
+Endpoint selection keeps the usual explicit flag / environment / context
+precedence, including `HUBRPC_*` aliases. An explicit `--context` suppresses the
+ambient endpoint unless `--use-env` is passed. On an effective Hub connection,
+the manager defaults to `<hubServiceId>/daemon`; override with
+`--daemon-service`. Both that option and `--namespace` can be saved using
+`context set`. An unreachable or unauthorized selected manager is an error,
+**never** a fallback to local execution.
+
+```sh
+hub --endpoint ws://remote-host:7000 --daemon-service remote/daemon \
+  --context . services run --id worker --cwd /srv/project --detach -- node worker.js
+```
+
+Remote launches require `--cwd` on the execution host. Commands, files, and
+environment values are not uploaded. Arguments after `--` are an executable
+and argv, not a shell command string. Execution host, namespace, ID, command,
+and working directory are printed before creation. Local fallback is used only
+when no endpoint/config is selected. `run`, `connect`, and `start` may bootstrap
+the local daemon; reads never do. Without a selected endpoint, `hub ls`, `call`,
+and other connected commands can use the local Hub when this context has
+running endpoints. Use the full `serviceId` returned by `services list` for RPC
+calls; endpoint IDs and published RPC service IDs are different things.
+
+Process readiness defaults to connecting to the provided `LINKRPC_ENDPOINT`
+and token. Use `--readiness spawned` for non-LinkRPC programs. Detached launches
+wait up to 30 seconds for readiness; a timeout leaves the endpoint managed and
+inspectable. Attachments stream bounded recent stdout/stderr and daemon output,
+forward stdin and Ctrl+C, and do not own the process lifetime. This is a **pipe
+console**, not a PTY: terminal resize and full-screen terminal apps are not
+supported. `logs` prints recent output; `logs --follow` keeps streaming.
+
+Connections support initialized LinkRPC socket/WebSocket endpoints. Forwarding
+preserves method names and signatures, rather than rewriting root services
+under a new prefix. The target must serve the assigned namespace (available
+from `services list` or by querying the Hub's granted namespace over the
+bidirectional connection). Connecting does not own or stop the target process.
+
 ## Views
 
 Views target an **interface** or a **service** (including the main/root service),

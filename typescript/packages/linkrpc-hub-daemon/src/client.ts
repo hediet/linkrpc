@@ -9,6 +9,7 @@ import { hubDaemonManagementInterface } from './managementInterface';
 import { HubHome } from './paths';
 
 export * from './managementInterface';
+export * from './endpointInterface';
 export { type EndpointDiscovery, readEndpointDiscovery } from './discovery';
 export { HubHome, LINKRPC_HUB_HOME_VAR } from './paths';
 

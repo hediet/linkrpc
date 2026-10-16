@@ -65,6 +65,8 @@ const ENDPOINT_GLOBAL_OPTIONS: readonly FlagDef[] = [
     { name: '--context-set', takesValue: false },
     { name: '--new-context', takesValue: true, valueType: 'free' },
     { name: '--schema', takesValue: true, valueType: 'free' },
+    { name: '--daemon-service', takesValue: true, valueType: 'serviceId' },
+    { name: '--namespace', takesValue: true, valueType: 'free' },
     { name: '--validation', takesValue: true, valueType: 'free' },
     { name: '--use-env', takesValue: false },
     { name: '--no-use-env', takesValue: false },
@@ -314,6 +316,48 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
 ];
 
 const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
+    {
+        name: 'services',
+        description: 'Manage daemon-owned processes and connections.',
+        positionals: [],
+        options: [],
+        subcommands: [
+            {
+                name: 'run', description: 'Run on the selected daemon.', positionals: [{ name: 'command', type: 'free' }],
+                options: [
+                    { name: '--id', takesValue: true, valueType: 'free' },
+                    { name: '--persistent', takesValue: false },
+                    { name: '--restart', takesValue: true, valueType: 'free' },
+                    { name: '--detach', takesValue: false },
+                    { name: '--cwd', takesValue: true, valueType: 'free' },
+                    { name: '--env', takesValue: true, valueType: 'free' },
+                    { name: '--readiness', takesValue: true, valueType: 'free' },
+                ],
+            },
+            {
+                name: 'connect', description: 'Connect an existing endpoint.', positionals: [],
+                options: [
+                    { name: '--id', takesValue: true, valueType: 'free' },
+                    { name: '--persistent', takesValue: false },
+                    { name: '--restart', takesValue: true, valueType: 'free' },
+                    { name: '--target-endpoint', takesValue: true, valueType: 'free' },
+                ],
+            },
+            { name: 'list', description: 'List managed endpoints.', positionals: [], options: [{ name: '--all-contexts', takesValue: false }] },
+            ...['start', 'stop', 'remove', 'attach', 'logs', 'configure'].map((name): SubcommandDef => ({
+                name, description: `${name} a managed endpoint.`, positionals: [],
+                options: [
+                    { name: '--id', takesValue: true, valueType: 'free' },
+                    ...(name === 'logs' || name === 'attach' ? [{ name: '--follow', takesValue: false }] : []),
+                    ...(name === 'configure' ? [
+                        { name: '--persistent', takesValue: false },
+                        { name: '--no-persistent', takesValue: false },
+                        { name: '--restart', takesValue: true, valueType: 'free' as const },
+                    ] : []),
+                ],
+            })),
+        ],
+    },
     {
         name: 'caps',
         description: 'List stored capabilities or request access for a call.',

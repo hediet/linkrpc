@@ -22,6 +22,7 @@
     "dependencies": {
         "@hediet/linkrpc": "workspace:*",
         "@hediet/linkrpc-hub": "workspace:*",
+        "@hediet/linkrpc-hub-daemon": "workspace:*",
         "@hediet/linkrpc-infra": "workspace:*",
         "beautiful-mermaid": "1.1.3",
         "commander": "^12.1.0",

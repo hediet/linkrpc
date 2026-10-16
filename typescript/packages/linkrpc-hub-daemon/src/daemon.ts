@@ -12,11 +12,16 @@ import { packageVersion } from './packageInfo';
 import { HubHome } from './paths';
 import { SingleInstanceLock } from './singleInstance';
 import { type ServiceHost, ServiceSupervisor } from './supervisor';
+import * as path from 'node:path';
+import { ManagedEndpoints } from './managedEndpoints';
+import { createAutostartManager } from './autostart/autostart';
+import { nodeDaemonLaunch } from './autostart/launch';
 
 export interface StartHubDaemonOptions {
     readonly home?: HubHome;
     /** Also write the log to stderr. */
     readonly echoLog?: boolean;
+    readonly enableAutostart?: () => Promise<void>;
 }
 
 interface LocalEndpoint {
@@ -40,7 +45,13 @@ export class HubDaemon {
         _ensurePrivateDirs(home);
         const lock = await SingleInstanceLock.acquire(home.lockEndpoint);
         const log = DaemonLog.open(home.logFile, { echo: options.echoLog ?? false });
-        const daemon = new HubDaemon(home, lock, log);
+        const daemon = new HubDaemon(home, lock, log, options.enableAutostart ?? (async () => {
+            const manager = await createAutostartManager({ home });
+            if (!await manager.isEnabled()) {
+                await manager.enable(nodeDaemonLaunch(home));
+                log.line('Enabled daemon startup at user login for persistent restarting endpoints');
+            }
+        }));
         try {
             await daemon._start();
             return daemon;
@@ -62,6 +73,9 @@ export class HubDaemon {
     private readonly _services = new Map<string, ServiceSupervisor>();
     private readonly _statusListeners = new Set<() => void>();
     private readonly _serviceHost: ServiceHost;
+    private _endpoints: ManagedEndpoints | undefined;
+    private readonly _endpointRegistrations = new Map<LinkRpcConnection, { dispose(): void } | undefined>();
+    private _managementLink: { dispose(): void } | undefined;
     private _hub: RunningHub | undefined;
     private _hubKey: string | undefined;
     private _hubStartedAt = 0;
@@ -82,6 +96,7 @@ export class HubDaemon {
         public readonly home: HubHome,
         private readonly _lock: SingleInstanceLock,
         private readonly _log: DaemonLog,
+        private readonly _enableAutostart: () => Promise<void>,
     ) {
         this.done = new Promise(resolve => { this._resolveDone = resolve; });
         this._configFile = new ConfigFile(home.configFile, home.configSchemaFile);
@@ -197,6 +212,14 @@ export class HubDaemon {
         if (hubKey !== this._hubKey || !this._hub) {
             if (this._hub) this._log.line('hub settings changed; restarting the hub and all services');
             await this._disposeAllServices();
+            const endpointSnapshot = this._endpoints?.snapshot();
+            await this._endpoints?.dispose();
+            this._endpoints = undefined;
+            for (const [connection, registration] of this._endpointRegistrations) {
+                registration?.dispose();
+                this._endpointRegistrations.set(connection, undefined);
+            }
+            this._managementLink?.dispose();
             this._hub?.dispose();
             this._hub = undefined;
             fs.rmSync(this.home.discoveryFile, { force: true });
@@ -204,6 +227,20 @@ export class HubDaemon {
             this._appPath = config.localEndpoint.path ?? this.home.defaultAppEndpoint;
             try {
                 this._hub = await this._startHub(config);
+                this._endpoints = new ManagedEndpoints(
+                    path.join(this.home.stateDir, 'endpoints.json'),
+                    `${config.hub.hubServiceId}/services`, this._serviceHost, this._enableAutostart,
+                );
+                await this._endpoints.restore(endpointSnapshot);
+                for (const connection of this._endpointRegistrations.keys()) {
+                    this._endpointRegistrations.set(connection, this._endpoints.register(connection));
+                }
+                const serviceId = `${config.hub.hubServiceId}/daemon`;
+                const link = this._hub.hub.attachOut({ routePrefixes: [serviceId] });
+                const connection = LinkRpcConnection.fromTransport(link.transport);
+                this._endpoints.register(connection, serviceId);
+                connection.enableReflection({ serviceId });
+                this._managementLink = { dispose: () => { connection.close(); link.dispose(); } };
                 this._hubStartedAt = Date.now();
                 this._hubError = undefined;
                 writePrivateJson(this.home.discoveryFile, this._discovery({ path: this._appPath, token: config.localEndpoint.token }));
@@ -300,12 +337,17 @@ export class HubDaemon {
         server.setConnectionHandler((transport: NodeSocketTransport) => {
             const connection = LinkRpcConnection.fromTransport(transport);
             this._registerManagement(connection);
-            transport.onDidClose(() => connection.close());
+            transport.onDidClose(() => {
+                this._endpointRegistrations.get(connection)?.dispose();
+                this._endpointRegistrations.delete(connection);
+                connection.close();
+            });
         });
         this._managementServer = server;
     }
 
     private _registerManagement(connection: LinkRpcConnection): void {
+        this._endpointRegistrations.set(connection, this._endpoints?.register(connection));
         connection.register(hubDaemonManagementInterface, {
             getStatus: () => this.status(),
             watchStatus: async (_params, _ctx, stream) => {
@@ -384,6 +426,8 @@ export class HubDaemon {
             if (readEndpointDiscovery(file)?.pid === process.pid) fs.rmSync(file, { force: true });
         }
         await this._disposeAllServices();
+        await this._endpoints?.dispose();
+        this._managementLink?.dispose();
         this._hub?.dispose();
         this._hub = undefined;
         this._managementServer?.dispose();
