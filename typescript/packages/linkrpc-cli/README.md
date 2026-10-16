@@ -15,6 +15,35 @@ reflected interface; compiled-in views add specialized CLI and TUI renderers.
 management RPC API**, including on the local machine. The CLI may bootstrap a
 local per-user daemon, but never supervises the managed workload itself.
 
+The daemon executable and implementation are bundled in this package's `dist/`
+(`daemon.js`). Installing the CLI does not require publishing or installing
+`@hediet/linkrpc-hub-daemon` separately. The daemon source package is a build-only
+workspace dependency; bootstrap launches the bundled executable with Node.js.
+
+Before using a daemon, the CLI checks its `requiredInterfaces` against the
+interface IDs and hashes advertised through reflection. Each required hash must
+be supported; no package/protocol version or automatic update policy is used.
+A legacy daemon without reflection, a missing interface, or a different hash
+fails with an actionable error before the workload is created:
+
+```sh
+hub services restart
+```
+
+This explicit command sends the local daemon's management `shutdown` RPC,
+waits for exit, starts the CLI's bundled daemon, and rechecks its interfaces.
+It disconnects Hub clients and stops workloads. Ephemeral endpoints disappear;
+persistent definitions retain their existing restart/desired-state semantics.
+It does **not** modify OS autostart registrations. A selected endpoint/config or
+routed manager is never silently replaced: update it on its execution host, or
+explicitly select the default local daemon with
+`hub --context :empty --no-use-env services restart`.
+
+OS autostart integration for `hub services` is postponed. Bootstrap/restart
+does not invoke the OS service manager, and persistent endpoint creation does
+not enable login startup. Existing registrations are left untouched and may
+still start a different build at the next login.
+
 ```sh
 # Create a context explicitly and run attached in the foreground:
 hub services run --new-context . -- node server.js
@@ -30,10 +59,10 @@ hub services run --id worker --detach -- node worker.js
 hub services attach --id worker
 hub services stop --id worker
 
-# Retain a definition and resume it at user login:
+# Retain a definition and resume it when the daemon next starts:
 hub services run --id worker --persistent --restart on-failure --detach -- node worker.js
 hub services configure --id worker --restart always
-hub services stop --id worker     # stays stopped, including after login
+hub services stop --id worker     # stays stopped across daemon restarts
 hub services start --id worker
 hub services remove --id worker
 
@@ -50,10 +79,10 @@ does not determine a remote working directory.
 Definitions default to ephemeral: they disappear after stop, completion, or
 terminal failure. `--persistent` retains a definition. `--restart` is `never`
 (default), `on-failure`, or `always`; for connections, disconnect counts as
-failure. Persistent restarting endpoints resume after daemon/OS restart unless
-explicitly stopped. Creating/configuring one enables daemon startup **at user
-login** when necessary, with a notice. Persistent `never` definitions remain
-stopped after daemon restart.
+failure. Persistent restarting endpoints resume when the daemon next starts,
+unless explicitly stopped. This does not arrange for the daemon itself to start
+after OS restart. Persistent `never` definitions remain stopped after daemon
+restart.
 
 Endpoint selection keeps the usual explicit flag / environment / context
 precedence, including `HUBRPC_*` aliases. An explicit `--context` suppresses the

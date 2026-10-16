@@ -50,8 +50,12 @@ export async function stopDaemon(home: HubHome, timeoutMs = 30_000): Promise<'st
     let connection: Awaited<ReturnType<typeof connectToHubManagement>>;
     try {
         connection = await connectToHubManagement(home);
-    } catch {
-        return 'not-running';
+    } catch (error) {
+        if (pid === undefined) return 'not-running';
+        if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') && !_isProcessAlive(pid)) {
+            return 'not-running';
+        }
+        throw error;
     }
     try {
         await connection.management.shutdown({});

@@ -1,5 +1,5 @@
 import { Command, Option } from 'commander';
-import { type InterfaceClient } from '@hediet/linkrpc';
+import { directoryInterface, ErrorCode, RpcError, type InterfaceClient, type LinkRpcConnection } from '@hediet/linkrpc';
 import { connectToHub } from '@hediet/linkrpc/node';
 import { managedEndpointsInterface, HubHome, readEndpointDiscovery, type EndpointStatus } from '@hediet/linkrpc-hub-daemon/client';
 import type { ContextReference } from '../contexts';
@@ -7,7 +7,43 @@ import type { ContextReference } from '../contexts';
 export type EndpointClient = InterfaceClient<typeof managedEndpointsInterface>;
 export interface ServicesHost {
     namespace(): string;
+    restart(): Promise<void>;
     use<T>(startLocal: boolean, action: (client: EndpointClient, local: boolean) => Promise<T>): Promise<T>;
+}
+
+const requiredInterfaces = [
+    { id: managedEndpointsInterface.info.id, hash: managedEndpointsInterface.schemaHash },
+];
+
+export async function checkDaemonInterfaces(connection: LinkRpcConnection, serviceId?: string): Promise<void> {
+    const recovery = serviceId === undefined
+        ? 'Run `hub services restart` to stop the local daemon via RPC and start this CLI\'s bundled daemon.'
+        : 'Update/restart the daemon on its execution host. To replace the default local daemon, run `hub --context :empty --no-use-env services restart`.';
+    for (const required of requiredInterfaces) {
+        let cursor: string | undefined;
+        let supported = false;
+        const hashes = new Set<string>();
+        try {
+            do {
+                const page = await connection.get(directoryInterface, { serviceId }).list({
+                    interfaceId: required.id, serviceId: serviceId ?? '', cursor,
+                });
+                for (const item of page.items) {
+                    if (item.interfaceId !== required.id || item.serviceId !== (serviceId ?? '')) continue;
+                    hashes.add(item.interfaceHash);
+                    supported ||= item.interfaceHash === required.hash;
+                }
+                if (page.truncated) throw new Error('Daemon interface discovery was truncated; compatibility could not be checked.');
+                cursor = page.nextCursor;
+            } while (!supported && cursor !== undefined);
+        } catch (error) {
+            if (!(error instanceof RpcError) || error.code !== ErrorCode.methodNotFound) throw error;
+            throw new Error(`The selected daemon cannot report its interfaces. ${recovery}`, { cause: error });
+        }
+        if (!supported) {
+            throw new Error(`The selected daemon does not support required interface ${required.id}@${required.hash} (reported: ${[...hashes].join(', ') || 'missing'}). ${recovery}`);
+        }
+    }
 }
 
 export function contextNamespace(reference: ContextReference): string {
@@ -22,19 +58,35 @@ export function contextNamespace(reference: ContextReference): string {
 export async function useLocalManagement<T>(start: boolean, action: (client: EndpointClient) => Promise<T>): Promise<T> {
     const home = HubHome.resolve();
     if (start) {
-        const { startDaemon, nodeDaemonLaunch, createAutostartManager } = await import('@hediet/linkrpc-hub-daemon');
-        const result = await startDaemon({ home, launch: nodeDaemonLaunch(home), autostart: await createAutostartManager({ home }) });
+        const { startDaemon, nodeDaemonLaunch } = await import('@hediet/linkrpc-hub-daemon');
+        const result = await startDaemon({ home, launch: nodeDaemonLaunch(home) });
         if (result === 'started') process.stderr.write('linkrpc: local daemon started.\n');
     }
     const discovery = readEndpointDiscovery(home.managementFile);
     if (!discovery) throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
     const handle = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token ?? '' });
-    try { return await action(handle.connection.get(managedEndpointsInterface)); }
+    try {
+        await checkDaemonInterfaces(handle.connection);
+        return await action(handle.connection.get(managedEndpointsInterface));
+    }
     finally { handle.close(); }
+}
+
+export async function restartLocalDaemon(): Promise<void> {
+    const { startDaemon, stopDaemon, nodeDaemonLaunch } = await import('@hediet/linkrpc-hub-daemon');
+    const home = HubHome.resolve();
+    process.stderr.write('Restarting the local Hub daemon: clients will disconnect and managed workloads will stop. OS autostart settings are unchanged.\n');
+    await stopDaemon(home);
+    await startDaemon({ home, launch: nodeDaemonLaunch(home) });
+    await useLocalManagement(false, async () => {});
+    process.stderr.write('The bundled daemon is running and supports the required interfaces.\n');
 }
 
 export function registerServices(program: Command, host: ServicesHost): void {
     const services = program.command('services').description('Manage context-scoped endpoints through the selected daemon.');
+    services.command('restart')
+        .description('Stop the local daemon via RPC and start the bundled daemon; does not change OS autostart.')
+        .action(() => host.restart());
     const addressed = (command: Command) => command.option('--id <id>', 'endpoint name in this context', 'main');
     const policy = (command: Command) => command.option('--persistent', 'retain definition across stop and daemon restart')
         .addOption(new Option('--restart <policy>', 'restart process or reconnect after failure').choices(['never', 'on-failure', 'always']).default('never'));
@@ -59,7 +111,6 @@ export function registerServices(program: Command, host: ServicesHost): void {
                 const cwd = options.cwd ?? (local ? process.cwd() : undefined);
                 if (!cwd) throw new Error('Remote execution requires --cwd with a path on the execution host.');
                 process.stderr.write(`Execution host: ${info.hostname}\nNamespace: ${namespace}\nEndpoint: ${options.id}\nCommand: ${JSON.stringify(command)}\nWorking directory: ${cwd}\n`);
-                if (options.persistent && options.restart !== 'never') process.stderr.write('Persistent restart policy enables daemon startup at user login on the execution host if needed.\n');
                 const status = await client.create({
                     namespace, id: options.id, persistent: options.persistent ?? false, restart: options.restart,
                     source: { kind: 'process', command, cwd, env, readiness: options.readiness },
@@ -74,7 +125,6 @@ export function registerServices(program: Command, host: ServicesHost): void {
             await host.use(true, async client => {
                 const info = await client.info({});
                 process.stderr.write(`Execution host: ${info.hostname}\nNamespace: ${namespace}\nEndpoint: ${options.id}\n`);
-                if (options.persistent && options.restart !== 'never') process.stderr.write('Persistent restart policy enables daemon startup at user login on the execution host if needed.\n');
                 const status = await client.create({
                     namespace, id: options.id, persistent: options.persistent ?? false, restart: options.restart,
                     source: { kind: 'connection', endpoint: options.targetEndpoint },

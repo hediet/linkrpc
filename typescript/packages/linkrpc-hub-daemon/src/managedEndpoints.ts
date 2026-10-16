@@ -31,7 +31,6 @@ export class ManagedEndpoints {
         private readonly _file: string,
         private readonly _prefix: string,
         private readonly _host: ServiceHost,
-        private readonly _enableAutostart: () => Promise<void>,
     ) {}
 
     snapshot(): { definition: EndpointDefinition; desired: boolean }[] {
@@ -67,7 +66,6 @@ export class ManagedEndpoints {
             list: ({ namespace }) => this.list(namespace),
             create: definition => this._serialize(async () => {
                 if (this._entries.has(key(definition))) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
-                if (definition.persistent && definition.restart !== 'never') await this._enableAutostart();
                 const entry = this._make(definition, true);
                 this._entries.set(key(definition), entry);
                 try { this._save(); }
@@ -77,7 +75,6 @@ export class ManagedEndpoints {
             }),
             start: address => this._serialize(async () => {
                 const entry = this._get(address);
-                if (entry.definition.persistent && entry.definition.restart !== 'never') await this._enableAutostart();
                 this._setDesired(entry, true);
                 await entry.supervisor.update({ ...entry.supervisor.service, enabled: true });
                 await entry.supervisor.sync();
@@ -105,7 +102,6 @@ export class ManagedEndpoints {
                     ...(params.persistent === undefined ? {} : { persistent: params.persistent }),
                     ...(params.restart === undefined ? {} : { restart: params.restart }),
                 };
-                if (definition.persistent && definition.restart !== 'never') await this._enableAutostart();
                 const previous = entry.definition;
                 entry.definition = definition;
                 try { this._save(); } catch (error) { entry.definition = previous; throw error; }

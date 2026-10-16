@@ -11,6 +11,7 @@ import { HubDaemon } from './daemon';
 import { HubHome } from './paths';
 import { readEndpointDiscovery } from './discovery';
 import { managedEndpointsInterface, type EndpointEvent, type EndpointStatus } from './endpointInterface';
+import * as autostart from './autostart/autostart';
 
 const cleanup: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
@@ -19,8 +20,7 @@ async function fixture() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lr-endpoints-'));
     cleanup.push(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10 }));
     const home = HubHome.at(dir);
-    const autostart = vi.fn(async () => {});
-    let daemon = await HubDaemon.start({ home, enableAutostart: autostart });
+    let daemon = await HubDaemon.start({ home });
     cleanup.push(() => daemon.shutdown());
     const connect = async () => {
         const discovery = readEndpointDiscovery(home.managementFile)!;
@@ -30,10 +30,10 @@ async function fixture() {
     };
     const restart = async () => {
         await daemon.shutdown();
-        daemon = await HubDaemon.start({ home, enableAutostart: autostart });
+        daemon = await HubDaemon.start({ home });
         return connect();
     };
-    return { home, connect, restart, autostart, daemon };
+    return { home, connect, restart, daemon };
 }
 
 async function status(client: InterfaceClient<typeof managedEndpointsInterface>, id: string, state: EndpointStatus['runtime']['state']) {
@@ -92,6 +92,10 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
     });
 
     it('restores desired persistent restart policies but remembers explicit stop', async () => {
+        const startup = vi.spyOn(autostart, 'createAutostartManager').mockImplementation(() => {
+            throw new Error('Managed endpoints must not touch OS autostart');
+        });
+        cleanup.push(() => startup.mockRestore());
         const f = await fixture();
         let client = await f.connect();
         for (const id of ['resume', 'stop', 'never']) {
@@ -104,9 +108,9 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         expect((await client.list({ namespace: 'test' })).map(value => [value.id, value.desired, value.runtime.state])).toEqual([
             ['resume', true, 'running'], ['stop', false, 'disabled'], ['never', false, 'disabled'],
         ]);
-        expect(f.autostart).toHaveBeenCalledTimes(2);
         await client.start({ namespace: 'test', id: 'never' });
         await status(client, 'never', 'running');
+        expect(startup).not.toHaveBeenCalled();
     });
 
     it('exposes the same API through the Hub and keeps existing management clients across reload', async () => {

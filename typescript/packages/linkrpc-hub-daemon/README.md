@@ -49,10 +49,19 @@ Dynamic endpoints are keyed by `(namespace, id)` and publish under
 desired state are atomically saved in `endpoints.json` in the daemon state
 directory. They are separate from the legacy configured services below, whose
 defaults remain unchanged. Dynamic endpoints default to ephemeral and
-`restart: never`; persistent restarting endpoints enable OS user-login startup.
+`restart: never`. Persistent restarting endpoints resume when the daemon starts,
+but do not enable OS user-login startup. The standalone daemon's explicit
+`autostart` commands remain available; dynamic endpoint operations never alter
+OS registrations.
 Explicit stop persists desired=false. Daemon shutdown does not overwrite it.
 Hub configuration reload preserves dynamic definitions in memory and restarts
 their workloads when the Hub itself must be replaced.
+
+The CLI bundles this daemon implementation and executable; it does not require
+this package to be published separately. Both management transports expose
+reflection for the CLI's required interface-hash checks. `hub services restart`
+explicitly shuts down the local daemon over management RPC and launches the
+CLI's bundled build, without updating existing autostart entries.
 
 ### Config file
 

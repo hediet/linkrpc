@@ -1,12 +1,11 @@
 import { defineConfig } from 'tsdown';
+import { fileURLToPath } from 'node:url';
 
 // Library entry and one explicit entry per executable profile.
 //
-// Runtime `dependencies` (react, ink, commander, zod, `@hediet/linkrpc`,
-// `@hediet/linkrpc-hub`) stay external and resolve from node_modules. The
-// source-only client helper package below is a dev dependency that exposes its
-// TypeScript source directly, so it must be bundled into the output.
-export default defineConfig({
+// Runtime dependencies stay external. The daemon and source-only client helpers
+// are build dependencies bundled into the CLI package.
+export default defineConfig([{
     entry: {
         index: 'src/index.ts',
         linkrpc: 'src/linkrpc.ts',
@@ -19,11 +18,19 @@ export default defineConfig({
     sourcemap: true,
     clean: true,
     dts: true,
+    alias: {
+        '@hediet/linkrpc-hub-daemon/client': fileURLToPath(new URL('../linkrpc-hub-daemon/src/client.ts', import.meta.url)),
+        '@hediet/linkrpc-hub-daemon': fileURLToPath(new URL('../linkrpc-hub-daemon/src/index.ts', import.meta.url)),
+        'jsonc-parser': fileURLToPath(new URL('../linkrpc-hub-daemon/node_modules/jsonc-parser/lib/esm/main.js', import.meta.url)),
+    },
     outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
     deps: {
         alwaysBundle: [
             '@vscode/observables',
             '@hediet/linkrpc-client-internal',
+            '@hediet/linkrpc-hub-daemon',
+            'cross-spawn',
+            'jsonc-parser',
         ],
     },
     outputOptions: {
@@ -31,4 +38,18 @@ export default defineConfig({
         banner: (chunk) =>
             (['linkrpc', 'rpc', 'hub'].includes(chunk.name) ? '#!/usr/bin/env node' : ''),
     },
-});
+}, {
+    // Separate compilation keeps daemon CLI side effects out of library chunks.
+    entry: { daemon: '../linkrpc-hub-daemon/src/cli.ts' },
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    sourcemap: true,
+    clean: false,
+    outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
+    alias: {
+        'jsonc-parser': fileURLToPath(new URL('../linkrpc-hub-daemon/node_modules/jsonc-parser/lib/esm/main.js', import.meta.url)),
+    },
+    deps: { alwaysBundle: ['cross-spawn', 'jsonc-parser'] },
+    outputOptions: { chunkFileNames: 'chunks/daemon-[name]-[hash].js' },
+}]);

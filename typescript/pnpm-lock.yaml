@@ -153,9 +153,6 @@ importers:
       '@hediet/linkrpc-hub':
         specifier: workspace:*
         version: link:../linkrpc-hub
-      '@hediet/linkrpc-hub-daemon':
-        specifier: workspace:*
-        version: link:../linkrpc-hub-daemon
       '@hediet/linkrpc-infra':
         specifier: workspace:*
         version: link:../linkrpc-infra
@@ -184,6 +181,9 @@ importers:
       '@hediet/linkrpc-client-internal':
         specifier: workspace:*
         version: link:../../packages-private/linkrpc-client-internal
+      '@hediet/linkrpc-hub-daemon':
+        specifier: workspace:*
+        version: link:../linkrpc-hub-daemon
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43

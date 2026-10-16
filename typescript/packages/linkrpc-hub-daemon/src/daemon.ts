@@ -14,14 +14,11 @@ import { SingleInstanceLock } from './singleInstance';
 import { type ServiceHost, ServiceSupervisor } from './supervisor';
 import * as path from 'node:path';
 import { ManagedEndpoints } from './managedEndpoints';
-import { createAutostartManager } from './autostart/autostart';
-import { nodeDaemonLaunch } from './autostart/launch';
 
 export interface StartHubDaemonOptions {
     readonly home?: HubHome;
     /** Also write the log to stderr. */
     readonly echoLog?: boolean;
-    readonly enableAutostart?: () => Promise<void>;
 }
 
 interface LocalEndpoint {
@@ -45,13 +42,7 @@ export class HubDaemon {
         _ensurePrivateDirs(home);
         const lock = await SingleInstanceLock.acquire(home.lockEndpoint);
         const log = DaemonLog.open(home.logFile, { echo: options.echoLog ?? false });
-        const daemon = new HubDaemon(home, lock, log, options.enableAutostart ?? (async () => {
-            const manager = await createAutostartManager({ home });
-            if (!await manager.isEnabled()) {
-                await manager.enable(nodeDaemonLaunch(home));
-                log.line('Enabled daemon startup at user login for persistent restarting endpoints');
-            }
-        }));
+        const daemon = new HubDaemon(home, lock, log);
         try {
             await daemon._start();
             return daemon;
@@ -96,7 +87,6 @@ export class HubDaemon {
         public readonly home: HubHome,
         private readonly _lock: SingleInstanceLock,
         private readonly _log: DaemonLog,
-        private readonly _enableAutostart: () => Promise<void>,
     ) {
         this.done = new Promise(resolve => { this._resolveDone = resolve; });
         this._configFile = new ConfigFile(home.configFile, home.configSchemaFile);
@@ -229,7 +219,7 @@ export class HubDaemon {
                 this._hub = await this._startHub(config);
                 this._endpoints = new ManagedEndpoints(
                     path.join(this.home.stateDir, 'endpoints.json'),
-                    `${config.hub.hubServiceId}/services`, this._serviceHost, this._enableAutostart,
+                    `${config.hub.hubServiceId}/services`, this._serviceHost,
                 );
                 await this._endpoints.restore(endpointSnapshot);
                 for (const connection of this._endpointRegistrations.keys()) {
@@ -385,6 +375,7 @@ export class HubDaemon {
                 return {};
             },
         });
+        connection.enableReflection();
     }
 
     private _service(name: string): ServiceSupervisor {

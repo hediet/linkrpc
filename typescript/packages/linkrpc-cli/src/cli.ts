@@ -1,7 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { managedEndpointsInterface, HubHome, readEndpointDiscovery } from '@hediet/linkrpc-hub-daemon/client';
-import { contextNamespace, registerServices, useLocalManagement } from './commands/services';
+import { checkDaemonInterfaces, contextNamespace, registerServices, restartLocalDaemon, useLocalManagement } from './commands/services';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
@@ -326,6 +326,12 @@ export async function main(
     });
 
     if (profile === 'hub') registerServices(program, {
+        restart: async () => {
+            if (endpoint !== undefined || g_hubConfigPath !== undefined || g_invocation?.values.daemonService !== undefined) {
+                throw new Error('services restart only replaces the default local daemon, not a selected Hub endpoint or routed daemon. Run `hub --context :empty --no-use-env services restart` to explicitly choose the local daemon.');
+            }
+            await restartLocalDaemon();
+        },
         namespace: () => {
             if (!g_invocation) throw new Error('Context resolver is unavailable');
             return g_invocation.values.namespace ?? contextNamespace(preparedNewContext?.reference ?? g_invocation.selected.reference);
@@ -339,6 +345,7 @@ export async function main(
                 const connection = new LinkRpcConnection(channel);
                 const serviceId = g_invocation?.values.daemonService
                     ?? `${(await connection.get(hubGrantedServiceIdInterface).getHubServiceId({})).hubServiceId}/daemon`;
+                await checkDaemonInterfaces(connection, serviceId);
                 result = await action(connection.get(managedEndpointsInterface, { serviceId }), false);
             }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
             return result!;

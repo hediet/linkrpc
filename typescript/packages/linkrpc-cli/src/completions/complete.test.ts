@@ -23,6 +23,10 @@ function makeDir(opts: {
 }
 
 describe('complete (static-only)', () => {
+    it('offers explicit daemon restart under services', async () => {
+        const line = 'hub services ';
+        expect((await complete({ line, point: line.length })).map(value => value.text)).toContain('restart');
+    });
     it('returns subcommand names at the top level', async () => {
         const r = await complete({ line: 'hub ', point: 4 });
         const texts = r.map((c) => c.text);

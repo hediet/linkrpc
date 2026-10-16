@@ -322,6 +322,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
         positionals: [],
         options: [],
         subcommands: [
+            { name: 'restart', description: 'Replace the local daemon with the bundled daemon.', positionals: [], options: [] },
             {
                 name: 'run', description: 'Run on the selected daemon.', positionals: [{ name: 'command', type: 'free' }],
                 options: [
