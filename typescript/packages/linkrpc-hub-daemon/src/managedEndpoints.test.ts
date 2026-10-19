@@ -46,7 +46,7 @@ async function status(client: InterfaceClient<typeof managedEndpointsInterface>,
 }
 
 const processSource = (script = 'setInterval(() => {}, 1000)') => ({
-    kind: 'process' as const, command: [process.execPath, '-e', script], readiness: 'spawned' as const, env: {},
+    kind: 'process' as const, command: [process.execPath, '-e', script], readiness: 'spawned' as const, env: {}, rpc: true,
 });
 const defaults = { namespace: 'test', id: 'main', persistent: false as const, restart: 'never' as const };
 const address = { namespace: 'test', id: 'main' };
@@ -131,10 +131,10 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         expect((await client.list({ namespace: 'other' })).map(value => value.id)).toEqual(['main']);
     });
 
-    it('streams output and stdin, survives attach cancellation, and guards stale input', async () => {
+    it.each([true, false])('streams output and stdin, survives attach cancellation, and guards stale input (rpc: %s)', async rpc => {
         const f = await fixture();
         const client = await f.connect();
-        const created = await client.create({ ...defaults, source: processSource('process.stdin.on("data", d => process.stdout.write(d))') });
+        const created = await client.create({ ...defaults, source: { ...processSource('process.stdin.on("data", d => process.stdout.write(d))'), rpc } });
         await status(client, 'main', 'running');
         const events: EndpointEvent[] = [];
         const watch = client.attach({ ...address, after: 0, instanceId: created.instanceId }, { onMessage: event => { events.push(event); } });
@@ -158,7 +158,7 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         expect(events.at(-1)).toEqual({ type: 'removed' });
     });
 
-    it('restores desired persistent restart policies but remembers explicit stop', async () => {
+    it.each([true, false])('restores desired persistent restart policies but remembers explicit stop (rpc: %s)', async rpc => {
         const startup = vi.spyOn(autostart, 'createAutostartManager').mockImplementation(() => {
             throw new Error('Managed endpoints must not touch OS autostart');
         });
@@ -166,12 +166,13 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         const f = await fixture();
         let client = await f.connect();
         for (const id of ['resume', 'stop', 'never']) {
-            await client.create({ ...defaults, id, source: processSource(), persistent: true, restart: id === 'never' ? 'never' : 'on-failure' });
+            await client.create({ ...defaults, id, source: { ...processSource(), rpc }, persistent: true, restart: id === 'never' ? 'never' : 'on-failure' });
             await status(client, id, 'running');
         }
         await client.stop({ namespace: 'test', id: 'stop' });
         client = await f.restart();
         await status(client, 'resume', 'running');
+        expect((await client.list({ namespace: 'test' })).map(value => value.rpc)).toEqual([rpc, rpc, rpc]);
         expect((await client.list({ namespace: 'test' })).map(value => [value.id, value.desired, value.runtime.state])).toEqual([
             ['resume', true, 'running'], ['stop', false, 'disabled'], ['never', false, 'disabled'],
         ]);

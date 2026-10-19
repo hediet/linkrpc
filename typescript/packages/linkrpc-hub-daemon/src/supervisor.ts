@@ -156,7 +156,9 @@ export class ServiceSupervisor {
     private async _spawn(): Promise<void> {
         const service = this._service;
         try {
-            this._socket ??= await this._host.openSocket(this.name, service, count => this._onConnections(count));
+            if (service.rpc) {
+                this._socket ??= await this._host.openSocket(this.name, service, count => this._onConnections(count));
+            }
         } catch (error) {
             this._error = `cannot connect to the hub: ${_message(error)}`;
             this._logDaemon(this._error);
@@ -168,8 +170,14 @@ export class ServiceSupervisor {
             // cross-spawn resolves PATHEXT and escapes arguments for `.cmd` shims, so
             // `command` never goes through a shell's word splitting or metacharacters.
             const [executable, ...args] = service.command;
+            const env = { ...process.env };
+            if (!service.rpc) {
+                for (const key of Object.keys(env)) {
+                    if (/^(LINKRPC|HUBRPC)_(ENDPOINT|TOKEN)$/i.test(key)) delete env[key];
+                }
+            }
             child = crossSpawn(executable!, args, {
-                env: { ...process.env, ...service.env, ...this._socket.env },
+                env: { ...env, ...service.env, ...this._socket?.env },
                 ...(service.cwd !== undefined ? { cwd: service.cwd } : {}),
                 stdio: ['pipe', 'pipe', 'pipe'],
                 windowsHide: true,
@@ -194,7 +202,7 @@ export class ServiceSupervisor {
         child.stdin?.on('error', error => this._logDaemon(`stdin failed: ${error.message}`));
         this._error = undefined;
         this._setState('starting');
-        if (service.readiness === 'spawned') {
+        if (!service.rpc || service.readiness === 'spawned') {
             child.once('spawn', () => {
                 if (this._process?.child === child && this._state === 'starting') this._markRunning();
             });

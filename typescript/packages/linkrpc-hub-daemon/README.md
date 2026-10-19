@@ -51,8 +51,18 @@ There is no separate create/attach gap that could orphan foreground work.
 Observer attachments remain non-owning. Foreground endpoints cannot be made
 persistent and are not restored across Hub replacement.
 
-Dynamic endpoints are keyed by `(namespace, id)` and publish under
-`<hubServiceId>/services/<sha256(namespace)>/<id>`. Persistent definitions and
+Process sources accept `rpc: false` for plain stdio programs (CLI `--no-rpc` /
+`-x`). These start without a participant socket or identity and become ready
+on spawn, regardless of the RPC readiness setting. Ambient LinkRPC/legacy
+HubRPC endpoint and token variables are removed; explicit source `env` values
+are preserved. RPC clients still observe/control their stdio via this management
+API, including when another caller owns the foreground lifetime. Attachments
+share stdin and receive the same output; they are pipe consoles, not PTYs.
+`list` and status events report `rpc: false`.
+
+Dynamic endpoints are keyed by `(namespace, id)` and reserve
+`<hubServiceId>/services/<sha256(namespace)>/<id>` for application RPC. Plain
+stdio processes publish no RPC methods there. Persistent definitions and
 desired state are atomically saved in `endpoints.json` in the daemon state
 directory. They are separate from the legacy configured services below, whose
 defaults remain unchanged. Dynamic endpoints default to ephemeral and
@@ -98,7 +108,8 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 | `env`, `cwd` | `{}`, inherited | Extra environment and working directory |
 | `enabled` | `true` | `false` keeps the service configured but stopped |
 | `restart` | `on-failure` | `always`, `on-failure`, or `never` |
-| `readiness` | `connected` | Running once connected to the hub, or once `spawned` |
+| `rpc` | `true` | `false` runs plain stdio without an RPC socket or identity; ready on spawn |
+| `readiness` | `connected` | RPC processes are running once connected to the hub, or once `spawned`; ignored when `rpc: false` |
 | `serviceId` | `<hubServiceId>/<name>` | Namespace the service may claim on the hub (default `hub/<name>`) |
 | `managedIdentity` | `true` | Provision a persistent identity (slot `service:<name>`) |
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
@@ -151,7 +162,7 @@ on the discovery file (written only by the daemon) or configure a token.
 | --- | --- |
 | Formatting, comments, `$schema` | Nothing |
 | Service added / removed | That service starts / stops |
-| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `readiness` | That service restarts |
+| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `readiness` | That service restarts |
 | `enabled`, `restart`, timeouts, `description` | Applied without restarting the process |
 | Any hub-wide setting | The hub and all services restart |
 | Invalid file | Nothing; the error is reported and the previous config keeps running |

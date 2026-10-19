@@ -45,7 +45,7 @@ not enable login startup. Existing registrations are left untouched and may
 still start a different build at the next login.
 
 ```sh
-# Create a context explicitly and run attached in the foreground:
+# Create a context explicitly and run attached (daemon-owned lifetime):
 hub services run --new-context . -- node server.js
 
 # Bind the service lifetime to this terminal's CLI process:
@@ -111,7 +111,12 @@ running endpoints. Use the full `serviceId` returned by `services list` for RPC
 calls; endpoint IDs and published RPC service IDs are different things.
 
 Process readiness defaults to connecting to the provided `LINKRPC_ENDPOINT`
-and token. Use `--readiness spawned` for non-LinkRPC programs. Detached launches
+and token. Use `--no-rpc` (short form `-x`) for non-LinkRPC programs: they become
+ready on spawn, without a participant socket or managed identity. Ambient
+`LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` and legacy `HUBRPC_*` connection variables
+are not inherited in this mode; explicitly supplied `--env` values are preserved.
+`--readiness spawned` alone still provisions RPC, but does not wait for connection.
+`--no-rpc --readiness connected` is an error. Detached launches
 wait up to 30 seconds for readiness; a timeout leaves the endpoint managed and
 inspectable. Attachments stream bounded recent stdout/stderr and daemon output,
 forward stdin and Ctrl+C, and do not own the process lifetime. This is a **pipe
@@ -125,7 +130,7 @@ the CLI is forcibly killed and cannot run an exit handler. On a remote Hub,
 cleanup begins once the disconnect is detected. The normal graceful stop
 timeout still applies before forced process-tree termination.
 
-Other terminals can discover/call the service and attach as observers; closing
+Other terminals can discover/call RPC services and attach as observers; closing
 an observer does not stop it. Ctrl+] followed by Enter cancels the owning
 foreground command (and therefore stops the service), rather than detaching it.
 `--foreground` conflicts with `--detach` and `--persistent`; the management API
@@ -133,6 +138,37 @@ also rejects making a foreground endpoint persistent later. Restart policies
 apply only while the owning call is alive. Hub replacement stops foreground
 endpoints rather than restoring them without an owner. Ordinary `run` and
 `attach` retain their daemon-owned lifetime behavior.
+
+#### Plain stdio programs
+
+The [counter example](examples/counter.mjs) prints one number per second and has
+no LinkRPC dependency. From this package directory, with an existing context:
+
+```sh
+# Background: the counter survives the launching CLI.
+hub services run -x --id counter --detach -- node examples/counter.mjs
+hub services attach --id counter
+# Ctrl+] then Enter detaches without stopping the counter.
+hub services logs --id counter --follow
+hub services stop --id counter
+
+# Foreground: closing this CLI stops and removes the counter.
+hub services run --no-rpc --foreground --id counter -- node examples/counter.mjs
+# A different terminal can still attach while the owner is running:
+hub services attach --id counter
+```
+
+Create a context first with `hub context --new-context .` if needed. Multiple
+attachments receive the same output; interactive attachments share the process's
+stdin. Use `logs --follow` for a read-only observer. Restart/persistence policies
+work for plain processes too.
+
+`services list` reports `rpc: false` for these processes. They do not publish
+application RPC methods under their reserved `serviceId`: other Hub participants
+use `linkrpc.managedEndpoints` on `<hubServiceId>/daemon` to list, attach, and send
+input to them. This management RPC remains available in both foreground and
+background mode. When the program adds LinkRPC support, omit `-x` to provision
+its RPC connection. PTY/TTY emulation is not implemented.
 
 Connections support initialized LinkRPC socket/WebSocket endpoints. Forwarding
 preserves method names and signatures, rather than rewriting root services

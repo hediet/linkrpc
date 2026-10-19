@@ -196,7 +196,7 @@ export class ManagedEndpoints {
             ...ManagedServiceSchema.parse({
                 ...(definition.source.kind === 'process' ? {
                     command: definition.source.command, env: definition.source.env,
-                    cwd: definition.source.cwd, readiness: definition.source.readiness,
+                    cwd: definition.source.cwd, readiness: definition.source.readiness, rpc: definition.source.rpc,
                 } : { command: ['connection'] }),
                 enabled: desired, restart: definition.restart, serviceId,
             }),
@@ -248,6 +248,7 @@ export class ManagedEndpoints {
             namespace: entry.definition.namespace, id: entry.definition.id, instanceId: entry.instanceId,
             serviceId: entry.supervisor.service.serviceId, persistent: entry.definition.persistent,
             restart: entry.definition.restart, desired: entry.desired, sourceKind: entry.definition.source.kind,
+            rpc: entry.definition.source.kind === 'connection' || entry.definition.source.rpc,
             runtime: entry.supervisor.status(),
         };
     }

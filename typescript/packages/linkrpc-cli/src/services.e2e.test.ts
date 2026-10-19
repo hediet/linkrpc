@@ -3,7 +3,8 @@ import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from '
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { HubHome, readEndpointDiscovery, connectToHubManagement } from '@hediet/linkrpc-hub-daemon/client';
+import { connectToHub } from '@hediet/linkrpc/node';
+import { HubHome, readEndpointDiscovery, connectToHubManagement, managedEndpointsInterface, type EndpointEvent } from '@hediet/linkrpc-hub-daemon/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -51,18 +52,88 @@ async function fixture(isolated = false) {
         expect({ code: result.code, error: result.code ? result.stderr : '' }).toEqual({ code: 0, error: '' });
         return result.stdout;
     };
-    return { root, home, env, run, ok, cli };
+    const start = (args: string[]) => {
+        const child = spawn(process.execPath, [cli, ...args], { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        const exited = new Promise<number | null>((resolve, reject) => {
+            child.once('exit', resolve);
+            child.once('error', reject);
+        });
+        cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        return { child, exited, get stdout() { return stdout; }, get stderr() { return stderr; } };
+    };
+    return { root, home, env, run, ok, cli, start };
 }
 
 describe('hub services CLI', { timeout: 120_000 }, () => {
-    it.each([false, true])('kills the foreground process tree when the CLI is forcibly killed (routed: %s)', async routed => {
+    it.each([false, true])('multiplexes a plain counter over CLI attach and the routed Hub API (foreground: %s)', async foreground => {
+        const f = await fixture();
+        await f.ok(['context', '--new-context', '.']);
+        const counter = fileURLToPath(new URL('../examples/counter.mjs', import.meta.url));
+        const args = ['services', 'run', foreground ? '-x' : '--no-rpc', foreground ? '--foreground' : '--detach',
+            '--', process.execPath, counter];
+        const owner = foreground ? f.start(args) : undefined;
+        if (!foreground) await f.ok(args);
+        await vi.waitFor(() => expect(readEndpointDiscovery(f.home.discoveryFile)).toBeDefined(), { timeout: 15_000 });
+        const hub = await connectToHub({ endpoint: readEndpointDiscovery(f.home.discoveryFile)!.endpoint, token: '' });
+        cleanup.push(async () => hub.close());
+        const client = hub.connection.get(managedEndpointsInterface, { serviceId: 'hub/daemon' });
+        await vi.waitFor(async () => expect(await client.list({})).toMatchObject([
+            { rpc: false, sourceKind: 'process', runtime: { state: 'running', connections: 0 } },
+        ]), { timeout: 15_000 });
+        const [running] = await client.list({});
+        const events: EndpointEvent[] = [];
+        const observation = client.attach({ namespace: running!.namespace, id: running!.id, after: 0 }, {
+            onMessage: event => { events.push(event); },
+        });
+        const observed = observation.then(() => 'completed', error => String(error));
+        const observerOutput = () => events.flatMap(event => event.type === 'output' && event.stream === 'stdout' ? [event.text] : []).join('');
+        const attached = f.start(['services', 'attach']);
+        await vi.waitFor(() => {
+            expect(attached.stdout, attached.stderr).toContain('1\n2\n');
+            expect(observerOutput()).toContain('1\n2\n');
+            if (owner) expect(owner.stdout, owner.stderr).toContain('1\n2\n');
+        }, { timeout: 15_000 });
+        attached.child.stdin.write('\x1d\n');
+        expect(await attached.exited).toBe(0);
+        expect((await client.list({}))[0]?.runtime.pid).toBe(running!.runtime.pid);
+        await vi.waitFor(() => expect(observerOutput()).toContain('3\n'), { timeout: 5000 });
+        expect(await f.ok(['services', 'logs'])).toContain('1\n2\n3\n');
+        if (owner) {
+            owner.child.stdin.write('\x1d\n');
+            expect(await owner.exited).toBe(0);
+        } else {
+            await f.ok(['services', 'stop']);
+        }
+        expect(await observed).toBe('completed');
+        expect(events.at(-1)).toEqual({ type: 'removed' });
+        expect(await client.list({})).toEqual([]);
+        expect(() => process.kill(running!.runtime.pid!, 0)).toThrow();
+    });
+
+    it('rejects connected readiness for a plain process before starting a daemon', async () => {
+        const f = await fixture();
+        const result = await f.run(['services', 'run', '--no-rpc', '--readiness', 'connected', '--', process.execPath]);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('--no-rpc cannot use --readiness connected');
+        expect(readEndpointDiscovery(f.home.managementFile)).toBeUndefined();
+    });
+
+    it.each([
+        { routed: false, rpc: false }, { routed: true, rpc: false },
+        { routed: false, rpc: true }, { routed: true, rpc: true },
+    ])('kills the foreground process tree when the CLI is forcibly killed ($routed, rpc: $rpc)', async ({ routed, rpc }) => {
         const f = await fixture();
         await f.ok(['context', '--new-context', '.']);
         await f.ok(['services', 'restart']);
         const endpoint = readEndpointDiscovery(f.home.discoveryFile)!.endpoint;
         const child = spawn(process.execPath, [f.cli,
             ...(routed ? ['--endpoint', endpoint] : []),
-            'services', 'run', '--foreground', '--cwd', f.root, '--readiness', 'spawned', '--restart', 'always', '--',
+            'services', 'run', '--foreground', '--cwd', f.root,
+            ...(rpc ? ['--readiness', 'spawned'] : ['--no-rpc']), '--restart', 'always', '--',
             process.execPath, '-e',
             'const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]); console.log(JSON.stringify({ parent: process.pid, child: child.pid })); setInterval(() => {}, 1000)',
         ], { cwd: f.root, env: f.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
@@ -95,7 +166,7 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
     it('forwards foreground stdin and cancels rather than detaching on Ctrl+]', async () => {
         const f = await fixture();
         const child = spawn(process.execPath, [f.cli, 'services', 'run', '--new-context', '.', '--foreground',
-            '--readiness', 'spawned', '--', process.execPath, '-e',
+            '-x', '--', process.execPath, '-e',
             'process.stdin.on("data", data => process.stdout.write(data));',
         ], { cwd: f.root, env: f.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
         const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));

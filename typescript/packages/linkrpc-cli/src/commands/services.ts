@@ -93,13 +93,15 @@ export function registerServices(program: Command, host: ServicesHost): void {
     policy(addressed(services.command('run <command...>').description('Start a process on the daemon; arguments follow --.')))
         .option('--detach', 'return after readiness')
         .addOption(new Option('--foreground', 'stop and remove the service when this CLI disconnects').conflicts(['detach', 'persistent']))
+        .option('-x, --no-rpc', 'run a plain stdio process without an RPC connection; ready on spawn')
         .option('--cwd <directory>', 'working directory on the execution host')
         .option('--env <key=value...>', 'explicit child environment')
-        .addOption(new Option('--readiness <mode>', 'wait for Hub connection or process spawn').choices(['connected', 'spawned']).default('connected'))
+        .addOption(new Option('--readiness <mode>', 'wait for Hub connection or process spawn (default: connected, or spawned with --no-rpc)').choices(['connected', 'spawned']))
         .action(async (command: string[], options: {
             id: string; persistent?: boolean; restart: 'never' | 'on-failure' | 'always';
-            detach?: boolean; foreground?: boolean; cwd?: string; env?: string[]; readiness: 'connected' | 'spawned';
+            detach?: boolean; foreground?: boolean; rpc: boolean; cwd?: string; env?: string[]; readiness?: 'connected' | 'spawned';
         }) => {
+            if (!options.rpc && options.readiness === 'connected') throw new Error('--no-rpc cannot use --readiness connected; plain processes are ready on spawn.');
             const namespace = host.namespace();
             const env: Record<string, string> = {};
             for (const value of options.env ?? []) {
@@ -114,7 +116,7 @@ export function registerServices(program: Command, host: ServicesHost): void {
                 process.stderr.write(`Execution host: ${info.hostname}\nNamespace: ${namespace}\nEndpoint: ${options.id}\nCommand: ${JSON.stringify(command)}\nWorking directory: ${cwd}\n`);
                 const definition: ForegroundEndpointDefinition = {
                     namespace, id: options.id, persistent: false, restart: options.restart,
-                    source: { kind: 'process', command, cwd, env, readiness: options.readiness },
+                    source: { kind: 'process', command, cwd, env, rpc: options.rpc, readiness: options.readiness ?? (options.rpc ? 'connected' : 'spawned') },
                 };
                 if (options.foreground) {
                     await attach(client, definition, { interactive: true });

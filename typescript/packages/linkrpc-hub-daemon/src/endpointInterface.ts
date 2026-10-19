@@ -13,6 +13,7 @@ export const endpointDefinition = endpointAddress.extend({
             command: z.array(z.string().min(1)).min(1),
             cwd: z.string().optional(),
             env: z.record(z.string(), z.string()).default({}),
+            rpc: z.boolean().default(true),
             readiness: z.enum(['connected', 'spawned']).default('connected'),
         }),
         z.object({ kind: z.literal('connection'), endpoint: z.string().min(1) }),
@@ -34,6 +35,7 @@ export const endpointStatus = endpointAddress.extend({
     restart: endpointDefinition.shape.restart,
     desired: z.boolean(),
     sourceKind: z.enum(['process', 'connection']),
+    rpc: z.boolean(),
     runtime: ServiceStatusSchema,
 });
 export type EndpointStatus = z.infer<typeof endpointStatus>;
