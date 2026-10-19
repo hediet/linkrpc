@@ -96,7 +96,7 @@ export class ConnectionSupervisor {
     private _failed(generation: number, error: unknown): void {
         this._cleanup();
         this._error = error instanceof Error ? error.message : String(error);
-        this._host.output?.(this.name, 'daemon', `${this._error}\n`);
+        this._host.notice?.(this.name, this._error);
         if (this._service.restart === 'never') {
             this._setState('failed');
         } else {

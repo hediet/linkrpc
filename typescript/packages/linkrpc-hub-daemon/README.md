@@ -37,28 +37,46 @@ The routed interface is subject to the selected Hub's admission/capability
 policy. It permits execution as the daemon's OS user: do not expose a trusted
 local listener to untrusted networks without configuring those policies.
 
-The API exposes `info`, `list`, `create`, `runForeground`, `start`, `stop`, `remove`, `configure`,
-`attach` (server stream), and instance-guarded `input`. Attach cancellation never
-stops an endpoint. Output retention is bounded to 1000 chunks per endpoint;
-recently completed ephemeral instances retain a bounded replay window.
-These instance IDs identify endpoint definitions, not individual automatic
-restart attempts.
+The API exposes `info`, `list`, `create`, `run`, `watch`, `start`, `stop`,
+`remove`, and `configure`. `watch` streams status changes until the endpoint is
+removed. `create` and `run` accept `replace: true` (CLI `--force`): an existing
+endpoint with the same address, including a persistent or owned one, is stopped
+and removed first within the same serialized operation; its console reports a
+notice and completes.
 
-`runForeground` creates a non-persistent process and streams the same events as
-`attach`, but owns that process's lifetime. Its completion, cancellation, or
-caller disconnect disposes that exact supervisor and removes its endpoint.
-There is no separate create/attach gap that could orphan foreground work.
-Observer attachments remain non-owning. Foreground endpoints cannot be made
-persistent and are not restored across Hub replacement.
+Every process endpoint serves the standard
+[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+interface at `<hubServiceId>/daemon/consoles/<sha256(namespace)>/<id>`, reported
+as `status.console.serviceId`. Consoles are registered on the private management
+socket and on the routed daemon service. Attachments share input, observe the
+same output, and never stop the endpoint when cancelled. Pipe consoles replay up
+to 1 MiB of recent output and supervisor notices; TTY consoles replay the
+current screen and scrollback from a headless terminal (`@xterm/headless`). A
+console stays registered across automatic restarts; its attachments complete when
+no process runs and none is pending, and it closes when the endpoint is removed.
+
+`run` creates a process endpoint and attaches to its console in one call: the
+stream carries the `linkrpc.console` attach protocol plus `status` events, so
+there is no create/attach gap that could lose output of a short-lived process.
+With `owner: true`, the call owns the endpoint (CLI `--foreground`): its
+completion, cancellation, or caller disconnect disposes that exact supervisor and
+removes its endpoint. Without it, cancelling only detaches. Observer attachments
+remain non-owning. Owned endpoints cannot be made persistent and are not
+restored across Hub replacement. Instance IDs identify endpoint definitions,
+not individual automatic restart attempts.
 
 Process sources accept `rpc: false` for plain stdio programs (CLI `--no-rpc` /
 `-x`). These start without a participant socket or identity and become ready
 on spawn, regardless of the RPC readiness setting. Ambient LinkRPC/legacy
 HubRPC endpoint and token variables are removed; explicit source `env` values
-are preserved. RPC clients still observe/control their stdio via this management
-API, including when another caller owns the foreground lifetime. Attachments
-share stdin and receive the same output; they are pipe consoles, not PTYs.
-`list` and status events report `rpc: false`.
+are preserved. `list` and status events report `rpc: false`.
+
+Process sources accept `tty: true` (CLI `-t`) to run in a pseudoterminal
+(`@lydell/node-pty`; ConPTY on Windows): stdout and stderr merge, and console
+attachments can resize it. Its consoles report the signals they can deliver:
+on Windows, TTYs support `SIGINT` (Ctrl+C via ConPTY) and `SIGKILL`, pipes only
+`SIGKILL`; POSIX supports `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, and `SIGKILL`
+(delivered to the process group).
 
 Dynamic endpoints are keyed by `(namespace, id)` and reserve
 `<hubServiceId>/services/<sha256(namespace)>/<id>` for application RPC. Plain
@@ -109,13 +127,14 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 | `enabled` | `true` | `false` keeps the service configured but stopped |
 | `restart` | `on-failure` | `always`, `on-failure`, or `never` |
 | `rpc` | `true` | `false` runs plain stdio without an RPC socket or identity; ready on spawn |
+| `tty` | `false` | Run in a pseudoterminal; stdout and stderr merge |
 | `readiness` | `connected` | RPC processes are running once connected to the hub, or once `spawned`; ignored when `rpc: false` |
 | `serviceId` | `<hubServiceId>/<name>` | Namespace the service may claim on the hub (default `hub/<name>`) |
 | `managedIdentity` | `true` | Provision a persistent identity (slot `service:<name>`) |
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
 | `stopTimeoutMs` | `5000` | Grace period before the process tree is killed |
 
-On Windows, a pipe process without an active RPC connection has no graceful
+On Windows, a process without an active RPC connection has no graceful
 stop channel. Stopping it kills its process tree immediately rather than
 waiting `stopTimeoutMs`. Connected RPC services still get the disconnect grace
 period; on POSIX, processes get SIGTERM and the configured grace period.
@@ -167,7 +186,7 @@ on the discovery file (written only by the daemon) or configure a token.
 | --- | --- |
 | Formatting, comments, `$schema` | Nothing |
 | Service added / removed | That service starts / stops |
-| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `readiness` | That service restarts |
+| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `tty`, `readiness` | That service restarts |
 | `enabled`, `restart`, timeouts, `description` | Applied without restarting the process |
 | Any hub-wide setting | The hub and all services restart |
 | Invalid file | Nothing; the error is reported and the previous config keeps running |

@@ -4,11 +4,18 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectToHub } from '@hediet/linkrpc/node';
-import { HubHome, readEndpointDiscovery, connectToHubManagement, managedEndpointsInterface, type EndpointEvent } from '@hediet/linkrpc-hub-daemon/client';
+import { consoleInterface, decodeConsoleData, type ConsoleServerMessage } from '@hediet/linkrpc-infra/console';
+import { HubHome, readEndpointDiscovery, connectToHubManagement, managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const dispose of cleanup.splice(0).reverse()) await dispose(); });
+
+/** Terminal output without control sequences, so assertions do not depend on ConPTY's rendering. */
+function screenText(value: string): string {
+    // eslint-disable-next-line no-control-regex
+    return value.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])/g, '').replace(/\r/g, '');
+}
 
 async function fixture(isolated = false) {
     const root = await mkdtemp(path.join(os.tmpdir(), 'lr-services-cli-'));
@@ -89,6 +96,7 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
             expect(result.stderr).toContain('Endpoint "counter-fg" already exists in custom namespace');
             const match = /Attach to it: (hub services attach .*)/.exec(result.stderr);
             expect(match).not.toBeNull();
+            expect(result.stderr).toContain('Or replace it: rerun this command with --force');
             hint = match![1]!;
             expect(hint).toContain('--id counter-fg --context ');
             expect(hint).toContain("--namespace 'custom namespace' --no-use-env");
@@ -141,6 +149,12 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         await vi.waitFor(() => expect(attached.stdout).toContain('reset 0\n'));
         attached.child.stdin.write('invalid\r');
         await vi.waitFor(() => expect(attached.stderr).toContain('Unknown command: invalid.'));
+        if (process.platform === 'win32') {
+            // Windows pipes cannot deliver an interrupt; Ctrl+C must not terminate the shared service.
+            attached.child.stdin.write('\x03');
+            await vi.waitFor(() => expect(attached.stderr).toContain('Interrupting is not supported for pipe processes on this host'));
+            expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ runtime: { state: 'running' } }]);
+        }
         attached.child.stdin.write('\x04');
         expect(await attached.exited).toBe(0);
         expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ runtime: { state: 'running' } }]);
@@ -169,20 +183,26 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
             { rpc: false, sourceKind: 'process', runtime: { state: 'running', connections: 0 } },
         ]), { timeout: 15_000 });
         const [running] = await client.list({});
-        const events: EndpointEvent[] = [];
-        const observation = client.attach({ namespace: running!.namespace, id: running!.id, after: 0 }, {
-            onMessage: event => { events.push(event); },
+        expect(running!.console).toEqual({ serviceId: expect.stringMatching(/^hub\/daemon\/consoles\//), mode: 'pipe' });
+        const messages: ConsoleServerMessage[] = [];
+        const observation = hub.connection.get(consoleInterface, { serviceId: running!.console!.serviceId }).attach({ interactive: false }, {
+            onMessage: message => { messages.push(message); },
         });
-        const observed = observation.then(() => 'completed', error => String(error));
-        const observerOutput = () => events.flatMap(event => event.type === 'output' && event.stream === 'stdout' ? [event.text] : []).join('');
+        const observed = observation.then(result => result, (error: unknown) => String(error));
+        const observerOutput = () => messages.flatMap(message => message.t === 'output' && message.stream === 'stdout'
+            ? [new TextDecoder().decode(decodeConsoleData(message.data))] : []).join('');
         const attached = f.start(['services', 'attach']);
+        const generic = f.start(['--endpoint', readEndpointDiscovery(f.home.discoveryFile)!.endpoint, 'attach', running!.console!.serviceId, '--read-only']);
         await vi.waitFor(() => {
             expect(attached.stdout, attached.stderr).toContain('1\n2\n');
+            expect(generic.stdout, generic.stderr).toContain('1\n2\n');
             expect(observerOutput()).toContain('1\n2\n');
             if (owner) expect(owner.stdout, owner.stderr).toContain('1\n2\n');
         }, { timeout: 15_000 });
         attached.child.stdin.write('\x1d\n');
         expect(await attached.exited).toBe(0);
+        generic.child.kill();
+        await generic.exited;
         expect((await client.list({}))[0]?.runtime.pid).toBe(running!.runtime.pid);
         await vi.waitFor(() => expect(observerOutput()).toContain('3\n'), { timeout: 5000 });
         expect(await f.ok(['services', 'logs'])).toContain('1\n2\n3\n');
@@ -192,10 +212,53 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         } else {
             await f.ok(['services', 'stop']);
         }
-        expect(await observed).toBe('completed');
-        expect(events.at(-1)).toEqual({ type: 'removed' });
+        expect(await observed).toHaveProperty('exit');
         expect(await client.list({})).toEqual([]);
         expect(() => process.kill(running!.runtime.pid!, 0)).toThrow();
+    });
+
+    it('runs a TTY service: keys reach the program, attachments see the screen, and Ctrl+P, Ctrl+Q detaches or stops', async () => {
+        const f = await fixture();
+        await f.ok(['context', '--new-context', '.']);
+        const script = 'console.log("tty=" + process.stdout.isTTY); process.stdin.setRawMode(true);'
+            + ' process.stdin.on("data", data => process.stdout.write("key=" + JSON.stringify(String(data)) + "\\r\\n"));';
+        const owner = f.start(['services', 'run', '-x', '-t', '--foreground', '--', process.execPath, '-e', script], true);
+        await vi.waitFor(() => expect(screenText(owner.stdout), owner.stderr).toContain('tty=true'), { timeout: 15_000 });
+        expect(owner.stderr).toContain('Foreground (TTY). Keys go to the program; Ctrl+P, Ctrl+Q stops and removes the service.');
+        owner.child.stdin.write('\x03');
+        await vi.waitFor(() => expect(screenText(owner.stdout)).toContain('key="\\u0003"'), { timeout: 10_000 });
+
+        const attached = f.start(['services', 'attach'], true);
+        await vi.waitFor(() => expect(screenText(attached.stdout), attached.stderr).toContain('tty=true'), { timeout: 15_000 });
+        expect(attached.stderr).toContain('Attached (TTY). Keys go to the program; Ctrl+P, Ctrl+Q detaches.');
+        attached.child.stdin.write('a');
+        await vi.waitFor(() => expect(screenText(owner.stdout)).toContain('key="a"'), { timeout: 10_000 });
+        attached.child.stdin.write('\x10\x11');
+        await vi.waitFor(() => expect(attached.child.exitCode, attached.stderr).toBe(0), { timeout: 5000 });
+        expect(attached.stderr).toContain('Detached. Reattach: hub services attach --id main');
+        expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ owned: true, console: { mode: 'tty' }, runtime: { state: 'running' } }]);
+
+        owner.child.stdin.write('\x10\x11');
+        await vi.waitFor(() => expect(owner.child.exitCode, owner.stderr).toBe(0), { timeout: 5000 });
+        expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
+    });
+
+    it('replaces detached and foreground endpoints with --force', async () => {
+        const f = await fixture();
+        await f.ok(['context', '--new-context', '.']);
+        const counter = fileURLToPath(new URL('../examples/counter.mjs', import.meta.url));
+        const owner = f.start(['services', 'run', '-x', '--foreground', '--', process.execPath, counter]);
+        await vi.waitFor(() => expect(owner.stdout, owner.stderr).toContain('1\n'), { timeout: 15_000 });
+        const [before] = JSON.parse(await f.ok(['services', 'list']));
+        const replaced = JSON.parse(await f.ok(['services', 'run', '-x', '--detach', '--force', '--', process.execPath, counter]));
+        expect({ owned: replaced.owned, replaced: replaced.instanceId !== before.instanceId }).toEqual({ owned: false, replaced: true });
+        await owner.exited;
+        expect(owner.stderr).toContain('Replaced by a new launch of the same endpoint.');
+        expect(() => process.kill(before.runtime.pid, 0)).toThrow();
+        const again = JSON.parse(await f.ok(['services', 'run', '-x', '--detach', '--force', '--', process.execPath, counter]));
+        expect(again.instanceId).not.toBe(replaced.instanceId);
+        expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ instanceId: again.instanceId }]);
+        await f.ok(['services', 'stop']);
     });
 
     it('rejects connected readiness for a plain process before starting a daemon', async () => {

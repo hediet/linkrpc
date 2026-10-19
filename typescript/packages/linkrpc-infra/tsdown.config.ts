@@ -4,6 +4,7 @@ export default defineConfig({
     entry: {
         index: 'src/index.ts',
         'approval/index': 'src/approval/index.ts',
+        'console/index': 'src/console/index.ts',
         'graph/index': 'src/graph/index.ts',
         'graph/source': 'src/graph/source.ts',
         'inspection/index': 'src/inspection/index.ts',

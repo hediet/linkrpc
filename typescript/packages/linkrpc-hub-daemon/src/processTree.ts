@@ -13,6 +13,11 @@ export function terminateProcessTree(pid: number): void {
     _signalGroup(pid, 'SIGTERM');
 }
 
+/** Deliver a POSIX signal to a service's process group. */
+export function signalProcessGroup(pid: number, signal: NodeJS.Signals): void {
+    _signalGroup(pid, signal);
+}
+
 /** Forcefully end a process and all of its descendants. */
 export function killProcessTree(pid: number): Promise<void> {
     if (process.platform !== 'win32') {

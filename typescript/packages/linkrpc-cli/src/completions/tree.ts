@@ -175,6 +175,12 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
             ],
         },
     {
+        name: 'attach',
+        description: 'Attach to a linkrpc.console service (pipe or TTY).',
+        positionals: [{ name: 'serviceId', type: 'serviceId' }],
+        options: [{ name: '--read-only', takesValue: false }],
+    },
+    {
         name: 'batch',
         description: 'Run sequential calls and notifications.',
         positionals: [],
@@ -331,6 +337,9 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                     { name: '--restart', takesValue: true, valueType: 'free' },
                     { name: '--detach', takesValue: false },
                     { name: '--foreground', takesValue: false },
+                    { name: '--force', takesValue: false },
+                    { name: '--tty', takesValue: false },
+                    { name: '-t', takesValue: false },
                     { name: '--no-rpc', takesValue: false },
                     { name: '-x', takesValue: false },
                     { name: '--cwd', takesValue: true, valueType: 'free' },
@@ -344,6 +353,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                     { name: '--id', takesValue: true, valueType: 'free' },
                     { name: '--persistent', takesValue: false },
                     { name: '--restart', takesValue: true, valueType: 'free' },
+                    { name: '--force', takesValue: false },
                     { name: '--target-endpoint', takesValue: true, valueType: 'free' },
                 ],
             },
@@ -352,7 +362,8 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                 name, description: `${name} a managed endpoint.`, positionals: [],
                 options: [
                     { name: '--id', takesValue: true, valueType: 'free' },
-                    ...(name === 'logs' || name === 'attach' ? [{ name: '--follow', takesValue: false }] : []),
+                    ...(name === 'logs' ? [{ name: '--follow', takesValue: false }] : []),
+                    ...(name === 'attach' ? [{ name: '--read-only', takesValue: false }] : []),
                     ...(name === 'configure' ? [
                         { name: '--persistent', takesValue: false },
                         { name: '--no-persistent', takesValue: false },

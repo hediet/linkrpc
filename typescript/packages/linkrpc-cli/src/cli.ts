@@ -2,6 +2,8 @@ import { Command, InvalidArgumentError, Option } from 'commander';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { managedEndpointsInterface, HubHome, readEndpointDiscovery } from '@hediet/linkrpc-hub-daemon/client';
 import { checkDaemonInterfaces, contextNamespace, registerServices, restartLocalDaemon, serviceAttachCommand, useLocalManagement } from './commands/services';
+import { localTerminalSize, runConsoleSession } from './commands/consoleSession';
+import { consoleInterface } from '@hediet/linkrpc-infra/console';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
@@ -347,7 +349,7 @@ export async function main(
         },
         use: async (startLocal, action) => {
             if (endpoint === undefined && g_hubConfigPath === undefined) {
-                return useLocalManagement(startLocal, client => action(client, true));
+                return useLocalManagement(startLocal, action);
             }
             let result: Awaited<ReturnType<typeof action>> | undefined;
             await withChannel(endpoint, getPrincipalSpec(), async channel => {
@@ -355,11 +357,32 @@ export async function main(
                 const serviceId = g_invocation?.values.daemonService
                     ?? `${(await connection.get(hubGrantedServiceIdInterface).getHubServiceId({})).hubServiceId}/daemon`;
                 await checkDaemonInterfaces(connection, serviceId);
-                result = await action(connection.get(managedEndpointsInterface, { serviceId }), false);
+                result = await action(connection.get(managedEndpointsInterface, { serviceId }), { local: false, connection });
             }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
             return result!;
         },
     });
+
+    program
+        .command('attach <serviceId>')
+        .description(
+            'Attach to a service that implements `linkrpc.console` (a pipe or TTY process console). '
+            + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; Ctrl+P, Ctrl+Q detaches.',
+        )
+        .option('--read-only', 'observe output without sending input')
+        .action(async (serviceId: string, opts: { readOnly?: boolean }) => {
+            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                const console = new LinkRpcConnection(channel).get(consoleInterface, { serviceId });
+                const interactive = opts.readOnly !== true;
+                const size = interactive ? localTerminalSize() : undefined;
+                const result = await runConsoleSession(onMessage => console.attach({ interactive, ...(size ? { size } : {}) }, { onMessage }), {
+                    interactive,
+                    owner: false,
+                    reattachCommand: `${cliInvocation.programName} attach ${serviceId}`,
+                });
+                if (!result.closedLocally && result.exit?.code) process.exitCode = result.exit.code;
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+        });
 
     program
         .command('ls')

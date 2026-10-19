@@ -17,6 +17,8 @@ export const ManagedServiceSchema = z.object({
     restart: z.enum(['always', 'on-failure', 'never']).default('on-failure'),
     /** `false` runs a plain stdio process without a participant socket or identity. */
     rpc: z.boolean().default(true),
+    /** Run in a pseudoterminal: stdout and stderr merge, and attachments can resize it. */
+    tty: z.boolean().default(false),
     /**
      * When the service counts as running: after it connects to the hub
      * (`connected`, for LinkRPC services) or as soon as it spawned.

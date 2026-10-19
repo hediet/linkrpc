@@ -217,10 +217,12 @@ export class HubDaemon {
             this._appPath = config.localEndpoint.path ?? this.home.defaultAppEndpoint;
             try {
                 this._hub = await this._startHub(config);
-                this._endpoints = new ManagedEndpoints(
-                    path.join(this.home.stateDir, 'endpoints.json'),
-                    `${config.hub.hubServiceId}/services`, this._serviceHost,
-                );
+                this._endpoints = new ManagedEndpoints({
+                    file: path.join(this.home.stateDir, 'endpoints.json'),
+                    servicePrefix: `${config.hub.hubServiceId}/services`,
+                    consolePrefix: `${config.hub.hubServiceId}/daemon/consoles`,
+                    host: this._serviceHost,
+                });
                 await this._endpoints.restore(endpointSnapshot);
                 for (const connection of this._endpointRegistrations.keys()) {
                     this._endpointRegistrations.set(connection, this._endpoints.register(connection));

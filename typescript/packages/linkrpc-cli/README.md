@@ -62,6 +62,12 @@ hub services run --id worker --detach -- node worker.js
 hub services attach --id worker
 hub services stop --id worker
 
+# Run in a pseudoterminal (TTY); detach with Ctrl+P, Ctrl+Q:
+hub services run -x -t --id shell -- pwsh
+
+# Stop and replace an existing endpoint with the same ID:
+hub services run --force --id worker --detach -- node worker.js
+
 # Retain a definition and resume it when the daemon next starts:
 hub services run --id worker --persistent --restart on-failure --detach -- node worker.js
 hub services configure --id worker --restart always
@@ -118,19 +124,61 @@ are not inherited in this mode; explicitly supplied `--env` values are preserved
 `--readiness spawned` alone still provisions RPC, but does not wait for connection.
 `--no-rpc --readiness connected` is an error. Detached launches
 wait up to 30 seconds for readiness; a timeout leaves the endpoint managed and
-inspectable. Attachments stream bounded recent stdout/stderr and daemon output,
-forward stdin and Ctrl+C, and do not own the process lifetime. This is a **pipe
-console**, not a PTY: terminal resize and full-screen terminal apps are not
-supported. `logs` prints recent output; `logs --follow` keeps streaming.
+inspectable. Attachments stream bounded recent output and supervisor notices,
+forward input and interrupts, and do not own the process lifetime. `logs`
+prints recent output; `logs --follow` keeps streaming; `attach --read-only`
+observes without sending input.
+
+Every process endpoint serves the standard
+[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+interface; `services list` reports its `console.serviceId`. `hub services attach`
+resolves that ID and attaches to it. The generic command attaches to **any**
+participant that implements the interface, not only daemon-managed processes:
+
+```sh
+hub attach hub/daemon/consoles/<sha256(namespace)>/<id>
+rpc --endpoint ws://localhost:7000 attach my/service --read-only
+```
+
+#### Pipe and TTY consoles
+
+Processes default to a **pipe console**: stdout and stderr stay separate, and
+the program sees no terminal. `-t` / `--tty` runs it in a pseudoterminal
+(ConPTY on Windows) instead: output is a single terminal stream, programs enable
+colors, prompts, and full-screen interfaces, and attachments can resize it. The
+TTY adopts the size of the most recent interactive attachment. Joining
+attachments receive the **current screen** (rendered by a headless terminal in
+the daemon, including scrollback) instead of a raw byte replay, so full-screen
+programs display correctly.
+
+| | Pipe console | TTY console (`-t`) |
+| --- | --- | --- |
+| Local input | Line editing; Enter sends the line | Raw: every key goes to the program |
+| Ctrl+C | Interrupts (sends SIGINT where supported), or stops a foreground owner | Goes to the program (an interrupt in a shell) |
+| Ctrl+D | On an empty line: detach, or stop a foreground owner | Goes to the program (EOF in a shell) |
+| Detach | Ctrl+D on an empty line (Ctrl+] also works) | Ctrl+P, then Ctrl+Q (Docker's sequence); a lone Ctrl+P is forwarded with the next key |
+
+Windows pipes have no interrupt channel: there, Ctrl+C in a pipe attachment
+prints a hint instead of terminating the shared process; use `-t` when the
+program should receive Ctrl+C. When a TTY attachment ends, the CLI resets
+terminal modes the program may have enabled (mouse, bracketed paste, alternate
+screen). Piped input is forwarded as received; EOF on a pipe does not cancel the
+attachment or stop the service, so it can continue producing output.
 
 The attached-console banner prints a `hub services attach ...` command for
-reattaching. Duplicate `run`/`connect` errors print the same recovery command
-without stopping or replacing the existing endpoint. Hints include the selected
+reattaching, and detaching prints it again. Duplicate `run`/`connect` errors
+print the same recovery command without stopping or replacing the existing
+endpoint, and point to `--force`. Hints include the selected
 context, namespace, endpoint ID, environment policy, and explicit connection
 overrides. Reuse the same environment when `--use-env` is shown and the same
 working directory for relative connection/config paths. Explicit tokens and
 command-environment values are replaced with `<same ...>` placeholders rather
 than exposed in the hint.
+
+`--force` stops an existing endpoint with the same address and replaces it with
+the new definition in one daemon operation. This also applies to persistent
+endpoints (their stored definition is replaced) and to a foreground endpoint
+owned by another terminal: that terminal prints a notice and its command ends.
 
 `run --foreground` instead creates the process inside a lifetime-owning
 management RPC. Ctrl+C, SIGTERM, cancellation, or a detected CLI disconnect
@@ -138,26 +186,23 @@ causes the daemon to stop the process tree and remove the endpoint, even when
 the CLI is forcibly killed and cannot run an exit handler. On a remote Hub,
 cleanup begins once the disconnect is detected. The normal graceful stop
 timeout applies when a stop request can be delivered: SIGTERM on POSIX or
-disconnecting an active RPC connection. On Windows, a pipe process without an
+disconnecting an active RPC connection. On Windows, a process without an
 RPC connection has no graceful stop channel, so its tree is terminated
 immediately instead of waiting out an idle five-second timeout.
 
 Other terminals can discover/call RPC services and attach as observers; closing
-an observer does not stop it. Ctrl+D on an empty input line cancels the owning
-foreground command (and therefore stops the service), rather than detaching it.
+an observer does not stop it. The detach key of the owning terminal (Ctrl+D on
+an empty line, or Ctrl+P, Ctrl+Q for a TTY) cancels the foreground command and
+therefore stops the service, rather than detaching it.
 `--foreground` conflicts with `--detach` and `--persistent`; the management API
 also rejects making a foreground endpoint persistent later. Restart policies
 apply only while the owning call is alive. Hub replacement stops foreground
 endpoints rather than restoring them without an owner. Ordinary `run` and
 `attach` retain their daemon-owned lifetime behavior.
 
-Interactive terminals use local line editing: Enter sends the line, Ctrl+C
-interrupts (or cancels the foreground owner), and Ctrl+D on an empty line
-closes the attachment without requiring Enter. With unfinished text, Ctrl+D
-retains the line and uses normal delete-under-cursor behavior. Ctrl+] remains
-a legacy escape. Piped input is forwarded as received; EOF on a pipe does not
-cancel the attachment or stop the service, so it can continue producing output.
-This local input handling does not give the child a PTY.
+With a pipe console, interactive terminals use local line editing: with
+unfinished text, Ctrl+D retains the line and uses normal delete-under-cursor
+behavior.
 
 #### Plain stdio programs
 
@@ -200,10 +245,10 @@ work for plain processes too.
 
 `services list` reports `rpc: false` for these processes. They do not publish
 application RPC methods under their reserved `serviceId`: other Hub participants
-use `linkrpc.managedEndpoints` on `<hubServiceId>/daemon` to list, attach, and send
-input to them. This management RPC remains available in both foreground and
-background mode. When the program adds LinkRPC support, omit `-x` to provision
-its RPC connection. PTY/TTY emulation is not implemented.
+attach to their `linkrpc.console` (`console.serviceId`) to observe output and
+send input, in both foreground and background mode. When the program adds
+LinkRPC support, omit `-x` to provision its RPC connection. Add `-t` when the
+program expects a terminal.
 
 Connections support initialized LinkRPC socket/WebSocket endpoints. Forwarding
 preserves method names and signatures, rather than rewriting root services
@@ -529,6 +574,12 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 ```
 
 ## Commands
+
+### Consoles
+
+| Command                       | Purpose                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `attach <serviceId> [--read-only]` | Attach to any service implementing [`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole): pipe consoles use line editing (Ctrl+D on an empty line detaches); TTY consoles receive raw keys (Ctrl+P, Ctrl+Q detaches). |
 
 ### Reflection
 

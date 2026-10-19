@@ -3,39 +3,59 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { z } from 'zod';
 import type { LinkRpcConnection, StreamApi } from '@hediet/linkrpc';
-import { endpointDefinition, managedEndpointsInterface, type EndpointAddress, type EndpointDefinition, type EndpointEvent, type EndpointStatus } from './endpointInterface';
+import { ConsoleHost, type ConsoleClientMessage, type ConsoleExit, type ConsoleSize } from '@hediet/linkrpc-infra/console';
+import {
+    endpointDefinition,
+    managedEndpointsInterface,
+    type EndpointAddress,
+    type EndpointDefinition,
+    type EndpointStatus,
+    type RunEvent,
+    type RunParams,
+    type WatchEvent,
+} from './endpointInterface';
 import { ManagedServiceSchema, type ManagedService } from './config';
 import { writePrivateJson } from './discovery';
+import { processSignals } from './processIo';
+import { ScreenHistory } from './screenHistory';
 import { ServiceSupervisor, type ServiceHost } from './supervisor';
 import { ConnectionSupervisor } from './connectionSupervisor';
 
 const storedEndpoints = z.array(z.object({ definition: endpointDefinition, desired: z.boolean() }));
+const finishedStates = new Set(['failed', 'stopped', 'disabled']);
+
 interface Entry {
     definition: EndpointDefinition;
     desired: boolean;
     readonly instanceId: string;
-    readonly foreground: boolean;
+    /** Owned by a `run` call: it is never persisted or restored. */
+    readonly owned: boolean;
     readonly supervisor: ServiceSupervisor | ConnectionSupervisor;
-    readonly output: Extract<EndpointEvent, { type: 'output' }>[];
+    readonly console: { readonly host: ConsoleHost; readonly serviceId: string } | undefined;
     readonly listeners: Set<() => void>;
-    sequence: number;
     removed: boolean;
+}
+
+export interface ManagedEndpointsOptions {
+    readonly file: string;
+    /** Published endpoint service IDs: `<servicePrefix>/<sha256(namespace)>/<id>`. */
+    readonly servicePrefix: string;
+    /** Console service IDs: `<consolePrefix>/<sha256(namespace)>/<id>`. */
+    readonly consolePrefix: string;
+    readonly host: ServiceHost;
 }
 
 export class ManagedEndpoints {
     private readonly _entries = new Map<string, Entry>();
-    private readonly _recent = new Map<string, Entry>();
+    /** Console registrations of each connection serving this API. */
+    private readonly _connections = new Map<LinkRpcConnection, Map<Entry, { dispose(): void }>>();
     private _ops = Promise.resolve();
     private _closing = false;
 
-    constructor(
-        private readonly _file: string,
-        private readonly _prefix: string,
-        private readonly _host: ServiceHost,
-    ) {}
+    constructor(private readonly _options: ManagedEndpointsOptions) {}
 
     snapshot(): { definition: EndpointDefinition; desired: boolean }[] {
-        return [...this._entries.values()].filter(entry => !entry.foreground)
+        return [...this._entries.values()].filter(entry => !entry.owned)
             .map(entry => ({ definition: entry.definition, desired: entry.desired }));
     }
 
@@ -45,7 +65,7 @@ export class ManagedEndpoints {
             return;
         }
         let text: string;
-        try { text = fs.readFileSync(this._file, 'utf8'); }
+        try { text = fs.readFileSync(this._options.file, 'utf8'); }
         catch (error) {
             if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
             throw error;
@@ -57,31 +77,20 @@ export class ManagedEndpoints {
 
     private async _restoreEntry(definition: EndpointDefinition, desired: boolean): Promise<void> {
         if (this._entries.has(key(definition))) throw new Error('Duplicate persisted endpoint');
-        const entry = this._make(definition, desired);
-        this._entries.set(key(definition), entry);
+        const entry = this._add(definition, desired, { owned: false });
         if (entry.desired) await entry.supervisor.sync();
     }
 
+    /** Serve the management API, and every process endpoint's console, on `connection`. */
     register(connection: LinkRpcConnection, serviceId?: string): { dispose(): void } {
-        return connection.register(managedEndpointsInterface, {
-            info: () => ({ hostname: os.hostname(), platform: process.platform, cwd: process.cwd(), servicePrefix: this._prefix }),
+        const management = connection.register(managedEndpointsInterface, {
+            info: () => ({ hostname: os.hostname(), platform: process.platform, cwd: process.cwd(), servicePrefix: this._options.servicePrefix }),
             list: ({ namespace }) => this.list(namespace),
-            create: definition => this._serialize(async () => this._status(await this._create(definition, false))),
-            runForeground: async (definition, _context, stream) => {
-                const entry = await this._serialize(async () => {
-                    stream.signal.throwIfAborted();
-                    return this._create(definition, true);
-                });
-                try {
-                    await this._stream(entry, 0, stream);
-                } finally {
-                    // Shutdown already disposes every supervisor. Otherwise cleanup owns
-                    // this exact instance, never a replacement using the same name.
-                    if (!this._closing) await this._serialize(async () => {
-                        await entry.supervisor.dispose();
-                        this._removeEntry(entry);
-                    });
-                }
+            create: ({ replace, ...definition }) => this._serialize(async () =>
+                this._status(await this._create(definition, { owned: false, replace: replace ?? false }))),
+            run: (params, _context, stream) => this._run(params, stream),
+            watch: async (address, _context, stream) => {
+                await this._watch(this._get(address), stream);
                 return {};
             },
             start: address => this._serialize(async () => {
@@ -108,7 +117,7 @@ export class ManagedEndpoints {
             }),
             configure: params => this._serialize(async () => {
                 const entry = this._get(params);
-                if (entry.foreground && params.persistent) throw new Error('A foreground endpoint cannot be persistent');
+                if (entry.owned && params.persistent) throw new Error('A foreground (owned) endpoint cannot be persistent');
                 const definition = {
                     ...entry.definition,
                     ...(params.persistent === undefined ? {} : { persistent: params.persistent }),
@@ -121,60 +130,17 @@ export class ManagedEndpoints {
                 this._changed(entry);
                 return this._status(entry);
             }),
-            attach: async (params, _context, stream) => {
-                const entry = params.instanceId ? this._recent.get(params.instanceId) : this._entries.get(key(params));
-                if (!entry || key(entry.definition) !== key(params)) throw new Error('Endpoint instance not found');
-                await this._stream(entry, params.after, stream);
-                return {};
-            },
-            input: params => {
-                const entry = this._get(params);
-                if (entry.instanceId !== params.instanceId) throw new Error('Endpoint instance changed; attach again');
-                entry.supervisor.input(params.input);
-                return {};
-            },
         }, serviceId === undefined ? undefined : { serviceId });
-    }
-
-    private async _create(definition: EndpointDefinition, foreground: boolean): Promise<Entry> {
-        if (this._entries.has(key(definition))) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
-        const entry = this._make(definition, true, foreground);
-        this._entries.set(key(definition), entry);
-        try {
-            this._save();
-            await entry.supervisor.sync();
-            return entry;
-        } catch (error) {
-            await entry.supervisor.dispose();
-            this._removeEntry(entry);
-            throw error;
-        }
-    }
-
-    private async _stream(entry: Entry, after: number, stream: Pick<StreamApi<never, EndpointEvent>, 'signal' | 'send'>): Promise<void> {
-        let dirty = true;
-        let wake: (() => void) | undefined;
-        const notify = () => { dirty = true; wake?.(); };
-        entry.listeners.add(notify);
-        stream.signal.addEventListener('abort', notify);
-        try {
-            while (!stream.signal.aborted) {
-                dirty = false;
-                for (const output of entry.output.filter(value => value.sequence > after)) {
-                    await stream.send(output);
-                    after = output.sequence;
-                }
-                const status = this._status(entry);
-                await stream.send({ type: 'status', status });
-                if (entry.removed) { await stream.send({ type: 'removed' }); break; }
-                if (['disabled', 'stopped', 'failed'].includes(status.runtime.state)) break;
-                if (!dirty) await new Promise<void>(resolve => { wake = resolve; if (dirty || stream.signal.aborted) resolve(); });
-                wake = undefined;
-            }
-        } finally {
-            entry.listeners.delete(notify);
-            stream.signal.removeEventListener('abort', notify);
-        }
+        const consoles = new Map<Entry, { dispose(): void }>();
+        this._connections.set(connection, consoles);
+        for (const entry of this._entries.values()) this._registerConsole(consoles, connection, entry);
+        return {
+            dispose: () => {
+                management.dispose();
+                for (const registration of consoles.values()) registration.dispose();
+                this._connections.delete(connection);
+            },
+        };
     }
 
     list(namespace?: string): EndpointStatus[] {
@@ -186,17 +152,92 @@ export class ManagedEndpoints {
         this._closing = true;
         await this._ops;
         await Promise.all([...this._entries.values()].map(entry => entry.supervisor.dispose()));
+        for (const entry of this._entries.values()) this._closeConsole(entry);
     }
 
-    private _make(definition: EndpointDefinition, desired: boolean, foreground = false): Entry {
+    private async _run(
+        { definition, owner = false, replace = false, console: attach }: RunParams,
+        stream: StreamApi<ConsoleClientMessage, RunEvent>,
+    ): Promise<{ exit: ConsoleExit | null }> {
+        if (owner && definition.persistent) throw new Error('A foreground (owned) endpoint cannot be persistent');
+        const entry = await this._serialize(async () => {
+            stream.signal.throwIfAborted();
+            return this._create(definition, { owned: owner, replace, ...(attach.size ? { size: attach.size } : {}) });
+        });
+        const sendStatus = () => { stream.send({ t: 'status', status: this._status(entry) }).catch(() => {}); };
+        entry.listeners.add(sendStatus);
+        try {
+            sendStatus();
+            return await entry.console!.host.attach(attach, stream);
+        } finally {
+            entry.listeners.delete(sendStatus);
+            // Shutdown already disposes every supervisor. Otherwise cleanup owns
+            // this exact instance, never a replacement using the same name.
+            if (owner && !this._closing) {
+                await this._serialize(async () => {
+                    await entry.supervisor.dispose();
+                    this._removeEntry(entry);
+                });
+            }
+        }
+    }
+
+    private async _create(
+        definition: EndpointDefinition,
+        options: { readonly owned: boolean; readonly replace: boolean; readonly size?: ConsoleSize },
+    ): Promise<Entry> {
+        const existing = this._entries.get(key(definition));
+        if (existing) {
+            if (!options.replace) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
+            existing.console?.host.notice('Replaced by a new launch of the same endpoint.');
+            await existing.supervisor.dispose();
+            this._removeEntry(existing);
+        }
+        const entry = this._add(definition, true, options);
+        try {
+            this._save();
+            await entry.supervisor.sync();
+            return entry;
+        } catch (error) {
+            await entry.supervisor.dispose();
+            this._removeEntry(entry);
+            throw error;
+        }
+    }
+
+    private async _watch(entry: Entry, stream: Pick<StreamApi<never, WatchEvent>, 'signal' | 'send'>): Promise<void> {
+        let dirty = true;
+        let wake: (() => void) | undefined;
+        const notify = () => { dirty = true; wake?.(); };
+        entry.listeners.add(notify);
+        stream.signal.addEventListener('abort', notify);
+        try {
+            while (!stream.signal.aborted) {
+                dirty = false;
+                if (entry.removed) {
+                    await stream.send({ t: 'removed' });
+                    return;
+                }
+                await stream.send({ t: 'status', status: this._status(entry) });
+                if (!dirty) await new Promise<void>(resolve => { wake = resolve; if (dirty || stream.signal.aborted) resolve(); });
+                wake = undefined;
+            }
+        } finally {
+            entry.listeners.delete(notify);
+            stream.signal.removeEventListener('abort', notify);
+        }
+    }
+
+    private _add(definition: EndpointDefinition, desired: boolean, options: { readonly owned: boolean; readonly size?: ConsoleSize }): Entry {
         const digest = createHash('sha256').update(definition.namespace).digest('hex');
         const name = `${digest.slice(0, 16)}-${definition.id}`;
-        const serviceId = `${this._prefix}/${digest}/${definition.id}`;
+        const serviceId = `${this._options.servicePrefix}/${digest}/${definition.id}`;
+        const source = definition.source;
         const service: ManagedService = {
             ...ManagedServiceSchema.parse({
-                ...(definition.source.kind === 'process' ? {
-                    command: definition.source.command, env: definition.source.env,
-                    cwd: definition.source.cwd, readiness: definition.source.readiness, rpc: definition.source.rpc,
+                ...(source.kind === 'process' ? {
+                    command: source.command, env: source.env, cwd: source.cwd,
+                    readiness: source.readiness, rpc: source.rpc, tty: source.tty,
                 } : { command: ['connection'] }),
                 enabled: desired, restart: definition.restart, serviceId,
             }),
@@ -204,67 +245,97 @@ export class ManagedEndpoints {
         };
         let entry: Entry;
         const host: ServiceHost = {
-            openSocket: (...args) => this._host.openSocket(...args),
-            log: (...args) => this._host.log(...args),
-            output: (_name, stream, text) => {
-                for (let offset = 0; offset < text.length; offset += 8192) {
-                    entry.output.push({ type: 'output', sequence: ++entry.sequence, stream, text: text.slice(offset, offset + 8192) });
-                }
-                if (entry.output.length > 1000) entry.output.splice(0, entry.output.length - 1000);
-                for (const listener of entry.listeners) listener();
-            },
+            openSocket: (...args) => this._options.host.openSocket(...args),
+            log: (...args) => this._options.host.log(...args),
+            output: (_name, stream, data) => entry.console?.host.output(stream, data),
+            notice: (_name, text) => entry.console?.host.notice(text),
+            processStarted: (_name, pid) => entry.console?.host.started(pid),
+            processExited: (_name, exit) => entry.console?.host.exited(exit),
         };
-        const supervisor = definition.source.kind === 'process'
-            ? new ServiceSupervisor(name, service, host, () => this._changed(entry))
-            : new ConnectionSupervisor(name, definition.source.endpoint, service, host, () => this._changed(entry));
-        entry = { definition, desired, foreground, supervisor, instanceId: randomUUID(), output: [], listeners: new Set(), sequence: 0, removed: false };
-        this._recent.set(entry.instanceId, entry);
-        for (const [id, old] of this._recent) {
-            if (this._recent.size <= this._entries.size + 64) break;
-            if (old.removed && old.listeners.size === 0) this._recent.delete(id);
+        let supervisor: ServiceSupervisor | ConnectionSupervisor;
+        let console: Entry['console'];
+        if (source.kind === 'process') {
+            const processSupervisor = new ServiceSupervisor(name, service, host, () => this._changed(entry));
+            const size = source.tty ? options.size ?? { cols: 80, rows: 24 } : undefined;
+            if (size) processSupervisor.resize(size);
+            const consoleHost = new ConsoleHost({
+                mode: source.tty ? 'tty' : 'pipe',
+                signals: processSignals(source.tty),
+                backend: processSupervisor,
+                ...(size ? { size, history: new ScreenHistory(size) } : {}),
+            });
+            if (!desired) consoleHost.finish();
+            supervisor = processSupervisor;
+            console = { host: consoleHost, serviceId: `${this._options.consolePrefix}/${digest}/${definition.id}` };
+        } else {
+            supervisor = new ConnectionSupervisor(name, source.endpoint, service, host, () => this._changed(entry));
         }
+        entry = { definition, desired, owned: options.owned, supervisor, console, instanceId: randomUUID(), listeners: new Set(), removed: false };
+        this._entries.set(key(definition), entry);
+        for (const [connection, consoles] of this._connections) this._registerConsole(consoles, connection, entry);
         return entry;
+    }
+
+    private _registerConsole(consoles: Map<Entry, { dispose(): void }>, connection: LinkRpcConnection, entry: Entry): void {
+        if (entry.console) consoles.set(entry, entry.console.host.register(connection, entry.console.serviceId));
+    }
+
+    private _closeConsole(entry: Entry): void {
+        for (const consoles of this._connections.values()) {
+            consoles.get(entry)?.dispose();
+            consoles.delete(entry);
+        }
+        entry.console?.host.close();
     }
 
     private _changed(entry: Entry): void {
         for (const listener of entry.listeners) listener();
-        if (this._closing || entry.removed || entry.definition.persistent) return;
-        if (['failed', 'stopped', 'disabled'].includes(entry.supervisor.status().state)) {
-            this._removeEntry(entry);
-        }
+        if (!finishedStates.has(entry.supervisor.status().state)) return;
+        entry.console?.host.finish();
+        if (!this._closing && !entry.removed && !entry.definition.persistent) this._removeEntry(entry);
     }
+
     private _removeEntry(entry: Entry): void {
+        if (entry.removed) return;
         if (this._entries.get(key(entry.definition)) === entry) this._entries.delete(key(entry.definition));
         entry.removed = true;
+        this._closeConsole(entry);
         for (const listener of entry.listeners) listener();
     }
+
     private _get(address: EndpointAddress): Entry {
         const entry = this._entries.get(key(address));
         if (!entry) throw new Error(`Endpoint "${address.id}" not found in ${address.namespace}`);
         return entry;
     }
+
     private _status(entry: Entry): EndpointStatus {
+        const source = entry.definition.source;
         return {
             namespace: entry.definition.namespace, id: entry.definition.id, instanceId: entry.instanceId,
             serviceId: entry.supervisor.service.serviceId, persistent: entry.definition.persistent,
-            restart: entry.definition.restart, desired: entry.desired, sourceKind: entry.definition.source.kind,
-            rpc: entry.definition.source.kind === 'connection' || entry.definition.source.rpc,
+            restart: entry.definition.restart, desired: entry.desired, owned: entry.owned, sourceKind: source.kind,
+            rpc: source.kind === 'connection' || source.rpc,
+            ...(entry.console ? { console: { serviceId: entry.console.serviceId, mode: entry.console.host.mode } } : {}),
             runtime: entry.supervisor.status(),
         };
     }
+
     private _save(): void {
-        writePrivateJson(this._file, [...this._entries.values()].filter(entry => entry.definition.persistent)
+        writePrivateJson(this._options.file, [...this._entries.values()].filter(entry => entry.definition.persistent)
             .map(entry => ({ definition: entry.definition, desired: entry.desired })));
     }
+
     private _setDesired(entry: Entry, desired: boolean): void {
         const previous = entry.desired;
         entry.desired = desired;
         try { this._save(); } catch (error) { entry.desired = previous; throw error; }
     }
+
     private _serialize<T>(operation: () => Promise<T>): Promise<T> {
         if (this._closing) return Promise.reject(new Error('Daemon is stopping'));
         const result = this._ops.then(operation);
-        this._ops = result.then(() => {}, error => this._host.log('management', String(error)));
+        this._ops = result.then(() => {}, error => this._options.host.log('management', String(error)));
         return result;
     }
 }

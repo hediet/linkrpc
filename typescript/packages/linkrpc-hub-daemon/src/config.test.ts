@@ -23,6 +23,7 @@ describe('daemon config', () => {
               "serviceId": "hub/echo",
               "startTimeoutMs": 30000,
               "stopTimeoutMs": 5000,
+              "tty": false,
             },
             "forwardChecking": false,
           }
