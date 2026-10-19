@@ -55,6 +55,62 @@ async function fixture(isolated = false) {
 }
 
 describe('hub services CLI', { timeout: 120_000 }, () => {
+    it.each([false, true])('kills the foreground process tree when the CLI is forcibly killed (routed: %s)', async routed => {
+        const f = await fixture();
+        await f.ok(['context', '--new-context', '.']);
+        await f.ok(['services', 'restart']);
+        const endpoint = readEndpointDiscovery(f.home.discoveryFile)!.endpoint;
+        const child = spawn(process.execPath, [f.cli,
+            ...(routed ? ['--endpoint', endpoint] : []),
+            'services', 'run', '--foreground', '--cwd', f.root, '--readiness', 'spawned', '--restart', 'always', '--',
+            process.execPath, '-e',
+            'const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]); console.log(JSON.stringify({ parent: process.pid, child: child.pid })); setInterval(() => {}, 1000)',
+        ], { cwd: f.root, env: f.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+        cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        await vi.waitFor(() => expect(stdout, stderr).toContain('"child":'), { timeout: 20_000 });
+        const pids = JSON.parse(stdout.trim()) as { parent: number; child: number };
+        expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ runtime: { pid: pids.parent, state: 'running' } }]);
+        child.kill('SIGKILL');
+        await exited;
+        await vi.waitFor(() => {
+            expect(() => process.kill(pids.parent, 0)).toThrow();
+            expect(() => process.kill(pids.child, 0)).toThrow();
+        }, { timeout: 15_000 });
+        expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
+    });
+
+    it.each(['--detach', '--persistent'])('rejects --foreground with %s before starting a daemon', async conflict => {
+        const f = await fixture();
+        const result = await f.run(['services', 'run', '--foreground', conflict, '--', process.execPath, '-e', '0']);
+        expect(result.code).not.toBe(0);
+        expect(result.stderr).toContain('cannot be used with option');
+        expect(readEndpointDiscovery(f.home.managementFile)).toBeUndefined();
+    });
+
+    it('forwards foreground stdin and cancels rather than detaching on Ctrl+]', async () => {
+        const f = await fixture();
+        const child = spawn(process.execPath, [f.cli, 'services', 'run', '--new-context', '.', '--foreground',
+            '--readiness', 'spawned', '--', process.execPath, '-e',
+            'process.stdin.on("data", data => process.stdout.write(data));',
+        ], { cwd: f.root, env: f.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+        cleanup.push(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.stdin.write('foreground-input\n');
+        await vi.waitFor(() => expect(stdout, stderr).toContain('foreground-input'), { timeout: 15_000 });
+        child.stdin.write('\x1d\n');
+        await exited;
+        await vi.waitFor(async () => expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]), { timeout: 15_000 });
+    });
+
     it('bootstraps standalone management, detaches, lists, logs, and stops', async () => {
         const f = await fixture();
         const missing = await f.run(['services', 'list', '--all-contexts']);
@@ -72,9 +128,9 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         expect(noServices.stderr).toContain('no local services are running');
     });
 
-    it('streams foreground output and preserves process exit status', async () => {
+    it.each([false, true])('streams output and preserves process exit status (foreground: %s)', async foreground => {
         const f = await fixture();
-        const result = await f.run(['services', 'run', '--new-context', '.', '--readiness', 'spawned', '--',
+        const result = await f.run(['services', 'run', ...(foreground ? ['--foreground'] : []), '--new-context', '.', '--readiness', 'spawned', '--',
             process.execPath, '-e', 'console.log("foreground-output"); process.exitCode = 7']);
         expect(result.stdout).toContain('foreground-output');
         expect(result.code).toBe(7);

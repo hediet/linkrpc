@@ -48,6 +48,9 @@ still start a different build at the next login.
 # Create a context explicitly and run attached in the foreground:
 hub services run --new-context . -- node server.js
 
+# Bind the service lifetime to this terminal's CLI process:
+hub services run --foreground --id temporary -- node server.js
+
 # Another terminal in this context:
 hub services list
 hub ls
@@ -114,6 +117,22 @@ inspectable. Attachments stream bounded recent stdout/stderr and daemon output,
 forward stdin and Ctrl+C, and do not own the process lifetime. This is a **pipe
 console**, not a PTY: terminal resize and full-screen terminal apps are not
 supported. `logs` prints recent output; `logs --follow` keeps streaming.
+
+`run --foreground` instead creates the process inside a lifetime-owning
+management RPC. Ctrl+C, SIGTERM, cancellation, or a detected CLI disconnect
+causes the daemon to stop the process tree and remove the endpoint, even when
+the CLI is forcibly killed and cannot run an exit handler. On a remote Hub,
+cleanup begins once the disconnect is detected. The normal graceful stop
+timeout still applies before forced process-tree termination.
+
+Other terminals can discover/call the service and attach as observers; closing
+an observer does not stop it. Ctrl+] followed by Enter cancels the owning
+foreground command (and therefore stops the service), rather than detaching it.
+`--foreground` conflicts with `--detach` and `--persistent`; the management API
+also rejects making a foreground endpoint persistent later. Restart policies
+apply only while the owning call is alive. Hub replacement stops foreground
+endpoints rather than restoring them without an owner. Ordinary `run` and
+`attach` retain their daemon-owned lifetime behavior.
 
 Connections support initialized LinkRPC socket/WebSocket endpoints. Forwarding
 preserves method names and signatures, rather than rewriting root services

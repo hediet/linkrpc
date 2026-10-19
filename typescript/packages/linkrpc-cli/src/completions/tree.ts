@@ -330,6 +330,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                     { name: '--persistent', takesValue: false },
                     { name: '--restart', takesValue: true, valueType: 'free' },
                     { name: '--detach', takesValue: false },
+                    { name: '--foreground', takesValue: false },
                     { name: '--cwd', takesValue: true, valueType: 'free' },
                     { name: '--env', takesValue: true, valueType: 'free' },
                     { name: '--readiness', takesValue: true, valueType: 'free' },

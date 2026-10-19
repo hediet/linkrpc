@@ -27,6 +27,10 @@ describe('complete (static-only)', () => {
         const line = 'hub services ';
         expect((await complete({ line, point: line.length })).map(value => value.text)).toContain('restart');
     });
+    it('offers foreground service execution', async () => {
+        const line = 'hub services run --fore';
+        expect((await complete({ line, point: line.length })).map(value => value.text)).toContain('--foreground');
+    });
     it('returns subcommand names at the top level', async () => {
         const r = await complete({ line: 'hub ', point: 4 });
         const texts = r.map((c) => c.text);

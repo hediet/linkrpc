@@ -21,6 +21,11 @@ export const endpointDefinition = endpointAddress.extend({
     restart: z.enum(['never', 'on-failure', 'always']).default('never'),
 });
 export type EndpointDefinition = z.infer<typeof endpointDefinition>;
+export const foregroundEndpointDefinition = endpointDefinition.extend({
+    source: endpointDefinition.shape.source.options[0],
+    persistent: z.literal(false).default(false),
+});
+export type ForegroundEndpointDefinition = z.infer<typeof foregroundEndpointDefinition>;
 export type EndpointAddress = z.infer<typeof endpointAddress>;
 export const endpointStatus = endpointAddress.extend({
     instanceId: z.string(),
@@ -46,6 +51,8 @@ export const managedEndpointsInterface = defineInterface({
     info: requestType(z.object({}), z.object({ hostname: z.string(), platform: z.string(), cwd: z.string(), servicePrefix: z.string() })),
     list: requestType(z.object({ namespace: z.string().optional() }), z.array(endpointStatus)),
     create: requestType(endpointDefinition, endpointStatus),
+    runForeground: requestType(foregroundEndpointDefinition, z.object({}))
+        .withStream({ server: endpointEvent }),
     start: requestType(endpointAddress, endpointStatus),
     stop: requestType(endpointAddress, z.object({})),
     remove: requestType(endpointAddress, z.object({})),

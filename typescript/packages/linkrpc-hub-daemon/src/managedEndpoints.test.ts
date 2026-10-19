@@ -48,10 +48,77 @@ async function status(client: InterfaceClient<typeof managedEndpointsInterface>,
 const processSource = (script = 'setInterval(() => {}, 1000)') => ({
     kind: 'process' as const, command: [process.execPath, '-e', script], readiness: 'spawned' as const, env: {},
 });
-const defaults = { namespace: 'test', id: 'main', persistent: false, restart: 'never' as const };
+const defaults = { namespace: 'test', id: 'main', persistent: false as const, restart: 'never' as const };
 const address = { namespace: 'test', id: 'main' };
 
 describe('managed endpoint RPC', { timeout: 30_000 }, () => {
+    it.each([false, true])('removes foreground work when the owner disconnects (routed: %s)', async routed => {
+        const f = await fixture();
+        const observer = await f.connect();
+        const discovery = readEndpointDiscovery(routed ? f.home.discoveryFile : f.home.managementFile)!;
+        const owner = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token ?? '' });
+        cleanup.push(() => owner.close());
+        const client = owner.connection.get(managedEndpointsInterface, routed ? { serviceId: 'hub/daemon' } : {});
+        const run = client.runForeground({ ...defaults, source: processSource(), restart: 'always' }, { onMessage: () => {} });
+        const ended = run.catch(() => {});
+        const running = await status(observer, 'main', 'running');
+        await expect(observer.configure({ ...address, persistent: true })).rejects.toThrow(/foreground/);
+        const attach = observer.attach({ ...address, after: 0 }, { onMessage: () => {} });
+        const attachedEnded = attach.catch(() => {});
+        await attach.cancel();
+        await attachedEnded;
+        expect((await status(observer, 'main', 'running')).runtime.pid).toBe(running.runtime.pid);
+        owner.close();
+        await ended;
+        await vi.waitFor(async () => expect(await observer.list({ namespace: 'test' })).toEqual([]), { timeout: 15_000 });
+        expect(() => process.kill(running.runtime.pid!, 0)).toThrow();
+    });
+
+    it('cancels foreground work explicitly and streams natural completion', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        const run = client.runForeground({ ...defaults, source: processSource() }, { onMessage: () => {} });
+        const ended = run.catch(() => {});
+        await status(client, 'main', 'running');
+        await run.cancel();
+        await ended;
+        await vi.waitFor(async () => expect(await client.list({ namespace: 'test' })).toEqual([]), { timeout: 15_000 });
+        const events: EndpointEvent[] = [];
+        await client.runForeground({ ...defaults, source: processSource('console.log("foreground-done"); process.exitCode = 7') }, {
+            onMessage: event => { events.push(event); },
+        });
+        expect(events.flatMap(event => event.type === 'output' && event.stream === 'stdout' ? [event.text] : []).join('')).toBe('foreground-done\n');
+        expect(events.filter(event => event.type === 'status').at(-1)?.status.runtime.lastExit?.code).toBe(7);
+        expect(await client.list({ namespace: 'test' })).toEqual([]);
+    });
+
+    it('does not restore foreground endpoints during Hub replacement', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        const run = client.runForeground({ ...defaults, source: processSource() }, { onMessage: () => {} });
+        const ended = run.catch(() => {});
+        await status(client, 'main', 'running');
+        fs.writeFileSync(f.home.configFile, JSON.stringify({ localEndpoint: { token: 'changed' } }));
+        await f.daemon.reload();
+        await ended;
+        expect(await client.list({ namespace: 'test' })).toEqual([]);
+    });
+
+    it('handles cancellation during startup without removing a duplicate named endpoint', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        const source = { ...processSource(), readiness: 'connected' as const };
+        const run = client.runForeground({ ...defaults, source }, { onMessage: () => {} });
+        const ended = run.catch(() => {});
+        const starting = await status(client, 'main', 'starting');
+        await expect(client.runForeground({ ...defaults, source }, { onMessage: () => {} })).rejects.toThrow(/already exists/);
+        expect((await status(client, 'main', 'starting')).instanceId).toBe(starting.instanceId);
+        await run.cancel();
+        await ended;
+        await vi.waitFor(async () => expect(await client.list({ namespace: 'test' })).toEqual([]), { timeout: 15_000 });
+        expect(() => process.kill(starting.runtime.pid!, 0)).toThrow();
+    });
+
     it('isolates namespaces, rejects duplicates, and removes ephemeral endpoints on stop', async () => {
         const f = await fixture();
         const client = await f.connect();

@@ -1,7 +1,7 @@
 import { Command, Option } from 'commander';
 import { directoryInterface, ErrorCode, RpcError, type InterfaceClient, type LinkRpcConnection } from '@hediet/linkrpc';
 import { connectToHub } from '@hediet/linkrpc/node';
-import { managedEndpointsInterface, HubHome, readEndpointDiscovery, type EndpointStatus } from '@hediet/linkrpc-hub-daemon/client';
+import { managedEndpointsInterface, HubHome, readEndpointDiscovery, type EndpointStatus, type EndpointEvent, type ForegroundEndpointDefinition } from '@hediet/linkrpc-hub-daemon/client';
 import type { ContextReference } from '../contexts';
 
 export type EndpointClient = InterfaceClient<typeof managedEndpointsInterface>;
@@ -92,12 +92,13 @@ export function registerServices(program: Command, host: ServicesHost): void {
         .addOption(new Option('--restart <policy>', 'restart process or reconnect after failure').choices(['never', 'on-failure', 'always']).default('never'));
     policy(addressed(services.command('run <command...>').description('Start a process on the daemon; arguments follow --.')))
         .option('--detach', 'return after readiness')
+        .addOption(new Option('--foreground', 'stop and remove the service when this CLI disconnects').conflicts(['detach', 'persistent']))
         .option('--cwd <directory>', 'working directory on the execution host')
         .option('--env <key=value...>', 'explicit child environment')
         .addOption(new Option('--readiness <mode>', 'wait for Hub connection or process spawn').choices(['connected', 'spawned']).default('connected'))
         .action(async (command: string[], options: {
             id: string; persistent?: boolean; restart: 'never' | 'on-failure' | 'always';
-            detach?: boolean; cwd?: string; env?: string[]; readiness: 'connected' | 'spawned';
+            detach?: boolean; foreground?: boolean; cwd?: string; env?: string[]; readiness: 'connected' | 'spawned';
         }) => {
             const namespace = host.namespace();
             const env: Record<string, string> = {};
@@ -111,9 +112,16 @@ export function registerServices(program: Command, host: ServicesHost): void {
                 const cwd = options.cwd ?? (local ? process.cwd() : undefined);
                 if (!cwd) throw new Error('Remote execution requires --cwd with a path on the execution host.');
                 process.stderr.write(`Execution host: ${info.hostname}\nNamespace: ${namespace}\nEndpoint: ${options.id}\nCommand: ${JSON.stringify(command)}\nWorking directory: ${cwd}\n`);
-                const status = await client.create({
-                    namespace, id: options.id, persistent: options.persistent ?? false, restart: options.restart,
+                const definition: ForegroundEndpointDefinition = {
+                    namespace, id: options.id, persistent: false, restart: options.restart,
                     source: { kind: 'process', command, cwd, env, readiness: options.readiness },
+                };
+                if (options.foreground) {
+                    await attach(client, definition, { interactive: true });
+                    return;
+                }
+                const status = await client.create({
+                    ...definition, persistent: options.persistent ?? false,
                 });
                 await attach(client, status, { untilReady: options.detach, interactive: !options.detach });
             });
@@ -175,62 +183,76 @@ export function registerServices(program: Command, host: ServicesHost): void {
     }
 }
 
-async function attach(client: EndpointClient, initial: EndpointStatus, options: {
+async function attach(client: EndpointClient, initial: EndpointStatus | ForegroundEndpointDefinition, options: {
     untilReady?: boolean; interactive?: boolean; snapshot?: boolean; readOnly?: boolean;
 }): Promise<void> {
-    const address = { namespace: initial.namespace, id: initial.id, instanceId: initial.instanceId };
-    let current = initial;
+    const foreground = !('instanceId' in initial);
+    let current: EndpointStatus | undefined = 'instanceId' in initial ? initial : undefined;
+    const address = () => {
+        if (!current) throw new Error('Endpoint has not started');
+        return { namespace: current.namespace, id: current.id, instanceId: current.instanceId };
+    };
     let cancelled = false;
     let ready = false;
     let failure: Error | undefined;
-    const call = client.attach({ ...address, after: 0 }, {
-        onMessage: event => {
+    let inputStarted = false;
+    const onMessage = (event: EndpointEvent) => {
             if (event.type === 'output') {
                 (event.stream === 'stdout' ? process.stdout : process.stderr).write(event.text);
             } else if (event.type === 'status') {
                 current = event.status;
                 ready ||= current.runtime.state === 'running';
+                startInput();
                 if (options.snapshot || (options.untilReady && ready)) cancel();
             }
-        },
-    });
+    };
+    const call = 'instanceId' in initial
+        ? client.attach({ ...address(), after: 0 }, { onMessage })
+        : client.runForeground(initial, { onMessage });
     function cancel(): void {
         cancelled = true;
         void call.cancel().catch(error => { failure = error instanceof Error ? error : new Error(String(error)); });
     }
     const input = (data: Buffer) => {
         if (data.includes(29)) { cancel(); return; }
-        void client.input({ ...address, input: { type: 'stdin', data: data.toString('utf8') } })
+        void client.input({ ...address(), input: { type: 'stdin', data: data.toString('utf8') } })
             .catch(error => { failure = error instanceof Error ? error : new Error(String(error)); cancel(); });
     };
     const interrupt = () => {
-        if (!options.interactive) { cancel(); return; }
-        void client.input({ ...address, input: { type: 'signal', signal: 'SIGINT' } })
+        if (foreground || !options.interactive) { cancel(); return; }
+        void client.input({ ...address(), input: { type: 'signal', signal: 'SIGINT' } })
             .catch(error => { failure = error instanceof Error ? error : new Error(String(error)); cancel(); });
     };
     process.on('SIGINT', interrupt);
+    if (foreground) process.on('SIGTERM', interrupt);
     const timeout = options.untilReady ? setTimeout(() => {
         failure = new Error('Endpoint did not become ready within 30 seconds. It remains daemon-owned; use services list or logs to inspect it.');
         cancel();
     }, 30_000) : undefined;
-    if (options.interactive) {
+    function startInput(): void {
+        if (!options.interactive || inputStarted || !current) return;
+        inputStarted = true;
         process.stdin.on('data', input);
         process.stdin.resume();
-        process.stderr.write('Attached (pipe console). Ctrl+C interrupts; Ctrl+] then Enter detaches.\n');
+        process.stderr.write(foreground
+            ? 'Foreground (pipe console). Ctrl+C or disconnect stops and removes the service.\n'
+            : 'Attached (pipe console). Ctrl+C interrupts; Ctrl+] then Enter detaches.\n');
     }
+    startInput();
     try {
         try { await call; } catch (error) { if (!cancelled) throw error; }
         if (failure) throw failure;
-        if (options.untilReady && !ready) throw new Error(current.runtime.error ?? 'Endpoint exited before readiness');
-        if (current.runtime.state === 'failed' && !options.readOnly && !current.runtime.lastExit?.code) {
+        if (options.untilReady && !ready) throw new Error(current?.runtime.error ?? 'Endpoint exited before readiness');
+        if (current?.runtime.state === 'failed' && !options.readOnly && !current.runtime.lastExit?.code) {
             throw new Error(current.runtime.error ?? 'Endpoint failed');
         }
         if (options.untilReady && ready) print(current);
-        if (!options.untilReady && !options.readOnly && !cancelled && current.runtime.lastExit?.code) process.exitCode = current.runtime.lastExit.code;
+        if (!options.untilReady && !options.readOnly && !cancelled && current?.runtime.lastExit?.code) process.exitCode = current.runtime.lastExit.code;
     } finally {
         clearTimeout(timeout);
         process.removeListener('SIGINT', interrupt);
-        if (options.interactive) { process.stdin.removeListener('data', input); process.stdin.pause(); }
+        if (foreground) process.removeListener('SIGTERM', interrupt);
+        if (inputStarted) { process.stdin.removeListener('data', input); process.stdin.pause(); }
     }
 }
 

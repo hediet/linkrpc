@@ -37,12 +37,19 @@ The routed interface is subject to the selected Hub's admission/capability
 policy. It permits execution as the daemon's OS user: do not expose a trusted
 local listener to untrusted networks without configuring those policies.
 
-The API exposes `info`, `list`, `create`, `start`, `stop`, `remove`, `configure`,
+The API exposes `info`, `list`, `create`, `runForeground`, `start`, `stop`, `remove`, `configure`,
 `attach` (server stream), and instance-guarded `input`. Attach cancellation never
 stops an endpoint. Output retention is bounded to 1000 chunks per endpoint;
 recently completed ephemeral instances retain a bounded replay window.
 These instance IDs identify endpoint definitions, not individual automatic
 restart attempts.
+
+`runForeground` creates a non-persistent process and streams the same events as
+`attach`, but owns that process's lifetime. Its completion, cancellation, or
+caller disconnect disposes that exact supervisor and removes its endpoint.
+There is no separate create/attach gap that could orphan foreground work.
+Observer attachments remain non-owning. Foreground endpoints cannot be made
+persistent and are not restored across Hub replacement.
 
 Dynamic endpoints are keyed by `(namespace, id)` and publish under
 `<hubServiceId>/services/<sha256(namespace)>/<id>`. Persistent definitions and

@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { z } from 'zod';
-import type { LinkRpcConnection } from '@hediet/linkrpc';
+import type { LinkRpcConnection, StreamApi } from '@hediet/linkrpc';
 import { endpointDefinition, managedEndpointsInterface, type EndpointAddress, type EndpointDefinition, type EndpointEvent, type EndpointStatus } from './endpointInterface';
 import { ManagedServiceSchema, type ManagedService } from './config';
 import { writePrivateJson } from './discovery';
@@ -14,6 +14,7 @@ interface Entry {
     definition: EndpointDefinition;
     desired: boolean;
     readonly instanceId: string;
+    readonly foreground: boolean;
     readonly supervisor: ServiceSupervisor | ConnectionSupervisor;
     readonly output: Extract<EndpointEvent, { type: 'output' }>[];
     readonly listeners: Set<() => void>;
@@ -34,7 +35,8 @@ export class ManagedEndpoints {
     ) {}
 
     snapshot(): { definition: EndpointDefinition; desired: boolean }[] {
-        return [...this._entries.values()].map(entry => ({ definition: entry.definition, desired: entry.desired }));
+        return [...this._entries.values()].filter(entry => !entry.foreground)
+            .map(entry => ({ definition: entry.definition, desired: entry.desired }));
     }
 
     async restore(snapshot?: ReturnType<ManagedEndpoints['snapshot']>): Promise<void> {
@@ -64,15 +66,24 @@ export class ManagedEndpoints {
         return connection.register(managedEndpointsInterface, {
             info: () => ({ hostname: os.hostname(), platform: process.platform, cwd: process.cwd(), servicePrefix: this._prefix }),
             list: ({ namespace }) => this.list(namespace),
-            create: definition => this._serialize(async () => {
-                if (this._entries.has(key(definition))) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
-                const entry = this._make(definition, true);
-                this._entries.set(key(definition), entry);
-                try { this._save(); }
-                catch (error) { this._entries.delete(key(definition)); throw error; }
-                await entry.supervisor.sync();
-                return this._status(entry);
-            }),
+            create: definition => this._serialize(async () => this._status(await this._create(definition, false))),
+            runForeground: async (definition, _context, stream) => {
+                const entry = await this._serialize(async () => {
+                    stream.signal.throwIfAborted();
+                    return this._create(definition, true);
+                });
+                try {
+                    await this._stream(entry, 0, stream);
+                } finally {
+                    // Shutdown already disposes every supervisor. Otherwise cleanup owns
+                    // this exact instance, never a replacement using the same name.
+                    if (!this._closing) await this._serialize(async () => {
+                        await entry.supervisor.dispose();
+                        this._removeEntry(entry);
+                    });
+                }
+                return {};
+            },
             start: address => this._serialize(async () => {
                 const entry = this._get(address);
                 this._setDesired(entry, true);
@@ -97,6 +108,7 @@ export class ManagedEndpoints {
             }),
             configure: params => this._serialize(async () => {
                 const entry = this._get(params);
+                if (entry.foreground && params.persistent) throw new Error('A foreground endpoint cannot be persistent');
                 const definition = {
                     ...entry.definition,
                     ...(params.persistent === undefined ? {} : { persistent: params.persistent }),
@@ -112,30 +124,7 @@ export class ManagedEndpoints {
             attach: async (params, _context, stream) => {
                 const entry = params.instanceId ? this._recent.get(params.instanceId) : this._entries.get(key(params));
                 if (!entry || key(entry.definition) !== key(params)) throw new Error('Endpoint instance not found');
-                let after = params.after;
-                let dirty = true;
-                let wake: (() => void) | undefined;
-                const notify = () => { dirty = true; wake?.(); };
-                entry.listeners.add(notify);
-                stream.signal.addEventListener('abort', notify);
-                try {
-                    while (!stream.signal.aborted) {
-                        dirty = false;
-                        for (const output of entry.output.filter(value => value.sequence > after)) {
-                            await stream.send(output);
-                            after = output.sequence;
-                        }
-                        const status = this._status(entry);
-                        await stream.send({ type: 'status', status });
-                        if (entry.removed) { await stream.send({ type: 'removed' }); break; }
-                        if (['disabled', 'stopped', 'failed'].includes(status.runtime.state)) break;
-                        if (!dirty) await new Promise<void>(resolve => { wake = resolve; if (dirty || stream.signal.aborted) resolve(); });
-                        wake = undefined;
-                    }
-                } finally {
-                    entry.listeners.delete(notify);
-                    stream.signal.removeEventListener('abort', notify);
-                }
+                await this._stream(entry, params.after, stream);
                 return {};
             },
             input: params => {
@@ -145,6 +134,47 @@ export class ManagedEndpoints {
                 return {};
             },
         }, serviceId === undefined ? undefined : { serviceId });
+    }
+
+    private async _create(definition: EndpointDefinition, foreground: boolean): Promise<Entry> {
+        if (this._entries.has(key(definition))) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
+        const entry = this._make(definition, true, foreground);
+        this._entries.set(key(definition), entry);
+        try {
+            this._save();
+            await entry.supervisor.sync();
+            return entry;
+        } catch (error) {
+            await entry.supervisor.dispose();
+            this._removeEntry(entry);
+            throw error;
+        }
+    }
+
+    private async _stream(entry: Entry, after: number, stream: Pick<StreamApi<never, EndpointEvent>, 'signal' | 'send'>): Promise<void> {
+        let dirty = true;
+        let wake: (() => void) | undefined;
+        const notify = () => { dirty = true; wake?.(); };
+        entry.listeners.add(notify);
+        stream.signal.addEventListener('abort', notify);
+        try {
+            while (!stream.signal.aborted) {
+                dirty = false;
+                for (const output of entry.output.filter(value => value.sequence > after)) {
+                    await stream.send(output);
+                    after = output.sequence;
+                }
+                const status = this._status(entry);
+                await stream.send({ type: 'status', status });
+                if (entry.removed) { await stream.send({ type: 'removed' }); break; }
+                if (['disabled', 'stopped', 'failed'].includes(status.runtime.state)) break;
+                if (!dirty) await new Promise<void>(resolve => { wake = resolve; if (dirty || stream.signal.aborted) resolve(); });
+                wake = undefined;
+            }
+        } finally {
+            entry.listeners.delete(notify);
+            stream.signal.removeEventListener('abort', notify);
+        }
     }
 
     list(namespace?: string): EndpointStatus[] {
@@ -158,7 +188,7 @@ export class ManagedEndpoints {
         await Promise.all([...this._entries.values()].map(entry => entry.supervisor.dispose()));
     }
 
-    private _make(definition: EndpointDefinition, desired: boolean): Entry {
+    private _make(definition: EndpointDefinition, desired: boolean, foreground = false): Entry {
         const digest = createHash('sha256').update(definition.namespace).digest('hex');
         const name = `${digest.slice(0, 16)}-${definition.id}`;
         const serviceId = `${this._prefix}/${digest}/${definition.id}`;
@@ -187,7 +217,7 @@ export class ManagedEndpoints {
         const supervisor = definition.source.kind === 'process'
             ? new ServiceSupervisor(name, service, host, () => this._changed(entry))
             : new ConnectionSupervisor(name, definition.source.endpoint, service, host, () => this._changed(entry));
-        entry = { definition, desired, supervisor, instanceId: randomUUID(), output: [], listeners: new Set(), sequence: 0, removed: false };
+        entry = { definition, desired, foreground, supervisor, instanceId: randomUUID(), output: [], listeners: new Set(), sequence: 0, removed: false };
         this._recent.set(entry.instanceId, entry);
         for (const [id, old] of this._recent) {
             if (this._recent.size <= this._entries.size + 64) break;
