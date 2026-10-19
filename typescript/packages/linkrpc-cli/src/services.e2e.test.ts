@@ -52,8 +52,12 @@ async function fixture(isolated = false) {
         expect({ code: result.code, error: result.code ? result.stderr : '' }).toEqual({ code: 0, error: '' });
         return result.stdout;
     };
-    const start = (args: string[]) => {
-        const child = spawn(process.execPath, [cli, ...args], { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const start = (args: string[], terminal = false) => {
+        // Exercise the CLI's real readline/key handling over a deterministic input stream.
+        const terminalHook = 'data:text/javascript,' + encodeURIComponent('process.stdin.isTTY = true; process.stdin.setRawMode = () => process.stdin;');
+        const child = spawn(process.execPath, [...(terminal ? ['--import', terminalHook] : []), cli, ...args], {
+            cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        });
         const exited = new Promise<number | null>((resolve, reject) => {
             child.once('exit', resolve);
             child.once('error', reject);
@@ -69,6 +73,54 @@ async function fixture(isolated = false) {
 }
 
 describe('hub services CLI', { timeout: 120_000 }, () => {
+    it.each(['\x03', '\x04'])('promptly stops foreground work on terminal control %j', async control => {
+        const f = await fixture();
+        const owner = f.start(['services', 'run', '--new-context', '.', '-x', '--foreground', '--',
+            process.execPath, '-e', 'console.log(process.pid); setInterval(() => {}, 1000)'], true);
+        await vi.waitFor(() => expect(owner.stdout, owner.stderr).toMatch(/^\d+\n$/), { timeout: 15_000 });
+        const pid = Number(owner.stdout.trim());
+        const start = performance.now();
+        owner.child.stdin.write(control);
+        await vi.waitFor(() => expect(owner.child.exitCode, owner.stderr + owner.stdout).toBe(0), { timeout: 4000 });
+        expect(await owner.exited).toBe(0);
+        expect(performance.now() - start).toBeLessThan(2000);
+        expect(() => process.kill(pid, 0)).toThrow();
+        expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
+    });
+
+    it.each([false, true])('shares interactive counter requests and responses (foreground: %s)', async foreground => {
+        const f = await fixture();
+        await f.ok(['context', '--new-context', '.']);
+        const script = fileURLToPath(new URL('../examples/interactive-counter.mjs', import.meta.url));
+        const args = ['services', 'run', '-x', foreground ? '--foreground' : '--detach', '--', process.execPath, script];
+        const owner = foreground ? f.start(args, true) : undefined;
+        if (!foreground) await f.ok(args);
+        if (owner) await vi.waitFor(() => expect(owner.stdout, owner.stderr).toContain('Commands:'), { timeout: 15_000 });
+        const attached = f.start(['services', 'attach'], true);
+        await vi.waitFor(() => expect(attached.stdout, attached.stderr).toContain('tick 1\n'), { timeout: 15_000 });
+        attached.child.stdin.write('count\r');
+        await vi.waitFor(() => expect(attached.stdout).toMatch(/count [1-9]\d*\n/));
+        (owner ?? attached).child.stdin.write('echo hello\r');
+        await vi.waitFor(() => {
+            expect(attached.stdout).toMatch(/\[\d+\] hello\n/);
+            if (owner) expect(owner.stdout).toMatch(/\[\d+\] hello\n/);
+        });
+        attached.child.stdin.write('reset\r');
+        await vi.waitFor(() => expect(attached.stdout).toContain('reset 0\n'));
+        attached.child.stdin.write('invalid\r');
+        await vi.waitFor(() => expect(attached.stderr).toContain('Unknown command: invalid.'));
+        attached.child.stdin.write('\x04');
+        expect(await attached.exited).toBe(0);
+        expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ runtime: { state: 'running' } }]);
+        const final = owner ?? f.start(['services', 'attach'], true);
+        await vi.waitFor(() => expect(final.stdout).toContain('Commands:'), { timeout: 15_000 });
+        final.child.stdin.write('quit\r');
+        await vi.waitFor(() => expect(final.child.exitCode, final.stderr + final.stdout).toBe(0), { timeout: 5000 });
+        expect(await final.exited).toBe(0);
+        expect(final.stdout).toMatch(/bye \d+\n/);
+        expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
+    });
+
     it.each([false, true])('multiplexes a plain counter over CLI attach and the routed Hub API (foreground: %s)', async foreground => {
         const f = await fixture();
         await f.ok(['context', '--new-context', '.']);
@@ -146,12 +198,14 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         await vi.waitFor(() => expect(stdout, stderr).toContain('"child":'), { timeout: 20_000 });
         const pids = JSON.parse(stdout.trim()) as { parent: number; child: number };
         expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ runtime: { pid: pids.parent, state: 'running' } }]);
+        const stopStarted = performance.now();
         child.kill('SIGKILL');
         await exited;
         await vi.waitFor(() => {
             expect(() => process.kill(pids.parent, 0)).toThrow();
             expect(() => process.kill(pids.child, 0)).toThrow();
-        }, { timeout: 15_000 });
+        }, { timeout: 2000 });
+        expect(performance.now() - stopStarted).toBeLessThan(2000);
         expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
     });
 

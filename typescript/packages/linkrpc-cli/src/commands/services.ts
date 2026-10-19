@@ -3,6 +3,7 @@ import { directoryInterface, ErrorCode, RpcError, type InterfaceClient, type Lin
 import { connectToHub } from '@hediet/linkrpc/node';
 import { managedEndpointsInterface, HubHome, readEndpointDiscovery, type EndpointStatus, type EndpointEvent, type ForegroundEndpointDefinition } from '@hediet/linkrpc-hub-daemon/client';
 import type { ContextReference } from '../contexts';
+import { ServiceConsoleInput } from './serviceConsoleInput';
 
 export type EndpointClient = InterfaceClient<typeof managedEndpointsInterface>;
 export interface ServicesHost {
@@ -197,7 +198,7 @@ async function attach(client: EndpointClient, initial: EndpointStatus | Foregrou
     let cancelled = false;
     let ready = false;
     let failure: Error | undefined;
-    let inputStarted = false;
+    let consoleInput: ServiceConsoleInput | undefined;
     const onMessage = (event: EndpointEvent) => {
             if (event.type === 'output') {
                 (event.stream === 'stdout' ? process.stdout : process.stderr).write(event.text);
@@ -215,9 +216,8 @@ async function attach(client: EndpointClient, initial: EndpointStatus | Foregrou
         cancelled = true;
         void call.cancel().catch(error => { failure = error instanceof Error ? error : new Error(String(error)); });
     }
-    const input = (data: Buffer) => {
-        if (data.includes(29)) { cancel(); return; }
-        void client.input({ ...address(), input: { type: 'stdin', data: data.toString('utf8') } })
+    const input = (data: string) => {
+        void client.input({ ...address(), input: { type: 'stdin', data } })
             .catch(error => { failure = error instanceof Error ? error : new Error(String(error)); cancel(); });
     };
     const interrupt = () => {
@@ -232,13 +232,11 @@ async function attach(client: EndpointClient, initial: EndpointStatus | Foregrou
         cancel();
     }, 30_000) : undefined;
     function startInput(): void {
-        if (!options.interactive || inputStarted || !current) return;
-        inputStarted = true;
-        process.stdin.on('data', input);
-        process.stdin.resume();
+        if (!options.interactive || consoleInput || !current) return;
+        consoleInput = new ServiceConsoleInput(process.stdin, process.stderr, input, interrupt, cancel);
         process.stderr.write(foreground
-            ? 'Foreground (pipe console). Ctrl+C or disconnect stops and removes the service.\n'
-            : 'Attached (pipe console). Ctrl+C interrupts; Ctrl+] then Enter detaches.\n');
+            ? 'Foreground (pipe console). Ctrl+C or Ctrl+D on an empty line stops and removes the service.\n'
+            : 'Attached (pipe console). Ctrl+C interrupts; Ctrl+D on an empty line detaches.\n');
     }
     startInput();
     try {
@@ -254,7 +252,7 @@ async function attach(client: EndpointClient, initial: EndpointStatus | Foregrou
         clearTimeout(timeout);
         process.removeListener('SIGINT', interrupt);
         if (foreground) process.removeListener('SIGTERM', interrupt);
-        if (inputStarted) { process.stdin.removeListener('data', input); process.stdin.pause(); }
+        consoleInput?.dispose();
     }
 }
 

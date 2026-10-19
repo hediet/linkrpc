@@ -56,7 +56,7 @@ hub services list
 hub ls
 hub services logs --follow
 
-# Detach an attached pipe console with Ctrl+] followed by Enter.
+# Detach an attached pipe console with Ctrl+D on an empty line.
 # Or launch detached from the outset:
 hub services run --id worker --detach -- node worker.js
 hub services attach --id worker
@@ -128,16 +128,27 @@ management RPC. Ctrl+C, SIGTERM, cancellation, or a detected CLI disconnect
 causes the daemon to stop the process tree and remove the endpoint, even when
 the CLI is forcibly killed and cannot run an exit handler. On a remote Hub,
 cleanup begins once the disconnect is detected. The normal graceful stop
-timeout still applies before forced process-tree termination.
+timeout applies when a stop request can be delivered: SIGTERM on POSIX or
+disconnecting an active RPC connection. On Windows, a pipe process without an
+RPC connection has no graceful stop channel, so its tree is terminated
+immediately instead of waiting out an idle five-second timeout.
 
 Other terminals can discover/call RPC services and attach as observers; closing
-an observer does not stop it. Ctrl+] followed by Enter cancels the owning
+an observer does not stop it. Ctrl+D on an empty input line cancels the owning
 foreground command (and therefore stops the service), rather than detaching it.
 `--foreground` conflicts with `--detach` and `--persistent`; the management API
 also rejects making a foreground endpoint persistent later. Restart policies
 apply only while the owning call is alive. Hub replacement stops foreground
 endpoints rather than restoring them without an owner. Ordinary `run` and
 `attach` retain their daemon-owned lifetime behavior.
+
+Interactive terminals use local line editing: Enter sends the line, Ctrl+C
+interrupts (or cancels the foreground owner), and Ctrl+D on an empty line
+closes the attachment without requiring Enter. With unfinished text, Ctrl+D
+retains the line and uses normal delete-under-cursor behavior. Ctrl+] remains
+a legacy escape. Piped input is forwarded as received; EOF on a pipe does not
+cancel the attachment or stop the service, so it can continue producing output.
+This local input handling does not give the child a PTY.
 
 #### Plain stdio programs
 
@@ -148,7 +159,7 @@ no LinkRPC dependency. From this package directory, with an existing context:
 # Background: the counter survives the launching CLI.
 hub services run -x --id counter --detach -- node examples/counter.mjs
 hub services attach --id counter
-# Ctrl+] then Enter detaches without stopping the counter.
+# Ctrl+D on an empty line detaches without stopping the counter.
 hub services logs --id counter --follow
 hub services stop --id counter
 
@@ -157,6 +168,21 @@ hub services run --no-rpc --foreground --id counter -- node examples/counter.mjs
 # A different terminal can still attach while the owner is running:
 hub services attach --id counter
 ```
+
+The [interactive counter](examples/interactive-counter.mjs) also accepts input.
+It prints `tick 1`, `tick 2`, ... once per second and responds to `count`,
+`reset`, `echo <text>`, and `quit`:
+
+```sh
+hub services run -x --foreground --id interactive -- node examples/interactive-counter.mjs
+# Type: count, echo hello, reset, or quit (then Enter).
+# Or start with --detach instead of --foreground and attach separately:
+hub services attach --id interactive
+```
+
+`count` prints the current number, `reset` sets it to zero, `echo hello` prints
+`[<current count>] hello`, and `quit` exits the service. Requests can come from
+any attachment; all attachments see the responses and ticks.
 
 Create a context first with `hub context --new-context .` if needed. Multiple
 attachments receive the same output; interactive attachments share the process's

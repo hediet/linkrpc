@@ -281,11 +281,15 @@ export class ServiceSupervisor {
 
     /** Disconnecting from the hub is the portable stop request; POSIX also gets SIGTERM. */
     private async _terminate(running: ServiceProcess): Promise<void> {
+        // Windows pipe children without an RPC connection have no graceful stop channel.
+        const canStopGracefully = process.platform !== 'win32' || this._connections > 0;
         this._releaseSocket();
         const pid = running.child.pid;
-        if (pid !== undefined) terminateProcessTree(pid);
-        if (await _settlesWithin(running.exited, this._service.stopTimeoutMs)) return;
-        this._logDaemon(`did not stop within ${this._service.stopTimeoutMs} ms; killing`);
+        if (canStopGracefully) {
+            if (pid !== undefined) terminateProcessTree(pid);
+            if (await _settlesWithin(running.exited, this._service.stopTimeoutMs)) return;
+            this._logDaemon(`did not stop within ${this._service.stopTimeoutMs} ms; killing`);
+        }
         if (pid !== undefined) await killProcessTree(pid);
         if (!await _settlesWithin(running.exited, KILL_WAIT_MS)) this._logDaemon('process did not exit after kill');
     }

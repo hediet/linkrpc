@@ -115,6 +115,11 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
 | `stopTimeoutMs` | `5000` | Grace period before the process tree is killed |
 
+On Windows, a pipe process without an active RPC connection has no graceful
+stop channel. Stopping it kills its process tree immediately rather than
+waiting `stopTimeoutMs`. Connected RPC services still get the disconnect grace
+period; on POSIX, processes get SIGTERM and the configured grace period.
+
 Every other top-level field is a regular [hub config](../linkrpc-hub/README.md)
 (listeners, endpoints, `forwardChecking`, …). Unlike a standalone hub,
 `forwardChecking` defaults to `false`: the endpoints are private to the OS user,
