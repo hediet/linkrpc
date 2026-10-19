@@ -3,10 +3,43 @@ import { connectToHub } from '@hediet/linkrpc/node';
 import { SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
 import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { checkDaemonInterfaces } from './services';
+import { checkDaemonInterfaces, serviceAttachCommand } from './services';
 
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const dispose of cleanup.splice(0).reverse()) dispose(); });
+
+describe('service reattachment commands', () => {
+    it('pins the context, namespace, endpoint ID, and environment policy', () => {
+        expect(serviceAttachCommand({
+            context: 'D:\\work\\my project', namespace: 'custom namespace', id: 'counter-fg',
+            overrides: {}, useEnv: false,
+        }, 'win32')).toBe("hub services attach --id counter-fg --context 'D:\\work\\my project' --namespace 'custom namespace' --no-use-env");
+    });
+
+    it('retains explicit remote routing and authentication options', () => {
+        expect(serviceAttachCommand({
+            context: 'id:remote', namespace: 'workers', id: 'counter',
+            overrides: { endpoint: 'ws://localhost:7777', daemonService: 'remote/daemon', principal: 'user:demo', sign: false, namespace: 'workers' },
+            useEnv: true,
+        }, 'linux')).toBe('hub services attach --id counter --context id:remote --namespace workers --use-env --endpoint ws://localhost:7777 --daemon-service remote/daemon --principal user:demo --no-sign');
+    });
+
+    it.each([
+        ['win32', "'D:\\it''s work'"],
+        ['linux', "'D:\\it'\\''s work'"],
+    ] as const)('quotes shell arguments for %s', (platform, quoted) => {
+        expect(serviceAttachCommand({
+            context: "D:\\it's work", namespace: ':root', id: 'main', overrides: {}, useEnv: false,
+        }, platform)).toContain(`--context ${quoted}`);
+    });
+
+    it('does not echo connection tokens or command environment values', () => {
+        expect(serviceAttachCommand({
+            context: ':empty', namespace: 'test', id: 'main', useEnv: false,
+            overrides: { endpoint: 'ws://localhost?token=secret', endpointToken: 'secret', endpointCmdEnv: { PASSWORD: 'secret' } },
+        }, 'linux')).toBe("hub services attach --id main --context :empty --namespace test --no-use-env --endpoint 'ws://localhost?token=<same token>' --endpoint-token '<same endpoint token>' --endpoint-cmd-env 'PASSWORD=<same value>'");
+    });
+});
 
 async function connection(setup: (connection: LinkRpcConnection) => void) {
     const server = await SocketServer.start();

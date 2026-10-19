@@ -2,14 +2,38 @@ import { Command, Option } from 'commander';
 import { directoryInterface, ErrorCode, RpcError, type InterfaceClient, type LinkRpcConnection } from '@hediet/linkrpc';
 import { connectToHub } from '@hediet/linkrpc/node';
 import { managedEndpointsInterface, HubHome, readEndpointDiscovery, type EndpointStatus, type EndpointEvent, type ForegroundEndpointDefinition } from '@hediet/linkrpc-hub-daemon/client';
-import type { ContextReference } from '../contexts';
+import type { ContextReference, ContextValues } from '../contexts';
 import { ServiceConsoleInput } from './serviceConsoleInput';
 
 export type EndpointClient = InterfaceClient<typeof managedEndpointsInterface>;
 export interface ServicesHost {
     namespace(): string;
+    attachCommand(id: string): string;
     restart(): Promise<void>;
     use<T>(startLocal: boolean, action: (client: EndpointClient, local: boolean) => Promise<T>): Promise<T>;
+}
+
+export function serviceAttachCommand(options: {
+    context: string; namespace: string; id: string; overrides: ContextValues; useEnv: boolean;
+}, platform: NodeJS.Platform = process.platform): string {
+    const args = ['hub', 'services', 'attach', '--id', options.id,
+        '--context', options.context, '--namespace', options.namespace, options.useEnv ? '--use-env' : '--no-use-env'];
+    for (const key of Object.keys(options.overrides) as (keyof ContextValues)[]) {
+        if (key === 'namespace') continue;
+        const value = options.overrides[key];
+        if (value === undefined) continue;
+        const flag = '--' + key.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase());
+        if (key === 'endpointCmdEnv' && typeof value === 'object') {
+            for (const name of Object.keys(value)) args.push(flag, `${name}=<same value>`);
+        } else if (typeof value === 'boolean') {
+            if (value) args.push(flag);
+            else if (key === 'sign') args.push('--no-sign');
+        } else if (typeof value === 'string' || typeof value === 'number') {
+            args.push(flag, key === 'endpointToken' ? '<same endpoint token>' : String(value).replace(/([?&]token=)[^&]+/g, '$1<same token>'));
+        }
+    }
+    return args.map(arg => /^[A-Za-z0-9_./:-]+$/.test(arg) ? arg
+        : "'" + arg.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'").join(' ');
 }
 
 const requiredInterfaces = [
@@ -84,6 +108,15 @@ export async function restartLocalDaemon(): Promise<void> {
 }
 
 export function registerServices(program: Command, host: ServicesHost): void {
+    const createEndpoint = async (id: string, action: (client: EndpointClient, local: boolean) => Promise<void>) => {
+        try { await host.use(true, action); }
+        catch (error) {
+            if (error instanceof RpcError && error.message === `Endpoint "${id}" already exists in ${host.namespace()}`) {
+                throw new RpcError(`${error.message}\nAttach to it: ${host.attachCommand(id)}`, error.code, error.data, error.origin, error.hasData);
+            }
+            throw error;
+        }
+    };
     const services = program.command('services').description('Manage context-scoped endpoints through the selected daemon.');
     services.command('restart')
         .description('Stop the local daemon via RPC and start the bundled daemon; does not change OS autostart.')
@@ -110,7 +143,7 @@ export function registerServices(program: Command, host: ServicesHost): void {
                 if (index <= 0) throw new Error('--env requires KEY=value');
                 env[value.slice(0, index)] = value.slice(index + 1);
             }
-            await host.use(true, async (client, local) => {
+            await createEndpoint(options.id, async (client, local) => {
                 const info = await client.info({});
                 const cwd = options.cwd ?? (local ? process.cwd() : undefined);
                 if (!cwd) throw new Error('Remote execution requires --cwd with a path on the execution host.');
@@ -120,27 +153,27 @@ export function registerServices(program: Command, host: ServicesHost): void {
                     source: { kind: 'process', command, cwd, env, rpc: options.rpc, readiness: options.readiness ?? (options.rpc ? 'connected' : 'spawned') },
                 };
                 if (options.foreground) {
-                    await attach(client, definition, { interactive: true });
+                    await attach(client, definition, { interactive: true, reattachCommand: host.attachCommand(options.id) });
                     return;
                 }
                 const status = await client.create({
                     ...definition, persistent: options.persistent ?? false,
                 });
-                await attach(client, status, { untilReady: options.detach, interactive: !options.detach });
+                await attach(client, status, { untilReady: options.detach, interactive: !options.detach, reattachCommand: host.attachCommand(options.id) });
             });
         });
     policy(addressed(services.command('connect').description('Connect an existing LinkRPC endpoint; never owns its external process.')))
         .requiredOption('--target-endpoint <uri>', 'endpoint resolved on the daemon machine')
         .action(async (options: { id: string; targetEndpoint: string; persistent?: boolean; restart: 'never' | 'on-failure' | 'always' }) => {
             const namespace = host.namespace();
-            await host.use(true, async client => {
+            await createEndpoint(options.id, async client => {
                 const info = await client.info({});
                 process.stderr.write(`Execution host: ${info.hostname}\nNamespace: ${namespace}\nEndpoint: ${options.id}\n`);
                 const status = await client.create({
                     namespace, id: options.id, persistent: options.persistent ?? false, restart: options.restart,
                     source: { kind: 'connection', endpoint: options.targetEndpoint },
                 });
-                await attach(client, status, { untilReady: true });
+                await attach(client, status, { untilReady: true, reattachCommand: host.attachCommand(options.id) });
             });
         });
     services.command('list').option('--all-contexts', 'include every namespace visible to this caller')
@@ -153,7 +186,7 @@ export function registerServices(program: Command, host: ServicesHost): void {
             const namespace = host.namespace();
             await host.use(operation === 'start', async client => {
                 if (operation === 'start') {
-                    await attach(client, await client.start({ namespace, id: options.id }), { untilReady: true });
+                    await attach(client, await client.start({ namespace, id: options.id }), { untilReady: true, reattachCommand: host.attachCommand(options.id) });
                 } else print(await client[operation]({ namespace, id: options.id }));
             });
         });
@@ -180,6 +213,7 @@ export function registerServices(program: Command, host: ServicesHost): void {
                         interactive: operation === 'attach',
                         snapshot: operation === 'logs' && !options.follow,
                         readOnly: operation === 'logs',
+                        reattachCommand: host.attachCommand(options.id),
                     });
                 });
             });
@@ -187,7 +221,7 @@ export function registerServices(program: Command, host: ServicesHost): void {
 }
 
 async function attach(client: EndpointClient, initial: EndpointStatus | ForegroundEndpointDefinition, options: {
-    untilReady?: boolean; interactive?: boolean; snapshot?: boolean; readOnly?: boolean;
+    untilReady?: boolean; interactive?: boolean; snapshot?: boolean; readOnly?: boolean; reattachCommand: string;
 }): Promise<void> {
     const foreground = !('instanceId' in initial);
     let current: EndpointStatus | undefined = 'instanceId' in initial ? initial : undefined;
@@ -237,6 +271,7 @@ async function attach(client: EndpointClient, initial: EndpointStatus | Foregrou
         process.stderr.write(foreground
             ? 'Foreground (pipe console). Ctrl+C or Ctrl+D on an empty line stops and removes the service.\n'
             : 'Attached (pipe console). Ctrl+C interrupts; Ctrl+D on an empty line detaches.\n');
+        process.stderr.write(`${foreground ? 'Attach from another terminal while running' : 'Reattach'}: ${options.reattachCommand}\n`);
     }
     startInput();
     try {

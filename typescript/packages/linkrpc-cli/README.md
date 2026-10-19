@@ -123,6 +123,15 @@ forward stdin and Ctrl+C, and do not own the process lifetime. This is a **pipe
 console**, not a PTY: terminal resize and full-screen terminal apps are not
 supported. `logs` prints recent output; `logs --follow` keeps streaming.
 
+The attached-console banner prints a `hub services attach ...` command for
+reattaching. Duplicate `run`/`connect` errors print the same recovery command
+without stopping or replacing the existing endpoint. Hints include the selected
+context, namespace, endpoint ID, environment policy, and explicit connection
+overrides. Reuse the same environment when `--use-env` is shown and the same
+working directory for relative connection/config paths. Explicit tokens and
+command-environment values are replaced with `<same ...>` placeholders rather
+than exposed in the hint.
+
 `run --foreground` instead creates the process inside a lifetime-owning
 management RPC. Ctrl+C, SIGTERM, cancellation, or a detected CLI disconnect
 causes the daemon to stop the process tree and remove the endpoint, even when

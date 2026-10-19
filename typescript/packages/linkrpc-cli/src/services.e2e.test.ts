@@ -73,11 +73,43 @@ async function fixture(isolated = false) {
 }
 
 describe('hub services CLI', { timeout: 120_000 }, () => {
+    it.each([false, true])('prints matching reattach guidance for an attachment and duplicate launches (routed: %s)', async routed => {
+        const f = await fixture();
+        await f.ok(['context', '--new-context', '.']);
+        await f.ok(['services', 'restart']);
+        const flags = ['--context', f.root, '--namespace', 'custom namespace', '--no-use-env',
+            ...(routed ? ['--endpoint', readEndpointDiscovery(f.home.discoveryFile)!.endpoint, '--daemon-service', 'hub/daemon'] : [])];
+        await f.ok([...flags, 'services', 'run', '-x', '--detach', '--cwd', f.root, '--id', 'counter-fg', '--',
+            process.execPath, '-e', 'setInterval(() => {}, 1000)']);
+        const before = JSON.parse(await f.ok([...flags, 'services', 'list']));
+        let hint = '';
+        for (const mode of ['--detach', '--foreground']) {
+            const result = await f.run([...flags, 'services', 'run', '-x', mode, '--cwd', f.root, '--id', 'counter-fg', '--', process.execPath]);
+            expect(result.code).not.toBe(0);
+            expect(result.stderr).toContain('Endpoint "counter-fg" already exists in custom namespace');
+            const match = /Attach to it: (hub services attach .*)/.exec(result.stderr);
+            expect(match).not.toBeNull();
+            hint = match![1]!;
+            expect(hint).toContain('--id counter-fg --context ');
+            expect(hint).toContain("--namespace 'custom namespace' --no-use-env");
+            expect(hint.includes('--endpoint ')).toBe(routed);
+            if (routed) expect(hint).toContain('--daemon-service hub/daemon');
+        }
+        const attached = f.start([...flags, 'services', 'attach', '--id', 'counter-fg'], true);
+        await vi.waitFor(() => expect(attached.stderr).toContain(`Reattach: ${hint}\n`), { timeout: 15_000 });
+        attached.child.stdin.write('\x04');
+        await vi.waitFor(() => expect(attached.child.exitCode).toBe(0), { timeout: 5000 });
+        expect(JSON.parse(await f.ok([...flags, 'services', 'list']))[0].instanceId).toBe(before[0].instanceId);
+        await f.ok([...flags, 'services', 'stop', '--id', 'counter-fg']);
+    });
+
     it.each(['\x03', '\x04'])('promptly stops foreground work on terminal control %j', async control => {
         const f = await fixture();
         const owner = f.start(['services', 'run', '--new-context', '.', '-x', '--foreground', '--',
             process.execPath, '-e', 'console.log(process.pid); setInterval(() => {}, 1000)'], true);
         await vi.waitFor(() => expect(owner.stdout, owner.stderr).toMatch(/^\d+\n$/), { timeout: 15_000 });
+        expect(owner.stderr).toContain('Attach from another terminal while running: hub services attach --id main --context ');
+        expect(owner.stderr.split('Attach from another terminal while running:')[1]).not.toContain('--new-context');
         const pid = Number(owner.stdout.trim());
         const start = performance.now();
         owner.child.stdin.write(control);
