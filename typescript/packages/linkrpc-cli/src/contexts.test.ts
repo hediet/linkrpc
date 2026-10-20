@@ -93,12 +93,26 @@ describe('ContextStore', () => {
         expect(await readFile(f.storeFile, 'utf8')).toBe(before);
     });
 
-    it('uses the immutable empty context when no path or root context exists', async () => {
+    it('falls back to the always-existing root context when no path context applies', async () => {
         const f = await fixture();
         const store = new ContextStore({ file: f.storeFile, cwd: f.child });
         const selected = await store.select();
-        expect(selected.reference).toEqual({ kind: 'empty' });
-        expect(selected.selectedBy).toBe('empty');
+        expect({ reference: selected.reference, selectedBy: selected.selectedBy, values: selected.context?.values })
+            .toEqual({ reference: { kind: 'root' }, selectedBy: 'root', values: {} });
+        expect((await store.select({ selector: ':root' })).context?.values).toEqual({});
+        expect(await store.list()).toEqual([]);
+    });
+
+    it('cannot create the root context, and resets it when removed', async () => {
+        const f = await fixture();
+        const store = new ContextStore({ file: f.storeFile, cwd: f.child });
+        await expect(store.assertCanCreate({ kind: 'root' })).rejects.toThrow('The root context always exists');
+        await expect(store.set({ kind: 'root' }, {}, { createOnly: true })).rejects.toThrow('The root context always exists');
+        await store.unset({ kind: 'root' }, ['principal']);
+        await store.set({ kind: 'root' }, { principal: 'user:root' });
+        expect(await store.remove({ kind: 'root' })).toBe(true);
+        expect(await store.remove({ kind: 'root' })).toBe(true);
+        expect((await store.select()).context?.values).toEqual({});
     });
 
     it('walks from cwd to the closest path context', async () => {

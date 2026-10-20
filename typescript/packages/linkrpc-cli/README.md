@@ -80,7 +80,8 @@ hub services connect --id peer --target-endpoint ws://localhost:7000 --restart o
 ```
 
 `--id` defaults to `main`. Namespace defaults to the selected context's canonical
-folder path (case-normalized on Windows), or its named/root context identity.
+folder path (case-normalized on Windows), its named context identity (`id:<name>`),
+or `:root` where no folder context applies. The `:empty` context has no namespace.
 Override it with `hub services --namespace <name> ...`. `--namespace` belongs
 only to `services`; it does not select or filter services for `call`, `ls`, or
 `ui`. `--context` only selects an existing context;
@@ -497,15 +498,19 @@ Use `--validation auto|required|off` to override a profile default.
 Contexts persist command defaults in the global user configuration store. A
 folder context is keyed by its canonical folder path; no file is written into
 that folder. Without `--context`, the CLI searches from the current directory
-through its parents, then uses `:root`, then the immutable `:empty` context.
+through its parents, then uses `:root`.
 
 Context selectors are:
 
 - An absolute or relative folder path.
 - `id:<name>` for a named context.
 - `:root` for the system-wide root above platform filesystem roots. On Unix,
-  `/` is equivalent to `:root`.
-- `:empty` for no stored defaults.
+  `/` is equivalent to `:root`. The root context **always exists**: until you
+  store defaults in it, it has none. It cannot be created with `--new-context`,
+  and removing it resets it to no defaults. Because it applies to every folder
+  without its own context, `context set` and `--context-set` change it only when
+  selected explicitly (`--context :root`).
+- `:empty` for no stored defaults, selected only explicitly. It is immutable.
 
 `LINKRPC_CONTEXT` selects a context when `--context` is absent;
 `HUBRPC_CONTEXT` is its legacy alias. An explicit `--context` also suppresses
@@ -525,8 +530,10 @@ hub call app::api::get --validation off --context-set
 
 hub context                         # same as `hub context show`
 hub context resolve --context id:working-copy
-hub context list
+hub context list                    # always includes :root
 hub context remove --context .
+hub context set --context :root --principal user:work   # defaults for folders without a context
+hub context remove --context :root  # resets :root to no defaults
 hub call app::api::get --context :empty --endpoint ws://localhost:7700
 ```
 

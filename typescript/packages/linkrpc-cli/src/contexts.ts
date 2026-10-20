@@ -118,20 +118,11 @@ export class ContextStore {
             cursor = parent;
         }
 
-        const rootReference: ContextReference = { kind: 'root' };
-        const root = contexts.get(contextKey(rootReference));
-        if (root !== undefined) {
-            return {
-                reference: rootReference,
-                context: root,
-                selectedBy: 'root',
-                explicitlySelected: false,
-            };
-        }
+        // The root context always exists: without stored defaults it is empty.
         return {
-            reference: { kind: 'empty' },
-            context: undefined,
-            selectedBy: 'empty',
+            reference: ROOT_REFERENCE,
+            context: contexts.get(contextKey(ROOT_REFERENCE)) ?? implicitRootContext(),
+            selectedBy: 'root',
             explicitlySelected: false,
         };
     }
@@ -167,9 +158,7 @@ export class ContextStore {
         return this._mutate((contexts) => {
             const key = contextKey(reference);
             const existing = contexts.get(key);
-            if (options.createOnly === true && existing !== undefined) {
-                throw new Error(`context ${formatContextReference(reference)} already exists`);
-            }
+            if (options.createOnly === true) assertCreatable(reference, existing);
             const now = new Date().toISOString();
             const mergedValues = existing === undefined
                 ? normalizeContextValues(values)
@@ -191,9 +180,7 @@ export class ContextStore {
         reference: Exclude<ContextReference, { readonly kind: 'empty'; }>,
     ): Promise<void> {
         reference = normalizeContextReference(reference);
-        if ((await this._read()).has(contextKey(reference))) {
-            throw new Error(`context ${formatContextReference(reference)} already exists`);
-        }
+        assertCreatable(reference, (await this._read()).get(contextKey(reference)));
     }
 
     public async replace(
@@ -211,9 +198,7 @@ export class ContextStore {
         return this._mutate((contexts) => {
             const key = contextKey(reference);
             const existing = contexts.get(key);
-            if (options.createOnly === true && existing !== undefined) {
-                throw new Error(`context ${formatContextReference(reference)} already exists`);
-            }
+            if (options.createOnly === true) assertCreatable(reference, existing);
             const now = new Date().toISOString();
             const context: StoredContext = {
                 key,
@@ -237,7 +222,7 @@ export class ContextStore {
         reference = normalizeContextReference(reference);
         return this._mutate((contexts) => {
             const key = contextKey(reference);
-            const existing = contexts.get(key);
+            const existing = contexts.get(key) ?? (reference.kind === 'root' ? implicitRootContext() : undefined);
             if (existing === undefined) {
                 throw missingContextError(reference);
             }
@@ -255,14 +240,19 @@ export class ContextStore {
         });
     }
 
+    /**
+     * Remove a stored context. The root context always exists, so removing it
+     * resets it to no stored defaults; that always succeeds.
+     */
     public async remove(reference: ContextReference): Promise<boolean> {
         if (reference.kind === 'empty') {
             throw new Error(':empty is immutable and cannot be removed');
         }
         reference = normalizeContextReference(reference);
+        const isRoot = reference.kind === 'root';
         return this._mutate((contexts) => {
             const removed = contexts.delete(contextKey(reference));
-            return { value: removed, changed: removed };
+            return { value: removed || isRoot, changed: removed };
         });
     }
 
@@ -281,7 +271,8 @@ export class ContextStore {
         if (reference.kind === 'empty') {
             return { reference, context: undefined, selectedBy, explicitlySelected };
         }
-        const context = contexts.get(contextKey(reference));
+        const context = contexts.get(contextKey(reference))
+            ?? (reference.kind === 'root' ? implicitRootContext() : undefined);
         if (context === undefined && !allowMissing) {
             throw missingContextError(reference);
         }
@@ -359,6 +350,20 @@ export class ContextStore {
             await release();
         }
     }
+}
+
+const ROOT_REFERENCE: ContextReference = { kind: 'root' };
+
+/** The root context when it has no stored defaults: it always exists. */
+function implicitRootContext(): StoredContext {
+    return { key: contextKey(ROOT_REFERENCE), reference: { kind: 'root' }, values: {}, createdAt: '', updatedAt: '' };
+}
+
+function assertCreatable(reference: ContextReference, existing: StoredContext | undefined): void {
+    if (reference.kind === 'root') {
+        throw new Error('The root context always exists; change its defaults with: hub context set --context :root <flags>');
+    }
+    if (existing !== undefined) throw new Error(`context ${formatContextReference(reference)} already exists`);
 }
 
 function retainedOwnership(

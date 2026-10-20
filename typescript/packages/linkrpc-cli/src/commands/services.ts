@@ -89,7 +89,7 @@ export function contextNamespace(reference: ContextReference): string {
         case 'path': return process.platform === 'win32' ? reference.path.toLowerCase() : reference.path;
         case 'id': return `id:${reference.id}`;
         case 'root': return ':root';
-        case 'empty': throw new Error('No context selected. Create one with --new-context . or select one with --context <selector>.');
+        case 'empty': throw new Error('The :empty context has no namespace. Pass --namespace <name>, or select another context with --context <selector>.');
     }
 }
 

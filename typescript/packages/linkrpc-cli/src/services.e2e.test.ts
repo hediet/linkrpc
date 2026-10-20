@@ -80,6 +80,26 @@ async function fixture(isolated = false) {
 }
 
 describe('hub services CLI', { timeout: 120_000 }, () => {
+    it('uses the always-existing root context when no folder context applies', async () => {
+        const f = await fixture();
+        const status = JSON.parse(await f.ok(['services', 'run', '-x', '--detach', '--id', 'scratch', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)']));
+        expect({ namespace: status.namespace, id: status.id }).toEqual({ namespace: ':root', id: 'scratch' });
+        expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ namespace: ':root', id: 'scratch' }]);
+        await f.ok(['services', 'stop', '--id', 'scratch']);
+
+        const implicit = await f.run(['context', 'set', '--namespace', 'shared']);
+        expect(implicit.code).not.toBe(0);
+        expect(implicit.stderr).toContain('select it explicitly with --context :root');
+        const created = await f.run(['context', '--new-context', ':root']);
+        expect(created.stderr).toContain('The root context always exists');
+        await f.ok(['context', 'set', '--context', ':root', '--namespace', 'shared']);
+        expect(await f.ok(['context', 'list'])).toBe(':root\n');
+        expect(await f.ok(['context', 'show'])).toMatch(/Reference: :root[\s\S]*--namespace = shared/);
+        expect(await f.ok(['context', 'remove', '--context', ':root'])).toContain('Reset context :root');
+        expect(await f.ok(['context', 'show'])).not.toContain('--namespace');
+        const empty = await f.run(['--context', ':empty', 'services', 'list']);
+        expect(empty.stderr).toContain('The :empty context has no namespace');
+    });
     it.each([false, true])('prints matching reattach guidance for an attachment and duplicate launches (routed: %s)', async routed => {
         const f = await fixture();
         await f.ok(['context', '--new-context', '.']);

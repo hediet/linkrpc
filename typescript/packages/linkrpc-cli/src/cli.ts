@@ -86,6 +86,7 @@ import {
     ContextStore,
     type ContextReference,
     type ContextValues,
+    type SelectedContext,
     type StoredContext,
     type ValidationMode,
     formatContextReference,
@@ -267,6 +268,7 @@ export async function main(
             if (Object.keys(cliOverrides).length === 0) {
                 throw new Error('--context-set requires at least one context-capable override');
             }
+            assertExplicitRootMutation(g_invocation.selected);
             if (g_invocation.selected.context === undefined) {
                 throw new Error('No context exists to update. Use --new-context . to create one.');
             }
@@ -994,12 +996,12 @@ Batch options:
 
     context
         .command('list')
-        .description('List every path, named, and root context in the global store.')
+        .description('List every path and named context in the global store, and the root context, which always exists.')
         .action(async () => {
             if (g_contextStore === undefined) throw new Error('context store is unavailable');
-            for (const item of await g_contextStore.list()) {
-                process.stdout.write(`${formatContextReference(item.reference)}\n`);
-            }
+            const references = (await g_contextStore.list()).map(item => formatContextReference(item.reference));
+            if (!references.includes(':root')) references.push(':root');
+            for (const reference of references.sort()) process.stdout.write(`${reference}\n`);
         });
 
     context
@@ -1016,6 +1018,7 @@ Batch options:
                 if ((opts.unset?.length ?? 0) > 0) throw new Error('--unset cannot be used with --new-context');
                 return;
             }
+            assertExplicitRootMutation(g_invocation.selected);
             if (g_invocation.selected.context === undefined) {
                 throw new Error('No context exists to update. Use hub context set --new-context . with your desired flags.');
             }
@@ -1037,7 +1040,7 @@ Batch options:
 
     context
         .command('remove')
-        .description('Stop any owned connection and remove the selected context from the global store.')
+        .description('Stop any owned connection and remove the selected context; removing :root resets it to no defaults.')
         .action(async () => {
             if (g_contextStore === undefined || g_invocation === undefined) {
                 throw new Error('context resolver is unavailable');
@@ -1051,7 +1054,9 @@ Batch options:
             }
             const removed = await g_contextStore.remove(reference);
             if (!removed) throw new Error(`context ${formatContextReference(reference)} does not exist`);
-            process.stdout.write(`Removed context ${formatContextReference(reference)}.\n`);
+            process.stdout.write(reference.kind === 'root'
+                ? 'Reset context :root to no stored defaults (the root context always exists).\n'
+                : `Removed context ${formatContextReference(reference)}.\n`);
         });
 
     program
@@ -1806,6 +1811,15 @@ function mutableReference(
     return reference;
 }
 
+/** The root context applies to every folder without a context: change it only when selected explicitly. */
+function assertExplicitRootMutation(selected: SelectedContext): void {
+    if (selected.selectedBy === 'root') {
+        throw new Error('No folder or named context applies here, so the root context is in effect. '
+            + 'To change defaults for every such folder, select it explicitly with --context :root; '
+            + 'to create a context for this folder, use --new-context .');
+    }
+}
+
 function printSelectedContext(effective: boolean): void {
     if (g_invocation === undefined) throw new Error('context resolver is unavailable');
     const selected = g_invocation.selected;
@@ -1842,7 +1856,7 @@ function contextSelectionDescription(selectedBy: ResolvedInvocationContext['sele
         case 'argument': return '--context';
         case 'environment': return 'LINKRPC_CONTEXT (HUBRPC_CONTEXT fallback)';
         case 'cwd': return 'current-directory lookup';
-        case 'root': return ':root fallback';
+        case 'root': return ':root fallback (no folder context applies)';
         case 'empty': return 'no matching context (:empty)';
     }
 }
