@@ -8,6 +8,8 @@ export type ValidationMode = 'auto' | 'required' | 'off';
 
 export interface ContextValues {
     readonly daemonService?: string;
+    /** TTY console detach sequence in Docker syntax, e.g. `ctrl-b,d`. */
+    readonly detachKeys?: string;
     readonly namespace?: string;
     readonly endpoint?: string;
     readonly endpointCmd?: string;

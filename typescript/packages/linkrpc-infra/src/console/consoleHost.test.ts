@@ -1,8 +1,13 @@
-import { LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
+import { defineInterface, LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
+import { object, string } from 'zod/mini';
 import { describe, expect, it, vi } from 'vitest';
 import {
+    CONSOLE_INTERFACE_TAG,
+    CONSOLE_TEMPLATE_ID,
     ConsoleHost,
+    consoleHandlers,
     consoleInterface,
+    ConsoleTemplate,
     decodeConsoleData,
     encodeConsoleData,
     OutputHistory,
@@ -18,10 +23,10 @@ function setup(options: { mode?: 'pipe' | 'tty'; history?: ConsoleHistory } = {}
     const backend = { write: vi.fn(), resize: vi.fn(), signal: vi.fn() } satisfies ConsoleBackend;
     const host = new ConsoleHost({ mode: options.mode ?? 'pipe', signals: ['SIGINT'], backend, history: options.history });
     host.register(server, 'test/console');
-    const console = client.get(consoleInterface, { serviceId: 'test/console' });
-    const attach = (params: Parameters<typeof console.attach>[0] = {}) => {
+    const console = client.get(consoleInterface, { serviceId: 'test/console' }).console;
+    const attach = (params: Omit<Parameters<typeof console.attach>[0], 'params'> = {}) => {
         const messages: ConsoleServerMessage[] = [];
-        const call = console.attach(params, { onMessage: message => { messages.push(message); } });
+        const call = console.attach({ ...params, params: {} }, { onMessage: message => { messages.push(message); } });
         return { call, messages, settled: call.then(result => result, error => String(error)) };
     };
     return { host, backend, console, attach };
@@ -76,7 +81,7 @@ describe('ConsoleHost', () => {
         expect(f.backend.resize.mock.calls).toEqual([[{ cols: 100, rows: 30 }], [{ cols: 60, rows: 20 }]]);
         f.host.close();
         await first.settled;
-        await expect(f.console.attach({}, { onMessage: () => {} })).rejects.toThrow('The console is closed');
+        await expect(f.console.attach({ params: {} }, { onMessage: () => {} })).rejects.toThrow('The console is closed');
     });
 
     it('queues events that occur while an asynchronous snapshot is captured', async () => {
@@ -126,5 +131,48 @@ describe('ConsoleHost', () => {
     it('round-trips arbitrary bytes', () => {
         const bytes = Uint8Array.from({ length: 70_000 }, (_, index) => index % 256);
         expect(decodeConsoleData(encodeConsoleData(bytes))).toEqual(bytes);
+    });
+});
+
+describe('ConsoleTemplate', () => {
+    it('tags containing interfaces and publishes discoverable template metadata', () => {
+        const schema = consoleInterface.toSchema();
+        const metadata = schema['x-interface-templates'] as {
+            templates: Record<string, { id: string; parameters: string[]; tags?: string[] }>;
+            instances: { name: string; template: string; members: Record<string, string> }[];
+        };
+        expect({
+            tags: schema.tags,
+            template: metadata.templates[CONSOLE_TEMPLATE_ID],
+            instances: metadata.instances.map(({ name, template, members }) => ({ name, template, members })),
+            methods: Object.keys(schema.methods).sort(),
+        }).toMatchObject({
+            tags: [CONSOLE_INTERFACE_TAG],
+            template: { id: CONSOLE_TEMPLATE_ID, parameters: ['params'], tags: [CONSOLE_INTERFACE_TAG] },
+            instances: [{ name: 'console', template: CONSOLE_TEMPLATE_ID, members: { info: 'info', attach: 'attach' } }],
+            methods: ['attach', 'info'],
+        });
+    });
+
+    it('routes params to one of several consoles of a service', async () => {
+        const managed = defineInterface({ id: 'test.consoles' }, {
+            consoles: ConsoleTemplate({ params: object({ name: string() }) }),
+        });
+        const hosts = new Map(['a', 'b'].map(name => [name, new ConsoleHost({
+            mode: 'pipe', signals: [], backend: { write: vi.fn(), resize: vi.fn(), signal: vi.fn() },
+        })]));
+        const pair = new TransportPair();
+        LinkRpcConnection.fromTransport(pair.a).register(managed, {
+            consoles: consoleHandlers(({ name }: { name: string }) => {
+                const host = hosts.get(name);
+                if (!host) throw new Error(`No console "${name}"`);
+                return host;
+            }),
+        });
+        hosts.get('b')!.started(7);
+        const client = LinkRpcConnection.fromTransport(pair.b).get(managed).consoles;
+        expect(await client.info({ params: { name: 'b' } })).toMatchObject({ running: true, pid: 7 });
+        expect(await client.info({ params: { name: 'a' } })).toMatchObject({ running: false });
+        await expect(client.info({ params: { name: 'c' } })).rejects.toThrow('No console "c"');
     });
 });

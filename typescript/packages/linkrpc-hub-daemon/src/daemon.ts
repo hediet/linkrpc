@@ -220,7 +220,6 @@ export class HubDaemon {
                 this._endpoints = new ManagedEndpoints({
                     file: path.join(this.home.stateDir, 'endpoints.json'),
                     servicePrefix: `${config.hub.hubServiceId}/services`,
-                    consolePrefix: `${config.hub.hubServiceId}/daemon/consoles`,
                     host: this._serviceHost,
                 });
                 await this._endpoints.restore(endpointSnapshot);

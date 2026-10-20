@@ -62,7 +62,7 @@ hub services run --id worker --detach -- node worker.js
 hub services attach --id worker
 hub services stop --id worker
 
-# Run in a pseudoterminal (TTY); detach with Ctrl+P, Ctrl+Q:
+# Run in a pseudoterminal (TTY); detach with Ctrl+B, then d:
 hub services run -x -t --id shell -- pwsh
 
 # Stop and replace an existing endpoint with the same ID:
@@ -134,16 +134,24 @@ forward input and interrupts, and do not own the process lifetime. `logs`
 prints recent output; `logs --follow` keeps streaming; `attach --read-only`
 observes without sending input.
 
-Every process endpoint serves the standard
-[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
-interface; `services list` reports its `console.serviceId`. `hub services attach`
-resolves that ID and attaches to it. The generic command attaches to **any**
-participant that implements the interface, not only daemon-managed processes:
+Every process endpoint has a console that implements the standard
+[`linkrpc.console.v1`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+interface template: the daemon's management interface contains one template
+instance, `consoles`, whose params are the endpoint address. `hub services attach`
+calls it directly. The generic `attach` command works with **any** participant
+that instantiates the template, not only daemon-managed processes. It discovers
+consoles through the `linkrpc.console` directory tag and reads the wire methods
+and params schema from reflection:
 
 ```sh
-hub attach hub/daemon/consoles/<sha256(namespace)>/<id>
+hub attach                                   # list consoles and their params schemas
+hub attach hub/daemon --params '{"namespace":"d:\\work\\app","id":"main"}'
 rpc --endpoint ws://localhost:7000 attach my/service --read-only
 ```
+
+`--params` (default `{}`) is validated against the instance's reflected params
+schema. When a service has several console instances, select one with
+`--instance` or `--interface`.
 
 #### Pipe and TTY consoles
 
@@ -161,7 +169,23 @@ programs display correctly.
 | Local input | Line editing; Enter sends the line | Raw: every key goes to the program |
 | Ctrl+C | Interrupts (sends SIGINT where supported), or stops a foreground owner | Goes to the program (an interrupt in a shell) |
 | Ctrl+D | On an empty line: detach, or stop a foreground owner | Goes to the program (EOF in a shell) |
-| Detach | Ctrl+D on an empty line (Ctrl+] also works) | Ctrl+P, then Ctrl+Q (Docker's sequence); a lone Ctrl+P is forwarded with the next key |
+| Detach | Ctrl+D on an empty line (Ctrl+] also works) | The detach keys: Ctrl+B, then d by default |
+
+TTY detach keys use Docker's `--detach-keys` syntax: comma-separated keys, each
+a character or `ctrl-<key>` (`a`-`z`, `@`, `[`, `\`, `]`, `^`, `_`). The default
+is `ctrl-b,d`, tmux's binding. Docker's `ctrl-p,ctrl-q` does not work in VS
+Code's integrated terminal, which handles Ctrl+P (Quick Open) and, on Windows,
+Ctrl+Q itself; Ctrl+B passes through. Keys of an incomplete sequence are held
+back and forwarded unchanged when the sequence does not complete. Change the
+sequence per command or store it in a context:
+
+```sh
+hub --detach-keys ctrl-p,ctrl-q services attach --id shell
+hub context set --detach-keys 'ctrl-],q'     # store it in the active context
+```
+
+Choose another sequence when the attached program uses Ctrl+B itself, for
+example tmux running inside the console.
 
 Windows pipes have no interrupt channel: there, Ctrl+C in a pipe attachment
 prints a hint instead of terminating the shared process; use `-t` when the
@@ -197,7 +221,7 @@ immediately instead of waiting out an idle five-second timeout.
 
 Other terminals can discover/call RPC services and attach as observers; closing
 an observer does not stop it. The detach key of the owning terminal (Ctrl+D on
-an empty line, or Ctrl+P, Ctrl+Q for a TTY) cancels the foreground command and
+an empty line, or the TTY detach keys) cancels the foreground command and
 therefore stops the service, rather than detaching it.
 `--foreground` conflicts with `--detach` and `--persistent`; the management API
 also rejects making a foreground endpoint persistent later. Restart policies
@@ -250,7 +274,8 @@ work for plain processes too.
 
 `services list` reports `rpc: false` for these processes. They do not publish
 application RPC methods under their reserved `serviceId`: other Hub participants
-attach to their `linkrpc.console` (`console.serviceId`) to observe output and
+attach to their console (`hub services attach`, or generically through the
+daemon's `consoles` template instance) to observe output and
 send input, in both foreground and background mode. When the program adds
 LinkRPC support, omit `-x` to provision its RPC connection. Add `-t` when the
 program expects a terminal.
@@ -602,7 +627,7 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 
 | Command                       | Purpose                                                                                              |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `attach <serviceId> [--read-only]` | Attach to any service implementing [`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole): pipe consoles use line editing (Ctrl+D on an empty line detaches); TTY consoles receive raw keys (Ctrl+P, Ctrl+Q detaches). |
+| `attach [serviceId] [--params <json>] [--instance <name>] [--interface <id>] [--read-only]` | Attach to a [`linkrpc.console.v1`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole) template instance of any service, found through the `linkrpc.console` tag; without a service, list consoles. Pipe consoles use line editing (Ctrl+D on an empty line detaches); TTY consoles receive raw keys (`--detach-keys`, default Ctrl+B, then d, detaches). |
 
 ### Reflection
 

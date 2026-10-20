@@ -3,8 +3,8 @@ import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
 import { resolveLocalEndpoint } from './localEndpoint';
 import { checkDaemonInterfaces, contextNamespace, registerServices, restartLocalDaemon, serviceAttachCommand, useLocalManagement } from './commands/services';
-import { localTerminalSize, runConsoleSession } from './commands/consoleSession';
-import { consoleInterface } from '@hediet/linkrpc-infra/console';
+import { DetachKeys } from './commands/consoleSession';
+import { attachConsole, listConsoleTargets } from './commands/consoleAttach';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
@@ -162,6 +162,7 @@ export async function main(
         )
         .option('--schema <path-or-url>', 'static schema catalog used for discovery and validation')
         .option('--daemon-service <id>', 'daemon management service ID on the selected Hub')
+        .option('--detach-keys <keys>', "TTY console detach sequence in Docker syntax, e.g. 'ctrl-b,d' (default) or 'ctrl-p,ctrl-q'")
         .option(
             '--validation <mode>',
             'schema validation mode: auto, required, or off',
@@ -328,6 +329,7 @@ export async function main(
     });
 
     if (profile === 'hub') registerServices(program, {
+        detachKeys,
         attachCommand: id => {
             if (!g_invocation) throw new Error('Context resolver is unavailable');
             const reference = preparedNewContext?.reference ?? g_invocation.selected.reference;
@@ -357,31 +359,40 @@ export async function main(
                 const serviceId = g_invocation?.values.daemonService
                     ?? `${(await connection.get(hubGrantedServiceIdInterface).getHubServiceId({})).hubServiceId}/daemon`;
                 await checkDaemonInterfaces(connection, serviceId);
-                result = await action(connection.get(managedEndpointsInterface, { serviceId }), { local: false, connection });
+                result = await action(connection.get(managedEndpointsInterface, { serviceId }), { local: false });
             }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
             return result!;
         },
     });
 
     program
-        .command('attach <serviceId>')
+        .command('attach [serviceId]')
         .description(
-            'Attach to a service that implements `linkrpc.console` (a pipe or TTY process console). '
-            + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; Ctrl+P, Ctrl+Q detaches.',
+            'Attach to a console of any service implementing the `linkrpc.console.v1` interface template '
+            + '(found through the `linkrpc.console` directory tag). Without a service, list available consoles. '
+            + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; the detach '
+            + 'keys (default Ctrl+B, then d) detach.',
         )
+        .option('--params <json>', "params of the console template instance, e.g. '{\"namespace\":\"…\",\"id\":\"main\"}'", '{}')
+        .option('--interface <id>', 'interface containing the console instance')
+        .option('--instance <name>', 'console template instance name, when an interface has several')
         .option('--read-only', 'observe output without sending input')
-        .action(async (serviceId: string, opts: { readOnly?: boolean }) => {
+        .action(async (serviceId: string | undefined, opts: { params: string; interface?: string; instance?: string; readOnly?: boolean }) => {
             await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
-                const console = new LinkRpcConnection(channel).get(consoleInterface, { serviceId });
-                const interactive = opts.readOnly !== true;
-                const size = interactive ? localTerminalSize() : undefined;
-                const result = await runConsoleSession(onMessage => console.attach({ interactive, ...(size ? { size } : {}) }, { onMessage }), {
-                    interactive,
-                    owner: false,
-                    reattachCommand: `${cliInvocation.programName} attach ${serviceId}`,
+                if (serviceId === undefined) {
+                    process.stdout.write(`${await listConsoleTargets(channel)}\n`);
+                    return;
+                }
+                await attachConsole(channel, {
+                    serviceId, params: opts.params, readOnly: opts.readOnly,
+                    ...(opts.interface === undefined ? {} : { interfaceId: opts.interface }),
+                    ...(opts.instance === undefined ? {} : { instance: opts.instance }),
+                    detachKeys: detachKeys(),
+                    reattachCommand: [cliInvocation.programName, 'attach', serviceId,
+                        ...(opts.params === '{}' ? [] : ['--params', `'${opts.params}'`]),
+                        ...(opts.instance === undefined ? [] : ['--instance', opts.instance])].join(' '),
                 });
-                if (!result.closedLocally && result.exit?.code) process.exitCode = result.exit.code;
-            }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+            }, { autoNegotiatePerCall: true });
         });
 
     program
@@ -1707,6 +1718,7 @@ function collectContextOverrides(program: Command, actionCommand: Command): Cont
     copyExplicit(program, opts, result, 'schema');
     copyExplicit(program, opts, result, 'validation');
     copyExplicit(program, opts, result, 'daemonService');
+    copyExplicit(program, opts, result, 'detachKeys');
     for (let command: Command | null = actionCommand; command; command = command.parent) {
         if (command.name() === 'services') copyExplicit(command, command.opts(), result, 'namespace');
     }
@@ -1876,6 +1888,7 @@ function printContextValues(
 function contextValueFlag(key: keyof ContextValues): string {
     const names: Record<keyof ContextValues, string> = {
         daemonService: 'daemon-service',
+        detachKeys: 'detach-keys',
         namespace: 'namespace',
         endpoint: 'endpoint',
         endpointCmd: 'endpoint-cmd',
@@ -1900,6 +1913,7 @@ function contextValueFlag(key: keyof ContextValues): string {
 function parseContextValueKey(value: string): keyof ContextValues {
     const entry = (Object.keys({
         daemonService: true,
+        detachKeys: true,
         namespace: true,
         endpoint: true,
         endpointCmd: true,
@@ -1924,6 +1938,12 @@ function parseContextValueKey(value: string): keyof ContextValues {
 
 function effectiveValidation(profile: CliProfile): ValidationMode {
     return g_invocation?.values.validation ?? validationDefault(profile);
+}
+
+/** The configured TTY detach sequence; validated when used, so invalid stored values fail with a clear message. */
+function detachKeys(): DetachKeys | undefined {
+    const spec = g_invocation?.values.detachKeys;
+    return spec === undefined ? undefined : DetachKeys.parse(spec);
 }
 
 function parseValidationMode(value: string): ValidationMode {

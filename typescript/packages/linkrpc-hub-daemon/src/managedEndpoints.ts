@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { z } from 'zod';
 import type { LinkRpcConnection, StreamApi } from '@hediet/linkrpc';
-import { ConsoleHost, type ConsoleClientMessage, type ConsoleExit, type ConsoleSize } from '@hediet/linkrpc-infra/console';
+import { ConsoleHost, consoleHandlers, type ConsoleClientMessage, type ConsoleExit, type ConsoleSize } from '@hediet/linkrpc-infra/console';
 import {
     endpointDefinition,
     managedEndpointsInterface,
@@ -31,7 +31,7 @@ interface Entry {
     /** Owned by a `run` call: it is never persisted or restored. */
     readonly owned: boolean;
     readonly supervisor: ServiceSupervisor | ConnectionSupervisor;
-    readonly console: { readonly host: ConsoleHost; readonly serviceId: string } | undefined;
+    readonly console: ConsoleHost | undefined;
     readonly listeners: Set<() => void>;
     removed: boolean;
 }
@@ -40,15 +40,11 @@ export interface ManagedEndpointsOptions {
     readonly file: string;
     /** Published endpoint service IDs: `<servicePrefix>/<sha256(namespace)>/<id>`. */
     readonly servicePrefix: string;
-    /** Console service IDs: `<consolePrefix>/<sha256(namespace)>/<id>`. */
-    readonly consolePrefix: string;
     readonly host: ServiceHost;
 }
 
 export class ManagedEndpoints {
     private readonly _entries = new Map<string, Entry>();
-    /** Console registrations of each connection serving this API. */
-    private readonly _connections = new Map<LinkRpcConnection, Map<Entry, { dispose(): void }>>();
     private _ops = Promise.resolve();
     private _closing = false;
 
@@ -81,9 +77,13 @@ export class ManagedEndpoints {
         if (entry.desired) await entry.supervisor.sync();
     }
 
-    /** Serve the management API, and every process endpoint's console, on `connection`. */
     register(connection: LinkRpcConnection, serviceId?: string): { dispose(): void } {
-        const management = connection.register(managedEndpointsInterface, {
+        return connection.register(managedEndpointsInterface, {
+            consoles: consoleHandlers(address => {
+                const console = this._get(address).console;
+                if (!console) throw new Error(`Endpoint "${address.id}" is a connection and has no console`);
+                return console;
+            }),
             info: () => ({ hostname: os.hostname(), platform: process.platform, cwd: process.cwd(), servicePrefix: this._options.servicePrefix }),
             list: ({ namespace }) => this.list(namespace),
             create: ({ replace, ...definition }) => this._serialize(async () =>
@@ -131,16 +131,6 @@ export class ManagedEndpoints {
                 return this._status(entry);
             }),
         }, serviceId === undefined ? undefined : { serviceId });
-        const consoles = new Map<Entry, { dispose(): void }>();
-        this._connections.set(connection, consoles);
-        for (const entry of this._entries.values()) this._registerConsole(consoles, connection, entry);
-        return {
-            dispose: () => {
-                management.dispose();
-                for (const registration of consoles.values()) registration.dispose();
-                this._connections.delete(connection);
-            },
-        };
     }
 
     list(namespace?: string): EndpointStatus[] {
@@ -152,7 +142,7 @@ export class ManagedEndpoints {
         this._closing = true;
         await this._ops;
         await Promise.all([...this._entries.values()].map(entry => entry.supervisor.dispose()));
-        for (const entry of this._entries.values()) this._closeConsole(entry);
+        for (const entry of this._entries.values()) entry.console?.close();
     }
 
     private async _run(
@@ -168,7 +158,7 @@ export class ManagedEndpoints {
         entry.listeners.add(sendStatus);
         try {
             sendStatus();
-            return await entry.console!.host.attach(attach, stream);
+            return await entry.console!.attach(attach, stream);
         } finally {
             entry.listeners.delete(sendStatus);
             // Shutdown already disposes every supervisor. Otherwise cleanup owns
@@ -189,7 +179,7 @@ export class ManagedEndpoints {
         const existing = this._entries.get(key(definition));
         if (existing) {
             if (!options.replace) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
-            existing.console?.host.notice('Replaced by a new launch of the same endpoint.');
+            existing.console?.notice('Replaced by a new launch of the same endpoint.');
             await existing.supervisor.dispose();
             this._removeEntry(existing);
         }
@@ -247,10 +237,10 @@ export class ManagedEndpoints {
         const host: ServiceHost = {
             openSocket: (...args) => this._options.host.openSocket(...args),
             log: (...args) => this._options.host.log(...args),
-            output: (_name, stream, data) => entry.console?.host.output(stream, data),
-            notice: (_name, text) => entry.console?.host.notice(text),
-            processStarted: (_name, pid) => entry.console?.host.started(pid),
-            processExited: (_name, exit) => entry.console?.host.exited(exit),
+            output: (_name, stream, data) => entry.console?.output(stream, data),
+            notice: (_name, text) => entry.console?.notice(text),
+            processStarted: (_name, pid) => entry.console?.started(pid),
+            processExited: (_name, exit) => entry.console?.exited(exit),
         };
         let supervisor: ServiceSupervisor | ConnectionSupervisor;
         let console: Entry['console'];
@@ -266,32 +256,19 @@ export class ManagedEndpoints {
             });
             if (!desired) consoleHost.finish();
             supervisor = processSupervisor;
-            console = { host: consoleHost, serviceId: `${this._options.consolePrefix}/${digest}/${definition.id}` };
+            console = consoleHost;
         } else {
             supervisor = new ConnectionSupervisor(name, source.endpoint, service, host, () => this._changed(entry));
         }
         entry = { definition, desired, owned: options.owned, supervisor, console, instanceId: randomUUID(), listeners: new Set(), removed: false };
         this._entries.set(key(definition), entry);
-        for (const [connection, consoles] of this._connections) this._registerConsole(consoles, connection, entry);
         return entry;
-    }
-
-    private _registerConsole(consoles: Map<Entry, { dispose(): void }>, connection: LinkRpcConnection, entry: Entry): void {
-        if (entry.console) consoles.set(entry, entry.console.host.register(connection, entry.console.serviceId));
-    }
-
-    private _closeConsole(entry: Entry): void {
-        for (const consoles of this._connections.values()) {
-            consoles.get(entry)?.dispose();
-            consoles.delete(entry);
-        }
-        entry.console?.host.close();
     }
 
     private _changed(entry: Entry): void {
         for (const listener of entry.listeners) listener();
         if (!finishedStates.has(entry.supervisor.status().state)) return;
-        entry.console?.host.finish();
+        entry.console?.finish();
         if (!this._closing && !entry.removed && !entry.definition.persistent) this._removeEntry(entry);
     }
 
@@ -299,7 +276,7 @@ export class ManagedEndpoints {
         if (entry.removed) return;
         if (this._entries.get(key(entry.definition)) === entry) this._entries.delete(key(entry.definition));
         entry.removed = true;
-        this._closeConsole(entry);
+        entry.console?.close();
         for (const listener of entry.listeners) listener();
     }
 
@@ -316,7 +293,7 @@ export class ManagedEndpoints {
             serviceId: entry.supervisor.service.serviceId, persistent: entry.definition.persistent,
             restart: entry.definition.restart, desired: entry.desired, owned: entry.owned, sourceKind: source.kind,
             rpc: source.kind === 'connection' || source.rpc,
-            ...(entry.console ? { console: { serviceId: entry.console.serviceId, mode: entry.console.host.mode } } : {}),
+            ...(entry.console ? { console: { mode: entry.console.mode } } : {}),
             runtime: entry.supervisor.status(),
         };
     }

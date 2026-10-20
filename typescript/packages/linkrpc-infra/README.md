@@ -11,14 +11,21 @@ helpers directly; terminal prompting remains outside infra.
 
 ## Process consoles (`linkrpc.console`)
 
-`@hediet/linkrpc-infra/console` defines the standard interface for attaching
-to a process console, and `ConsoleHost`, a server-side implementation that any
-participant can register on its own service ID. Clients such as
-`linkrpc attach <serviceId>` work with every implementation.
+`@hediet/linkrpc-infra/console` defines the console protocol as the interface
+template `linkrpc.console.v1` (`ConsoleTemplate`), and `ConsoleHost`, a
+server-side implementation for one console. Like JSON-RPC connection
+forwarding, the template has a `params` schema argument that selects the
+console: a service with one console uses `{}`, a process manager uses an
+address. Instantiating the template tags the containing interface with
+`linkrpc.console`. Generic clients such as `linkrpc attach <serviceId>` find
+consoles through these directory tags, read the instance's wire methods and
+params schema from the reflected template metadata, and work with every
+implementation.
 
-- `info` reports the mode (`pipe` or `tty`), TTY size, deliverable signals,
-  and whether a process runs.
-- `attach` is one bidirectional stream. The server sends `console` first, then
+- `info({ params })` reports the mode (`pipe` or `tty`), TTY size, deliverable
+  signals, and whether a process runs.
+- `attach({ params, interactive?, size?, replay? })` is one bidirectional
+  stream. The server sends `console` first, then
   the replay (`output` chunks for pipes, one `screen` for TTYs), then `live`,
   followed by live `output`, `started`, `exit`, `resized`, and `notice` events.
   The client sends `input` bytes, `resize`, and `signal`. Data is base64-encoded
@@ -29,6 +36,9 @@ participant can register on its own service ID. Clients such as
 - Cancelling an attachment detaches; it never stops the process. `attach`
   completes when no process runs and none is pending, returning the last exit.
 
+A single console can use the standalone `consoleInterface` (`linkrpc.console`,
+with wire methods `info` and `attach` and empty params):
+
 ```ts
 import { ConsoleHost } from '@hediet/linkrpc-infra/console';
 
@@ -37,16 +47,31 @@ const processConsole = new ConsoleHost({
     signals: ['SIGINT', 'SIGKILL'],
     backend: { write: data => child.stdin.write(data), resize: () => {}, signal: s => child.kill(s) },
 });
-processConsole.register(connection, 'my/service/console');
+processConsole.register(connection, 'my/service');
 processConsole.started(child.pid);
 child.stdout.on('data', data => processConsole.output('stdout', data));
 child.on('exit', (code, signal) => { processConsole.exited({ code, signal }); processConsole.finish(); });
 ```
 
+A service with several consoles embeds the template in its own interface and
+routes `params` with `consoleHandlers`:
+
+```ts
+import { ConsoleTemplate, consoleHandlers } from '@hediet/linkrpc-infra/console';
+
+const workers = defineInterface({ id: 'example.workers' }, {
+    consoles: ConsoleTemplate({ params: z.object({ worker: z.string() }) }),
+    // ...other members
+});
+connection.register(workers, {
+    consoles: consoleHandlers(({ worker }) => consolesByWorker.get(worker) ?? fail(worker)),
+});
+```
+
 `ConsoleHost` retains up to 1 MiB of recent output for replay by default. TTY
 implementations supply a screen-based `ConsoleHistory`; the hub daemon uses a
 headless xterm terminal. Lifetime ownership (stopping a process when its
-launcher disconnects) is deliberately not part of this interface; see the hub
+launcher disconnects) is deliberately not part of this protocol; see the hub
 daemon's `linkrpc.managedEndpoints` `run` call.
 
 ## Compute nodes

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { defineInterface, requestType, LinkRpcConnection, type InterfaceClient } from '@hediet/linkrpc';
 import { connectToHub, formatEndpointUri } from '@hediet/linkrpc/node';
 import {
-    consoleInterface,
+    CONSOLE_INTERFACE_TAG,
     decodeConsoleData,
     encodeConsoleData,
     type ConsoleServerMessage,
@@ -38,13 +38,12 @@ async function fixture() {
         return handle.connection;
     };
     const connect = async () => (await connection()).get(managedEndpointsInterface);
-    const consoleOf = async (status: EndpointStatus) => (await connection()).get(consoleInterface, { serviceId: status.console!.serviceId });
     const restart = async () => {
         await daemon.shutdown();
         daemon = await HubDaemon.start({ home });
         return connect();
     };
-    return { home, connect, consoleOf, restart, daemon };
+    return { home, connect, restart, daemon };
 }
 
 async function status(client: EndpointsClient, id: string, state: EndpointStatus['runtime']['state']) {
@@ -88,9 +87,12 @@ function run(
     return { call, events, settled: call.then(result => result, (error: unknown) => error) };
 }
 
-function attach(console: InterfaceClient<typeof consoleInterface>, params: Parameters<InterfaceClient<typeof consoleInterface>['attach']>[0] = {}) {
+type ConsolesClient = EndpointsClient['consoles'];
+
+/** Attach to an endpoint's console through the management interface's `consoles` template instance. */
+function attach(consoles: ConsolesClient, status: EndpointStatus, options: Omit<Parameters<ConsolesClient['attach']>[0], 'params'> = {}) {
     const messages: ConsoleServerMessage[] = [];
-    const call = console.attach(params, { onMessage: message => { messages.push(message); } });
+    const call = consoles.attach({ ...options, params: { namespace: status.namespace, id: status.id } }, { onMessage: message => { messages.push(message); } });
     return { call, messages, settled: call.then(result => result, (error: unknown) => error) };
 }
 
@@ -106,7 +108,7 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         const running = await status(observer, 'main', 'running');
         expect(running).toMatchObject({ owned: true, console: { mode: 'pipe' } });
         await expect(observer.configure({ ...address, persistent: true })).rejects.toThrow(/foreground/);
-        const observation = attach(await f.consoleOf(running));
+        const observation = attach(observer.consoles, running);
         await vi.waitFor(() => expect(observation.messages.at(-1)).toEqual({ t: 'live' }));
         await observation.call.cancel();
         await observation.settled;
@@ -216,10 +218,9 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         const client = await f.connect();
         const created = await client.create({ ...defaults, source: processSource('process.stdin.on("data", d => process.stdout.write(d))', { rpc }) });
         await status(client, 'main', 'running');
-        const console = await f.consoleOf(created);
-        expect(await console.info({})).toMatchObject({ mode: 'pipe', running: true, signals: process.platform === 'win32' ? ['SIGKILL'] : expect.arrayContaining(['SIGINT']) });
-        const first = attach(console);
-        const second = attach(console, { interactive: false });
+        expect(await client.consoles.info({ params: address })).toMatchObject({ mode: 'pipe', running: true, signals: process.platform === 'win32' ? ['SIGKILL'] : expect.arrayContaining(['SIGINT']) });
+        const first = attach(client.consoles, created);
+        const second = attach(client.consoles, created, { interactive: false });
         await vi.waitFor(() => expect(second.messages.at(-1)).toEqual({ t: 'live' }));
         await first.call.send({ t: 'input', data: text('roundtrip\n') });
         await vi.waitFor(() => expect(outputText(second.messages)).toBe('roundtrip\n'));
@@ -247,7 +248,7 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         const running = await status(client, 'main', 'running');
         expect(running.console?.mode).toBe('tty');
 
-        const late = attach(await f.consoleOf(running), { interactive: false });
+        const late = attach(client.consoles, running, { interactive: false });
         await vi.waitFor(() => expect(late.messages.at(-1)).toEqual({ t: 'live' }));
         expect(late.messages[0]).toMatchObject({ t: 'console', mode: 'tty', size: { cols: 100, rows: 30 }, running: true });
         const screen = late.messages.find(message => message.t === 'screen');
@@ -295,9 +296,9 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         cleanup.push(() => remote.close());
         const routed = remote.connection.get(managedEndpointsInterface, { serviceId: 'hub/daemon' });
         expect((await routed.list({ namespace: 'test' }))[0]?.instanceId).toBe(first.instanceId);
-        const routedConsole = remote.connection.get(consoleInterface, { serviceId: first.console!.serviceId });
-        expect(first.console!.serviceId).toBe(`hub/daemon/consoles/${createHash('sha256').update('test').digest('hex')}/main`);
-        expect(await routedConsole.info({})).toMatchObject({ mode: 'pipe', running: true, pid: first.runtime.pid });
+        expect(await routed.consoles.info({ params: address })).toMatchObject({ mode: 'pipe', running: true, pid: first.runtime.pid });
+        expect(managedEndpointsInterface.toSchema().tags).toEqual([CONSOLE_INTERFACE_TAG]);
+        await expect(routed.consoles.info({ params: { ...address, id: 'missing' } })).rejects.toThrow('Endpoint "missing" not found');
         fs.writeFileSync(f.home.configFile, JSON.stringify({ localEndpoint: { token: 'changed' } }));
         await f.daemon.reload();
         const second = await status(client, 'main', 'running');

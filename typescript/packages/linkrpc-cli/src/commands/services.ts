@@ -1,23 +1,29 @@
 import { Command, Option } from 'commander';
 import { directoryInterface, ErrorCode, RpcError, type InterfaceClient, type LinkRpcConnection } from '@hediet/linkrpc';
 import { connectToHub } from '@hediet/linkrpc/node';
-import { consoleInterface, type ConsoleServerMessage } from '@hediet/linkrpc-infra/console';
+import type { ConsoleServerMessage } from '@hediet/linkrpc-infra/console';
 import { managedEndpointsInterface, HubHome, readEndpointDiscovery, type EndpointStatus, type RunEvent } from '@hediet/linkrpc-hub-daemon/client';
 import type { ContextReference, ContextValues } from '../contexts';
-import { localTerminalSize, runConsoleSession } from './consoleSession';
+import { localTerminalSize, runConsoleSession, type DetachKeys } from './consoleSession';
 
 export type EndpointClient = InterfaceClient<typeof managedEndpointsInterface>;
 export interface ServicesHost {
     namespace(): string;
     attachCommand(id: string): string;
+    /** The configured TTY detach sequence, if not the default. */
+    detachKeys(): DetachKeys | undefined;
     restart(): Promise<void>;
     use<T>(startLocal: boolean, action: (client: EndpointClient, context: ManagementContext) => Promise<T>): Promise<T>;
 }
 
-/** Where the management client lives; consoles are served on the same connection. */
 export interface ManagementContext {
+    /** The selected manager is the local daemon, so local paths are meaningful. */
     readonly local: boolean;
-    readonly connection: LinkRpcConnection;
+}
+
+function withDetachKeys(host: ServicesHost): { detachKeys?: DetachKeys } {
+    const detachKeys = host.detachKeys();
+    return detachKeys ? { detachKeys } : {};
 }
 
 export function serviceAttachCommand(options: {
@@ -99,7 +105,7 @@ export async function useLocalManagement<T>(start: boolean, action: (client: End
     const handle = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token ?? '' });
     try {
         await checkDaemonInterfaces(handle.connection);
-        return await action(handle.connection.get(managedEndpointsInterface), { local: true, connection: handle.connection });
+        return await action(handle.connection.get(managedEndpointsInterface), { local: true });
     }
     finally { handle.close(); }
 }
@@ -180,6 +186,7 @@ export function registerServices(program: Command, host: ServicesHost): void {
                         interactive: !options.detach,
                         owner: options.foreground === true,
                         reattachCommand: host.attachCommand(options.id),
+                        ...withDetachKeys(host),
                         signal: detach.signal,
                     }, event => {
                         status = event.status;
@@ -244,18 +251,21 @@ export function registerServices(program: Command, host: ServicesHost): void {
         else subcommand.option('--follow', 'follow new output');
         subcommand.action(async (options: { id: string; follow?: boolean; readOnly?: boolean }) => {
             const namespace = host.namespace();
-            await host.use(false, async (client, { connection }) => {
+            await host.use(false, async client => {
                 const status = (await client.list({ namespace })).find(value => value.id === options.id);
                 if (!status) throw new Error(`Endpoint "${options.id}" not found in ${namespace}`);
                 if (!status.console) throw new Error(`Endpoint "${options.id}" is a connection and has no console`);
                 const interactive = operation === 'attach' && options.readOnly !== true;
-                const console = connection.get(consoleInterface, { serviceId: status.console.serviceId });
                 const size = interactive ? localTerminalSize() : undefined;
-                const result = await runConsoleSession(onMessage => console.attach({ interactive, ...(size ? { size } : {}) }, { onMessage }), {
+                // The management interface's `consoles` template instance, addressed by endpoint, like `hub attach`.
+                const result = await runConsoleSession(onMessage => client.consoles.attach({
+                    params: { namespace, id: options.id }, interactive, ...(size ? { size } : {}),
+                }, { onMessage }), {
                     interactive,
                     owner: false,
                     untilLive: operation === 'logs' && !options.follow,
                     reattachCommand: host.attachCommand(options.id),
+                    ...withDetachKeys(host),
                 });
                 if (operation === 'attach' && !result.closedLocally && result.exit?.code) process.exitCode = result.exit.code;
             });

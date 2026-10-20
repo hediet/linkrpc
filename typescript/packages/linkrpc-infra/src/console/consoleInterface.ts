@@ -1,9 +1,10 @@
-import { defineInterface, requestType } from '@hediet/linkrpc';
+import { defineInterface, defineInterfaceTemplate, requestType, type Schema } from '@hediet/linkrpc';
 import {
     array,
     boolean,
     discriminatedUnion,
     enum as zEnum,
+    extend,
     int,
     literal,
     nullable,
@@ -79,19 +80,43 @@ export const consoleInfoSchema = object({
 });
 export type ConsoleInfo = zInfer<typeof consoleInfoSchema>;
 
+export const CONSOLE_INTERFACE_TAG = 'linkrpc.console';
+export const CONSOLE_TEMPLATE_ID = 'linkrpc.console.v1';
+export const consoleAttachResultSchema = object({ exit: nullable(consoleExitSchema) });
+
+/**
+ * The console protocol as an interface template. `params` selects a console of
+ * the implementing service, like the parameters of a JSON-RPC connection: a
+ * service with one console uses an empty object; a process manager can use an
+ * address. Instantiating it tags the containing interface with
+ * {@link CONSOLE_INTERFACE_TAG}, so clients find consoles through directory
+ * tags and reflected template metadata.
+ */
+export const ConsoleTemplate = defineInterfaceTemplate(
+    { id: CONSOLE_TEMPLATE_ID, parameters: ['params'], tags: [CONSOLE_INTERFACE_TAG] },
+    <P>({ params }: { params: Schema<P> }) => ({
+        info: requestType(object({ params }), consoleInfoSchema, {
+            description: 'Describe the console selected by `params`.',
+        }),
+        attach: requestType(extend(consoleAttachParamsSchema, { params }), consoleAttachResultSchema, {
+            description: 'Attach to the console selected by `params`. Pipe consoles separate stdout and stderr; '
+                + 'TTY consoles provide a terminal with resize support. The stream sends `console` first, then '
+                + 'replay (`output` chunks, or one `screen` for TTYs), then `live`, then live events. Data fields '
+                + 'are base64-encoded bytes. Attachments share input and observe the same output. Cancelling '
+                + 'detaches and never stops the process. Completes when the process ended without a pending restart.',
+        }).withStream({
+            client: consoleClientMessageSchema,
+            server: consoleServerMessageSchema,
+        }),
+    }),
+);
+
+/** A standalone console for services with a single console, with wire methods `info` and `attach`. */
 export const consoleInterface = defineInterface({
     id: 'linkrpc.console',
-    description: 'Attach to a process console. Pipe consoles separate stdout and stderr; TTY consoles provide '
-        + 'a terminal with resize support. `attach` streams `console` first, then replay (`output` chunks, or '
-        + 'one `screen` for TTYs), then `live`, then live events. Data fields are base64-encoded bytes. '
-        + 'Multiple attachments share input and observe the same output. Cancelling an attachment detaches '
-        + 'and never stops the process. `attach` completes when the process ended without a pending restart.',
+    description: 'A single process console; see the `linkrpc.console.v1` interface template.',
 }, {
-    info: requestType(object({}), consoleInfoSchema),
-    attach: requestType(consoleAttachParamsSchema, object({ exit: nullable(consoleExitSchema) })).withStream({
-        client: consoleClientMessageSchema,
-        server: consoleServerMessageSchema,
-    }),
+    console: ConsoleTemplate({ params: object({}) }).mapMembers({ info: 'info', attach: 'attach' }),
 });
 
 export function encodeConsoleData(bytes: Uint8Array): string {
