@@ -23,6 +23,10 @@ function makeDir(opts: {
 }
 
 describe('complete (static-only)', () => {
+    it.each(['hub --', 'hub call --', 'hub ui --', 'hub services --', 'hub services run --'])('scopes namespace completion in %s', async line => {
+        const flags = (await complete({ line, point: line.length })).map(value => value.text);
+        expect(flags.includes('--namespace')).toBe(line.startsWith('hub services '));
+    });
     it('offers explicit daemon restart under services', async () => {
         const line = 'hub services ';
         expect((await complete({ line, point: line.length })).map(value => value.text)).toContain('restart');

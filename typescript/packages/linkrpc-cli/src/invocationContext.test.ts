@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as localEndpoint from './localEndpoint';
 import { ContextStore } from './contexts';
 import {
     contextValuesFromEnvironment,
@@ -33,7 +34,42 @@ describe('signing profile defaults and explicit overrides', () => {
 });
 
 afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(cleanups.splice(0).map((folder) => rm(folder, { recursive: true, force: true })));
+});
+
+describe('linkrpc:local discovery', () => {
+    it.each(['cli', 'context', 'environment'] as const)('resolves %s selection using only discovered credentials', source => {
+        const endpoint = { kind: 'socket' as const, path: '/local-hub.sock', token: 'discovered-token' };
+        vi.spyOn(localEndpoint, 'resolveLocalEndpoint').mockReturnValue(endpoint);
+        const selected = { endpoint: 'linkrpc:local', endpointToken: 'stale-token' };
+        const resolved = resolveInvocationEndpoint(invocation({
+            contextValues: source === 'context' ? selected : { endpoint: 'ws://context.example', endpointToken: 'context-token' },
+            environmentValues: source === 'environment' ? selected : source === 'cli'
+                ? { endpoint: 'ws://environment.example', endpointToken: 'environment-token' } : {},
+            cliOverrides: source === 'cli' ? { endpoint: 'linkrpc:local' } : {},
+        }));
+        expect(resolved).toEqual(endpoint);
+    });
+
+    it('rejects token overrides and conflicting endpoint selectors', () => {
+        vi.spyOn(localEndpoint, 'resolveLocalEndpoint').mockReturnValue({ kind: 'socket', path: '/local-hub.sock' });
+        expect(() => resolveInvocationEndpoint(invocation({
+            cliOverrides: { endpoint: 'linkrpc:local', endpointToken: 'override' },
+        }))).toThrow('uses credentials from local Hub discovery');
+        expect(() => resolveInvocationEndpoint(invocation({
+            cliOverrides: { endpoint: 'linkrpc:local', endpointCmd: 'node server.js' },
+        }))).toThrow('specify at most one');
+    });
+
+    it('does not discover locally when an explicit network endpoint overrides the context', () => {
+        const discover = vi.spyOn(localEndpoint, 'resolveLocalEndpoint');
+        expect(resolveInvocationEndpoint(invocation({
+            contextValues: { endpoint: 'linkrpc:local' },
+            cliOverrides: { endpoint: 'ws://remote.example' },
+        }))).toEqual({ kind: 'ws', url: 'ws://remote.example/' });
+        expect(discover).not.toHaveBeenCalled();
+    });
 });
 
 async function fixture() {

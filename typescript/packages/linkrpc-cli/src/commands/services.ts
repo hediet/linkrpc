@@ -127,7 +127,8 @@ export function registerServices(program: Command, host: ServicesHost): void {
             throw error;
         }
     };
-    const services = program.command('services').description('Manage context-scoped endpoints through the selected daemon.');
+    const services = program.command('services').description('Manage context-scoped endpoints through the selected daemon.')
+        .option('--namespace <name>', 'managed endpoint namespace (defaults to selected context)');
     services.command('restart')
         .description('Stop the local daemon via RPC and start the bundled daemon; does not change OS autostart.')
         .action(() => host.restart());

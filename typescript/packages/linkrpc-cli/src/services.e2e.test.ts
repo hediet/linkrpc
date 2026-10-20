@@ -84,14 +84,14 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         const f = await fixture();
         await f.ok(['context', '--new-context', '.']);
         await f.ok(['services', 'restart']);
-        const flags = ['--context', f.root, '--namespace', 'custom namespace', '--no-use-env',
+        const flags = ['--context', f.root, '--no-use-env',
             ...(routed ? ['--endpoint', readEndpointDiscovery(f.home.discoveryFile)!.endpoint, '--daemon-service', 'hub/daemon'] : [])];
-        await f.ok([...flags, 'services', 'run', '-x', '--detach', '--cwd', f.root, '--id', 'counter-fg', '--',
+        await f.ok([...flags, 'services', '--namespace', 'custom namespace', 'run', '-x', '--detach', '--cwd', f.root, '--id', 'counter-fg', '--',
             process.execPath, '-e', 'setInterval(() => {}, 1000)']);
-        const before = JSON.parse(await f.ok([...flags, 'services', 'list']));
+        const before = JSON.parse(await f.ok([...flags, 'services', '--namespace', 'custom namespace', 'list']));
         let hint = '';
         for (const mode of ['--detach', '--foreground']) {
-            const result = await f.run([...flags, 'services', 'run', '-x', mode, '--cwd', f.root, '--id', 'counter-fg', '--', process.execPath]);
+            const result = await f.run([...flags, 'services', '--namespace', 'custom namespace', 'run', '-x', mode, '--cwd', f.root, '--id', 'counter-fg', '--', process.execPath]);
             expect(result.code).not.toBe(0);
             expect(result.stderr).toContain('Endpoint "counter-fg" already exists in custom namespace');
             const match = /Attach to it: (hub services attach .*)/.exec(result.stderr);
@@ -103,12 +103,12 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
             expect(hint.includes('--endpoint ')).toBe(routed);
             if (routed) expect(hint).toContain('--daemon-service hub/daemon');
         }
-        const attached = f.start([...flags, 'services', 'attach', '--id', 'counter-fg'], true);
+        const attached = f.start([...flags, 'services', '--namespace', 'custom namespace', 'attach', '--id', 'counter-fg'], true);
         await vi.waitFor(() => expect(attached.stderr).toContain(`Reattach: ${hint}\n`), { timeout: 15_000 });
         attached.child.stdin.write('\x04');
         await vi.waitFor(() => expect(attached.child.exitCode).toBe(0), { timeout: 5000 });
-        expect(JSON.parse(await f.ok([...flags, 'services', 'list']))[0].instanceId).toBe(before[0].instanceId);
-        await f.ok([...flags, 'services', 'stop', '--id', 'counter-fg']);
+        expect(JSON.parse(await f.ok([...flags, 'services', '--namespace', 'custom namespace', 'list']))[0].instanceId).toBe(before[0].instanceId);
+        await f.ok([...flags, 'services', '--namespace', 'custom namespace', 'stop', '--id', 'counter-fg']);
     });
 
     it.each(['\x03', '\x04'])('promptly stops foreground work on terminal control %j', async control => {
@@ -360,12 +360,39 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
     it('discovers and calls a daemon-owned participant from another CLI process', async () => {
         const f = await fixture();
         const script = fileURLToPath(new URL('../../linkrpc-hub-daemon/src/test/echoService.mjs', import.meta.url));
-        await f.ok(['services', 'run', '--new-context', '.', '--env', 'ECHO_REFLECTION=1', '--detach', '--', process.execPath, script]);
-        const endpoints = JSON.parse(await f.ok(['services', 'list']));
-        expect(await f.ok(['ls', '--json'])).toContain('test.echo');
-        const result = await f.ok(['call', `${endpoints[0].serviceId}::test.echo::echo`, '--params', '{"text":"separate terminal"}']);
+        await f.ok(['services', '--namespace', 'other-project', 'run', '--env', 'ECHO_REFLECTION=1', '--detach', '--', process.execPath, script]);
+        const endpoints = JSON.parse(await f.ok(['services', '--namespace', 'other-project', 'list']));
+        expect(await f.ok(['--context', ':empty', 'ls', '--json'])).toContain('test.echo');
+        const result = await f.ok(['--context', ':empty', 'call', `${endpoints[0].serviceId}::test.echo::echo`, '--params', '{"text":"separate terminal"}']);
         expect(JSON.parse(result)).toMatchObject({ text: 'separate terminal' });
-        await f.ok(['services', 'stop']);
+        const missing = process.platform === 'win32' ? `\\\\.\\pipe\\missing-${path.basename(f.root)}` : path.join(f.root, 'missing.sock');
+        const failed = await f.run(['--endpoint', missing, 'ls']);
+        expect(failed.code).not.toBe(0);
+        expect(failed.stdout).not.toContain('test.echo');
+        await f.ok(['services', '--namespace', 'other-project', 'stop']);
+    });
+
+    it('explicit local discovery works without services, overrides ambient endpoints, and never bootstraps', async () => {
+        const f = await fixture();
+        const absent = await f.run(['--endpoint', 'linkrpc:local', 'ls']);
+        expect(absent.code).not.toBe(0);
+        expect(absent.stderr).toContain('local LinkRPC hub is not running');
+        expect(readEndpointDiscovery(f.home.discoveryFile)).toBeUndefined();
+        await f.ok(['--context', ':empty', 'services', 'restart']);
+        const explicit = await f.run(['--endpoint', 'linkrpc:local', 'ls', '--json'], {
+            HUBRPC_ENDPOINT: 'ws://127.0.0.1:1', HUBRPC_TOKEN: 'wrong-token',
+        });
+        expect({ code: explicit.code, error: explicit.code ? explicit.stderr : '' }).toEqual({ code: 0, error: '' });
+        expect(explicit.stdout).toContain('linkrpc.managedEndpoints');
+        await f.ok(['context', '--new-context', '.', '--endpoint', 'linkrpc:local']);
+        expect(await f.ok(['ls', '--json'])).toContain('linkrpc.managedEndpoints');
+        const implicit = await f.run(['--context', ':empty', 'ls']);
+        expect(implicit.code).not.toBe(0);
+        expect(implicit.stderr).toContain('no local services are running');
+        const ui = await f.run(['--context', ':empty', 'ui']);
+        expect(ui.stderr).toContain('no local services are running');
+        const invalid = await f.run(['--namespace', 'not-for-call', 'ls']);
+        expect(invalid.stderr).toContain("unknown option '--namespace'");
     });
 
     it('uses the effective Hub endpoint without falling back to local execution', async () => {

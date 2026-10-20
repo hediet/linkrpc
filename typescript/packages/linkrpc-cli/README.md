@@ -81,7 +81,9 @@ hub services connect --id peer --target-endpoint ws://localhost:7000 --restart o
 
 `--id` defaults to `main`. Namespace defaults to the selected context's canonical
 folder path (case-normalized on Windows), or its named/root context identity.
-Override it with `--namespace`. `--context` only selects an existing context;
+Override it with `hub services --namespace <name> ...`. `--namespace` belongs
+only to `services`; it does not select or filter services for `call`, `ls`, or
+`ui`. `--context` only selects an existing context;
 `--new-context .` creates one before the attached command starts. A namespace
 does not determine a remote working directory.
 
@@ -112,8 +114,11 @@ and argv, not a shell command string. Execution host, namespace, ID, command,
 and working directory are printed before creation. Local fallback is used only
 when no endpoint/config is selected. `run`, `connect`, and `start` may bootstrap
 the local daemon; reads never do. Without a selected endpoint, `hub ls`, `call`,
-and other connected commands can use the local Hub when this context has
-running endpoints. Use the full `serviceId` returned by `services list` for RPC
+and other connected commands (including `ui`) use the local Hub when any namespace
+has a running managed endpoint. An empty or unrelated context does not prevent
+this fallback. If none are running, the command reports an error without starting
+the daemon. A configured endpoint that fails never falls back to the local Hub.
+Use the full `serviceId` returned by `services list` for RPC
 calls; endpoint IDs and published RPC service IDs are different things.
 
 Process readiness defaults to connecting to the provided `LINKRPC_ENDPOINT`
@@ -544,12 +549,30 @@ Every endpoint is a valid `new URL()` — safe in env vars and logs:
 
 | URI                                       | Transport                                  |
 | ----------------------------------------- | ------------------------------------------ |
+| `linkrpc:local`                           | CLI discovery of the current user's local LinkRPC Hub |
 | `unix:/run/hub/hub.sock?token=…`          | unix-domain socket                         |
 | `npipe://./pipe/linkrpc?token=…`           | Windows named pipe                         |
 | `ws://host:7700?token=…` / `wss://…`      | LinkRPC WebSocket (token → `hubrpc::initialize`) |
 | `ws-no-init://host:7700?…`                | Plain JSON-RPC WebSocket; skip LinkRPC initialization/signing, preserve query params |
 | `cmd:?command=…` / `cmd:?argv=…&argv=…`   | spawn-as-server (`--endpoint-cmd`)         |
 | `cmd-stdio:?command=…` / `?argv=…&argv=…` | spawn over stdio (`--endpoint-cmd-stdio`)  |
+
+`linkrpc:local` resolves the local daemon's application endpoint and credentials
+from its discovery file, honoring `LINKRPC_HUB_HOME`. It never starts the daemon
+and works even when no managed services are running. It is a CLI lookup URI,
+not a wire transport or a service filter; raw SDK endpoint parsers do not resolve
+it. It works as a CLI flag, a saved context endpoint, or an endpoint environment
+variable. Explicit selection overrides ambient endpoint settings:
+
+```sh
+hub --endpoint linkrpc:local ui
+hub --endpoint linkrpc:local ls
+hub context --new-context . --endpoint linkrpc:local
+```
+
+Credentials come exclusively from discovery; `--endpoint-token` is rejected for
+this URI. No username-derived pipe address needs to be hardcoded. By contrast,
+the implicit local fallback requires at least one running managed endpoint.
 
 `cmd:` children can use `startEndpoint({ onConnection })` without parsing any
 transport flags: the parent injects `LINKRPC_ENDPOINT` and `LINKRPC_TOKEN`.

@@ -66,7 +66,6 @@ const ENDPOINT_GLOBAL_OPTIONS: readonly FlagDef[] = [
     { name: '--new-context', takesValue: true, valueType: 'free' },
     { name: '--schema', takesValue: true, valueType: 'free' },
     { name: '--daemon-service', takesValue: true, valueType: 'serviceId' },
-    { name: '--namespace', takesValue: true, valueType: 'free' },
     { name: '--validation', takesValue: true, valueType: 'free' },
     { name: '--use-env', takesValue: false },
     { name: '--no-use-env', takesValue: false },
@@ -326,7 +325,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
         name: 'services',
         description: 'Manage daemon-owned processes and connections.',
         positionals: [],
-        options: [],
+        options: [{ name: '--namespace', takesValue: true, valueType: 'free' }],
         subcommands: [
             { name: 'restart', description: 'Replace the local daemon with the bundled daemon.', positionals: [], options: [] },
             {

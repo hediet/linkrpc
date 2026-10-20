@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
-import { managedEndpointsInterface, HubHome, readEndpointDiscovery } from '@hediet/linkrpc-hub-daemon/client';
+import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
+import { resolveLocalEndpoint } from './localEndpoint';
 import { checkDaemonInterfaces, contextNamespace, registerServices, restartLocalDaemon, serviceAttachCommand, useLocalManagement } from './commands/services';
 import { localTerminalSize, runConsoleSession } from './commands/consoleSession';
 import { consoleInterface } from '@hediet/linkrpc-infra/console';
@@ -120,7 +121,7 @@ export async function main(
         )
         .option(
             '--endpoint <uri>',
-            'endpoint URI (unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
+            'endpoint URI (linkrpc:local, unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
             'ws-no-init://host?…, ' +
             'cmd:?command=… or cmd-stdio:?command=…)',
         )
@@ -161,7 +162,6 @@ export async function main(
         )
         .option('--schema <path-or-url>', 'static schema catalog used for discovery and validation')
         .option('--daemon-service <id>', 'daemon management service ID on the selected Hub')
-        .option('--namespace <name>', 'managed endpoint namespace (defaults to selected context)')
         .option(
             '--validation <mode>',
             'schema validation mode: auto, required, or off',
@@ -1707,7 +1707,9 @@ function collectContextOverrides(program: Command, actionCommand: Command): Cont
     copyExplicit(program, opts, result, 'schema');
     copyExplicit(program, opts, result, 'validation');
     copyExplicit(program, opts, result, 'daemonService');
-    copyExplicit(program, opts, result, 'namespace');
+    for (let command: Command | null = actionCommand; command; command = command.parent) {
+        if (command.name() === 'services') copyExplicit(command, command.opts(), result, 'namespace');
+    }
 
     if (getCommandPath(actionCommand) === 'connection create') {
         const actionOpts = actionCommand.opts();
@@ -2177,16 +2179,12 @@ async function acquireConnection(
     }
     if (endpoint === undefined && g_invocation?.profile === 'hub') {
         await useLocalManagement(false, async client => {
-            const namespace = g_invocation?.values.namespace
-                ?? contextNamespace(g_invocation!.selected.reference);
-            const endpoints = await client.list({ namespace });
+            const endpoints = await client.list({});
             if (!endpoints.some(value => value.runtime.state === 'running')) {
                 throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
             }
         });
-        const discovery = readEndpointDiscovery(HubHome.resolve().discoveryFile);
-        if (!discovery) throw new Error('The local Hub stopped before connecting');
-        return { ep: { kind: 'socket', path: discovery.endpoint, token: discovery.token } };
+        return { ep: resolveLocalEndpoint() };
     }
     return { ep: needEndpoint(endpoint) };
 }
