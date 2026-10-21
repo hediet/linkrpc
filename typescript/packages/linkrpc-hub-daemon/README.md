@@ -13,7 +13,7 @@ OS login (Run key / LaunchAgent / systemd user unit)
                  └─ management endpoint ◄── CLI, tray app
 ```
 
-The [desktop app](../../packages-private/linkrpc-hub-desktop) adds a tray icon
+The [desktop app](https://github.com/hediet/linkrpc-studio/tree/main/apps/linkrpc-hub-desktop) adds a tray icon
 and a management window. It is a client: closing it never stops the hub.
 
 ## Quick start
