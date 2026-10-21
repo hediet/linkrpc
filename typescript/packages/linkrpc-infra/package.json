@@ -18,6 +18,14 @@
             "@hediet/source": "./src/approval/index.ts",
             "default": "./dist/approval/index.js"
         },
+        "./compute-node": {
+            "@hediet/source": "./src/compute-node/index.ts",
+            "default": "./dist/compute-node/index.js"
+        },
+        "./compute-node/node": {
+            "@hediet/source": "./src/compute-node/node.ts",
+            "default": "./dist/compute-node/node.js"
+        },
         "./console": {
             "@hediet/source": "./src/console/index.ts",
             "default": "./dist/console/index.js"
@@ -85,6 +93,8 @@
         "exports": {
             ".": "./dist/index.js",
             "./approval": "./dist/approval/index.js",
+            "./compute-node": "./dist/compute-node/index.js",
+            "./compute-node/node": "./dist/compute-node/node.js",
             "./console": "./dist/console/index.js",
             "./graph": "./dist/graph/index.js",
             "./graph/source": "./dist/graph/source.js",
