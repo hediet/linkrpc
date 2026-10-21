@@ -300,10 +300,15 @@ export function describeSchema(
         case "object": {
             if (depth >= 2) return "object";
             const obj = schema as {
-                properties: Record<string, SvcJsonSchema>;
+                properties?: Record<string, SvcJsonSchema>;
                 required?: string[];
-                additionalProperties: SvcJsonSchema | false;
+                additionalProperties?: SvcJsonSchema | boolean;
             };
+            if (obj.properties === undefined) {
+                return typeof obj.additionalProperties === "object"
+                    ? `Record<string, ${describeSchema(obj.additionalProperties, components, depth + 1)}>`
+                    : "object";
+            }
             const reqSet = new Set(obj.required ?? []);
             const fields = Object.entries(obj.properties).map(([k, v]) => {
                 const opt = reqSet.has(k) ? "" : "?";
@@ -318,8 +323,9 @@ export function describeSchema(
 /**
  * Multi-line table of an object schema's properties: name, required-marker,
  * type, and description. Used as the "Expected params:" footer printed under
- * a validation error. Returns `undefined` if `schema` is not an object —
- * fall back to a single `describeSchema` line in that case.
+ * a validation error. Returns `undefined` if `schema` is not an object with
+ * named properties (params are closed objects) — fall back to a single
+ * `describeSchema` line in that case.
  */
 export function describeObjectParams(
     schema: SvcJsonSchema,
@@ -331,9 +337,10 @@ export function describeObjectParams(
     }
     const obj = resolved as {
         type: "object";
-        properties: Record<string, SvcJsonSchema>;
+        properties?: Record<string, SvcJsonSchema>;
         required?: string[];
     };
+    if (obj.properties === undefined) return undefined;
     const required = new Set(obj.required ?? []);
     const rows: { name: string; type: string; req: string; desc: string; }[] = [];
     for (const [k, v] of Object.entries(obj.properties)) {
