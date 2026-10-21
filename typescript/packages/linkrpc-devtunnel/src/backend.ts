@@ -166,6 +166,15 @@ export class AzureCliTokenSource {
     }
 }
 
+/**
+ * Whether `error` is the Dev Tunnels SDK's `CancellationError`. When a relay
+ * session is torn down, the SDK rejects pending stream reads with it, and some
+ * of those reads are awaited inside the SDK without a handler.
+ */
+export function isSdkCancellation(error: unknown): boolean {
+    return error instanceof Error && error.constructor.name === 'CancellationError';
+}
+
 function _isHosted(tunnel: Tunnel): boolean {
     if ((tunnel.endpoints?.length ?? 0) > 0) return true;
     const count = tunnel.status?.hostConnectionCount;
