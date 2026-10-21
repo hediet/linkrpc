@@ -5,6 +5,7 @@ import { autorun } from '@vscode/observables';
 import { CallFilterSchema, CallLogLevelSchema } from '@hediet/linkrpc-hub-daemon/client';
 import { z } from 'zod';
 import { DesktopModel } from './desktopModel';
+import { CallsViewSettingsSchema } from './desktopSettings';
 import { homeFromArgs } from './electronLaunch';
 import { type DesktopActionName, type DesktopState, IPC_CALLS, IPC_INVOKE, IPC_STATE } from './protocol';
 import { type TrayIconState, trayIconPng } from './trayIcon';
@@ -32,6 +33,8 @@ const ACTION_PARAMS: Record<DesktopActionName, z.ZodType> = {
     watchCalls: z.object({ filter: CallFilterSchema }),
     unwatchCalls: z.undefined(),
     openCallLogFolder: z.undefined(),
+    getCallsViewSettings: z.undefined(),
+    setCallsViewSettings: CallsViewSettingsSchema,
 };
 
 /** The tray icon, its menu, and the single management window. */

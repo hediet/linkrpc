@@ -17,6 +17,7 @@ import {
     XdgAutostart,
 } from '@hediet/linkrpc-hub-daemon';
 import { appArgs, electronDaemonLaunch, homeArgs } from './electronLaunch';
+import { DesktopSettings } from './desktopSettings';
 import type { DesktopActions, DesktopState, StartupState } from './protocol';
 import type { TrayIconState } from './trayIcon';
 
@@ -29,7 +30,8 @@ const RECONNECT_MS = 1_500;
  */
 export class DesktopModel {
     public static async create(home: HubHome): Promise<DesktopModel> {
-        const model = new DesktopModel(home, await createAutostartManager({ home }), electronDaemonLaunch(home));
+        const settings = DesktopSettings.load(path.join(app.getPath('userData'), 'settings.json'));
+        const model = new DesktopModel(home, await createAutostartManager({ home }), electronDaemonLaunch(home), settings);
         await model._refreshStartup();
         void model._connectLoop();
         return model;
@@ -68,6 +70,7 @@ export class DesktopModel {
         public readonly home: HubHome,
         private readonly _autostart: AutostartManager,
         private readonly _launch: DaemonLaunch,
+        private readonly _settings: DesktopSettings,
     ) {
         this._trayLogin = new TrayLoginItem([...appArgs(), ...homeArgs(home)]);
     }
@@ -137,6 +140,8 @@ export class DesktopModel {
             const error = await shell.openPath(this.home.callLogDir);
             if (error) throw new Error(error);
         },
+        getCallsViewSettings: async () => this._settings.callsView,
+        setCallsViewSettings: async settings => this._settings.setCallsView(settings),
     };
 
     /** Calls streamed by {@link actions.watchCalls}. */

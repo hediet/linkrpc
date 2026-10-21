@@ -21,7 +21,9 @@ keeps the hub running.
   (`-` excludes, `method:` globs); right-clicking a call appends an exclusion
   for its service, its interface or method (on that service or on all
   services). "Errors only" limits the table to failures, and "Open Folder"
-  opens the log directory.
+  opens the log directory. The filter, "Errors only", and "Live" are saved in
+  the tray app's `settings.json` (Electron's user data directory) and
+  restored on the next start.
 - **Startup:** "Start hub at login" and "Start tray at login" are independent.
 
 The daemon runs on Electron's own binary in Node.js mode, so an installed app

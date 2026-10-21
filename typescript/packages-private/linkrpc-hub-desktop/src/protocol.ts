@@ -3,6 +3,9 @@
  * Types only: the renderer bundle must not pull in Node.js code.
  */
 import type { CallFilter, CallLogLevel, CallRecord, ConfigDocument, DaemonStatus, LogLine } from '@hediet/linkrpc-hub-daemon/client';
+import type { CallsViewSettings } from './desktopSettings';
+
+export type { CallsViewSettings } from './desktopSettings';
 
 export type { CallFilter, CallLogLevel, CallRecord, ConfigDocument, DaemonStatus, LogLine, ServiceStatus } from '@hediet/linkrpc-hub-daemon/client';
 
@@ -48,6 +51,9 @@ export interface DesktopActions {
     watchCalls(params: { filter: CallFilter; }): void;
     unwatchCalls(): void;
     openCallLogFolder(): void;
+    /** The Calls view filter, saved in the tray app's settings file. */
+    getCallsViewSettings(): CallsViewSettings;
+    setCallsViewSettings(params: CallsViewSettings): void;
 }
 
 export type DesktopActionName = keyof DesktopActions;

@@ -39,16 +39,24 @@ export class CallsView {
     private _truncated = false;
     private _loads = 0;
     private _debounce: ReturnType<typeof setTimeout> | undefined;
+    /** Resolves once the saved filter is in the inputs; queries wait for it. */
+    private readonly _settingsLoaded: Promise<void>;
 
     constructor(private readonly _onError: (message: string) => void) {
+        this._settingsLoaded = this._run(async () => {
+            const saved = await bridge.invoke('getCallsViewSettings');
+            this._text.value = saved.query;
+            this._errorsOnly.checked = saved.errorsOnly;
+            this._live.checked = saved.live;
+        });
         this._recording.addEventListener('change', () => void this._setLevel(this._recording.checked ? this._chosenLevel() : 'off'));
         this._level.addEventListener('change', () => void this._setLevel(this._chosenLevel()));
         this._text.addEventListener('input', () => {
             clearTimeout(this._debounce);
-            this._debounce = setTimeout(() => void this._reload(), FILTER_DEBOUNCE_MS);
+            this._debounce = setTimeout(() => void this._onFilterChanged(), FILTER_DEBOUNCE_MS);
         });
-        this._errorsOnly.addEventListener('change', () => void this._reload());
-        this._live.addEventListener('change', () => void this._reload());
+        this._errorsOnly.addEventListener('change', () => void this._onFilterChanged());
+        this._live.addEventListener('change', () => void this._onFilterChanged());
         bridge.onCall(call => {
             this._calls.set(call.id, call);
             this._renderTable();
@@ -98,8 +106,20 @@ export class CallsView {
         };
     }
 
+    /** Save the filter in the tray app's settings and apply it. */
+    private async _onFilterChanged(): Promise<void> {
+        await this._settingsLoaded;
+        await this._run(() => bridge.invoke('setCallsViewSettings', {
+            query: this._text.value,
+            errorsOnly: this._errorsOnly.checked,
+            live: this._live.checked,
+        }));
+        await this._reload();
+    }
+
     /** Restart the live watch and read the newest matching calls from the files. */
     private async _reload(): Promise<void> {
+        await this._settingsLoaded;
         if (!this._status) return;
         const load = ++this._loads;
         const filter = this._filter();
@@ -181,7 +201,7 @@ export class CallsView {
     private _appendTerm(term: string): void {
         this._text.value = CallQuery.appendTerm(this._text.value, term);
         clearTimeout(this._debounce);
-        void this._reload();
+        void this._onFilterChanged();
     }
 
     private _renderInfo(shown = this._calls.size): void {
