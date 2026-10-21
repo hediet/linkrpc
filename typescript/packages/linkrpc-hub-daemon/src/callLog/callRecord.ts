@@ -4,6 +4,7 @@
  */
 import { logLevelSchema } from '@hediet/linkrpc-infra/logging';
 import { z } from 'zod';
+import { CallQuery } from './callQuery';
 
 /** `linkrpc.logging` levels. A threshold records calls at or above it. */
 export const CallLogLevelSchema = z.enum(logLevelSchema.options);
@@ -61,7 +62,7 @@ export const CallRecordSchema = z.object({
 export type CallRecord = z.infer<typeof CallRecordSchema>;
 
 export const CallFilterSchema = z.object({
-    /** Case-insensitive substring of the method, peers, principal, or error message. */
+    /** A {@link CallQuery}: space-separated terms, `-term` to exclude, `method:<glob>` for methods. */
     text: z.string().optional(),
     /** Only records at or above this level, e.g. `error` for failures. */
     minLevel: CallRecordLevelSchema.optional(),
@@ -78,14 +79,13 @@ export function isCallLevelEnabled(level: CallRecordLevel, threshold: CallLogLev
     return SEVERITY[level] >= SEVERITY[threshold];
 }
 
-export function matchesCallFilter(record: CallRecord, filter: CallFilter): boolean {
-    if (filter.minLevel !== undefined && !isCallLevelEnabled(record.level, filter.minLevel)) return false;
-    if (filter.since !== undefined && record.at < filter.since) return false;
-    if (filter.until !== undefined && record.at > filter.until) return false;
-    if (filter.text) {
-        const needle = filter.text.toLowerCase();
-        const haystack = [record.method, record.from.label, record.to?.label, record.principal, record.error?.message];
-        if (!haystack.some(value => value?.toLowerCase().includes(needle))) return false;
-    }
-    return true;
+/** Parses `filter` once; the result tests records against it. */
+export function createCallMatcher(filter: CallFilter): (record: CallRecord) => boolean {
+    const query = filter.text ? CallQuery.parse(filter.text) : undefined;
+    return record => {
+        if (filter.minLevel !== undefined && !isCallLevelEnabled(record.level, filter.minLevel)) return false;
+        if (filter.since !== undefined && record.at < filter.since) return false;
+        if (filter.until !== undefined && record.at > filter.until) return false;
+        return query?.matches(record) ?? true;
+    };
 }

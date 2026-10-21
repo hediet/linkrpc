@@ -1,4 +1,6 @@
+import { CallQuery, type CallTarget, callTargetOf, excludeMethodTerm } from '@hediet/linkrpc-hub-daemon/call-query';
 import type { CallFilter, CallLogLevel, CallRecord, DaemonStatus } from '../protocol';
+import { type ContextMenuItem, type ContextMenuSection, showContextMenu } from './contextMenu';
 import { bridge, errorMessage, h } from './dom';
 
 const PAGE = 200;
@@ -22,7 +24,12 @@ export class CallsView {
     private readonly _calls = new Map<string, CallRecord>();
     private readonly _recording = h('input', { type: 'checkbox' });
     private readonly _level = h('select', { title: 'What to record' });
-    private readonly _text = h('input', { type: 'search', placeholder: 'Filter: method, caller, target, principal, or error' });
+    private readonly _text = h('input', {
+        type: 'search',
+        placeholder: 'Filter: text  -text  method:service::interface::member (* wildcard)  -method:…',
+        title: 'Space-separated terms that must all match. "-" excludes, quotes group words, '
+            + 'method: matches service::interface::member with * wildcards. Right-click a call to add exclusions.',
+    });
     private readonly _errorsOnly = h('input', { type: 'checkbox' });
     private readonly _live = h('input', { type: 'checkbox', checked: true });
     private readonly _info = h('div', { class: 'row muted' });
@@ -120,7 +127,7 @@ export class CallsView {
                 : 'Start the hub to view its call log.'));
         } else {
             this._table.replaceChildren(h('table', {},
-                h('thead', {}, h('tr', {}, ...['Time', 'Status', 'Caller → Target', 'Method', 'Duration', 'Size'].map(text => h('th', {}, text)))),
+                h('thead', {}, h('tr', {}, ...['Time', 'Status', 'Caller → Target', 'Service', 'Method', 'Duration', 'Size'].map(text => h('th', {}, text)))),
                 h('tbody', {}, ...calls.slice(0, MAX_SHOWN).flatMap(call => this._rows(call)))));
         }
         this._renderInfo(calls.length);
@@ -128,25 +135,53 @@ export class CallsView {
 
     private _rows(call: CallRecord): Node[] {
         const selected = this._selected === call.id;
+        const target = callTargetOf(call);
         const row = h('tr', {
             class: `call${selected ? ' selected' : ''}`,
-            title: 'Show details',
+            title: 'Show details · right-click to exclude',
             onClick: () => {
                 this._selected = selected ? undefined : call.id;
                 this._renderTable();
             },
+            onContextMenu: (event: MouseEvent) => showContextMenu(event, this._excludeMenu(target)),
         },
         h('td', { class: 'nowrap' }, _time(call.at)),
         h('td', {}, h('span', { class: `pill ${_statusClass(call)}`, title: call.error?.message }, call.status)),
         h('td', { title: _peersTitle(call) },
             h('div', {}, call.from.label, h('span', { class: 'muted' }, ' → '), call.to?.label ?? '–'),
             call.principal ? h('div', { class: 'sub' }, _shortPrincipal(call.principal)) : undefined),
-        h('td', {}, h('code', {}, call.method),
-            call.error ? h('div', { class: 'sub error' }, call.error.message) : undefined),
+        h('td', { class: 'service' }, target.serviceId ?? h('span', { class: 'muted', title: 'Root-form call' }, '(root)')),
+        h('td', {}, h('code', {},
+            ...(target.interfaceId !== undefined ? [h('span', { class: 'muted' }, `${target.interfaceId}::`)] : []),
+            target.member),
+        call.error ? h('div', { class: 'sub error' }, call.error.message) : undefined),
         h('td', { class: 'nowrap' }, call.status === 'pending' ? `${call.durationMs} ms…` : `${call.durationMs} ms`),
         h('td', { class: 'nowrap sub' }, `${_bytes(call.paramsBytes)} → ${_bytes(call.resultBytes)}`));
         if (!selected) return [row];
-        return [row, h('tr', { class: 'details' }, h('td', { colSpan: 6 }, _details(call)))];
+        return [row, h('tr', { class: 'details' }, h('td', { colSpan: 7 }, _details(call)))];
+    }
+
+    /** Exclusions for a call's method, from the broadest to the most specific; each appends a filter term. */
+    private _excludeMenu({ serviceId, interfaceId, member }: CallTarget): ContextMenuSection[] {
+        const item = (label: string, target: Partial<CallTarget>): ContextMenuItem => {
+            const term = excludeMethodTerm(target);
+            return { label, detail: term, run: () => this._appendTerm(term) };
+        };
+        const scoped = (target: Partial<CallTarget>): ContextMenuItem[] => [
+            ...(serviceId !== undefined ? [item(`on ${serviceId}`, { ...target, serviceId })] : []),
+            item('on all services', target),
+        ];
+        return [
+            { title: 'Exclude service', items: serviceId !== undefined ? [item(serviceId, { serviceId })] : [] },
+            { title: `Exclude interface ${interfaceId ?? ''}`, items: interfaceId !== undefined ? scoped({ interfaceId }) : [] },
+            { title: `Exclude method ${interfaceId !== undefined ? `${interfaceId}::` : ''}${member}`, items: scoped({ interfaceId, member }) },
+        ];
+    }
+
+    private _appendTerm(term: string): void {
+        this._text.value = CallQuery.appendTerm(this._text.value, term);
+        clearTimeout(this._debounce);
+        void this._reload();
     }
 
     private _renderInfo(shown = this._calls.size): void {

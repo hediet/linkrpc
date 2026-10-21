@@ -319,12 +319,26 @@ The recorder observes the hub's inspection traffic (the source of
 call is one record however many messages it took.
 
 **Reading the log.** Besides the files and the tray app, the management API
-offers `queryCalls` (newest first, filtered by text, minimum level, and time)
-and `watchCalls` (live). Hub clients, including remote hubs, read it through
+offers `queryCalls` (newest first, filtered by a query, minimum level, and
+time) and `watchCalls` (live, same filter). Hub clients, including remote hubs, read it through
 the standard [`linkrpc.logging`](../linkrpc-infra/README.md#logging) interface
 at `<hubServiceId>/daemon`: the latest 200 calls as a revisioned document,
 rendered like the hub's flow log. `getLogLevel` returns `callLog.level`, and
 `setLogLevel` persists a new level in the config.
+
+The query ([`callQuery.ts`](src/callLog/callQuery.ts), also exported as
+`@hediet/linkrpc-hub-daemon/call-query` for UIs) is a list of
+space-separated terms that must all match:
+
+| Term | Matches |
+| --- | --- |
+| `echo`, `"no route"` | Case-insensitive substring of the method, caller, target, principal, or error |
+| `method:<glob>` | `service::interface::member`, `*` matching anything (the service is empty for root-form calls) |
+| `-<term>` | Calls the term does not match |
+
+For example, `-method:hediet/devbox::*` hides every call to that service,
+`-method:*::hubrpc.directory::*` hides an interface on all services, and
+`-method:hediet/pc2::hubrpc.directory::list` hides one method of one service.
 
 ## Locations
 

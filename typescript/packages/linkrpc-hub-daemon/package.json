@@ -13,6 +13,10 @@
         "./client": {
             "import": "./dist/client.js",
             "types": "./dist/client.d.ts"
+        },
+        "./call-query": {
+            "import": "./dist/call-query.js",
+            "types": "./dist/call-query.d.ts"
         }
     },
     "bin": {

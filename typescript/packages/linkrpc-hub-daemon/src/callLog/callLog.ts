@@ -4,7 +4,7 @@ import { loggingInterface } from '@hediet/linkrpc-infra/logging';
 import { type CallLogConfig, CallLogConfigSchema } from './callLogConfig';
 import { CallLogDocument, registerCallLogService } from './callLogService';
 import { type CallQueryResult, CallLogStore } from './callLogStore';
-import { type CallFilter, type CallLogLevel, type CallRecord, matchesCallFilter } from './callRecord';
+import { type CallFilter, type CallLogLevel, type CallRecord, createCallMatcher } from './callRecord';
 import { CallRecorder } from './callRecorder';
 
 export interface CallLogStatus {
@@ -92,8 +92,9 @@ export class CallLog {
 
     /** Live records matching `filter`, as they are written. */
     public watch(filter: CallFilter, listener: (record: CallRecord) => void): { dispose(): void; } {
+        const matches = createCallMatcher(filter);
         return this._store.onRecord(record => {
-            if (matchesCallFilter(record, filter)) listener(record);
+            if (matches(record)) listener(record);
         });
     }
 

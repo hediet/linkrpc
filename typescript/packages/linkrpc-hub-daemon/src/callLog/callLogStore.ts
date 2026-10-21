@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { CallLogRotation } from './callLogConfig';
-import { type CallFilter, type CallRecord, matchesCallFilter } from './callRecord';
+import { type CallFilter, type CallRecord, createCallMatcher } from './callRecord';
 
 const SEGMENT = /^calls-[0-9TZ-]+\.ndjson$/;
 const DAY_MS = 24 * 60 * 60_000;
@@ -61,6 +61,7 @@ export class CallLogStore {
 
     public async query(filter: CallFilter = {}, limit = 200): Promise<CallQueryResult> {
         await this.flush();
+        const matches = createCallMatcher(filter);
         const calls: CallRecord[] = [];
         const seen = new Set<string>();
         for (const name of (await this._segments()).reverse()) {
@@ -77,7 +78,7 @@ export class CallLogStore {
                 const record = _parseLine(lines[i]!);
                 if (!record || seen.has(record.id)) continue;
                 seen.add(record.id);
-                if (!matchesCallFilter(record, filter)) continue;
+                if (!matches(record)) continue;
                 if (calls.length === limit) return { calls, truncated: true };
                 calls.push(record);
             }

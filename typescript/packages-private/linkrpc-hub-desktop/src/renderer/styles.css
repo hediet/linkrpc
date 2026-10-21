@@ -282,3 +282,54 @@ td code { overflow-wrap: anywhere; }
 }
 .call-details dl { margin: 0; }
 .call-details pre.log { max-height: 180px; }
+
+td.service { white-space: nowrap; }
+
+.context-menu {
+    position: fixed;
+    z-index: 10;
+    min-width: 260px;
+    max-width: 520px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.context-menu-section + .context-menu-section {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+}
+
+.context-menu-title {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.context-menu-item {
+    display: flex;
+    width: 100%;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 4px 8px 4px 16px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    text-align: left;
+}
+
+.context-menu-item:hover, .context-menu-item:focus {
+    outline: none;
+    background: var(--badge-bg);
+}
+
+.context-menu-detail {
+    font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+}

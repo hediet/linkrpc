@@ -10,6 +10,7 @@ import { HubHome } from './paths';
 
 export * from './managementInterface';
 export * from './callLog/callRecord';
+export * from './callLog/callQuery';
 export * from './endpointInterface';
 export { type EndpointDiscovery, readEndpointDiscovery } from './discovery';
 export { HubHome, LINKRPC_HUB_HOME_VAR } from './paths';
