@@ -2,7 +2,7 @@
 import { openHubChannel } from '@hediet/linkrpc/node';
 import { HubHome, readEndpointDiscovery } from '@hediet/linkrpc-hub-daemon/client';
 import { Command } from 'commander';
-import { AzureCliTokenSource, DevTunnelsSdkBackend } from './backend';
+import { AzureCliTokenSource, DevTunnelsSdkBackend, isSdkCancellation } from './backend';
 import { fromHubChannel } from './forward';
 import { DevTunnelMesh } from './mesh';
 
@@ -25,6 +25,10 @@ const program = new Command('linkrpc-devtunnel')
     .option('--discovery-interval <seconds>', 'how often to look for peer hubs', '30')
     .action(async (options: Options) => {
         const log = (line: string) => console.log(line);
+        process.on('unhandledRejection', reason => {
+            if (!isSdkCancellation(reason)) throw reason;
+            log('ignored a cancelled Dev Tunnels operation');
+        });
         const tokens = new AzureCliTokenSource(options.azureCli);
         const mesh = await DevTunnelMesh.start({
             backend: new DevTunnelsSdkBackend(() => tokens.get()),
