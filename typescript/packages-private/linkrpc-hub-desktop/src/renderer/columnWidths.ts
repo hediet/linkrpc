@@ -1,18 +1,20 @@
 import { h } from './dom';
 
-/** A table column whose max width the user can drag; cells truncate with an ellipsis beyond it. */
+/** A table column the user can resize; cells truncate with an ellipsis at its edge. */
 export interface ResizableColumn {
     readonly id: string;
     readonly title: string;
-    readonly defaultMaxWidth: number;
+    readonly defaultWidth: number;
 }
 
 const MIN_WIDTH = 40;
 const MAX_WIDTH = 2_000;
 
 /**
- * Max widths of resizable columns, applied as `--col-<id>` CSS variables on a
- * container, so dragging restyles every row without re-rendering.
+ * Widths of resizable columns in a `table.resizable-columns` (fixed layout),
+ * applied as `--col-<id>` CSS variables on a container, so dragging restyles
+ * every row without re-rendering. Each column is exactly as wide as set; a
+ * trailing filler column takes any remaining space.
  */
 export class ColumnWidths {
     private _custom: Record<string, number> = {};
@@ -30,23 +32,31 @@ export class ColumnWidths {
         return this._custom;
     }
 
+    /** Columns per row, including the filler (for `colSpan`). */
+    public get span(): number {
+        return this._columns.length + 1;
+    }
+
     public set(custom: Readonly<Record<string, number>>): void {
         this._custom = { ...custom };
         this._apply();
     }
 
-    /** A cell's content wrapper, limited to its column's max width. */
-    public cell(column: ResizableColumn, props: Record<string, unknown>, ...children: Array<Node | string | undefined | false>): HTMLElement {
-        const element = h('div', { ...props, class: `cell ${(props.class as string | undefined) ?? ''}`.trim() }, ...children);
-        element.style.maxWidth = `var(--col-${column.id})`;
-        return element;
+    /** The header row: a cell per column with a drag handle on its right edge, then the filler. */
+    public headerRow(): HTMLElement {
+        return h('tr', {}, ...this._columns.map(column => this._header(column)), h('th', { class: 'filler' }));
     }
 
-    /** A header cell with a drag handle on its right edge; double-click the handle to reset. */
-    public header(column: ResizableColumn): HTMLElement {
-        const content = this.cell(column, {}, column.title);
-        const handle = h('span', { class: 'col-resizer', title: 'Drag to set the max width · double-click to reset' });
-        handle.addEventListener('pointerdown', event => this._drag(event, column, content, handle));
+    /** A cell's content wrapper; truncates with an ellipsis at the column's edge. */
+    public cell(props: Record<string, unknown>, ...children: Array<Node | string | undefined | false>): HTMLElement {
+        return h('div', { ...props, class: `cell ${(props.class as string | undefined) ?? ''}`.trim() }, ...children);
+    }
+
+    private _header(column: ResizableColumn): HTMLElement {
+        const handle = h('span', { class: 'col-resizer', title: 'Drag to resize · double-click to reset' });
+        const th = h('th', { class: 'resizable' }, this.cell({}, column.title), handle);
+        th.style.width = `var(--col-${column.id})`;
+        handle.addEventListener('pointerdown', event => this._drag(event, column, th, handle));
         handle.addEventListener('dblclick', () => {
             const { [column.id]: _removed, ...rest } = this._custom;
             this._custom = rest;
@@ -54,14 +64,14 @@ export class ColumnWidths {
             this._onDidChange();
         });
         handle.addEventListener('click', event => event.stopPropagation());
-        return h('th', { class: 'resizable' }, content, handle);
+        return th;
     }
 
-    private _drag(event: PointerEvent, column: ResizableColumn, content: HTMLElement, handle: HTMLElement): void {
+    private _drag(event: PointerEvent, column: ResizableColumn, th: HTMLElement, handle: HTMLElement): void {
         event.preventDefault();
         handle.setPointerCapture(event.pointerId);
         const startX = event.clientX;
-        const startWidth = content.getBoundingClientRect().width;
+        const startWidth = th.getBoundingClientRect().width;
         const onMove = (move: PointerEvent) => {
             const width = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + move.clientX - startX)));
             this._custom = { ...this._custom, [column.id]: width };
@@ -80,7 +90,7 @@ export class ColumnWidths {
 
     private _apply(): void {
         for (const column of this._columns) {
-            this._container.style.setProperty(`--col-${column.id}`, `${this._custom[column.id] ?? column.defaultMaxWidth}px`);
+            this._container.style.setProperty(`--col-${column.id}`, `${this._custom[column.id] ?? column.defaultWidth}px`);
         }
     }
 }
