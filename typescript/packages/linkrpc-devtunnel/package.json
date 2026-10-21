@@ -1,0 +1,44 @@
+{
+    "name": "@hediet/linkrpc-devtunnel",
+    "version": "0.0.1",
+    "description": "Connect LinkRPC hubs on several machines through private Dev Tunnels.",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        }
+    },
+    "bin": {
+        "linkrpc-devtunnel": "./dist/cli.js"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsdown",
+        "dev": "tsdown --watch",
+        "test": "vitest --run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@hediet/linkrpc": "workspace:*",
+        "@hediet/linkrpc-hub-daemon": "workspace:*",
+        "@microsoft/dev-tunnels-connections": "^1.3.61",
+        "@microsoft/dev-tunnels-contracts": "^1.3.61",
+        "@microsoft/dev-tunnels-management": "^1.3.61",
+        "commander": "^12.1.0",
+        "cross-spawn": "^7.0.6"
+    },
+    "devDependencies": {
+        "@hediet/linkrpc-hub": "workspace:*",
+        "@types/cross-spawn": "^6.0.6",
+        "@types/node": "^22.0.0",
+        "tsdown": "^0.22.3",
+        "tsx": "4.22.4",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0"
+    }
+}
