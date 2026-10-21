@@ -23,6 +23,22 @@ function makeDir(opts: {
 }
 
 describe('complete (static-only)', () => {
+    it.each(['hub --', 'hub call --', 'hub ui --', 'hub services --', 'hub services run --'])('scopes namespace completion in %s', async line => {
+        const flags = (await complete({ line, point: line.length })).map(value => value.text);
+        expect(flags.includes('--namespace')).toBe(line.startsWith('hub services '));
+    });
+    it('offers explicit daemon restart under services', async () => {
+        const line = 'hub services ';
+        expect((await complete({ line, point: line.length })).map(value => value.text)).toContain('restart');
+    });
+    it('offers foreground service execution', async () => {
+        const line = 'hub services run --fore';
+        expect((await complete({ line, point: line.length })).map(value => value.text)).toContain('--foreground');
+    });
+    it.each(['--no-rpc', '-x'])('offers plain stdio execution with %s', async flag => {
+        const line = `hub services run ${flag}`;
+        expect((await complete({ line, point: line.length })).map(value => value.text)).toContain(flag);
+    });
     it('returns subcommand names at the top level', async () => {
         const r = await complete({ line: 'hub ', point: 4 });
         const texts = r.map((c) => c.text);

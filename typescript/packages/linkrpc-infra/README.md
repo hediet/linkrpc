@@ -9,6 +9,46 @@ approval clients, manifest aggregation, and permission/discovery helpers.
 It depends on core LinkRPC, not the hub package. The CLI and hub consume these
 helpers directly; terminal prompting remains outside infra.
 
+## Process consoles (`linkrpc.console`)
+
+`@hediet/linkrpc-infra/console` defines the standard interface for attaching
+to a process console, and `ConsoleHost`, a server-side implementation that any
+participant can register on its own service ID. Clients such as
+`linkrpc attach <serviceId>` work with every implementation.
+
+- `info` reports the mode (`pipe` or `tty`), TTY size, deliverable signals,
+  and whether a process runs.
+- `attach` is one bidirectional stream. The server sends `console` first, then
+  the replay (`output` chunks for pipes, one `screen` for TTYs), then `live`,
+  followed by live `output`, `started`, `exit`, `resized`, and `notice` events.
+  The client sends `input` bytes, `resize`, and `signal`. Data is base64-encoded
+  bytes, so terminal escape sequences and partial UTF-8 characters survive.
+- Multiple attachments share input and observe the same output. Read-only
+  attachments (`interactive: false`) cannot send input. A TTY adopts the size of
+  the most recent interactive attachment.
+- Cancelling an attachment detaches; it never stops the process. `attach`
+  completes when no process runs and none is pending, returning the last exit.
+
+```ts
+import { ConsoleHost } from '@hediet/linkrpc-infra/console';
+
+const processConsole = new ConsoleHost({
+    mode: 'pipe',
+    signals: ['SIGINT', 'SIGKILL'],
+    backend: { write: data => child.stdin.write(data), resize: () => {}, signal: s => child.kill(s) },
+});
+processConsole.register(connection, 'my/service/console');
+processConsole.started(child.pid);
+child.stdout.on('data', data => processConsole.output('stdout', data));
+child.on('exit', (code, signal) => { processConsole.exited({ code, signal }); processConsole.finish(); });
+```
+
+`ConsoleHost` retains up to 1 MiB of recent output for replay by default. TTY
+implementations supply a screen-based `ConsoleHistory`; the hub daemon uses a
+headless xterm terminal. Lifetime ownership (stopping a process when its
+launcher disconnects) is deliberately not part of this interface; see the hub
+daemon's `linkrpc.managedEndpoints` `run` call.
+
 ## Compute nodes
 
 `@hediet/linkrpc-infra/compute-node` defines browser-safe interfaces for

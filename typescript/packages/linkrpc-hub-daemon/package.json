@@ -30,6 +30,10 @@
     "dependencies": {
         "@hediet/linkrpc": "workspace:*",
         "@hediet/linkrpc-hub": "workspace:*",
+        "@hediet/linkrpc-infra": "workspace:*",
+        "@lydell/node-pty": "1.2.0-beta.15",
+        "@xterm/addon-serialize": "0.14.0",
+        "@xterm/headless": "6.0.0",
         "commander": "^12.1.0",
         "cross-spawn": "^7.0.6",
         "jsonc-parser": "^3.3.1",

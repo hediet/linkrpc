@@ -1,9 +1,10 @@
-import type { ChildProcess } from 'node:child_process';
-import crossSpawn from 'cross-spawn';
+import { StringDecoder } from 'node:string_decoder';
+import type { ConsoleSignal, ConsoleSize } from '@hediet/linkrpc-infra/console';
 import type { ManagedService } from './config';
 import { LogBuffer } from './logBuffer';
 import type { LogLine, ServiceState, ServiceStatus } from './managementInterface';
-import { killProcessTree, SPAWN_DETACHED, terminateProcessTree } from './processTree';
+import { spawnPipeProcess, spawnPtyProcess, type ExitInfo, type ServiceProcess } from './processIo';
+import { terminateProcessTree } from './processTree';
 
 const MIN_BACKOFF_MS = 500;
 const MAX_BACKOFF_MS = 30_000;
@@ -20,22 +21,16 @@ export interface ServiceHost {
         onConnectionCountChanged: (count: number) => void,
     ): Promise<ServiceSocket>;
     log(name: string, line: string): void;
+    output?(name: string, stream: 'stdout' | 'stderr' | 'tty', data: Uint8Array): void;
+    /** Supervisor messages, such as exits and restart backoff. */
+    notice?(name: string, text: string): void;
+    processStarted?(name: string, pid: number | undefined): void;
+    processExited?(name: string, exit: { code: number | null; signal: string | null }): void;
 }
 
 export interface ServiceSocket {
     readonly env: Readonly<Record<string, string>>;
     dispose(): void;
-}
-
-interface ExitInfo {
-    readonly code: number | null;
-    readonly signal: NodeJS.Signals | null;
-    readonly error?: string;
-}
-
-interface ServiceProcess {
-    readonly child: ChildProcess;
-    readonly exited: Promise<ExitInfo>;
 }
 
 /**
@@ -62,6 +57,8 @@ export class ServiceSupervisor {
     private _stableTimer: ReturnType<typeof setTimeout> | undefined;
     private _ops: Promise<void> = Promise.resolve();
     private readonly _logs = new LogBuffer();
+    private readonly _decoders = { stdout: new StringDecoder('utf8'), stderr: new StringDecoder('utf8'), tty: new StringDecoder('utf8') };
+    private _size: ConsoleSize = { cols: 80, rows: 24 };
 
     constructor(
         public readonly name: string,
@@ -85,7 +82,7 @@ export class ServiceSupervisor {
             enabled: this._service.enabled,
             state: this._state,
             since: this._since,
-            pid: this._process?.child.pid,
+            pid: this._process?.pid,
             connections: this._connections,
             restarts: this._restarts,
             lastExit: this._lastExit,
@@ -95,6 +92,25 @@ export class ServiceSupervisor {
 
     public logs(limit?: number): LogLine[] {
         return this._logs.lines(limit);
+    }
+
+    public write(data: Uint8Array): void {
+        this._running().write(data);
+    }
+
+    /** Applies to the running pseudoterminal and to later starts. */
+    public resize(size: ConsoleSize): void {
+        this._size = size;
+        this._process?.resize(size);
+    }
+
+    public signal(signal: ConsoleSignal): void {
+        this._running().signal(signal);
+    }
+
+    private _running(): ServiceProcess {
+        if (!this._process) throw new Error('The process is not running');
+        return this._process;
     }
 
     /** Start or stop to match `enabled`. */
@@ -144,56 +160,54 @@ export class ServiceSupervisor {
     private async _spawn(): Promise<void> {
         const service = this._service;
         try {
-            this._socket ??= await this._host.openSocket(this.name, service, count => this._onConnections(count));
+            if (service.rpc) {
+                this._socket ??= await this._host.openSocket(this.name, service, count => this._onConnections(count));
+            }
         } catch (error) {
             this._error = `cannot connect to the hub: ${_message(error)}`;
             this._logDaemon(this._error);
             this._setState('failed');
             return;
         }
-        let child: ChildProcess;
+        const env = { ...process.env };
+        if (!service.rpc) {
+            for (const key of Object.keys(env)) {
+                if (/^(LINKRPC|HUBRPC)_(ENDPOINT|TOKEN)$/i.test(key)) delete env[key];
+            }
+        }
+        const options = {
+            command: service.command,
+            env: { ...env, ...service.env, ...this._socket?.env },
+            ...(service.cwd !== undefined ? { cwd: service.cwd } : {}),
+            onOutput: (stream: 'stdout' | 'stderr' | 'tty', data: Uint8Array) => this._appendOutput(stream, data),
+            onError: (message: string) => this._logDaemon(message),
+        };
+        let spawned: ServiceProcess;
         try {
-            // cross-spawn resolves PATHEXT and escapes arguments for `.cmd` shims, so
-            // `command` never goes through a shell's word splitting or metacharacters.
-            const [executable, ...args] = service.command;
-            child = crossSpawn(executable!, args, {
-                env: { ...process.env, ...service.env, ...this._socket.env },
-                ...(service.cwd !== undefined ? { cwd: service.cwd } : {}),
-                stdio: ['ignore', 'pipe', 'pipe'],
-                windowsHide: true,
-                detached: SPAWN_DETACHED,
-            });
+            spawned = service.tty ? await spawnPtyProcess({ ...options, size: this._size }) : spawnPipeProcess(options);
         } catch (error) {
             this._onSpawnFailed(_message(error));
             return;
         }
-        const exited = new Promise<ExitInfo>(resolve => {
-            child.once('exit', (code, signal) => resolve({ code, signal }));
-            child.once('error', error => {
-                if (child.pid === undefined) resolve({ code: null, signal: null, error: error.message });
-                else this._logDaemon(`process error: ${error.message}`);
-            });
-        });
-        for (const stream of ['stdout', 'stderr'] as const) {
-            child[stream]?.setEncoding('utf8');
-            child[stream]?.on('data', (chunk: string) => this._appendOutput(stream, chunk));
-        }
-        this._process = { child, exited };
+        this._process = spawned;
         this._error = undefined;
         this._setState('starting');
-        if (service.readiness === 'spawned') {
-            child.once('spawn', () => {
-                if (this._process?.child === child && this._state === 'starting') this._markRunning();
+        void spawned.spawned.then(() => {
+            if (this._process === spawned) this._host.processStarted?.(this.name, spawned.pid);
+        });
+        if (!service.rpc || service.readiness === 'spawned') {
+            void spawned.spawned.then(() => {
+                if (this._process === spawned && this._state === 'starting') this._markRunning();
             });
         } else {
             this._startTimer = setTimeout(() => {
-                if (this._process?.child !== child || this._state !== 'starting') return;
+                if (this._process !== spawned || this._state !== 'starting') return;
                 this._error = `did not connect to the hub within ${service.startTimeoutMs} ms`;
                 this._logDaemon(this._error);
-                if (child.pid !== undefined) void killProcessTree(child.pid);
+                void spawned.kill();
             }, service.startTimeoutMs);
         }
-        void exited.then(info => this._onExit(child, info));
+        void spawned.exited.then(info => this._onExit(spawned, info));
     }
 
     private _onSpawnFailed(error: string): void {
@@ -204,11 +218,12 @@ export class ServiceSupervisor {
         this._setState('failed');
     }
 
-    private _onExit(child: ChildProcess, info: ExitInfo): void {
-        if (this._process?.child !== child) return;
+    private _onExit(process: ServiceProcess, info: ExitInfo): void {
+        if (this._process !== process) return;
         this._process = undefined;
         this._clearProcessTimers();
         this._lastExit = { code: info.code, signal: info.signal, at: Date.now() };
+        if (info.error === undefined) this._host.processExited?.(this.name, { code: info.code, signal: info.signal });
         if (this._stopping) return;
 
         const failed = info.error !== undefined || info.code !== 0 || info.signal !== null;
@@ -260,12 +275,16 @@ export class ServiceSupervisor {
 
     /** Disconnecting from the hub is the portable stop request; POSIX also gets SIGTERM. */
     private async _terminate(running: ServiceProcess): Promise<void> {
+        // Windows pipe children without an RPC connection have no graceful stop channel.
+        const canStopGracefully = process.platform !== 'win32' || this._connections > 0;
         this._releaseSocket();
-        const pid = running.child.pid;
-        if (pid !== undefined) terminateProcessTree(pid);
-        if (await _settlesWithin(running.exited, this._service.stopTimeoutMs)) return;
-        this._logDaemon(`did not stop within ${this._service.stopTimeoutMs} ms; killing`);
-        if (pid !== undefined) await killProcessTree(pid);
+        const pid = running.pid;
+        if (canStopGracefully) {
+            if (pid !== undefined) terminateProcessTree(pid);
+            if (await _settlesWithin(running.exited, this._service.stopTimeoutMs)) return;
+            this._logDaemon(`did not stop within ${this._service.stopTimeoutMs} ms; killing`);
+        }
+        await running.kill();
         if (!await _settlesWithin(running.exited, KILL_WAIT_MS)) this._logDaemon('process did not exit after kill');
     }
 
@@ -308,14 +327,26 @@ export class ServiceSupervisor {
         this._onDidChange();
     }
 
-    private _appendOutput(stream: 'stdout' | 'stderr', chunk: string): void {
-        for (const line of this._logs.append(stream, chunk)) this._host.log(this.name, line);
+    private _appendOutput(stream: 'stdout' | 'stderr' | 'tty', data: Uint8Array): void {
+        this._host.output?.(this.name, stream, data);
+        const text = this._decoders[stream].write(Buffer.from(data));
+        const logStream = stream === 'stderr' ? 'stderr' : 'stdout';
+        for (const line of this._logs.append(logStream, stream === 'tty' ? _stripTerminalControls(text) : text)) {
+            this._host.log(this.name, line);
+        }
     }
 
     private _logDaemon(text: string): void {
+        this._host.notice?.(this.name, text);
         this._logs.append('daemon', text + '\n');
         this._host.log(this.name, text);
     }
+}
+
+/** Keep TTY log lines readable: drop escape sequences, carriage returns, and other controls. */
+function _stripTerminalControls(text: string): string {
+    // eslint-disable-next-line no-control-regex
+    return text.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])|[\x00-\x09\x0b-\x1f\x7f]/g, '');
 }
 
 function _describeExit(info: ExitInfo): string {

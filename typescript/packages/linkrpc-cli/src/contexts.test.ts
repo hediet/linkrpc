@@ -31,6 +31,12 @@ async function fixture() {
 }
 
 describe('ContextStore', () => {
+    it('explains explicit creation when the selected context is missing', async () => {
+        const f = await fixture();
+        const store = new ContextStore({ file: f.storeFile, cwd: f.project });
+        await expect(store.select({ selector: '.' })).rejects.toThrow('--new-context');
+        expect(await store.list()).toEqual([]);
+    });
     it.each(['set', 'replace', 'unset', 'remove'] as const)(
         'stops owned connections before persisting %s', async operation => {
             const f = await fixture();

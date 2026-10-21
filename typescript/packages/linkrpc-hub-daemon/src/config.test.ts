@@ -19,9 +19,11 @@ describe('daemon config', () => {
               "managedIdentity": true,
               "readiness": "connected",
               "restart": "on-failure",
+              "rpc": true,
               "serviceId": "hub/echo",
               "startTimeoutMs": 30000,
               "stopTimeoutMs": 5000,
+              "tty": false,
             },
             "forwardChecking": false,
           }
@@ -65,12 +67,14 @@ describe('daemon config', () => {
             restartPolicy: change({ restart: 'always' }),
             env: change({ env: { A: '1' } }),
             command: change({ command: ['y'] }),
+            rpc: change({ rpc: false }),
         }).toMatchInlineSnapshot(`
           {
             "command": "restart",
             "enabled": "inPlace",
             "env": "restart",
             "restartPolicy": "inPlace",
+            "rpc": "restart",
             "same": "none",
           }
         `);

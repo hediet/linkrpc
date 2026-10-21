@@ -9,6 +9,258 @@ interfaces (`hubrpc.defaults`, `hubrpc.directory`, `hubrpc.schemas`) are
 used to discover what the endpoint exposes. Generic RPC commands work with any
 reflected interface; compiled-in views add specialized CLI and TUI renderers.
 
+## Daemon-owned endpoints (`hub services`)
+
+`hub services` manages processes and existing connections **through the daemon
+management RPC API**, including on the local machine. The CLI may bootstrap a
+local per-user daemon, but never supervises the managed workload itself.
+
+The daemon executable and implementation are bundled in this package's `dist/`
+(`daemon.js`). Installing the CLI does not require publishing or installing
+`@hediet/linkrpc-hub-daemon` separately. The daemon source package is a build-only
+workspace dependency; bootstrap launches the bundled executable with Node.js.
+
+Before using a daemon, the CLI checks its `requiredInterfaces` against the
+interface IDs and hashes advertised through reflection. Each required hash must
+be supported; no package/protocol version or automatic update policy is used.
+A legacy daemon without reflection, a missing interface, or a different hash
+fails with an actionable error before the workload is created:
+
+```sh
+hub services restart
+```
+
+This explicit command sends the local daemon's management `shutdown` RPC,
+waits for exit, starts the CLI's bundled daemon, and rechecks its interfaces.
+It disconnects Hub clients and stops workloads. Ephemeral endpoints disappear;
+persistent definitions retain their existing restart/desired-state semantics.
+It does **not** modify OS autostart registrations. A selected endpoint/config or
+routed manager is never silently replaced: update it on its execution host, or
+explicitly select the default local daemon with
+`hub --context :empty --no-use-env services restart`.
+
+OS autostart integration for `hub services` is postponed. Bootstrap/restart
+does not invoke the OS service manager, and persistent endpoint creation does
+not enable login startup. Existing registrations are left untouched and may
+still start a different build at the next login.
+
+```sh
+# Create a context explicitly and run attached (daemon-owned lifetime):
+hub services run --new-context . -- node server.js
+
+# Bind the service lifetime to this terminal's CLI process:
+hub services run --foreground --id temporary -- node server.js
+
+# Another terminal in this context:
+hub services list
+hub ls
+hub services logs --follow
+
+# Detach an attached pipe console with Ctrl+D on an empty line.
+# Or launch detached from the outset:
+hub services run --id worker --detach -- node worker.js
+hub services attach --id worker
+hub services stop --id worker
+
+# Run in a pseudoterminal (TTY); detach with Ctrl+P, Ctrl+Q:
+hub services run -x -t --id shell -- pwsh
+
+# Stop and replace an existing endpoint with the same ID:
+hub services run --force --id worker --detach -- node worker.js
+
+# Retain a definition and resume it when the daemon next starts:
+hub services run --id worker --persistent --restart on-failure --detach -- node worker.js
+hub services configure --id worker --restart always
+hub services stop --id worker     # stays stopped across daemon restarts
+hub services start --id worker
+hub services remove --id worker
+
+# Connect rather than spawn (URI is interpreted on the daemon host):
+hub services connect --id peer --target-endpoint ws://localhost:7000 --restart on-failure
+```
+
+`--id` defaults to `main`. Namespace defaults to the selected context's canonical
+folder path (case-normalized on Windows), or its named/root context identity.
+Override it with `hub services --namespace <name> ...`. `--namespace` belongs
+only to `services`; it does not select or filter services for `call`, `ls`, or
+`ui`. `--context` only selects an existing context;
+`--new-context .` creates one before the attached command starts. A namespace
+does not determine a remote working directory.
+
+Definitions default to ephemeral: they disappear after stop, completion, or
+terminal failure. `--persistent` retains a definition. `--restart` is `never`
+(default), `on-failure`, or `always`; for connections, disconnect counts as
+failure. Persistent restarting endpoints resume when the daemon next starts,
+unless explicitly stopped. This does not arrange for the daemon itself to start
+after OS restart. Persistent `never` definitions remain stopped after daemon
+restart.
+
+Endpoint selection keeps the usual explicit flag / environment / context
+precedence, including `HUBRPC_*` aliases. An explicit `--context` suppresses the
+ambient endpoint unless `--use-env` is passed. On an effective Hub connection,
+the manager defaults to `<hubServiceId>/daemon`; override with
+`--daemon-service`. Both that option and `--namespace` can be saved using
+`context set`. An unreachable or unauthorized selected manager is an error,
+**never** a fallback to local execution.
+
+```sh
+hub --endpoint ws://remote-host:7000 --daemon-service remote/daemon \
+  --context . services run --id worker --cwd /srv/project --detach -- node worker.js
+```
+
+Remote launches require `--cwd` on the execution host. Commands, files, and
+environment values are not uploaded. Arguments after `--` are an executable
+and argv, not a shell command string. Execution host, namespace, ID, command,
+and working directory are printed before creation. Local fallback is used only
+when no endpoint/config is selected. `run`, `connect`, and `start` may bootstrap
+the local daemon; reads never do. Without a selected endpoint, `hub ls`, `call`,
+and other connected commands (including `ui`) use the local Hub when any namespace
+has a running managed endpoint. An empty or unrelated context does not prevent
+this fallback. If none are running, the command reports an error without starting
+the daemon. A configured endpoint that fails never falls back to the local Hub.
+Use the full `serviceId` returned by `services list` for RPC
+calls; endpoint IDs and published RPC service IDs are different things.
+
+Process readiness defaults to connecting to the provided `LINKRPC_ENDPOINT`
+and token. Use `--no-rpc` (short form `-x`) for non-LinkRPC programs: they become
+ready on spawn, without a participant socket or managed identity. Ambient
+`LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` and legacy `HUBRPC_*` connection variables
+are not inherited in this mode; explicitly supplied `--env` values are preserved.
+`--readiness spawned` alone still provisions RPC, but does not wait for connection.
+`--no-rpc --readiness connected` is an error. Detached launches
+wait up to 30 seconds for readiness; a timeout leaves the endpoint managed and
+inspectable. Attachments stream bounded recent output and supervisor notices,
+forward input and interrupts, and do not own the process lifetime. `logs`
+prints recent output; `logs --follow` keeps streaming; `attach --read-only`
+observes without sending input.
+
+Every process endpoint serves the standard
+[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+interface; `services list` reports its `console.serviceId`. `hub services attach`
+resolves that ID and attaches to it. The generic command attaches to **any**
+participant that implements the interface, not only daemon-managed processes:
+
+```sh
+hub attach hub/daemon/consoles/<sha256(namespace)>/<id>
+rpc --endpoint ws://localhost:7000 attach my/service --read-only
+```
+
+#### Pipe and TTY consoles
+
+Processes default to a **pipe console**: stdout and stderr stay separate, and
+the program sees no terminal. `-t` / `--tty` runs it in a pseudoterminal
+(ConPTY on Windows) instead: output is a single terminal stream, programs enable
+colors, prompts, and full-screen interfaces, and attachments can resize it. The
+TTY adopts the size of the most recent interactive attachment. Joining
+attachments receive the **current screen** (rendered by a headless terminal in
+the daemon, including scrollback) instead of a raw byte replay, so full-screen
+programs display correctly.
+
+| | Pipe console | TTY console (`-t`) |
+| --- | --- | --- |
+| Local input | Line editing; Enter sends the line | Raw: every key goes to the program |
+| Ctrl+C | Interrupts (sends SIGINT where supported), or stops a foreground owner | Goes to the program (an interrupt in a shell) |
+| Ctrl+D | On an empty line: detach, or stop a foreground owner | Goes to the program (EOF in a shell) |
+| Detach | Ctrl+D on an empty line (Ctrl+] also works) | Ctrl+P, then Ctrl+Q (Docker's sequence); a lone Ctrl+P is forwarded with the next key |
+
+Windows pipes have no interrupt channel: there, Ctrl+C in a pipe attachment
+prints a hint instead of terminating the shared process; use `-t` when the
+program should receive Ctrl+C. When a TTY attachment ends, the CLI resets
+terminal modes the program may have enabled (mouse, bracketed paste, alternate
+screen). Piped input is forwarded as received; EOF on a pipe does not cancel the
+attachment or stop the service, so it can continue producing output.
+
+The attached-console banner prints a `hub services attach ...` command for
+reattaching, and detaching prints it again. Duplicate `run`/`connect` errors
+print the same recovery command without stopping or replacing the existing
+endpoint, and point to `--force`. Hints include the selected
+context, namespace, endpoint ID, environment policy, and explicit connection
+overrides. Reuse the same environment when `--use-env` is shown and the same
+working directory for relative connection/config paths. Explicit tokens and
+command-environment values are replaced with `<same ...>` placeholders rather
+than exposed in the hint.
+
+`--force` stops an existing endpoint with the same address and replaces it with
+the new definition in one daemon operation. This also applies to persistent
+endpoints (their stored definition is replaced) and to a foreground endpoint
+owned by another terminal: that terminal prints a notice and its command ends.
+
+`run --foreground` instead creates the process inside a lifetime-owning
+management RPC. Ctrl+C, SIGTERM, cancellation, or a detected CLI disconnect
+causes the daemon to stop the process tree and remove the endpoint, even when
+the CLI is forcibly killed and cannot run an exit handler. On a remote Hub,
+cleanup begins once the disconnect is detected. The normal graceful stop
+timeout applies when a stop request can be delivered: SIGTERM on POSIX or
+disconnecting an active RPC connection. On Windows, a process without an
+RPC connection has no graceful stop channel, so its tree is terminated
+immediately instead of waiting out an idle five-second timeout.
+
+Other terminals can discover/call RPC services and attach as observers; closing
+an observer does not stop it. The detach key of the owning terminal (Ctrl+D on
+an empty line, or Ctrl+P, Ctrl+Q for a TTY) cancels the foreground command and
+therefore stops the service, rather than detaching it.
+`--foreground` conflicts with `--detach` and `--persistent`; the management API
+also rejects making a foreground endpoint persistent later. Restart policies
+apply only while the owning call is alive. Hub replacement stops foreground
+endpoints rather than restoring them without an owner. Ordinary `run` and
+`attach` retain their daemon-owned lifetime behavior.
+
+With a pipe console, interactive terminals use local line editing: with
+unfinished text, Ctrl+D retains the line and uses normal delete-under-cursor
+behavior.
+
+#### Plain stdio programs
+
+The [counter example](examples/counter.mjs) prints one number per second and has
+no LinkRPC dependency. From this package directory, with an existing context:
+
+```sh
+# Background: the counter survives the launching CLI.
+hub services run -x --id counter --detach -- node examples/counter.mjs
+hub services attach --id counter
+# Ctrl+D on an empty line detaches without stopping the counter.
+hub services logs --id counter --follow
+hub services stop --id counter
+
+# Foreground: closing this CLI stops and removes the counter.
+hub services run --no-rpc --foreground --id counter -- node examples/counter.mjs
+# A different terminal can still attach while the owner is running:
+hub services attach --id counter
+```
+
+The [interactive counter](examples/interactive-counter.mjs) also accepts input.
+It prints `tick 1`, `tick 2`, ... once per second and responds to `count`,
+`reset`, `echo <text>`, and `quit`:
+
+```sh
+hub services run -x --foreground --id interactive -- node examples/interactive-counter.mjs
+# Type: count, echo hello, reset, or quit (then Enter).
+# Or start with --detach instead of --foreground and attach separately:
+hub services attach --id interactive
+```
+
+`count` prints the current number, `reset` sets it to zero, `echo hello` prints
+`[<current count>] hello`, and `quit` exits the service. Requests can come from
+any attachment; all attachments see the responses and ticks.
+
+Create a context first with `hub context --new-context .` if needed. Multiple
+attachments receive the same output; interactive attachments share the process's
+stdin. Use `logs --follow` for a read-only observer. Restart/persistence policies
+work for plain processes too.
+
+`services list` reports `rpc: false` for these processes. They do not publish
+application RPC methods under their reserved `serviceId`: other Hub participants
+attach to their `linkrpc.console` (`console.serviceId`) to observe output and
+send input, in both foreground and background mode. When the program adds
+LinkRPC support, omit `-x` to provision its RPC connection. Add `-t` when the
+program expects a terminal.
+
+Connections support initialized LinkRPC socket/WebSocket endpoints. Forwarding
+preserves method names and signatures, rather than rewriting root services
+under a new prefix. The target must serve the assigned namespace (available
+from `services list` or by querying the Hub's granted namespace over the
+bidirectional connection). Connecting does not own or stop the target process.
+
 ## Views
 
 Views target an **interface** or a **service** (including the main/root service),
@@ -236,8 +488,8 @@ the Hub profile's normal environment endpoint overlay. Every context value can
 still be overridden by a command-line option.
 
 ```sh
-# Set endpoint and principal on the nearest context, creating one for cwd if needed.
-hub context set --endpoint 'wss://hub.example?token=%' \
+# Explicitly create a context for cwd with endpoint and principal defaults.
+hub context set --new-context . --endpoint 'wss://hub.example?token=%' \
   --endpoint-token secret --principal user:work
 
 # Create a named context from the effective values only after the call succeeds.
@@ -253,8 +505,15 @@ hub context remove --context .
 hub call app::api::get --context :empty --endpoint ws://localhost:7700
 ```
 
-Context creation and mutation are explicit: use `context set`,
-`--context-set`, or `--new-context <selector>`. Context values, including
+Context creation is explicit: use `--new-context <selector>` (for example,
+`hub context --new-context .` to create a folder context from effective defaults).
+`--context <selector>` only selects an existing context; missing-context errors
+show how to create it. `context set` and `--context-set` update existing contexts
+and do not implicitly create a cwd context. Use `context set --new-context <selector>`
+to create one with initial defaults. Combining `--context existing` with
+`--new-context new` derives the new context from an existing one; it never creates
+the selected source context.
+Context values, including
 endpoint tokens, are currently stored inline and unencrypted. Principals are
 stored by selector (`managed`, `user:<id>`, or `file:<path>`); their private
 keys remain in the existing identity store.
@@ -290,12 +549,30 @@ Every endpoint is a valid `new URL()` — safe in env vars and logs:
 
 | URI                                       | Transport                                  |
 | ----------------------------------------- | ------------------------------------------ |
+| `linkrpc:local`                           | CLI discovery of the current user's local LinkRPC Hub |
 | `unix:/run/hub/hub.sock?token=…`          | unix-domain socket                         |
 | `npipe://./pipe/linkrpc?token=…`           | Windows named pipe                         |
 | `ws://host:7700?token=…` / `wss://…`      | LinkRPC WebSocket (token → `hubrpc::initialize`) |
 | `ws-no-init://host:7700?…`                | Plain JSON-RPC WebSocket; skip LinkRPC initialization/signing, preserve query params |
 | `cmd:?command=…` / `cmd:?argv=…&argv=…`   | spawn-as-server (`--endpoint-cmd`)         |
 | `cmd-stdio:?command=…` / `?argv=…&argv=…` | spawn over stdio (`--endpoint-cmd-stdio`)  |
+
+`linkrpc:local` resolves the local daemon's application endpoint and credentials
+from its discovery file, honoring `LINKRPC_HUB_HOME`. It never starts the daemon
+and works even when no managed services are running. It is a CLI lookup URI,
+not a wire transport or a service filter; raw SDK endpoint parsers do not resolve
+it. It works as a CLI flag, a saved context endpoint, or an endpoint environment
+variable. Explicit selection overrides ambient endpoint settings:
+
+```sh
+hub --endpoint linkrpc:local ui
+hub --endpoint linkrpc:local ls
+hub context --new-context . --endpoint linkrpc:local
+```
+
+Credentials come exclusively from discovery; `--endpoint-token` is rejected for
+this URI. No username-derived pipe address needs to be hardcoded. By contrast,
+the implicit local fallback requires at least one running managed endpoint.
 
 `cmd:` children can use `startEndpoint({ onConnection })` without parsing any
 transport flags: the parent injects `LINKRPC_ENDPOINT` and `LINKRPC_TOKEN`.
@@ -320,6 +597,12 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 ```
 
 ## Commands
+
+### Consoles
+
+| Command                       | Purpose                                                                                              |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `attach <serviceId> [--read-only]` | Attach to any service implementing [`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole): pipe consoles use line editing (Ctrl+D on an empty line detaches); TTY consoles receive raw keys (Ctrl+P, Ctrl+Q detaches). |
 
 ### Reflection
 

@@ -1,4 +1,10 @@
 import { Command, InvalidArgumentError, Option } from 'commander';
+import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
+import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
+import { resolveLocalEndpoint } from './localEndpoint';
+import { checkDaemonInterfaces, contextNamespace, registerServices, restartLocalDaemon, serviceAttachCommand, useLocalManagement } from './commands/services';
+import { localTerminalSize, runConsoleSession } from './commands/consoleSession';
+import { consoleInterface } from '@hediet/linkrpc-infra/console';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
@@ -87,7 +93,6 @@ import {
 import {
     type CliProfile,
     type ResolvedInvocationContext,
-    mutationReference,
     resolveInvocationContext,
     resolveInvocationEndpoint,
     validationDefault,
@@ -116,7 +121,7 @@ export async function main(
         )
         .option(
             '--endpoint <uri>',
-            'endpoint URI (unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
+            'endpoint URI (linkrpc:local, unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
             'ws-no-init://host?…, ' +
             'cmd:?command=… or cmd-stdio:?command=…)',
         )
@@ -156,6 +161,7 @@ export async function main(
             'create a new context from the effective command values; fails if it already exists',
         )
         .option('--schema <path-or-url>', 'static schema catalog used for discovery and validation')
+        .option('--daemon-service <id>', 'daemon management service ID on the selected Hub')
         .option(
             '--validation <mode>',
             'schema validation mode: auto, required, or off',
@@ -237,7 +243,6 @@ export async function main(
         | undefined;
     program.hook('preAction', async (_thisCommand, actionCommand) => {
         const commandPath = getCommandPath(actionCommand);
-        const allowMissingContext = commandPath === 'context set';
         const store = new ContextStore();
         const cliOverrides = collectContextOverrides(program, actionCommand);
         const selector = explicitOption<string>(program, 'context');
@@ -249,7 +254,6 @@ export async function main(
             ...(selector !== undefined ? { selector } : {}),
             cliOverrides,
             ...(useEnvironment !== undefined ? { useEnvironment } : {}),
-            allowMissingContext,
         });
         if (profile === 'rpc' && g_invocation.values.config !== undefined) {
             throw new Error('--config is only available in the hub profile');
@@ -262,9 +266,12 @@ export async function main(
             if (Object.keys(cliOverrides).length === 0) {
                 throw new Error('--context-set requires at least one context-capable override');
             }
+            if (g_invocation.selected.context === undefined) {
+                throw new Error('No context exists to update. Use --new-context . to create one.');
+            }
             pendingContextSet = {
                 store,
-                reference: await mutationReference(store, g_invocation.selected),
+                reference: mutableReference(g_invocation.selected.reference),
                 values: cliOverrides,
             };
         }
@@ -282,6 +289,10 @@ export async function main(
                 reference: preparedNewContext.reference,
                 values: g_invocation.values,
             };
+        }
+        if (commandPath.startsWith('services ') && preparedNewContext !== undefined) {
+            await createContextFromInvocation(preparedNewContext.store, preparedNewContext.reference, g_invocation.values);
+            pendingNewContext = undefined;
         }
 
         endpoint = commandUsesEndpoint(commandPath) || hasEndpointOverrides(cliOverrides)
@@ -315,6 +326,63 @@ export async function main(
             pendingNewContext = undefined;
         }
     });
+
+    if (profile === 'hub') registerServices(program, {
+        attachCommand: id => {
+            if (!g_invocation) throw new Error('Context resolver is unavailable');
+            const reference = preparedNewContext?.reference ?? g_invocation.selected.reference;
+            return serviceAttachCommand({
+                context: formatContextReference(reference),
+                namespace: g_invocation.values.namespace ?? contextNamespace(reference),
+                id, overrides: g_invocation.cliOverrides, useEnv: g_invocation.environmentApplied,
+            });
+        },
+        restart: async () => {
+            if (endpoint !== undefined || g_hubConfigPath !== undefined || g_invocation?.values.daemonService !== undefined) {
+                throw new Error('services restart only replaces the default local daemon, not a selected Hub endpoint or routed daemon. Run `hub --context :empty --no-use-env services restart` to explicitly choose the local daemon.');
+            }
+            await restartLocalDaemon();
+        },
+        namespace: () => {
+            if (!g_invocation) throw new Error('Context resolver is unavailable');
+            return g_invocation.values.namespace ?? contextNamespace(preparedNewContext?.reference ?? g_invocation.selected.reference);
+        },
+        use: async (startLocal, action) => {
+            if (endpoint === undefined && g_hubConfigPath === undefined) {
+                return useLocalManagement(startLocal, action);
+            }
+            let result: Awaited<ReturnType<typeof action>> | undefined;
+            await withChannel(endpoint, getPrincipalSpec(), async channel => {
+                const connection = new LinkRpcConnection(channel);
+                const serviceId = g_invocation?.values.daemonService
+                    ?? `${(await connection.get(hubGrantedServiceIdInterface).getHubServiceId({})).hubServiceId}/daemon`;
+                await checkDaemonInterfaces(connection, serviceId);
+                result = await action(connection.get(managedEndpointsInterface, { serviceId }), { local: false, connection });
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+            return result!;
+        },
+    });
+
+    program
+        .command('attach <serviceId>')
+        .description(
+            'Attach to a service that implements `linkrpc.console` (a pipe or TTY process console). '
+            + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; Ctrl+P, Ctrl+Q detaches.',
+        )
+        .option('--read-only', 'observe output without sending input')
+        .action(async (serviceId: string, opts: { readOnly?: boolean }) => {
+            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                const console = new LinkRpcConnection(channel).get(consoleInterface, { serviceId });
+                const interactive = opts.readOnly !== true;
+                const size = interactive ? localTerminalSize() : undefined;
+                const result = await runConsoleSession(onMessage => console.attach({ interactive, ...(size ? { size } : {}) }, { onMessage }), {
+                    interactive,
+                    owner: false,
+                    reattachCommand: `${cliInvocation.programName} attach ${serviceId}`,
+                });
+                if (!result.closedLocally && result.exit?.code) process.exitCode = result.exit.code;
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+        });
 
     program
         .command('ls')
@@ -926,16 +994,21 @@ Batch options:
     context
         .command('set')
         .description(
-            'Set explicit context-capable flags on the active context; creates a cwd context when none exists.',
+            'Set explicit context-capable flags on an existing context, or create one with --new-context.',
         )
         .option('--unset <key...>', 'remove one or more stored context values')
         .action(async (opts: { unset?: string[] }) => {
             if (g_contextStore === undefined || g_invocation === undefined) {
                 throw new Error('context resolver is unavailable');
             }
-            const target = explicitOption<string>(program, 'context') !== undefined
-                ? mutableReference(g_invocation.selected.reference)
-                : await mutationReference(g_contextStore, g_invocation.selected);
+            if (preparedNewContext !== undefined) {
+                if ((opts.unset?.length ?? 0) > 0) throw new Error('--unset cannot be used with --new-context');
+                return;
+            }
+            if (g_invocation.selected.context === undefined) {
+                throw new Error('No context exists to update. Use hub context set --new-context . with your desired flags.');
+            }
+            const target = mutableReference(g_invocation.selected.reference);
             const overrides = g_invocation.cliOverrides;
             const unset = (opts.unset ?? []).map(parseContextValueKey);
             if (Object.keys(overrides).length === 0 && unset.length === 0) {
@@ -1633,6 +1706,10 @@ function collectContextOverrides(program: Command, actionCommand: Command): Cont
     copyExplicit(program, opts, result, 'sign');
     copyExplicit(program, opts, result, 'schema');
     copyExplicit(program, opts, result, 'validation');
+    copyExplicit(program, opts, result, 'daemonService');
+    for (let command: Command | null = actionCommand; command; command = command.parent) {
+        if (command.name() === 'services') copyExplicit(command, command.opts(), result, 'namespace');
+    }
 
     if (getCommandPath(actionCommand) === 'connection create') {
         const actionOpts = actionCommand.opts();
@@ -1798,6 +1875,8 @@ function printContextValues(
 
 function contextValueFlag(key: keyof ContextValues): string {
     const names: Record<keyof ContextValues, string> = {
+        daemonService: 'daemon-service',
+        namespace: 'namespace',
         endpoint: 'endpoint',
         endpointCmd: 'endpoint-cmd',
         endpointCmdStdio: 'endpoint-cmd-stdio',
@@ -1820,6 +1899,8 @@ function contextValueFlag(key: keyof ContextValues): string {
 
 function parseContextValueKey(value: string): keyof ContextValues {
     const entry = (Object.keys({
+        daemonService: true,
+        namespace: true,
         endpoint: true,
         endpointCmd: true,
         endpointCmdStdio: true,
@@ -2095,6 +2176,15 @@ async function acquireConnection(
             ep: { kind: 'socket', path: running.controlEndpoint.path, token: running.controlEndpoint.token },
             running,
         };
+    }
+    if (endpoint === undefined && g_invocation?.profile === 'hub') {
+        await useLocalManagement(false, async client => {
+            const endpoints = await client.list({});
+            if (!endpoints.some(value => value.runtime.state === 'running')) {
+                throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
+            }
+        });
+        return { ep: resolveLocalEndpoint() };
     }
     return { ep: needEndpoint(endpoint) };
 }

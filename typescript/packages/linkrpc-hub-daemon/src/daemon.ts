@@ -12,6 +12,8 @@ import { packageVersion } from './packageInfo';
 import { HubHome } from './paths';
 import { SingleInstanceLock } from './singleInstance';
 import { type ServiceHost, ServiceSupervisor } from './supervisor';
+import * as path from 'node:path';
+import { ManagedEndpoints } from './managedEndpoints';
 
 export interface StartHubDaemonOptions {
     readonly home?: HubHome;
@@ -62,6 +64,9 @@ export class HubDaemon {
     private readonly _services = new Map<string, ServiceSupervisor>();
     private readonly _statusListeners = new Set<() => void>();
     private readonly _serviceHost: ServiceHost;
+    private _endpoints: ManagedEndpoints | undefined;
+    private readonly _endpointRegistrations = new Map<LinkRpcConnection, { dispose(): void } | undefined>();
+    private _managementLink: { dispose(): void } | undefined;
     private _hub: RunningHub | undefined;
     private _hubKey: string | undefined;
     private _hubStartedAt = 0;
@@ -197,6 +202,14 @@ export class HubDaemon {
         if (hubKey !== this._hubKey || !this._hub) {
             if (this._hub) this._log.line('hub settings changed; restarting the hub and all services');
             await this._disposeAllServices();
+            const endpointSnapshot = this._endpoints?.snapshot();
+            await this._endpoints?.dispose();
+            this._endpoints = undefined;
+            for (const [connection, registration] of this._endpointRegistrations) {
+                registration?.dispose();
+                this._endpointRegistrations.set(connection, undefined);
+            }
+            this._managementLink?.dispose();
             this._hub?.dispose();
             this._hub = undefined;
             fs.rmSync(this.home.discoveryFile, { force: true });
@@ -204,6 +217,22 @@ export class HubDaemon {
             this._appPath = config.localEndpoint.path ?? this.home.defaultAppEndpoint;
             try {
                 this._hub = await this._startHub(config);
+                this._endpoints = new ManagedEndpoints({
+                    file: path.join(this.home.stateDir, 'endpoints.json'),
+                    servicePrefix: `${config.hub.hubServiceId}/services`,
+                    consolePrefix: `${config.hub.hubServiceId}/daemon/consoles`,
+                    host: this._serviceHost,
+                });
+                await this._endpoints.restore(endpointSnapshot);
+                for (const connection of this._endpointRegistrations.keys()) {
+                    this._endpointRegistrations.set(connection, this._endpoints.register(connection));
+                }
+                const serviceId = `${config.hub.hubServiceId}/daemon`;
+                const link = this._hub.hub.attachOut({ routePrefixes: [serviceId] });
+                const connection = LinkRpcConnection.fromTransport(link.transport);
+                this._endpoints.register(connection, serviceId);
+                connection.enableReflection({ serviceId });
+                this._managementLink = { dispose: () => { connection.close(); link.dispose(); } };
                 this._hubStartedAt = Date.now();
                 this._hubError = undefined;
                 writePrivateJson(this.home.discoveryFile, this._discovery({ path: this._appPath, token: config.localEndpoint.token }));
@@ -300,12 +329,17 @@ export class HubDaemon {
         server.setConnectionHandler((transport: NodeSocketTransport) => {
             const connection = LinkRpcConnection.fromTransport(transport);
             this._registerManagement(connection);
-            transport.onDidClose(() => connection.close());
+            transport.onDidClose(() => {
+                this._endpointRegistrations.get(connection)?.dispose();
+                this._endpointRegistrations.delete(connection);
+                connection.close();
+            });
         });
         this._managementServer = server;
     }
 
     private _registerManagement(connection: LinkRpcConnection): void {
+        this._endpointRegistrations.set(connection, this._endpoints?.register(connection));
         connection.register(hubDaemonManagementInterface, {
             getStatus: () => this.status(),
             watchStatus: async (_params, _ctx, stream) => {
@@ -343,6 +377,7 @@ export class HubDaemon {
                 return {};
             },
         });
+        connection.enableReflection();
     }
 
     private _service(name: string): ServiceSupervisor {
@@ -384,6 +419,8 @@ export class HubDaemon {
             if (readEndpointDiscovery(file)?.pid === process.pid) fs.rmSync(file, { force: true });
         }
         await this._disposeAllServices();
+        await this._endpoints?.dispose();
+        this._managementLink?.dispose();
         this._hub?.dispose();
         this._hub = undefined;
         this._managementServer?.dispose();

@@ -11,10 +11,11 @@ if (process.env.ECHO_FAIL_AT_START) {
 console.log(`echo service ${process.pid} starting`);
 const host = await hostParticipant({
     registrationMode: 'grantedServiceId',
-    setup: ({ services }) => {
+    setup: ({ services, connection, serviceId }) => {
         services.register(echoInterface, {
             echo: ({ text }) => ({ text: `${process.env.ECHO_PREFIX ?? ''}${text}`, pid: process.pid }),
         });
+        if (process.env.ECHO_REFLECTION) connection.enableReflection({ serviceId });
     },
 });
 await host.done;

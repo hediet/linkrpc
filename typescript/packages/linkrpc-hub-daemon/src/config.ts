@@ -4,20 +4,25 @@ import { z } from 'zod';
 
 const SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** A process the daemon starts, supervises, and connects to the hub. */
+/** A process the daemon starts and supervises, optionally connected to the hub. */
 export const ManagedServiceSchema = z.object({
     description: z.string().optional(),
     /** Executable and arguments (no shell). `.cmd`/`.bat` shims work on Windows. */
     command: z.array(z.string().min(1)).min(1),
-    /** Extra environment. `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` are always provided. */
+    /** Extra environment. RPC services also receive `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`. */
     env: z.record(z.string(), z.string()).default({}),
     cwd: z.string().optional(),
     /** `false` keeps the service configured but stopped. */
     enabled: z.boolean().default(true),
     restart: z.enum(['always', 'on-failure', 'never']).default('on-failure'),
+    /** `false` runs a plain stdio process without a participant socket or identity. */
+    rpc: z.boolean().default(true),
+    /** Run in a pseudoterminal: stdout and stderr merge, and attachments can resize it. */
+    tty: z.boolean().default(false),
     /**
      * When the service counts as running: after it connects to the hub
      * (`connected`, for LinkRPC services) or as soon as it spawned.
+     * Plain stdio processes (`rpc: false`) always use spawned readiness.
      */
     readiness: z.enum(['connected', 'spawned']).default('connected'),
     /**
@@ -172,7 +177,7 @@ export function daemonConfigJsonSchema(): unknown {
 /** The config written on first start. */
 export const DEFAULT_CONFIG_TEXT = `{
     "$schema": "./config.schema.json",
-    // Services the hub starts at login and keeps running. Each service gets
+    // Services the hub starts at login and keeps running. RPC-enabled services get
     // LINKRPC_ENDPOINT and LINKRPC_TOKEN and may claim the service ID
     // <hubServiceId>/<name> (default hub/<name>). Saving this file applies
     // changes; only changed services restart.

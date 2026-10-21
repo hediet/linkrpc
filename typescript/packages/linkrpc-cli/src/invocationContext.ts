@@ -9,6 +9,8 @@ import {
     resolveEndpoint,
     type ResolvedEndpoint,
 } from '@hediet/linkrpc-client-internal';
+import { formatEndpointUri } from '@hediet/linkrpc/node';
+import { resolveLocalEndpoint } from './localEndpoint';
 
 export type CliProfile = 'rpc' | 'hub';
 
@@ -152,6 +154,14 @@ export function resolveInvocationEndpoint(
         };
     }
 
+    const uri = input.endpoint ?? (input.endpointCmd === undefined && input.endpointCmdStdio === undefined
+        ? input.env?.LINKRPC_ENDPOINT : undefined);
+    if (uri === 'linkrpc:local') {
+        if (cli.endpointToken !== undefined) {
+            throw new Error('linkrpc:local uses credentials from local Hub discovery; --endpoint-token is not supported.');
+        }
+        input = { ...input, endpoint: formatEndpointUri(resolveLocalEndpoint(), { revealToken: true }), endpointToken: undefined, env: {} };
+    }
     const result = resolveEndpoint(input);
     if (result.error !== undefined) throw new Error(result.error);
     return result.endpoint;

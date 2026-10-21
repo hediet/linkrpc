@@ -27,6 +27,79 @@ linkrpc-hub-daemon config path        # the file to edit
 
 ## Configuring services
 
+### Dynamically managed endpoints
+
+The [CLI's `hub services` commands](../linkrpc-cli/README.md#daemon-owned-endpoints-hub-services)
+use `linkrpc.managedEndpoints` on the private management socket or the routed
+Hub service `<hubServiceId>/daemon`. Local clients and remote clients use the
+same API; the daemon owns processes, connection retries, output, and lifecycle.
+The routed interface is subject to the selected Hub's admission/capability
+policy. It permits execution as the daemon's OS user: do not expose a trusted
+local listener to untrusted networks without configuring those policies.
+
+The API exposes `info`, `list`, `create`, `run`, `watch`, `start`, `stop`,
+`remove`, and `configure`. `watch` streams status changes until the endpoint is
+removed. `create` and `run` accept `replace: true` (CLI `--force`): an existing
+endpoint with the same address, including a persistent or owned one, is stopped
+and removed first within the same serialized operation; its console reports a
+notice and completes.
+
+Every process endpoint serves the standard
+[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+interface at `<hubServiceId>/daemon/consoles/<sha256(namespace)>/<id>`, reported
+as `status.console.serviceId`. Consoles are registered on the private management
+socket and on the routed daemon service. Attachments share input, observe the
+same output, and never stop the endpoint when cancelled. Pipe consoles replay up
+to 1 MiB of recent output and supervisor notices; TTY consoles replay the
+current screen and scrollback from a headless terminal (`@xterm/headless`). A
+console stays registered across automatic restarts; its attachments complete when
+no process runs and none is pending, and it closes when the endpoint is removed.
+
+`run` creates a process endpoint and attaches to its console in one call: the
+stream carries the `linkrpc.console` attach protocol plus `status` events, so
+there is no create/attach gap that could lose output of a short-lived process.
+With `owner: true`, the call owns the endpoint (CLI `--foreground`): its
+completion, cancellation, or caller disconnect disposes that exact supervisor and
+removes its endpoint. Without it, cancelling only detaches. Observer attachments
+remain non-owning. Owned endpoints cannot be made persistent and are not
+restored across Hub replacement. Instance IDs identify endpoint definitions,
+not individual automatic restart attempts.
+
+Process sources accept `rpc: false` for plain stdio programs (CLI `--no-rpc` /
+`-x`). These start without a participant socket or identity and become ready
+on spawn, regardless of the RPC readiness setting. Ambient LinkRPC/legacy
+HubRPC endpoint and token variables are removed; explicit source `env` values
+are preserved. `list` and status events report `rpc: false`.
+
+Process sources accept `tty: true` (CLI `-t`) to run in a pseudoterminal
+(`@lydell/node-pty`; ConPTY on Windows): stdout and stderr merge, and console
+attachments can resize it. Its consoles report the signals they can deliver:
+on Windows, TTYs support `SIGINT` (Ctrl+C via ConPTY) and `SIGKILL`, pipes only
+`SIGKILL`; POSIX supports `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGQUIT`, and `SIGKILL`
+(delivered to the process group).
+
+Dynamic endpoints are keyed by `(namespace, id)` and reserve
+`<hubServiceId>/services/<sha256(namespace)>/<id>` for application RPC. Plain
+stdio processes publish no RPC methods there. Persistent definitions and
+desired state are atomically saved in `endpoints.json` in the daemon state
+directory. They are separate from the legacy configured services below, whose
+defaults remain unchanged. Dynamic endpoints default to ephemeral and
+`restart: never`. Persistent restarting endpoints resume when the daemon starts,
+but do not enable OS user-login startup. The standalone daemon's explicit
+`autostart` commands remain available; dynamic endpoint operations never alter
+OS registrations.
+Explicit stop persists desired=false. Daemon shutdown does not overwrite it.
+Hub configuration reload preserves dynamic definitions in memory and restarts
+their workloads when the Hub itself must be replaced.
+
+The CLI bundles this daemon implementation and executable; it does not require
+this package to be published separately. Both management transports expose
+reflection for the CLI's required interface-hash checks. `hub services restart`
+explicitly shuts down the local daemon over management RPC and launches the
+CLI's bundled build, without updating existing autostart entries.
+
+### Config file
+
 The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 `config.schema.json` next to it gives editors completion and validation.
 
@@ -53,11 +126,18 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 | `env`, `cwd` | `{}`, inherited | Extra environment and working directory |
 | `enabled` | `true` | `false` keeps the service configured but stopped |
 | `restart` | `on-failure` | `always`, `on-failure`, or `never` |
-| `readiness` | `connected` | Running once connected to the hub, or once `spawned` |
+| `rpc` | `true` | `false` runs plain stdio without an RPC socket or identity; ready on spawn |
+| `tty` | `false` | Run in a pseudoterminal; stdout and stderr merge |
+| `readiness` | `connected` | RPC processes are running once connected to the hub, or once `spawned`; ignored when `rpc: false` |
 | `serviceId` | `<hubServiceId>/<name>` | Namespace the service may claim on the hub (default `hub/<name>`) |
 | `managedIdentity` | `true` | Provision a persistent identity (slot `service:<name>`) |
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
 | `stopTimeoutMs` | `5000` | Grace period before the process tree is killed |
+
+On Windows, a process without an active RPC connection has no graceful
+stop channel. Stopping it kills its process tree immediately rather than
+waiting `stopTimeoutMs`. Connected RPC services still get the disconnect grace
+period; on POSIX, processes get SIGTERM and the configured grace period.
 
 Every other top-level field is a regular [hub config](../linkrpc-hub/README.md)
 (listeners, endpoints, `forwardChecking`, …). Unlike a standalone hub,
@@ -106,7 +186,7 @@ on the discovery file (written only by the daemon) or configure a token.
 | --- | --- |
 | Formatting, comments, `$schema` | Nothing |
 | Service added / removed | That service starts / stops |
-| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `readiness` | That service restarts |
+| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `tty`, `readiness` | That service restarts |
 | `enabled`, `restart`, timeouts, `description` | Applied without restarting the process |
 | Any hub-wide setting | The hub and all services restart |
 | Invalid file | Nothing; the error is reported and the previous config keeps running |

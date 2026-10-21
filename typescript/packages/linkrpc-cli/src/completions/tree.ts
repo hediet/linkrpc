@@ -65,6 +65,7 @@ const ENDPOINT_GLOBAL_OPTIONS: readonly FlagDef[] = [
     { name: '--context-set', takesValue: false },
     { name: '--new-context', takesValue: true, valueType: 'free' },
     { name: '--schema', takesValue: true, valueType: 'free' },
+    { name: '--daemon-service', takesValue: true, valueType: 'serviceId' },
     { name: '--validation', takesValue: true, valueType: 'free' },
     { name: '--use-env', takesValue: false },
     { name: '--no-use-env', takesValue: false },
@@ -172,6 +173,12 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--no-validate', takesValue: false },
             ],
         },
+    {
+        name: 'attach',
+        description: 'Attach to a linkrpc.console service (pipe or TTY).',
+        positionals: [{ name: 'serviceId', type: 'serviceId' }],
+        options: [{ name: '--read-only', takesValue: false }],
+    },
     {
         name: 'batch',
         description: 'Run sequential calls and notifications.',
@@ -314,6 +321,57 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
 ];
 
 const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
+    {
+        name: 'services',
+        description: 'Manage daemon-owned processes and connections.',
+        positionals: [],
+        options: [{ name: '--namespace', takesValue: true, valueType: 'free' }],
+        subcommands: [
+            { name: 'restart', description: 'Replace the local daemon with the bundled daemon.', positionals: [], options: [] },
+            {
+                name: 'run', description: 'Run on the selected daemon.', positionals: [{ name: 'command', type: 'free' }],
+                options: [
+                    { name: '--id', takesValue: true, valueType: 'free' },
+                    { name: '--persistent', takesValue: false },
+                    { name: '--restart', takesValue: true, valueType: 'free' },
+                    { name: '--detach', takesValue: false },
+                    { name: '--foreground', takesValue: false },
+                    { name: '--force', takesValue: false },
+                    { name: '--tty', takesValue: false },
+                    { name: '-t', takesValue: false },
+                    { name: '--no-rpc', takesValue: false },
+                    { name: '-x', takesValue: false },
+                    { name: '--cwd', takesValue: true, valueType: 'free' },
+                    { name: '--env', takesValue: true, valueType: 'free' },
+                    { name: '--readiness', takesValue: true, valueType: 'free' },
+                ],
+            },
+            {
+                name: 'connect', description: 'Connect an existing endpoint.', positionals: [],
+                options: [
+                    { name: '--id', takesValue: true, valueType: 'free' },
+                    { name: '--persistent', takesValue: false },
+                    { name: '--restart', takesValue: true, valueType: 'free' },
+                    { name: '--force', takesValue: false },
+                    { name: '--target-endpoint', takesValue: true, valueType: 'free' },
+                ],
+            },
+            { name: 'list', description: 'List managed endpoints.', positionals: [], options: [{ name: '--all-contexts', takesValue: false }] },
+            ...['start', 'stop', 'remove', 'attach', 'logs', 'configure'].map((name): SubcommandDef => ({
+                name, description: `${name} a managed endpoint.`, positionals: [],
+                options: [
+                    { name: '--id', takesValue: true, valueType: 'free' },
+                    ...(name === 'logs' ? [{ name: '--follow', takesValue: false }] : []),
+                    ...(name === 'attach' ? [{ name: '--read-only', takesValue: false }] : []),
+                    ...(name === 'configure' ? [
+                        { name: '--persistent', takesValue: false },
+                        { name: '--no-persistent', takesValue: false },
+                        { name: '--restart', takesValue: true, valueType: 'free' as const },
+                    ] : []),
+                ],
+            })),
+        ],
+    },
     {
         name: 'caps',
         description: 'List stored capabilities or request access for a call.',
