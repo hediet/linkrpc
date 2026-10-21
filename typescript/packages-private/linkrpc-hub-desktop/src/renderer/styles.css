@@ -269,7 +269,6 @@ tr.details td { padding-top: 0; }
 tr.details pre.log { max-height: 260px; }
 td.nowrap { white-space: nowrap; }
 td code { overflow-wrap: anywhere; }
-td.method code { overflow-wrap: normal; word-break: normal; }
 .error { color: var(--bad); }
 .card h2 label, .card h2 select {
     text-transform: none;
@@ -284,7 +283,6 @@ td.method code { overflow-wrap: normal; word-break: normal; }
 .call-details dl { margin: 0; }
 .call-details pre.log { max-height: 180px; }
 
-td.service { white-space: nowrap; }
 
 .context-menu {
     position: fixed;
@@ -335,3 +333,56 @@ td.service { white-space: nowrap; }
     font-size: 11px;
     color: var(--muted);
 }
+
+/*
+ * Resizable columns: fixed layout, so every column is exactly as wide as its
+ * --col-<id> (set on the header, in px) and content truncates at the column's
+ * edge.
+ */
+table.resizable-columns {
+    table-layout: fixed;
+    width: 100%;
+}
+
+.calls td, .calls th { padding-left: 6px; padding-right: 6px; }
+
+.calls .cell {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.calls .cell > .line {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.calls th.resizable {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding-right: 12px;
+}
+
+.col-resizer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 7px;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.col-resizer::after {
+    content: "";
+    position: absolute;
+    top: 25%;
+    bottom: 25%;
+    right: 3px;
+    width: 1px;
+    background: var(--border);
+}
+
+.col-resizer:hover::after { background: var(--accent); width: 2px; }

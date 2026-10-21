@@ -1,6 +1,7 @@
 import { CallQuery, type CallTarget, callTargetOf, excludeMethodTerm } from '@hediet/linkrpc-hub-daemon/call-query';
 import type { CallFilter, CallLogLevel, CallRecord, DaemonStatus } from '../protocol';
 import { type ContextMenuItem, type ContextMenuSection, showContextMenu } from './contextMenu';
+import { ColumnWidths, type ResizableColumn } from './columnWidths';
 import { bridge, errorMessage, h } from './dom';
 
 const PAGE = 200;
@@ -14,6 +15,17 @@ const LEVELS: ReadonlyArray<readonly [CallLogLevel, string]> = [
     ['debug', 'Requests and notifications'],
     ['trace', 'Everything, with stream frames'],
 ];
+
+/** Widths in px; the flexible columns share the table width left by the others, in proportion. */
+const COLUMNS = {
+    time: { id: 'time', title: 'Time', defaultWidth: 90 },
+    status: { id: 'status', title: 'Status', defaultWidth: 110 },
+    peers: { id: 'peers', title: 'Caller → Target', defaultWidth: 150, flexible: true },
+    service: { id: 'service', title: 'Service', defaultWidth: 130, flexible: true },
+    method: { id: 'method', title: 'Method', defaultWidth: 190, flexible: true },
+    duration: { id: 'duration', title: 'Duration', defaultWidth: 80 },
+    size: { id: 'size', title: 'Size', defaultWidth: 110 },
+} as const satisfies Record<string, ResizableColumn>;
 
 /**
  * Recorded hub calls, read from the daemon's call-log files: recording toggle
@@ -34,6 +46,7 @@ export class CallsView {
     private readonly _live = h('input', { type: 'checkbox', checked: true });
     private readonly _info = h('div', { class: 'row muted' });
     private readonly _table = h('div', { class: 'calls' });
+    private readonly _widths = new ColumnWidths(this._table, Object.values(COLUMNS), () => void this._saveSettings());
     private _status: DaemonStatus | undefined;
     private _selected: string | undefined;
     private _truncated = false;
@@ -48,6 +61,7 @@ export class CallsView {
             this._text.value = saved.query;
             this._errorsOnly.checked = saved.errorsOnly;
             this._live.checked = saved.live;
+            this._widths.set(saved.columnWidths);
         });
         this._recording.addEventListener('change', () => void this._setLevel(this._recording.checked ? this._chosenLevel() : 'off'));
         this._level.addEventListener('change', () => void this._setLevel(this._chosenLevel()));
@@ -108,13 +122,18 @@ export class CallsView {
 
     /** Save the filter in the tray app's settings and apply it. */
     private async _onFilterChanged(): Promise<void> {
+        await this._saveSettings();
+        await this._reload();
+    }
+
+    private async _saveSettings(): Promise<void> {
         await this._settingsLoaded;
         await this._run(() => bridge.invoke('setCallsViewSettings', {
             query: this._text.value,
             errorsOnly: this._errorsOnly.checked,
             live: this._live.checked,
+            columnWidths: { ...this._widths.custom },
         }));
-        await this._reload();
     }
 
     /** Restart the live watch and read the newest matching calls from the files. */
@@ -146,8 +165,8 @@ export class CallsView {
                 ? 'No recorded calls match. Turn on "Record calls" to log calls routed through the hub.'
                 : 'Start the hub to view its call log.'));
         } else {
-            this._table.replaceChildren(h('table', {},
-                h('thead', {}, h('tr', {}, ...['Time', 'Status', 'Caller → Target', 'Service', 'Method', 'Duration', 'Size'].map(text => h('th', {}, text)))),
+            this._table.replaceChildren(h('table', { class: 'resizable-columns' },
+                h('thead', {}, this._widths.headerRow()),
                 h('tbody', {}, ...calls.slice(0, MAX_SHOWN).flatMap(call => this._rows(call)))));
         }
         this._renderInfo(calls.length);
@@ -156,29 +175,32 @@ export class CallsView {
     private _rows(call: CallRecord): Node[] {
         const selected = this._selected === call.id;
         const target = callTargetOf(call);
+        const cell = this._widths.cell.bind(this._widths);
+        const method = `${target.interfaceId !== undefined ? `${target.interfaceId}::` : ''}${target.member}`;
         const row = h('tr', {
             class: `call${selected ? ' selected' : ''}`,
-            title: 'Show details · right-click to exclude',
             onClick: () => {
                 this._selected = selected ? undefined : call.id;
                 this._renderTable();
             },
             onContextMenu: (event: MouseEvent) => showContextMenu(event, this._excludeMenu(target)),
         },
-        h('td', { class: 'nowrap' }, _time(call.at)),
-        h('td', {}, h('span', { class: `pill ${_statusClass(call)}`, title: call.error?.message }, call.status)),
-        h('td', { title: _peersTitle(call) },
-            h('div', {}, call.from.label, h('span', { class: 'muted' }, ' → '), call.to?.label ?? '–'),
-            call.principal ? h('div', { class: 'sub' }, _shortPrincipal(call.principal)) : undefined),
-        h('td', { class: 'service' }, target.serviceId ?? h('span', { class: 'muted', title: 'Root-form call' }, '(root)')),
-        h('td', { class: 'method' }, h('code', {},
-            ...(target.interfaceId !== undefined ? [h('span', { class: 'muted' }, `${target.interfaceId}::`), h('wbr')] : []),
-            target.member),
-        call.error ? h('div', { class: 'sub error' }, call.error.message) : undefined),
-        h('td', { class: 'nowrap' }, call.status === 'pending' ? `${call.durationMs} ms…` : `${call.durationMs} ms`),
-        h('td', { class: 'nowrap sub' }, `${_bytes(call.paramsBytes)} → ${_bytes(call.resultBytes)}`));
+        h('td', {}, cell({}, _time(call.at))),
+        h('td', {}, cell({ title: call.error?.message }, h('span', { class: `pill ${_statusClass(call)}` }, call.status))),
+        h('td', {}, cell({ title: _peersTitle(call) },
+            h('div', { class: 'line' }, call.from.label, h('span', { class: 'muted' }, ' → '), call.to?.label ?? '–'),
+            call.principal ? h('div', { class: 'line sub' }, call.principal) : undefined)),
+        h('td', {}, cell({ title: target.serviceId ?? 'Root-form call' },
+            target.serviceId ?? h('span', { class: 'muted' }, '(root)'))),
+        h('td', {}, cell({ title: [method, call.error?.message].filter(Boolean).join('\n') },
+            h('code', { class: 'line' },
+                ...(target.interfaceId !== undefined ? [h('span', { class: 'muted' }, `${target.interfaceId}::`)] : []),
+                target.member),
+            call.error ? h('div', { class: 'line sub error' }, call.error.message) : undefined)),
+        h('td', {}, cell({}, call.status === 'pending' ? `${call.durationMs} ms…` : `${call.durationMs} ms`)),
+        h('td', {}, cell({ class: 'sub' }, `${_bytes(call.paramsBytes)} → ${_bytes(call.resultBytes)}`)));
         if (!selected) return [row];
-        return [row, h('tr', { class: 'details' }, h('td', { colSpan: 7 }, _details(call)))];
+        return [row, h('tr', { class: 'details' }, h('td', { colSpan: this._widths.span }, _details(call)))];
     }
 
     /** Exclusions for a call's method, from the broadest to the most specific; each appends a filter term. */
@@ -255,10 +277,6 @@ function _peersTitle(call: CallRecord): string {
         call.to ? `target: ${call.to.label}${call.to.transport ? ` (${call.to.transport})` : ''}` : undefined,
         call.principal ? `principal: ${call.principal}` : undefined,
     ].filter(line => line !== undefined).join('\n');
-}
-
-function _shortPrincipal(principal: string): string {
-    return principal.length > 24 ? `${principal.slice(0, 20)}…` : principal;
 }
 
 function _time(at: number): string {
