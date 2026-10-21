@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import { z } from 'zod';
 
-/** How the window's Calls table is filtered. */
+/** How the window's Calls table is filtered and laid out. */
 export const CallsViewSettingsSchema = z.object({
     /** The call-log query, e.g. `-method:hediet/devbox::*`. */
     query: z.string().max(10_000).default(''),
     errorsOnly: z.boolean().default(false),
     live: z.boolean().default(true),
+    /** Max width in px per column id; columns without an entry use their default. */
+    columnWidths: z.record(z.string().max(40), z.number().int().min(40).max(2_000)).default({}),
 });
 export type CallsViewSettings = z.output<typeof CallsViewSettingsSchema>;
 
