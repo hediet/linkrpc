@@ -181,6 +181,7 @@ function _formatStatus(status: DaemonStatus | undefined, hubHome: HubHome, autos
         `Config:      ${status.configFile}${status.config.error ? `\n  error: ${status.config.error}` : ''}`,
         ...(status.hub.error ? [`Hub error:   ${status.hub.error}`] : []),
         `Log:         ${status.logFile}`,
+        `Call log:    ${status.callLog.level === 'off' ? 'off' : `${status.callLog.level} → ${status.callLog.directory}`}${status.callLog.error ? `\n  error: ${status.callLog.error}` : ''}`,
         `Autostart:   ${autostart}`,
     ];
     if (status.services.length === 0) return [...lines, 'Services:    none configured'].join('\n');

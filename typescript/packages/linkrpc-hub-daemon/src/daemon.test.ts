@@ -4,8 +4,9 @@ import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { connectToHub } from '@hediet/linkrpc/node';
+import { loggingInterface } from '@hediet/linkrpc-infra/logging';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { connectToHubManagement, connectToLocalHub, type DaemonStatus, type ServiceStatus } from './client';
+import { type CallRecord, connectToHubManagement, connectToLocalHub, type DaemonStatus, type ServiceStatus } from './client';
 import { HubDaemon } from './daemon';
 import { HubHome } from './paths';
 import { AlreadyRunningError } from './singleInstance';
@@ -175,6 +176,88 @@ describe('HubDaemon', () => {
             await expect(management.setConfig({ text: '{}', expectedRevision: 'stale' })).rejects.toThrow(/changed since/);
             await management.setConfig({ text: '{}', expectedRevision: document.revision });
             expect(daemon!.status().services).toEqual([]);
+            watch.cancel();
+            await watchEnded;
+        } finally {
+            connection.close();
+        }
+    });
+
+    it('records calls once enabled, without restarting the hub, and serves them to management and hub clients', async () => {
+        writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
+        await running('a');
+        const hubStartedAt = daemon!.status().hub.startedAt;
+        await echo('a');
+        const connection = await connectToHubManagement(home);
+        try {
+            const { management } = connection;
+            const live: CallRecord[] = [];
+            const watch = management.watchCalls({ filter: { text: 'test.echo' } }, { onMessage: record => live.push(record) });
+            const watchEnded = Promise.resolve(watch).catch(() => undefined);
+
+            await management.setCallLogLevel({ level: 'info' });
+            expect(daemon!.status()).toMatchObject({
+                hub: { startedAt: hubStartedAt },
+                callLog: { level: 'info', directory: home.callLogDir, serviceId: 'hub/daemon' },
+            });
+            expect(fs.readFileSync(home.configFile, 'utf8')).toContain('"level": "info"');
+
+            await echo('a');
+            const { calls } = await waitFor(async () => {
+                const result = await management.queryCalls({ filter: { text: 'test.echo' } });
+                return result.calls.length > 0 && result;
+            }, 'the recorded call');
+            expect(calls).toHaveLength(1);
+            const { id: _id, at: _at, durationMs: _duration, ...record } = calls[0]!;
+            const masked = JSON.parse(JSON.stringify(record)
+                .replace(/"label":"e\d+"/g, '"label":"e<n>"')
+                .replace(/"transport":"[^"]*"/g, '"transport":"<transport>"')
+                .replace(/"pid":\d+/g, '"pid":"<pid>"'));
+            expect(masked).toMatchInlineSnapshot(`
+              {
+                "from": {
+                  "label": "e<n>",
+                  "transport": "<transport>",
+                },
+                "kind": "request",
+                "level": "info",
+                "method": "hub/a::test.echo::echo",
+                "params": {
+                  "text": "hi",
+                },
+                "paramsBytes": 13,
+                "result": {
+                  "pid": "<pid>",
+                  "text": "a:hi",
+                },
+                "resultBytes": 27,
+                "serviceId": "hub/a",
+                "status": "completed",
+                "to": {
+                  "label": "hub/a",
+                  "transport": "<transport>",
+                },
+                "v": 1,
+              }
+            `);
+            await waitFor(() => live.some(call => call.status === 'completed'), 'the live record');
+            expect(fs.readdirSync(home.callLogDir)).toHaveLength(1);
+
+            const hub = await connectToLocalHub({ home });
+            try {
+                const logging = hub.connection.service('hub/daemon').get(loggingInterface);
+                const { document } = await logging.getLogSnapshot({});
+                expect(document.entries.map(entry => entry.message).find(message => message.includes('test.echo')))
+                    .toMatch(/^✓ e\d+ → hub\/a {2}hub\/a::test\.echo::echo\(\{"text":"hi"\}\) {2}→ \{"text":"a:hi","pid":\d+\} \(\d+ms\)$/);
+                expect(await logging.getLogLevel({})).toEqual({ level: 'info' });
+                await logging.setLogLevel({ level: 'off' });
+            } finally {
+                hub.close();
+            }
+            expect(daemon!.status().callLog.level).toBe('off');
+            await echo('a');
+            expect((await management.queryCalls({ filter: { text: 'test.echo' } })).calls).toHaveLength(1);
+            expect(daemon!.status().hub.startedAt).toBe(hubStartedAt);
             watch.cancel();
             await watchEnded;
         } finally {

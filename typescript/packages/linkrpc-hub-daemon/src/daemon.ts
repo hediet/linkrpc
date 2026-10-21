@@ -3,7 +3,9 @@ import * as fs from 'node:fs';
 import { LinkRpcConnection } from '@hediet/linkrpc';
 import { type HubConfig, runHub, type RunningHub } from '@hediet/linkrpc-hub';
 import { type NodeSocketTransport, SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
-import { classifyServiceChange, type DaemonConfig, type ManagedService, parseDaemonConfig, parseDaemonConfigText, setServiceEnabledInText, stableKey } from './config';
+import { classifyServiceChange, type DaemonConfig, type ManagedService, parseDaemonConfig, parseDaemonConfigText, setCallLogLevelInText, setServiceEnabledInText, stableKey } from './config';
+import { CallLog } from './callLog/callLog';
+import type { CallLogLevel } from './callLog/callRecord';
 import { ConfigFile } from './configFile';
 import { DaemonLog } from './daemonLog';
 import { readEndpointDiscovery, writePrivateJson, type EndpointDiscovery } from './discovery';
@@ -69,6 +71,8 @@ export class HubDaemon {
     private _managementLink: { dispose(): void } | undefined;
     private _hub: RunningHub | undefined;
     private _hubKey: string | undefined;
+    private readonly _callLog: CallLog;
+    private _callLogAttachment: { dispose(): void } | undefined;
     private _hubStartedAt = 0;
     private _hubError: string | undefined;
     private _seenRevision: string | undefined;
@@ -90,6 +94,7 @@ export class HubDaemon {
     ) {
         this.done = new Promise(resolve => { this._resolveDone = resolve; });
         this._configFile = new ConfigFile(home.configFile, home.configSchemaFile);
+        this._callLog = new CallLog(home.callLogDir, this.startedAt, level => this.setCallLogLevel(level));
         this._appPath = home.defaultAppEndpoint;
         this._management = { path: home.allocEndpoint('management'), token: _token() };
         this._serviceHost = {
@@ -112,6 +117,7 @@ export class HubDaemon {
                 listeners: this._hub?.listeners.map(({ type, address }) => ({ type, address })) ?? [],
                 error: this._hubError,
             },
+            callLog: this._callLog.status(),
             services: [...this._services.values()]
                 .map(service => service.status())
                 .sort((a, b) => a.name.localeCompare(b.name)),
@@ -140,6 +146,13 @@ export class HubDaemon {
     public async setServiceEnabled(name: string, enabled: boolean): Promise<void> {
         const document = this._configFile.read();
         this._configFile.write(setServiceEnabledInText(document.text, name, enabled), document.revision);
+        await this.reload();
+    }
+
+    /** Persist `callLog.level` in the config file and apply it; the hub keeps running. */
+    public async setCallLogLevel(level: CallLogLevel): Promise<void> {
+        const document = this._configFile.read();
+        this._configFile.write(setCallLogLevelInText(document.text, level), document.revision);
         await this.reload();
     }
 
@@ -198,6 +211,8 @@ export class HubDaemon {
     }
 
     private async _apply(config: DaemonConfig): Promise<void> {
+        // The call log is not a hub setting: it follows the config without a hub restart.
+        this._callLog.configure(config.callLog);
         const hubKey = stableKey({ hub: config.hub, localEndpoint: config.localEndpoint });
         if (hubKey !== this._hubKey || !this._hub) {
             if (this._hub) this._log.line('hub settings changed; restarting the hub and all services');
@@ -210,6 +225,8 @@ export class HubDaemon {
                 this._endpointRegistrations.set(connection, undefined);
             }
             this._managementLink?.dispose();
+            this._callLogAttachment?.dispose();
+            this._callLogAttachment = undefined;
             this._hub?.dispose();
             this._hub = undefined;
             fs.rmSync(this.home.discoveryFile, { force: true });
@@ -233,6 +250,7 @@ export class HubDaemon {
                 this._endpoints.register(connection, serviceId);
                 connection.enableReflection({ serviceId });
                 this._managementLink = { dispose: () => { connection.close(); link.dispose(); } };
+                this._callLogAttachment = this._callLog.attach(this._hub.inspection, connection, serviceId);
                 this._hubStartedAt = Date.now();
                 this._hubError = undefined;
                 writePrivateJson(this.home.discoveryFile, this._discovery({ path: this._appPath, token: config.localEndpoint.token }));
@@ -372,6 +390,28 @@ export class HubDaemon {
                 return {};
             },
             getServiceLogs: ({ name, limit }) => ({ lines: this._service(name).logs(limit) }),
+            setCallLogLevel: async ({ level }) => {
+                await this.setCallLogLevel(level);
+                return {};
+            },
+            queryCalls: async ({ filter, limit }) => {
+                const { calls, truncated } = await this._callLog.query(filter ?? {}, limit);
+                return { calls: [...calls], truncated };
+            },
+            watchCalls: async ({ filter }, _ctx, stream) => {
+                const subscription = this._callLog.watch(filter ?? {}, record => {
+                    stream.send(record).catch(() => { /* the watcher went away */ });
+                });
+                try {
+                    await new Promise<void>(resolve => {
+                        if (stream.signal.aborted) resolve();
+                        else stream.signal.addEventListener('abort', () => resolve(), { once: true });
+                    });
+                } finally {
+                    subscription.dispose();
+                }
+                return {};
+            },
             shutdown: () => {
                 setTimeout(() => void this.shutdown(), 0);
                 return {};
@@ -421,8 +461,10 @@ export class HubDaemon {
         await this._disposeAllServices();
         await this._endpoints?.dispose();
         this._managementLink?.dispose();
+        this._callLogAttachment?.dispose();
         this._hub?.dispose();
         this._hub = undefined;
+        await this._callLog.close();
         this._managementServer?.dispose();
         this._statusListeners.clear();
         this._log.line('stopped');

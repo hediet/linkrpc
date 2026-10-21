@@ -87,6 +87,11 @@ export class HubHome {
         return this._path.join(this.stateDir, 'daemon.log');
     }
 
+    /** NDJSON call-log files (`callLog` in the config). */
+    public get callLogDir(): string {
+        return this._path.join(this.stateDir, 'calls');
+    }
+
     /** Persistent managed identities of services. */
     public get identityDir(): string {
         return this._path.join(this.stateDir, 'identities');

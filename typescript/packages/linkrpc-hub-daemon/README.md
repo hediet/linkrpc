@@ -188,6 +188,7 @@ on the discovery file (written only by the daemon) or configure a token.
 | Service added / removed | That service starts / stops |
 | `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `tty`, `readiness` | That service restarts |
 | `enabled`, `restart`, timeouts, `description` | Applied without restarting the process |
+| `callLog` | Applied without restarting the hub or any service |
 | Any hub-wide setting | The hub and all services restart |
 | Invalid file | Nothing; the error is reported and the previous config keeps running |
 
@@ -259,6 +260,72 @@ Requests arrive fully qualified (`hub/github::…`) and are routed by this hub.
 The bridge exits when either side closes, and the host respawns it on the next
 call (for example after the hub restarted).
 
+## Call log
+
+The daemon can record every call routed through its hub, including calls
+forwarded from other machines (e.g. through `linkrpc-devtunnel`). It is off by
+default; turn it on in the tray app ("Record calls"), with
+`setCallLogLevel` in the management API, or in the config:
+
+```jsonc
+"callLog": {
+    // off | error (failed calls) | info (all requests) | debug (+ notifications) | trace (+ stream frames)
+    "level": "info",
+    "payloads": {
+        "mode": "truncated",          // none | truncated | full
+        "maxStringLength": 256,       // per string property
+        "maxArrayItems": 50,
+        "maxDepth": 8,
+        "redactKeys": ["password", "secret", "token", "apikey", "privatekey", "authorization", "cookie", "credential", "passwd"]
+    },
+    "rotation": { "maxFileSizeMb": 10, "maxFiles": 20, "maxAgeDays": 14 }
+}
+```
+
+Only `level` needs to be set; the rest shows the defaults. Changes apply
+without restarting the hub. `warn` records the same calls as `error`.
+
+**Files are the source of truth.** Calls are appended as NDJSON to
+`calls/calls-<UTC start>.ndjson` in the state directory. A file is closed at
+`maxFileSizeMb`; files beyond `maxFiles` or older than `maxAgeDays` are
+deleted. Each line is one record (see
+[`callRecord.ts`](src/callLog/callRecord.ts)):
+
+```json
+{"v":1,"id":"c7a1e33d-flow19","at":1792582431135,"level":"info","kind":"request","status":"completed","durationMs":1,
+ "method":"hediet/pc2/notes::test.echo::echo","serviceId":"hediet/pc2/notes",
+ "from":{"label":"hediet/devbox","transport":"named-pipe \\\\.\\pipe\\linkrpc-hub-service-devtunnel-…"},
+ "to":{"label":"hediet/pc2/notes","transport":"named-pipe \\\\.\\pipe\\linkrpc-hub-service-notes-…"},
+ "principal":"id:key:9xNY…","paramsBytes":52,"resultBytes":47,
+ "params":{"text":"remember the milk","token":"[redacted]"},"result":{"text":"noted: remember the milk"}}
+```
+
+- `from`/`to` are the hub ports the call entered and left on: the prefix the
+  peer claimed (`hediet/devbox` for calls forwarded from that machine) or an
+  edge id such as `e12` for an ordinary client, plus the transport behind the
+  port. `principal` is the caller's `$hubrpc.principal` when the call is signed;
+  with `forwardChecking` the hub has verified it.
+- A call still running about 50 ms after it started (e.g. a watch stream) is
+  written as `pending` and written again under the same `id` when it settles.
+  Readers keep the newest record per id.
+- Payloads exclude the `$hubrpc*` call metadata. Values under keys containing a
+  `redactKeys` entry (case-insensitive, ignoring `_` and `-`) are replaced by
+  `[redacted]`; `redactKeys: []` turns redaction off. `mode: "none"` records
+  only sizes.
+- Calls the hub originates itself (e.g. peer discovery) are not recorded.
+
+The recorder observes the hub's inspection traffic (the source of
+`hubrpc.traffic`) and coalesces it with the hub's `TrafficFlowAggregator`, so a
+call is one record however many messages it took.
+
+**Reading the log.** Besides the files and the tray app, the management API
+offers `queryCalls` (newest first, filtered by text, minimum level, and time)
+and `watchCalls` (live). Hub clients, including remote hubs, read it through
+the standard [`linkrpc.logging`](../linkrpc-infra/README.md#logging) interface
+at `<hubServiceId>/daemon`: the latest 200 calls as a revisioned document,
+rendered like the hub's flow log. `getLogLevel` returns `callLog.level`, and
+`setLogLevel` persists a new level in the config.
+
 ## Locations
 
 | | Windows | macOS | Linux |
@@ -299,7 +366,8 @@ The daemon serves `linkrpc.hubDaemon` (see
 [`managementInterface.ts`](src/managementInterface.ts)) on a second private
 endpoint published in `management.json`: status and a status stream, config
 read/validated write (with revision check), reload, service enable/restart/logs,
-and shutdown. `connectToHubManagement()` connects to it.
+the [call log](#call-log) (`setCallLogLevel`, `queryCalls`, `watchCalls`), and
+shutdown. `connectToHubManagement()` connects to it.
 
 Both discovery files are written with user-only permissions. The management
 endpoint keeps a generated token, which the CLI and tray read from

@@ -1,5 +1,6 @@
 import { defineInterface, requestType } from '@hediet/linkrpc';
 import { z } from 'zod';
+import { CallFilterSchema, CallLogLevelSchema, CallRecordSchema } from './callLog/callRecord';
 
 export const ServiceStateSchema = z.enum([
     /** `enabled: false` in the config. */
@@ -60,6 +61,14 @@ export const DaemonStatusSchema = z.object({
         listeners: z.array(z.object({ type: z.string(), address: z.string() })),
         error: z.string().optional(),
     }),
+    callLog: z.object({
+        level: CallLogLevelSchema,
+        /** Directory of the NDJSON call-log files. */
+        directory: z.string(),
+        /** Where the log is served as `linkrpc.logging` while the hub runs. */
+        serviceId: z.string().optional(),
+        error: z.string().optional(),
+    }),
     services: z.array(ServiceStatusSchema),
 });
 export type DaemonStatus = z.infer<typeof DaemonStatusSchema>;
@@ -101,6 +110,16 @@ export const hubDaemonManagementInterface = defineInterface(
             z.object({ name: z.string(), limit: z.number().int().positive().optional() }),
             z.object({ lines: z.array(LogLineSchema) }),
         ),
+        /** Persist `callLog.level` in the config file and apply it (`off` stops recording). */
+        setCallLogLevel: requestType(z.object({ level: CallLogLevelSchema }), z.object({})),
+        /** Read recorded calls from the call-log files, newest first. */
+        queryCalls: requestType(
+            z.object({ filter: CallFilterSchema.optional(), limit: z.number().int().positive().max(5_000).optional() }),
+            z.object({ calls: z.array(CallRecordSchema), truncated: z.boolean() }),
+        ),
+        /** Streams matching records as they are written, until cancelled. */
+        watchCalls: requestType(z.object({ filter: CallFilterSchema.optional() }), z.object({}))
+            .withStream({ server: CallRecordSchema }),
         /** Stop all services and exit. Intentional: autostart managers do not restart it. */
         shutdown: requestType(z.object({}), z.object({})),
     },
