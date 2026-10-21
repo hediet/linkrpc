@@ -16,15 +16,15 @@ const LEVELS: ReadonlyArray<readonly [CallLogLevel, string]> = [
     ['trace', 'Everything, with stream frames'],
 ];
 
-/** Defaults fit the default window; only the peers, service, and method columns have long content. */
+/** Column widths in px, including padding; the defaults fill the default window. */
 const COLUMNS = {
-    time: { id: 'time', title: 'Time', defaultMaxWidth: 90 },
-    status: { id: 'status', title: 'Status', defaultMaxWidth: 100 },
-    peers: { id: 'peers', title: 'Caller → Target', defaultMaxWidth: 150 },
-    service: { id: 'service', title: 'Service', defaultMaxWidth: 130 },
-    method: { id: 'method', title: 'Method', defaultMaxWidth: 190 },
-    duration: { id: 'duration', title: 'Duration', defaultMaxWidth: 70 },
-    size: { id: 'size', title: 'Size', defaultMaxWidth: 110 },
+    time: { id: 'time', title: 'Time', defaultWidth: 90 },
+    status: { id: 'status', title: 'Status', defaultWidth: 110 },
+    peers: { id: 'peers', title: 'Caller → Target', defaultWidth: 150 },
+    service: { id: 'service', title: 'Service', defaultWidth: 130 },
+    method: { id: 'method', title: 'Method', defaultWidth: 190 },
+    duration: { id: 'duration', title: 'Duration', defaultWidth: 80 },
+    size: { id: 'size', title: 'Size', defaultWidth: 110 },
 } as const satisfies Record<string, ResizableColumn>;
 
 /**
@@ -190,8 +190,8 @@ export class CallsView {
                 ? 'No recorded calls match. Turn on "Record calls" to log calls routed through the hub.'
                 : 'Start the hub to view its call log.'));
         } else {
-            this._table.replaceChildren(h('table', {},
-                h('thead', {}, h('tr', {}, ...Object.values(COLUMNS).map(column => this._widths.header(column)))),
+            this._table.replaceChildren(h('table', { class: 'resizable-columns' },
+                h('thead', {}, this._widths.headerRow()),
                 h('tbody', {}, ...calls.slice(0, MAX_SHOWN).flatMap(call => this._rows(call)))));
         }
         this._renderInfo(calls.length);
@@ -210,22 +210,22 @@ export class CallsView {
             },
             onContextMenu: (event: MouseEvent) => showContextMenu(event, this._excludeMenu(target)),
         },
-        h('td', {}, cell(COLUMNS.time, {}, _time(call.at))),
-        h('td', {}, cell(COLUMNS.status, { title: call.error?.message }, h('span', { class: `pill ${_statusClass(call)}` }, call.status))),
-        h('td', {}, cell(COLUMNS.peers, { title: _peersTitle(call) },
+        h('td', {}, cell({}, _time(call.at))),
+        h('td', {}, cell({ title: call.error?.message }, h('span', { class: `pill ${_statusClass(call)}` }, call.status))),
+        h('td', {}, cell({ title: _peersTitle(call) },
             h('div', { class: 'line' }, call.from.label, h('span', { class: 'muted' }, ' → '), call.to?.label ?? '–'),
             call.principal ? h('div', { class: 'line sub' }, call.principal) : undefined)),
-        h('td', {}, cell(COLUMNS.service, { title: target.serviceId ?? 'Root-form call' },
+        h('td', {}, cell({ title: target.serviceId ?? 'Root-form call' },
             target.serviceId ?? h('span', { class: 'muted' }, '(root)'))),
-        h('td', {}, cell(COLUMNS.method, { title: [method, call.error?.message].filter(Boolean).join('\n') },
+        h('td', {}, cell({ title: [method, call.error?.message].filter(Boolean).join('\n') },
             h('code', { class: 'line' },
                 ...(target.interfaceId !== undefined ? [h('span', { class: 'muted' }, `${target.interfaceId}::`)] : []),
                 target.member),
             call.error ? h('div', { class: 'line sub error' }, call.error.message) : undefined)),
-        h('td', {}, cell(COLUMNS.duration, {}, call.status === 'pending' ? `${call.durationMs} ms…` : `${call.durationMs} ms`)),
-        h('td', {}, cell(COLUMNS.size, { class: 'sub' }, `${_bytes(call.paramsBytes)} → ${_bytes(call.resultBytes)}`)));
+        h('td', {}, cell({}, call.status === 'pending' ? `${call.durationMs} ms…` : `${call.durationMs} ms`)),
+        h('td', {}, cell({ class: 'sub' }, `${_bytes(call.paramsBytes)} → ${_bytes(call.resultBytes)}`)));
         if (!selected) return [row];
-        return [row, h('tr', { class: 'details' }, h('td', { colSpan: Object.keys(COLUMNS).length }, _details(call)))];
+        return [row, h('tr', { class: 'details' }, h('td', { colSpan: this._widths.span }, _details(call)))];
     }
 
     /** Exclusions for a call's method, from the broadest to the most specific; each appends a filter term. */

@@ -334,8 +334,20 @@ td code { overflow-wrap: anywhere; }
     color: var(--muted);
 }
 
-/* Resizable columns: each cell's content is capped at var(--col-<id>) and truncated. */
+/*
+ * Resizable columns: fixed layout, so every column is exactly as wide as its
+ * --col-<id> (set on the header) and content truncates at the column's edge.
+ * The filler column takes the remaining space; with wider columns the table
+ * grows and scrolls horizontally.
+ */
+table.resizable-columns {
+    table-layout: fixed;
+    width: 100%;
+}
+
 .calls td, .calls th { padding-left: 6px; padding-right: 6px; }
+.calls th.filler { padding: 0; }
+
 .calls .cell {
     overflow: hidden;
     white-space: nowrap;
