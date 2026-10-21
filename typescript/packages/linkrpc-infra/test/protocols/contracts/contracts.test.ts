@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
     componentSchemaName,
     computeInterfaceHash,
@@ -25,6 +26,14 @@ const TYPECHECK_TIMEOUT_MS = 30_000;
 
 const corpus = (path: string): unknown =>
     JSON.parse(readFileSync(new URL(`../../../../../../conformance/protocols/${path}`, import.meta.url), "utf8"));
+
+/**
+ * A file next to this test, as the path TypeScript's compiler host uses
+ * (forward slashes). `URL.pathname` would yield `/D:/…` on Windows, from which
+ * relative imports do not resolve.
+ */
+const virtualPath = (name: string): string =>
+    `${fileURLToPath(new URL(".", import.meta.url)).replaceAll("\\", "/").replace(/\/?$/, "/")}${name}`;
 
 const cdp = () => importCdpProtocol(
     corpus("cdp-0.0.1677763/browser_protocol.json"),
@@ -116,7 +125,7 @@ describe("pinned protocol contract import", () => {
     it("type-checks every generated CDP and LSP interface", () => {
         const sources = [...Object.values(cdp().interfaces), ...Object.values(lsp().interfaces)]
             .map((schema, index) => [
-                new URL(`generated-${index}.ts`, import.meta.url).pathname,
+                virtualPath(`generated-${index}.ts`),
                 generateTsInterface(schema, {
                     linkRpcImport: "../../../../linkrpc/src/index",
                     preserveWireSchema: true,
@@ -129,7 +138,7 @@ describe("pinned protocol contract import", () => {
         const dom = cdp().interfaces["cdp.dom"]!;
         const runtime = cdp().interfaces["cdp.runtime"]!;
         const textDocument = lsp().interfaces["lsp.textdocument"]!;
-        const base = new URL(".", import.meta.url).pathname;
+        const base = virtualPath("");
         const virtual = new Map<string, string>([
             [`${base}generated-cdp-usage.ts`, generateTsInterface(dom, {
                 exportName: "cdpDomProtocol",

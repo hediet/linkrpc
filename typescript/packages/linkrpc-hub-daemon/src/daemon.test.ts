@@ -50,6 +50,16 @@ describe('HubDaemon', () => {
             hub.close();
         }
     };
+    /**
+     * Running and answering calls. A service is `running` once it connected,
+     * which can be before it claimed `hub/<name>`; until then such calls reach
+     * the hub's own `hub` services and fail with "Method not found".
+     */
+    const serving = async (name: string): Promise<ServiceStatus> => {
+        const status = await running(name);
+        await waitFor(() => echo(name).then(() => true, () => false), `${name} to answer calls`);
+        return status;
+    };
 
     beforeEach(async () => {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lrh-'));
@@ -65,8 +75,8 @@ describe('HubDaemon', () => {
 
     it('starts configured services, lets applications call them, and restarts only what changed', async () => {
         writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }), b: service({ ECHO_PREFIX: 'b:' }) } });
-        const a = await running('a');
-        const b = await running('b');
+        const a = await serving('a');
+        const b = await serving('b');
         expect(await echo('a')).toEqual({ text: 'a:hi', pid: a.pid });
         expect(await echo('b')).toEqual({ text: 'b:hi', pid: b.pid });
 
@@ -75,6 +85,7 @@ describe('HubDaemon', () => {
             const status = serviceStatus('b');
             return status?.state === 'running' && status.pid !== b.pid ? status : undefined;
         }, 'b to restart');
+        await serving('b');
         expect(await echo('b')).toEqual({ text: 'B:hi', pid: restartedB.pid });
         expect(serviceStatus('a')?.pid).toBe(a.pid);
 
@@ -130,7 +141,7 @@ describe('HubDaemon', () => {
 
     it('bridges handshake-free stdio JSON-RPC to the hub unchanged', async () => {
         writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
-        const { pid } = await running('a');
+        const { pid } = await serving('a');
         const input = new PassThrough();
         const output = new PassThrough();
         const bridged = bridgeStdioToLocalHub({ home, input, output });
@@ -185,7 +196,7 @@ describe('HubDaemon', () => {
 
     it('records calls once enabled, without restarting the hub, and serves them to management and hub clients', async () => {
         writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
-        await running('a');
+        await serving('a');
         const hubStartedAt = daemon!.status().hub.startedAt;
         await echo('a');
         const connection = await connectToHubManagement(home);
@@ -268,7 +279,7 @@ describe('HubDaemon', () => {
 
     it('needs no token by default and enforces a configured one', async () => {
         writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
-        await running('a');
+        await serving('a');
         expect(JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).token).toBeUndefined();
         const endpoint = daemon!.status().endpoint;
         const plain = await connectToHub({ endpoint, token: '' });
@@ -280,7 +291,7 @@ describe('HubDaemon', () => {
 
         writeConfig({ localEndpoint: { token: 'secret' }, services: { a: service({ ECHO_PREFIX: 'a:' }) } });
         await waitFor(() => JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).token === 'secret', 'the token to apply');
-        await running('a');
+        await serving('a');
         await expect(connectToHub({ endpoint, token: '' })).rejects.toThrow();
         expect((await echo('a')).text).toBe('a:hi');
     });
@@ -291,7 +302,7 @@ describe('HubDaemon', () => {
             ? `\\\\.\\pipe\\linkrpc-hub-test-${path.basename(dir)}`
             : path.join(home.runtimeDir, 'custom.sock');
         writeConfig({ localEndpoint: { path: custom }, services: { a: service({ ECHO_PREFIX: 'a:' }) } });
-        await running('a');
+        await serving('a');
         expect(daemon!.status().endpoint).toBe(custom);
         expect(JSON.parse(fs.readFileSync(home.discoveryFile, 'utf8')).endpoint).toBe(custom);
         const hub = await connectToHub({ endpoint: custom, token: '' });
