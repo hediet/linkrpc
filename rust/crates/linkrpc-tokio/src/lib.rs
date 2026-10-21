@@ -7,6 +7,7 @@
 pub mod connect;
 pub mod listener;
 pub mod ndjson;
+pub mod stdio;
 pub mod ws;
 
 pub use connect::{
@@ -16,6 +17,7 @@ pub use connect::{
 };
 pub use listener::HubListener;
 pub use ndjson::{NdjsonTransport, Preamble};
+pub use stdio::ChildStdioTransport;
 pub use ws::{connect_ws, WebSocketTransport};
 
 #[cfg(unix)]
