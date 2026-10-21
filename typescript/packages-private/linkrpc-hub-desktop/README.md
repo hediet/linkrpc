@@ -11,7 +11,9 @@ keeps the hub running.
 - **Window:** services with state, PID, restarts, and errors; enable/disable
   (persisted in the config), restart, and live logs per service; hub details;
   and a config editor that saves through the daemon (validated, conflict-checked,
-  applied immediately).
+  applied immediately). Clicking a service selects it: its logs open and the
+  Calls table shows only calls through it (a "Through service" chip; ✕ or
+  clicking the row again clears it). The selection is not saved.
 - **Calls:** the daemon's [call log](../../packages/linkrpc-hub-daemon/README.md#call-log).
   "Record calls" and the level are saved in the daemon config (the tray menu
   has the same toggle). The table reads the log files through the management

@@ -306,8 +306,9 @@ deleted. Each line is one record (see
 - `from`/`to` are the hub ports the call entered and left on: the prefix the
   peer claimed (`hediet/devbox` for calls forwarded from that machine) or an
   edge id such as `e12` for an ordinary client, plus the transport behind the
-  port. `principal` is the caller's `$hubrpc.principal` when the call is signed;
-  with `forwardChecking` the hub has verified it.
+  port and, for the daemon's configured services, `service` (e.g.
+  `devtunnel`). `principal` is the caller's `$hubrpc.principal` when the call
+  is signed; with `forwardChecking` the hub has verified it.
 - A call still running about 50 ms after it started (e.g. a watch stream) is
   written as `pending` and written again under the same `id` when it settles.
   Readers keep the newest record per id.
@@ -319,7 +320,11 @@ deleted. Each line is one record (see
 
 The recorder observes the hub's inspection traffic (the source of
 `hubrpc.traffic`) and coalesces it with the hub's `TrafficFlowAggregator`, so a
-call is one record however many messages it took.
+call is one record however many messages it took. Transport and `service` come
+from the hub's topology graph: the daemon describes each participant it
+connects (configured services and managed endpoints) with an `attacher`
+descriptor on its node (`{ type: "linkrpc.hubDaemon.service", label: <name> }`),
+which `linkrpc hub topology` shows as well.
 
 **Reading the log.** Besides the files and the tray app, the management API
 offers `queryCalls` (newest first, filtered by a query, minimum level, and
@@ -337,6 +342,7 @@ space-separated terms that must all match:
 | --- | --- |
 | `echo`, `"no route"` | Case-insensitive substring of the method, caller, target, principal, or error |
 | `method:<glob>` | `service::interface::member`, `*` matching anything (the service is empty for root-form calls) |
+| `service:<name>` | Calls from or to that configured service (e.g. `service:devtunnel` for all traffic with other machines) |
 | `-<term>` | Calls the term does not match |
 
 For example, `-method:hediet/devbox::*` hides every call to that service,
