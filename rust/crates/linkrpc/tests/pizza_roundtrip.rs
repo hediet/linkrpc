@@ -209,6 +209,64 @@ async fn reflection_directory_lists_pizza() {
 }
 
 #[tokio::test]
+async fn reflection_mounted_under_a_service_lists_only_that_service() {
+    let (a, b) = transport_pair();
+    let client = LinkRpcConnection::new(Box::new(a));
+    let server = LinkRpcConnection::new(Box::new(b));
+    let shop: Arc<dyn InterfaceHandler> = Arc::new(PizzaShop {
+        cancelled: Arc::new(Mutex::new(Vec::new())),
+    });
+    server
+        .register(
+            Arc::new(pizza_interface()),
+            shop,
+            RegisterOptions {
+                service_id: Some("acme/shop".into()),
+                ..Default::default()
+            },
+        )
+        .expect("register pizza");
+    server.enable_reflection_for("acme/shop");
+    server.enable_reflection_for("acme/shop");
+    let (c, s) = (client.clone(), server.clone());
+    tokio::spawn(async move { c.run().await });
+    tokio::spawn(async move { s.run().await });
+
+    let listing = client
+        .call_member(Some("acme/shop"), "hubrpc.directory", "list", json!({}))
+        .await
+        .expect("service-addressed directory list");
+    let mut items: Vec<(String, String)> = listing["items"]
+        .as_array()
+        .expect("items array")
+        .iter()
+        .map(|i| {
+            (
+                i["serviceId"].as_str().unwrap().to_owned(),
+                i["interfaceId"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    items.sort();
+    assert_eq!(
+        items,
+        [
+            ("acme/shop", PIZZA_ID),
+            ("acme/shop", "hubrpc.defaults"),
+            ("acme/shop", "hubrpc.directory"),
+            ("acme/shop", "hubrpc.schemas"),
+        ]
+        .map(|(s, i)| (s.to_owned(), i.to_owned()))
+    );
+
+    let root = client
+        .call_member(None, "hubrpc.directory", "list", json!({}))
+        .await
+        .expect_err("no root reflection was enabled");
+    assert_eq!(root.code, error_codes::METHOD_NOT_FOUND);
+}
+
+#[tokio::test]
 async fn reflection_directory_filters_by_interface() {
     let (client, _server) = make_pair(Arc::new(Mutex::new(Vec::new())));
     let listing = client

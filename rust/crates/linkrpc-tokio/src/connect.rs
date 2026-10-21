@@ -3,8 +3,9 @@
 //!
 //! [`connect_to_hub`] is the entrypoint. Token precedence follows the TS CLI:
 //! `endpoint_token ?? token-from-URI ?? LINKRPC_TOKEN ?? ""`. Socket endpoints (UDS / named pipe)
-//! write the `{"hello":1,"token":"…"}` preamble before any RPC; WebSocket endpoints send the token
-//! in the `Authorization` header with no preamble.
+//! send the `hubrpc::initialize` handshake carrying the token before any RPC; WebSocket endpoints send the token
+//! in the `Authorization` header with no preamble. `cmd-stdio:` endpoints spawn the child and speak
+//! NDJSON over its stdio (see [`crate::stdio`]).
 
 use std::env;
 use std::future::Future;
@@ -12,7 +13,6 @@ use std::time::Duration;
 
 use linkrpc::prelude::{parse_endpoint_uri, EndpointError, LinkRpcConnection, ResolvedEndpoint};
 
-use crate::ndjson::Preamble;
 use crate::ws::connect_ws;
 
 /// The env var naming the hub endpoint URI.
@@ -40,11 +40,11 @@ pub enum ConnectError {
     /// The endpoint URI failed to parse.
     #[error("{0}")]
     Endpoint(#[from] EndpointError),
-    /// The endpoint scheme is a spawn mode not supported by the v1 connector.
-    #[error("endpoint kind '{0}' is not supported in connector v1 (only socket and ws/wss)")]
+    /// The endpoint scheme is a spawn mode not supported by this connector.
+    #[error("endpoint kind '{0}' is not supported by the Rust connector (only socket, ws/wss, and cmd-stdio)")]
     Unsupported(&'static str),
-    /// Underlying I/O failure while dialing a socket.
-    #[error("socket connect failed: {0}")]
+    /// Underlying I/O failure while dialing a socket or spawning a `cmd-stdio` child.
+    #[error("connect failed: {0}")]
     Io(#[from] std::io::Error),
     /// Underlying WebSocket failure while dialing.
     #[error("websocket connect failed: {0}")]
@@ -112,7 +112,10 @@ pub async fn connect_to_hub(options: ConnectOptions) -> Result<LinkRpcConnection
                 .map_err(|e| ConnectError::Ws(e.to_string()))?;
             Ok(LinkRpcConnection::new(Box::new(transport)))
         }
-        ResolvedEndpoint::CmdStdio { .. } => Err(ConnectError::Unsupported("cmd-stdio")),
+        ResolvedEndpoint::CmdStdio { command, env } => {
+            let transport = crate::stdio::ChildStdioTransport::spawn(&command, env.as_ref())?;
+            Ok(LinkRpcConnection::new(Box::new(transport)))
+        }
         ResolvedEndpoint::CmdEnv { .. } => Err(ConnectError::Unsupported("cmd-env")),
     }
 }
@@ -205,9 +208,7 @@ async fn connect_socket(
     token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
     let transport = crate::unix::connect_unix(path).await?;
-    transport
-        .write_preamble(&Preamble::new(Some(token.to_string())))
-        .await?;
+    transport.initialize(Some(token.to_string())).await?;
     Ok(transport)
 }
 
@@ -217,9 +218,7 @@ async fn connect_socket(
     token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
     let transport = crate::windows::connect_pipe(path).await?;
-    transport
-        .write_preamble(&Preamble::new(Some(token.to_string())))
-        .await?;
+    transport.initialize(Some(token.to_string())).await?;
     Ok(transport)
 }
 
@@ -282,14 +281,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cmd_endpoints_are_unsupported() {
-        let result = connect_to_hub(opts("cmd-stdio:?command=run-hub", None, None)).await;
-        assert!(matches!(
-            result,
-            Err(ConnectError::Unsupported("cmd-stdio"))
-        ));
+    async fn cmd_env_endpoints_are_unsupported() {
+        let result = connect_to_hub(opts("cmd:?command=run-hub", None, None)).await;
+        assert!(matches!(result, Err(ConnectError::Unsupported("cmd-env"))));
+    }
 
-        // Sanity: the command still parses correctly upstream.
+    #[tokio::test]
+    async fn cmd_stdio_reports_spawn_failures() {
+        let result = connect_to_hub(opts(
+            "cmd-stdio:?argv=linkrpc-tokio-test-missing-binary.exe",
+            None,
+            None,
+        ))
+        .await;
+        assert!(matches!(result, Err(ConnectError::Io(_))));
+
         let resolved = resolve_connection(&opts("cmd-stdio:?argv=a&argv=b", None, None)).unwrap();
         assert!(matches!(
             resolved.endpoint,

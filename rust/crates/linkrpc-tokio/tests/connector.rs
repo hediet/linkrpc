@@ -1,5 +1,5 @@
 //! M6 connector integration: drive [`connect_to_hub`](linkrpc_tokio::connect_to_hub) end-to-end over
-//! both transports — a Unix-domain socket (with `hello` preamble) and a WebSocket (token in the
+//! both transports — a Unix-domain socket (with the `hubrpc::initialize` handshake) and a WebSocket (token in the
 //! `Authorization` header). Both wrap the same `LinkRpcConnection`, so a single helper serves the
 //! pizza interface and both clients exercise the real request/response path.
 
@@ -114,7 +114,7 @@ async fn assert_order(client: &LinkRpcConnection) {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn connect_to_hub_over_unix_socket_with_preamble() {
+async fn connect_to_hub_over_unix_socket_with_initialize() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("linkrpc-m6-{}.sock", std::process::id()));
     let _ = std::fs::remove_file(&path);
@@ -123,12 +123,11 @@ async fn connect_to_hub_over_unix_socket_with_preamble() {
     let server_path = path.clone();
     let server = tokio::spawn(async move {
         let transport = listener.accept().await.unwrap();
-        let preamble = transport
-            .read_preamble()
+        let token = transport
+            .accept_initialize(|_| true)
             .await
-            .expect("read preamble")
-            .expect("preamble present");
-        assert_eq!(preamble.token.as_deref(), Some(TOKEN));
+            .expect("initialize handshake");
+        assert_eq!(token.as_deref(), Some(TOKEN));
         let _conn = serve(Box::new(transport));
         // Keep the server alive until the test drops it.
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;

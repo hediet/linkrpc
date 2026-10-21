@@ -381,28 +381,46 @@ impl LinkRpcConnection {
     /// Register the reflection interfaces (`defaults`, `directory`, `schemas`) backed by
     /// this connection's live registry. Idempotent.
     pub fn enable_reflection(&self) {
-        if self.inner.find(None, DEFAULTS_ID).is_some() {
+        self.mount_reflection(None);
+    }
+
+    /// Additionally mount the reflection interfaces under `service_id`, for participants that live
+    /// behind a hub: callers reach them via form-3 `<serviceId>::hubrpc.directory::list` (root-form
+    /// calls are never forwarded by a hub). The mounted directory lists only that service's
+    /// interfaces. Idempotent per service id.
+    pub fn enable_reflection_for(&self, service_id: impl Into<String>) {
+        self.mount_reflection(Some(service_id.into()));
+    }
+
+    fn mount_reflection(&self, service_id: Option<String>) {
+        if self
+            .inner
+            .find(service_id.as_deref(), DEFAULTS_ID)
+            .is_some()
+        {
             return;
         }
         let reflection = Arc::new(Reflection {
             inner: self.inner.clone(),
+            service_id: service_id.clone(),
         });
+        let opts = RegisterOptions {
+            service_id,
+            ..RegisterOptions::default()
+        };
         // Unwrap is safe: idempotency guard above guarantees these keys are free.
         self.register_service(
             Arc::new(DefaultsServiceServer::new(reflection.clone())),
-            RegisterOptions::default(),
+            opts.clone(),
         )
         .unwrap();
         self.register_service(
             Arc::new(DirectoryServiceServer::new(reflection.clone())),
-            RegisterOptions::default(),
+            opts.clone(),
         )
         .unwrap();
-        self.register_service(
-            Arc::new(SchemasServiceServer::new(reflection)),
-            RegisterOptions::default(),
-        )
-        .unwrap();
+        self.register_service(Arc::new(SchemasServiceServer::new(reflection)), opts)
+            .unwrap();
     }
 
     /// Snapshot of registered interfaces, in registration order.
@@ -719,6 +737,8 @@ fn not_found(reason: &str, method: &str) -> JsonRpcError {
 /// macro-generated `*Server` adapters in [`LinkRpcConnection::enable_reflection`].
 struct Reflection {
     inner: Arc<RegistryInner>,
+    /// The service this reflection is mounted under; its directory lists only that service.
+    service_id: Option<String>,
 }
 
 #[async_trait]
@@ -799,6 +819,11 @@ impl DirectoryService for Reflection {
             .iter()
             .filter(|e| filter_iface.is_none_or(|f| e.iface.id() == f))
             .filter(|e| filter_service.is_none_or(|f| e.service_id.as_deref().unwrap_or("") == f))
+            .filter(|e| {
+                self.service_id
+                    .as_deref()
+                    .is_none_or(|mounted| e.service_id.as_deref() == Some(mounted))
+            })
             .map(|e| ServiceListing {
                 service_id: e.service_id.clone().unwrap_or_default(),
                 interface_id: e.iface.id().to_string(),
