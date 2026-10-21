@@ -1,7 +1,7 @@
 //! `linkrpc-tokio` — tokio-based transports for linkrpc.
 //!
 //! Ships the north-star [`NdjsonTransport`] (newline-delimited JSON-RPC framing + `hello`
-//! preamble) over any async byte stream, plus Unix-domain-socket constructors. Higher layers
+//! the `hubrpc::initialize` handshake) over any async byte stream, plus Unix-domain-socket constructors. Higher layers
 //! (`LinkRpcConnection`, the hub client) are runtime-agnostic and sit on top of this.
 
 pub mod connect;

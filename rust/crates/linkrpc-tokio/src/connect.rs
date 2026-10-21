@@ -3,7 +3,7 @@
 //!
 //! [`connect_to_hub`] is the entrypoint. Token precedence follows the TS CLI:
 //! `endpoint_token ?? token-from-URI ?? LINKRPC_TOKEN ?? ""`. Socket endpoints (UDS / named pipe)
-//! write the `{"hello":1,"token":"…"}` preamble before any RPC; WebSocket endpoints send the token
+//! send the `hubrpc::initialize` handshake carrying the token before any RPC; WebSocket endpoints send the token
 //! in the `Authorization` header with no preamble. `cmd-stdio:` endpoints spawn the child and speak
 //! NDJSON over its stdio (see [`crate::stdio`]).
 
@@ -13,7 +13,6 @@ use std::time::Duration;
 
 use linkrpc::prelude::{parse_endpoint_uri, EndpointError, LinkRpcConnection, ResolvedEndpoint};
 
-use crate::ndjson::Preamble;
 use crate::ws::connect_ws;
 
 /// The env var naming the hub endpoint URI.
@@ -209,9 +208,7 @@ async fn connect_socket(
     token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
     let transport = crate::unix::connect_unix(path).await?;
-    transport
-        .write_preamble(&Preamble::new(Some(token.to_string())))
-        .await?;
+    transport.initialize(Some(token.to_string())).await?;
     Ok(transport)
 }
 
@@ -221,9 +218,7 @@ async fn connect_socket(
     token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
     let transport = crate::windows::connect_pipe(path).await?;
-    transport
-        .write_preamble(&Preamble::new(Some(token.to_string())))
-        .await?;
+    transport.initialize(Some(token.to_string())).await?;
     Ok(transport)
 }
 

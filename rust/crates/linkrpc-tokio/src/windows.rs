@@ -1,8 +1,8 @@
 //! Windows named-pipe constructors for the NDJSON transport — the Windows counterpart to
 //! [`unix`](crate::unix).
 //!
-//! Dialing produces an [`NdjsonTransport`] ready for the caller to write its `hello` preamble;
-//! accepting produces one ready for the server to [`read_preamble`](NdjsonTransport::read_preamble).
+//! Dialing produces an [`NdjsonTransport`] ready for the caller to send its [`initialize`](NdjsonTransport::initialize) handshake;
+//! accepting produces one ready for the server to [`accept_initialize`](NdjsonTransport::accept_initialize).
 //! Both are thin wrappers over [`NdjsonTransport::from_stream`] — all framing lives there, so this
 //! module is just pipe plumbing. Pipe addresses use the `\\.\pipe\…` form (the same path
 //! [`parse_endpoint_uri`](linkrpc::prelude::parse_endpoint_uri) yields for an `npipe://` URI).
@@ -13,7 +13,7 @@ use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeServer, ServerOpti
 
 use crate::ndjson::NdjsonTransport;
 
-/// Dial a named pipe and wrap it in an NDJSON transport. Write the `hello` preamble before RPC.
+/// Dial a named pipe and wrap it in an NDJSON transport. Send the `hubrpc::initialize` handshake before RPC.
 pub async fn connect_pipe(addr: &str) -> io::Result<NdjsonTransport> {
     let client = ClientOptions::new().open(addr)?;
     Ok(NdjsonTransport::from_stream(client))
@@ -41,7 +41,7 @@ impl NamedPipeHubListener {
         })
     }
 
-    /// Accept the next connection. Read its `hello` preamble before serving RPC.
+    /// Accept the next connection. Run [`accept_initialize`](NdjsonTransport::accept_initialize) before serving RPC.
     pub async fn accept(&mut self) -> io::Result<NdjsonTransport> {
         let server = self
             .pending

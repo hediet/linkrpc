@@ -6,8 +6,8 @@
 //! 1. bind a [`HubListener`] and publish it as `LINKRPC_ENDPOINT` (a `unix:` / `npipe://` URI) plus
 //!    `LINKRPC_TOKEN`;
 //! 2. spawn the `calc_endpoint_server` example, which **inherits** those env vars and dials back in
-//!    with [`connect_to_hub`](linkrpc_tokio::connect_to_hub), writing the `hello` preamble;
-//! 3. accept the connection, verify the preamble token, and wrap it in a `LinkRpcConnection`;
+//!    with [`connect_to_hub`](linkrpc_tokio::connect_to_hub), sending the `hubrpc::initialize` handshake;
+//! 3. accept the connection, verify the handshake token, and wrap it in a `LinkRpcConnection`;
 //! 4. drive the (remote) service through the typed `CalculatorClient` — linkrpc is bidirectional, so
 //!    the accepting side calls the service the dialing side registered.
 //!
@@ -51,18 +51,12 @@ async fn main() {
         .spawn()
         .expect("spawn calc_endpoint_server");
 
-    // 3. Accept the server's connection and verify its `hello` preamble token.
+    // 3. Accept the server's connection and verify its `hubrpc::initialize` token.
     let transport = listener.accept().await.expect("accept server connection");
-    let preamble = transport
-        .read_preamble()
+    transport
+        .accept_initialize(|presented| presented == Some(token.as_str()))
         .await
-        .expect("read preamble")
-        .expect("preamble present");
-    assert_eq!(
-        preamble.token.as_deref(),
-        Some(token.as_str()),
-        "server presented the wrong token"
-    );
+        .expect("server presented the wrong token");
 
     let conn = LinkRpcConnection::new(Box::new(transport));
     let driver = conn.clone();

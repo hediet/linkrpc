@@ -2,7 +2,7 @@
 //!
 //! Spawning mirrors the TS hub's `spawnCommand`: a verbatim `command` runs through the OS shell,
 //! `argv` runs directly — except on Windows for binaries that are not `.exe`/`.com` (e.g. npm
-//! `.cmd` shims), which need `cmd.exe`. The child's stderr is inherited, no `hello` preamble is
+//! `.cmd` shims), which need `cmd.exe`. The child's stderr is inherited, no `hubrpc::initialize` handshake is
 //! written (the parent owns the child), and the child is killed when the transport is dropped.
 
 use std::collections::BTreeMap;
