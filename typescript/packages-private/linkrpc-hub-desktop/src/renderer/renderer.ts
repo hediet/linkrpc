@@ -7,11 +7,11 @@ const LOG_REFRESH_MS = 2_000;
 /** The management window: renders main-process state and invokes actions. */
 class ManagerView {
     private _state: DesktopState | undefined;
-    private _logsFor: string | undefined;
+    private _selectedService: string | undefined;
     private _logLines: LogLine[] = [];
     private _localError: string | undefined;
     private readonly _editor = new ConfigEditor(message => this._showError(message));
-    private readonly _calls = new CallsView(message => this._showError(message));
+    private readonly _calls = new CallsView(message => this._showError(message), () => this._selectService(undefined));
 
     constructor() {
         bridge.onState(state => this._setState(state));
@@ -87,7 +87,14 @@ class ManagerView {
             title: service.enabled ? 'Disable (saved in the config)' : 'Enable (saved in the config)',
             onChange: () => this._invoke(() => bridge.invoke('setServiceEnabled', { name: service.name, enabled: !service.enabled })),
         });
-        return h('tr', { class: this._logsFor === service.name ? 'selected' : '' },
+        const selected = this._selectedService === service.name;
+        return h('tr', {
+            class: `selectable${selected ? ' selected' : ''}`,
+            title: selected ? 'Click to deselect' : 'Click to show its logs and the calls through it',
+            onClick: (event: MouseEvent) => {
+                if (!(event.target as Element).closest('button, input, label')) this._selectService(service.name);
+            },
+        },
             h('td', {}, h('div', { class: 'name' }, service.name),
                 h('div', { class: 'sub' }, service.description ?? `service ID: ${service.serviceId}`)),
             h('td', {}, h('span', { class: `pill state-${service.state}` }, service.state)),
@@ -97,7 +104,7 @@ class ManagerView {
             h('td', { class: 'actions' },
                 h('label', { class: 'sub', title: 'Enabled services start with the hub' }, enabled, ' enabled'),
                 h('button', { class: 'small', disabled: !service.enabled, onClick: () => this._invoke(() => bridge.invoke('restartService', { name: service.name })) }, 'Restart'),
-                h('button', { class: 'small', onClick: () => this._showLogs(service.name) }, 'Logs')));
+                h('button', { class: 'small', onClick: () => this._selectService(service.name) }, 'Logs')));
     }
 
     private _hub(state: DesktopState, status: DaemonStatus | undefined): Node[] {
@@ -138,19 +145,21 @@ class ManagerView {
         ];
     }
 
-    private _showLogs(name: string): void {
-        this._logsFor = this._logsFor === name ? undefined : name;
+    /** Select a service (or deselect it): shows its logs and limits the Calls view to its traffic. */
+    private _selectService(name: string | undefined): void {
+        this._selectedService = this._selectedService === name ? undefined : name;
+        this._calls.setService(this._selectedService);
         this._logLines = [];
         this._render();
         void this._refreshLogs();
     }
 
     private async _refreshLogs(): Promise<void> {
-        const name = this._logsFor;
+        const name = this._selectedService;
         if (name === undefined || this._state?.connection !== 'connected') return;
         try {
             const lines = await bridge.invoke('getServiceLogs', { name });
-            if (this._logsFor !== name) return;
+            if (this._selectedService !== name) return;
             this._logLines = lines;
             this._renderLogs();
         } catch (error) {
@@ -160,7 +169,7 @@ class ManagerView {
 
     private _renderLogs(): void {
         const section = _byId('logs');
-        const name = this._logsFor;
+        const name = this._selectedService;
         section.hidden = name === undefined;
         if (name === undefined) return;
         const pre = h('pre', { class: 'log' }, ...(this._logLines.length === 0
@@ -169,7 +178,7 @@ class ManagerView {
                 `${new Date(line.at).toLocaleTimeString()}  ${line.text}`))));
         section.replaceChildren(
             h('h2', {}, `Logs · ${name}`, h('span', { class: 'spacer' }),
-                h('button', { class: 'small', onClick: () => this._showLogs(name) }, 'Close')),
+                h('button', { class: 'small', onClick: () => this._selectService(name) }, 'Close')),
             pre);
         pre.scrollTop = pre.scrollHeight;
     }
