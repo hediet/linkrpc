@@ -1,0 +1,38 @@
+{
+    "name": "@hediet/linkrpc-compute-node",
+    "version": "0.0.1",
+    "description": "A LinkRPC service that gives remote shell, file system, HTTP, and TCP access to this machine.",
+    "type": "module",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        }
+    },
+    "bin": {
+        "linkrpc-compute-node": "./dist/cli.js"
+    },
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsdown",
+        "dev": "tsdown --watch",
+        "test": "vitest --run",
+        "test:watch": "vitest"
+    },
+    "dependencies": {
+        "@hediet/linkrpc": "workspace:*",
+        "@hediet/linkrpc-hub": "workspace:*",
+        "@hediet/linkrpc-infra": "workspace:*"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "tsdown": "^0.22.3",
+        "tsx": "4.22.4",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0"
+    }
+}
