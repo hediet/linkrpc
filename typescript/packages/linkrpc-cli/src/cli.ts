@@ -3,8 +3,8 @@ import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
 import { resolveLocalEndpoint } from './localEndpoint';
 import { checkDaemonInterfaces, contextNamespace, registerServices, restartLocalDaemon, serviceAttachCommand, useLocalManagement } from './commands/services';
-import { localTerminalSize, runConsoleSession } from './commands/consoleSession';
-import { consoleInterface } from '@hediet/linkrpc-infra/console';
+import { DetachKeys } from './commands/consoleSession';
+import { attachConsole, listConsoleTargets } from './commands/consoleAttach';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
 import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
@@ -86,6 +86,7 @@ import {
     ContextStore,
     type ContextReference,
     type ContextValues,
+    type SelectedContext,
     type StoredContext,
     type ValidationMode,
     formatContextReference,
@@ -162,6 +163,7 @@ export async function main(
         )
         .option('--schema <path-or-url>', 'static schema catalog used for discovery and validation')
         .option('--daemon-service <id>', 'daemon management service ID on the selected Hub')
+        .option('--detach-keys <keys>', "TTY console detach sequence in Docker syntax, e.g. 'ctrl-b,d' (default) or 'ctrl-p,ctrl-q'")
         .option(
             '--validation <mode>',
             'schema validation mode: auto, required, or off',
@@ -241,6 +243,16 @@ export async function main(
             readonly reference: Exclude<ContextReference, { readonly kind: 'empty'; }>;
         }
         | undefined;
+    /** Create a context from the effective values, then make it the selected context of this invocation. */
+    const createAndSelectContext = async (reference: Exclude<ContextReference, { readonly kind: 'empty'; }>) => {
+        if (g_contextStore === undefined || g_invocation === undefined) throw new Error('context resolver is unavailable');
+        await createContextFromInvocation(g_contextStore, reference, g_invocation.values);
+        const useEnvironment = explicitOption<boolean>(program, 'useEnv');
+        g_invocation = await resolveInvocationContext({
+            profile, store: g_contextStore, selector: formatContextReference(reference),
+            cliOverrides: g_invocation.cliOverrides, ...(useEnvironment !== undefined ? { useEnvironment } : {}),
+        });
+    };
     program.hook('preAction', async (_thisCommand, actionCommand) => {
         const commandPath = getCommandPath(actionCommand);
         const store = new ContextStore();
@@ -266,6 +278,7 @@ export async function main(
             if (Object.keys(cliOverrides).length === 0) {
                 throw new Error('--context-set requires at least one context-capable override');
             }
+            assertExplicitRootMutation(g_invocation.selected);
             if (g_invocation.selected.context === undefined) {
                 throw new Error('No context exists to update. Use --new-context . to create one.');
             }
@@ -292,6 +305,11 @@ export async function main(
         }
         if (commandPath.startsWith('services ') && preparedNewContext !== undefined) {
             await createContextFromInvocation(preparedNewContext.store, preparedNewContext.reference, g_invocation.values);
+            pendingNewContext = undefined;
+        }
+        if ((commandPath === 'context' || commandPath === 'context show') && preparedNewContext !== undefined) {
+            // Create first, so that the command shows the new context rather than the one it was derived from.
+            await createAndSelectContext(preparedNewContext.reference);
             pendingNewContext = undefined;
         }
 
@@ -328,6 +346,7 @@ export async function main(
     });
 
     if (profile === 'hub') registerServices(program, {
+        detachKeys,
         attachCommand: id => {
             if (!g_invocation) throw new Error('Context resolver is unavailable');
             const reference = preparedNewContext?.reference ?? g_invocation.selected.reference;
@@ -357,31 +376,40 @@ export async function main(
                 const serviceId = g_invocation?.values.daemonService
                     ?? `${(await connection.get(hubGrantedServiceIdInterface).getHubServiceId({})).hubServiceId}/daemon`;
                 await checkDaemonInterfaces(connection, serviceId);
-                result = await action(connection.get(managedEndpointsInterface, { serviceId }), { local: false, connection });
+                result = await action(connection.get(managedEndpointsInterface, { serviceId }), { local: false });
             }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
             return result!;
         },
     });
 
     program
-        .command('attach <serviceId>')
+        .command('attach [serviceId]')
         .description(
-            'Attach to a service that implements `linkrpc.console` (a pipe or TTY process console). '
-            + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; Ctrl+P, Ctrl+Q detaches.',
+            'Attach to a console of any service implementing the `linkrpc.console.v1` interface template '
+            + '(found through the `linkrpc.console` directory tag). Without a service, list available consoles. '
+            + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; the detach '
+            + 'keys (default Ctrl+B, then d) detach.',
         )
+        .option('--params <json>', "params of the console template instance, e.g. '{\"namespace\":\"…\",\"id\":\"main\"}'", '{}')
+        .option('--interface <id>', 'interface containing the console instance')
+        .option('--instance <name>', 'console template instance name, when an interface has several')
         .option('--read-only', 'observe output without sending input')
-        .action(async (serviceId: string, opts: { readOnly?: boolean }) => {
+        .action(async (serviceId: string | undefined, opts: { params: string; interface?: string; instance?: string; readOnly?: boolean }) => {
             await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
-                const console = new LinkRpcConnection(channel).get(consoleInterface, { serviceId });
-                const interactive = opts.readOnly !== true;
-                const size = interactive ? localTerminalSize() : undefined;
-                const result = await runConsoleSession(onMessage => console.attach({ interactive, ...(size ? { size } : {}) }, { onMessage }), {
-                    interactive,
-                    owner: false,
-                    reattachCommand: `${cliInvocation.programName} attach ${serviceId}`,
+                if (serviceId === undefined) {
+                    process.stdout.write(`${await listConsoleTargets(channel)}\n`);
+                    return;
+                }
+                await attachConsole(channel, {
+                    serviceId, params: opts.params, readOnly: opts.readOnly,
+                    ...(opts.interface === undefined ? {} : { interfaceId: opts.interface }),
+                    ...(opts.instance === undefined ? {} : { instance: opts.instance }),
+                    detachKeys: detachKeys(),
+                    reattachCommand: [cliInvocation.programName, 'attach', serviceId,
+                        ...(opts.params === '{}' ? [] : ['--params', `'${opts.params}'`]),
+                        ...(opts.instance === undefined ? [] : ['--instance', opts.instance])].join(' '),
                 });
-                if (!result.closedLocally && result.exit?.code) process.exitCode = result.exit.code;
-            }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+            }, { autoNegotiatePerCall: true });
         });
 
     program
@@ -982,13 +1010,25 @@ Batch options:
         });
 
     context
+        .command('create <selector>')
+        .description('Create a context (a folder, id:<name>) from the effective values, including flags on this command; same as hub context --new-context <selector>.')
+        .action(async (selector: string) => {
+            if (g_contextStore === undefined) throw new Error('context store is unavailable');
+            if (preparedNewContext !== undefined) throw new Error('Use either context create <selector> or --new-context, not both');
+            const reference = mutableReference(await g_contextStore.resolveReference(selector));
+            await g_contextStore.assertCanCreate(reference);
+            await createAndSelectContext(reference);
+            printSelectedContext(false);
+        });
+
+    context
         .command('list')
-        .description('List every path, named, and root context in the global store.')
+        .description('List every path and named context in the global store, and the root context, which always exists.')
         .action(async () => {
             if (g_contextStore === undefined) throw new Error('context store is unavailable');
-            for (const item of await g_contextStore.list()) {
-                process.stdout.write(`${formatContextReference(item.reference)}\n`);
-            }
+            const references = (await g_contextStore.list()).map(item => formatContextReference(item.reference));
+            if (!references.includes(':root')) references.push(':root');
+            for (const reference of references.sort()) process.stdout.write(`${reference}\n`);
         });
 
     context
@@ -1005,6 +1045,7 @@ Batch options:
                 if ((opts.unset?.length ?? 0) > 0) throw new Error('--unset cannot be used with --new-context');
                 return;
             }
+            assertExplicitRootMutation(g_invocation.selected);
             if (g_invocation.selected.context === undefined) {
                 throw new Error('No context exists to update. Use hub context set --new-context . with your desired flags.');
             }
@@ -1026,7 +1067,7 @@ Batch options:
 
     context
         .command('remove')
-        .description('Stop any owned connection and remove the selected context from the global store.')
+        .description('Stop any owned connection and remove the selected context; removing :root resets it to no defaults.')
         .action(async () => {
             if (g_contextStore === undefined || g_invocation === undefined) {
                 throw new Error('context resolver is unavailable');
@@ -1040,7 +1081,9 @@ Batch options:
             }
             const removed = await g_contextStore.remove(reference);
             if (!removed) throw new Error(`context ${formatContextReference(reference)} does not exist`);
-            process.stdout.write(`Removed context ${formatContextReference(reference)}.\n`);
+            process.stdout.write(reference.kind === 'root'
+                ? 'Reset context :root to no stored defaults (the root context always exists).\n'
+                : `Removed context ${formatContextReference(reference)}.\n`);
         });
 
     program
@@ -1707,6 +1750,7 @@ function collectContextOverrides(program: Command, actionCommand: Command): Cont
     copyExplicit(program, opts, result, 'schema');
     copyExplicit(program, opts, result, 'validation');
     copyExplicit(program, opts, result, 'daemonService');
+    copyExplicit(program, opts, result, 'detachKeys');
     for (let command: Command | null = actionCommand; command; command = command.parent) {
         if (command.name() === 'services') copyExplicit(command, command.opts(), result, 'namespace');
     }
@@ -1794,6 +1838,15 @@ function mutableReference(
     return reference;
 }
 
+/** The root context applies to every folder without a context: change it only when selected explicitly. */
+function assertExplicitRootMutation(selected: SelectedContext): void {
+    if (selected.selectedBy === 'root') {
+        throw new Error('No folder or named context applies here, so the root context is in effect. '
+            + 'To change defaults for every such folder, select it explicitly with --context :root; '
+            + 'to create a context for this folder, use --new-context .');
+    }
+}
+
 function printSelectedContext(effective: boolean): void {
     if (g_invocation === undefined) throw new Error('context resolver is unavailable');
     const selected = g_invocation.selected;
@@ -1830,7 +1883,7 @@ function contextSelectionDescription(selectedBy: ResolvedInvocationContext['sele
         case 'argument': return '--context';
         case 'environment': return 'LINKRPC_CONTEXT (HUBRPC_CONTEXT fallback)';
         case 'cwd': return 'current-directory lookup';
-        case 'root': return ':root fallback';
+        case 'root': return ':root fallback (no folder context applies)';
         case 'empty': return 'no matching context (:empty)';
     }
 }
@@ -1876,6 +1929,7 @@ function printContextValues(
 function contextValueFlag(key: keyof ContextValues): string {
     const names: Record<keyof ContextValues, string> = {
         daemonService: 'daemon-service',
+        detachKeys: 'detach-keys',
         namespace: 'namespace',
         endpoint: 'endpoint',
         endpointCmd: 'endpoint-cmd',
@@ -1900,6 +1954,7 @@ function contextValueFlag(key: keyof ContextValues): string {
 function parseContextValueKey(value: string): keyof ContextValues {
     const entry = (Object.keys({
         daemonService: true,
+        detachKeys: true,
         namespace: true,
         endpoint: true,
         endpointCmd: true,
@@ -1924,6 +1979,12 @@ function parseContextValueKey(value: string): keyof ContextValues {
 
 function effectiveValidation(profile: CliProfile): ValidationMode {
     return g_invocation?.values.validation ?? validationDefault(profile);
+}
+
+/** The configured TTY detach sequence; validated when used, so invalid stored values fail with a clear message. */
+function detachKeys(): DetachKeys | undefined {
+    const spec = g_invocation?.values.detachKeys;
+    return spec === undefined ? undefined : DetachKeys.parse(spec);
 }
 
 function parseValidationMode(value: string): ValidationMode {
@@ -2178,13 +2239,13 @@ async function acquireConnection(
         };
     }
     if (endpoint === undefined && g_invocation?.profile === 'hub') {
-        await useLocalManagement(false, async client => {
-            const endpoints = await client.list({});
-            if (!endpoints.some(value => value.runtime.state === 'running')) {
-                throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
-            }
-        });
-        return { ep: resolveLocalEndpoint() };
+        // Without a configured endpoint, the hub profile uses the local Hub daemon whenever it runs.
+        try {
+            return { ep: resolveLocalEndpoint() };
+        } catch {
+            throw new Error('No endpoint configured through flags, environment, or context, and the local Hub daemon is not running. '
+                + 'Pass --endpoint, or start the daemon (any `hub services run` starts it).');
+        }
     }
     return { ep: needEndpoint(endpoint) };
 }

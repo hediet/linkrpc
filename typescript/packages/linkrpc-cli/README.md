@@ -62,7 +62,7 @@ hub services run --id worker --detach -- node worker.js
 hub services attach --id worker
 hub services stop --id worker
 
-# Run in a pseudoterminal (TTY); detach with Ctrl+P, Ctrl+Q:
+# Run in a pseudoterminal (TTY); detach with Ctrl+B, then d:
 hub services run -x -t --id shell -- pwsh
 
 # Stop and replace an existing endpoint with the same ID:
@@ -80,7 +80,8 @@ hub services connect --id peer --target-endpoint ws://localhost:7000 --restart o
 ```
 
 `--id` defaults to `main`. Namespace defaults to the selected context's canonical
-folder path (case-normalized on Windows), or its named/root context identity.
+folder path (case-normalized on Windows), its named context identity (`id:<name>`),
+or `:root` where no folder context applies. The `:empty` context has no namespace.
 Override it with `hub services --namespace <name> ...`. `--namespace` belongs
 only to `services`; it does not select or filter services for `call`, `ls`, or
 `ui`. `--context` only selects an existing context;
@@ -114,10 +115,10 @@ and argv, not a shell command string. Execution host, namespace, ID, command,
 and working directory are printed before creation. Local fallback is used only
 when no endpoint/config is selected. `run`, `connect`, and `start` may bootstrap
 the local daemon; reads never do. Without a selected endpoint, `hub ls`, `call`,
-and other connected commands (including `ui`) use the local Hub when any namespace
-has a running managed endpoint. An empty or unrelated context does not prevent
-this fallback. If none are running, the command reports an error without starting
-the daemon. A configured endpoint that fails never falls back to the local Hub.
+and other connected commands (including `ui`) use the local Hub whenever its
+daemon runs, whether or not any services do. If it is not running, the command
+reports an error without starting the daemon. A configured endpoint that fails
+never falls back to the local Hub.
 Use the full `serviceId` returned by `services list` for RPC
 calls; endpoint IDs and published RPC service IDs are different things.
 
@@ -134,16 +135,24 @@ forward input and interrupts, and do not own the process lifetime. `logs`
 prints recent output; `logs --follow` keeps streaming; `attach --read-only`
 observes without sending input.
 
-Every process endpoint serves the standard
-[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
-interface; `services list` reports its `console.serviceId`. `hub services attach`
-resolves that ID and attaches to it. The generic command attaches to **any**
-participant that implements the interface, not only daemon-managed processes:
+Every process endpoint has a console that implements the standard
+[`linkrpc.console.v1`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+interface template: the daemon's management interface contains one template
+instance, `consoles`, whose params are the endpoint address. `hub services attach`
+calls it directly. The generic `attach` command works with **any** participant
+that instantiates the template, not only daemon-managed processes. It discovers
+consoles through the `linkrpc.console` directory tag and reads the wire methods
+and params schema from reflection:
 
 ```sh
-hub attach hub/daemon/consoles/<sha256(namespace)>/<id>
+hub attach                                   # list consoles and their params schemas
+hub attach hub/daemon --params '{"namespace":"d:\\work\\app","id":"main"}'
 rpc --endpoint ws://localhost:7000 attach my/service --read-only
 ```
+
+`--params` (default `{}`) is validated against the instance's reflected params
+schema. When a service has several console instances, select one with
+`--instance` or `--interface`.
 
 #### Pipe and TTY consoles
 
@@ -161,7 +170,23 @@ programs display correctly.
 | Local input | Line editing; Enter sends the line | Raw: every key goes to the program |
 | Ctrl+C | Interrupts (sends SIGINT where supported), or stops a foreground owner | Goes to the program (an interrupt in a shell) |
 | Ctrl+D | On an empty line: detach, or stop a foreground owner | Goes to the program (EOF in a shell) |
-| Detach | Ctrl+D on an empty line (Ctrl+] also works) | Ctrl+P, then Ctrl+Q (Docker's sequence); a lone Ctrl+P is forwarded with the next key |
+| Detach | Ctrl+D on an empty line (Ctrl+] also works) | The detach keys: Ctrl+B, then d by default |
+
+TTY detach keys use Docker's `--detach-keys` syntax: comma-separated keys, each
+a character or `ctrl-<key>` (`a`-`z`, `@`, `[`, `\`, `]`, `^`, `_`). The default
+is `ctrl-b,d`, tmux's binding. Docker's `ctrl-p,ctrl-q` does not work in VS
+Code's integrated terminal, which handles Ctrl+P (Quick Open) and, on Windows,
+Ctrl+Q itself; Ctrl+B passes through. Keys of an incomplete sequence are held
+back and forwarded unchanged when the sequence does not complete. Change the
+sequence per command or store it in a context:
+
+```sh
+hub --detach-keys ctrl-p,ctrl-q services attach --id shell
+hub context set --detach-keys 'ctrl-],q'     # store it in the active context
+```
+
+Choose another sequence when the attached program uses Ctrl+B itself, for
+example tmux running inside the console.
 
 Windows pipes have no interrupt channel: there, Ctrl+C in a pipe attachment
 prints a hint instead of terminating the shared process; use `-t` when the
@@ -197,7 +222,7 @@ immediately instead of waiting out an idle five-second timeout.
 
 Other terminals can discover/call RPC services and attach as observers; closing
 an observer does not stop it. The detach key of the owning terminal (Ctrl+D on
-an empty line, or Ctrl+P, Ctrl+Q for a TTY) cancels the foreground command and
+an empty line, or the TTY detach keys) cancels the foreground command and
 therefore stops the service, rather than detaching it.
 `--foreground` conflicts with `--detach` and `--persistent`; the management API
 also rejects making a foreground endpoint persistent later. Restart policies
@@ -250,7 +275,8 @@ work for plain processes too.
 
 `services list` reports `rpc: false` for these processes. They do not publish
 application RPC methods under their reserved `serviceId`: other Hub participants
-attach to their `linkrpc.console` (`console.serviceId`) to observe output and
+attach to their console (`hub services attach`, or generically through the
+daemon's `consoles` template instance) to observe output and
 send input, in both foreground and background mode. When the program adds
 LinkRPC support, omit `-x` to provision its RPC connection. Add `-t` when the
 program expects a terminal.
@@ -472,15 +498,19 @@ Use `--validation auto|required|off` to override a profile default.
 Contexts persist command defaults in the global user configuration store. A
 folder context is keyed by its canonical folder path; no file is written into
 that folder. Without `--context`, the CLI searches from the current directory
-through its parents, then uses `:root`, then the immutable `:empty` context.
+through its parents, then uses `:root`.
 
 Context selectors are:
 
 - An absolute or relative folder path.
 - `id:<name>` for a named context.
 - `:root` for the system-wide root above platform filesystem roots. On Unix,
-  `/` is equivalent to `:root`.
-- `:empty` for no stored defaults.
+  `/` is equivalent to `:root`. The root context **always exists**: until you
+  store defaults in it, it has none. It cannot be created with `--new-context`,
+  and removing it resets it to no defaults. Because it applies to every folder
+  without its own context, `context set` and `--context-set` change it only when
+  selected explicitly (`--context :root`).
+- `:empty` for no stored defaults, selected only explicitly. It is immutable.
 
 `LINKRPC_CONTEXT` selects a context when `--context` is absent;
 `HUBRPC_CONTEXT` is its legacy alias. An explicit `--context` also suppresses
@@ -499,14 +529,18 @@ hub call app::api::get --new-context id:working-copy
 hub call app::api::get --validation off --context-set
 
 hub context                         # same as `hub context show`
+hub context create id:working-copy  # same as: hub context --new-context id:working-copy
 hub context resolve --context id:working-copy
-hub context list
+hub context list                    # always includes :root
 hub context remove --context .
+hub context set --context :root --principal user:work   # defaults for folders without a context
+hub context remove --context :root  # resets :root to no defaults
 hub call app::api::get --context :empty --endpoint ws://localhost:7700
 ```
 
-Context creation is explicit: use `--new-context <selector>` (for example,
-`hub context --new-context .` to create a folder context from effective defaults).
+Context creation is explicit: use `hub context create <selector>` or
+`--new-context <selector>` (for example, `hub context --new-context .` creates a
+folder context from effective defaults and shows it).
 `--context <selector>` only selects an existing context; missing-context errors
 show how to create it. `context set` and `--context-set` update existing contexts
 and do not implicitly create a cwd context. Use `context set --new-context <selector>`
@@ -602,7 +636,7 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 
 | Command                       | Purpose                                                                                              |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `attach <serviceId> [--read-only]` | Attach to any service implementing [`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole): pipe consoles use line editing (Ctrl+D on an empty line detaches); TTY consoles receive raw keys (Ctrl+P, Ctrl+Q detaches). |
+| `attach [serviceId] [--params <json>] [--instance <name>] [--interface <id>] [--read-only]` | Attach to a [`linkrpc.console.v1`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole) template instance of any service, found through the `linkrpc.console` tag; without a service, list consoles. Pipe consoles use line editing (Ctrl+D on an empty line detaches); TTY consoles receive raw keys (`--detach-keys`, default Ctrl+B, then d, detaches). |
 
 ### Reflection
 

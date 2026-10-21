@@ -1,4 +1,3 @@
-import type { StreamingCall } from '@hediet/linkrpc';
 import {
     decodeConsoleData,
     encodeConsoleData,
@@ -11,6 +10,12 @@ import {
 } from '@hediet/linkrpc-infra/console';
 import { ServiceConsoleInput } from './serviceConsoleInput';
 
+/** An in-flight console attach call: typed streaming calls and adapted raw calls both satisfy it. */
+export interface ConsoleCall extends PromiseLike<{ readonly exit: ConsoleExit | null }> {
+    send(message: ConsoleClientMessage): unknown;
+    cancel(): unknown;
+}
+
 export interface ConsoleSessionOptions {
     /** Forward local input, resizes, and interrupts. */
     readonly interactive: boolean;
@@ -19,6 +24,8 @@ export interface ConsoleSessionOptions {
     /** Close after replay, for one-shot log output. */
     readonly untilLive?: boolean;
     readonly reattachCommand?: string;
+    /** Detaches a TTY attachment; defaults to {@link DEFAULT_DETACH_KEYS}. */
+    readonly detachKeys?: DetachKeys;
     /** Aborting closes the session locally. */
     readonly signal?: AbortSignal;
 }
@@ -32,11 +39,12 @@ export interface ConsoleSessionResult {
 /**
  * Drive a `linkrpc.console` attachment (or a stream embedding its protocol):
  * render output, and configure local input from the console's mode. TTY
- * consoles get raw keystrokes, so detaching uses Ctrl+P, Ctrl+Q; pipe consoles
- * get local line editing, and Ctrl+D on an empty line detaches.
+ * consoles get raw keystrokes, so detaching uses a key sequence (see
+ * {@link DetachKeys}); pipe consoles get local line editing, and Ctrl+D on an
+ * empty line detaches.
  */
 export async function runConsoleSession<TExtra extends { readonly t: string }>(
-    start: (onMessage: (message: ConsoleServerMessage | TExtra) => void) => StreamingCall<{ exit: ConsoleExit | null }, ConsoleClientMessage>,
+    start: (onMessage: (message: ConsoleServerMessage | TExtra) => void) => ConsoleCall,
     options: ConsoleSessionOptions,
     onExtra?: (message: TExtra) => void,
 ): Promise<ConsoleSessionResult> {
@@ -50,23 +58,62 @@ export function localTerminalSize(): ConsoleSize | undefined {
     return process.stdout.isTTY && columns > 0 && rows > 0 ? { cols: columns, rows } : undefined;
 }
 
-const CTRL_P = 0x10;
-const CTRL_Q = 0x11;
+/**
+ * A detach key sequence in Docker's `--detach-keys` syntax: comma-separated
+ * keys, each a single character or `ctrl-<key>` with `<key>` in `a`-`z`, `@`,
+ * `[`, `\`, `]`, `^`, or `_`. For example `ctrl-b,d` or `ctrl-p,ctrl-q`.
+ */
+export class DetachKeys {
+    private constructor(readonly spec: string, readonly bytes: Uint8Array) {}
 
-/** Docker-style detach sequence: Ctrl+P, Ctrl+Q. A lone Ctrl+P is forwarded with the next key. */
+    static parse(spec: string): DetachKeys {
+        const bytes = spec.split(',').map(part => {
+            const key = part.trim();
+            const ctrl = /^ctrl-(.)$/i.exec(key);
+            if (ctrl) {
+                const index = '@abcdefghijklmnopqrstuvwxyz[\\]^_'.indexOf(ctrl[1]!.toLowerCase());
+                if (index >= 0) return index;
+            } else if (key.length === 1 && key.charCodeAt(0) >= 0x20 && key.charCodeAt(0) < 0x7f) {
+                return key.charCodeAt(0);
+            }
+            throw new Error(`Invalid detach key "${key}" in "${spec}": use a character or ctrl-<a-z, @, [, \\, ], ^, _>, separated by commas`);
+        });
+        if (bytes.length === 0) throw new Error('The detach key sequence is empty');
+        return new DetachKeys(spec, Uint8Array.from(bytes));
+    }
+
+    /** Human-readable form, e.g. `Ctrl+B, then d`. */
+    get label(): string {
+        return [...this.bytes].map(byte => byte < 0x20 ? `Ctrl+${String.fromCharCode(byte + 0x40)}` : String.fromCharCode(byte)).join(', then ');
+    }
+}
+
+/** Ctrl+B, then d (tmux's binding): unlike Docker's Ctrl+P, Ctrl+Q, it reaches programs in VS Code's terminal. */
+export const DEFAULT_DETACH_KEYS = DetachKeys.parse('ctrl-b,d');
+
+/**
+ * Recognizes a detach sequence in raw keyboard input. Bytes of a partial match
+ * are held back, and forwarded unchanged when the sequence does not complete.
+ */
 export class DetachKeyFilter {
-    private _pending = false;
+    private _matched = 0;
+
+    constructor(private readonly _keys: DetachKeys = DEFAULT_DETACH_KEYS) {}
 
     push(chunk: Uint8Array): { readonly forward: Uint8Array; readonly detach: boolean } {
+        const sequence = this._keys.bytes;
         const forward: number[] = [];
         for (const byte of chunk) {
-            if (this._pending) {
-                this._pending = false;
-                if (byte === CTRL_Q) return { forward: Uint8Array.from(forward), detach: true };
-                forward.push(CTRL_P);
+            // Keep the longest suffix of the pending keys that still starts the sequence.
+            const pending = [...sequence.subarray(0, this._matched), byte];
+            let start = 0;
+            while (start < pending.length && !pending.slice(start).every((value, index) => value === sequence[index])) start++;
+            forward.push(...pending.slice(0, start));
+            this._matched = pending.length - start;
+            if (this._matched === sequence.length) {
+                this._matched = 0;
+                return { forward: Uint8Array.from(forward), detach: true };
             }
-            if (byte === CTRL_P) this._pending = true;
-            else forward.push(byte);
         }
         return { forward: Uint8Array.from(forward), detach: false };
     }
@@ -77,7 +124,8 @@ const ALTERNATE_SCREEN = /\x1b\[\?(?:1049|1047|47)([hl])/g;
 const TERMINAL_RESET = '\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1004l\x1b[?9001l';
 
 class ConsoleSession<TExtra extends { readonly t: string }> {
-    private _call: StreamingCall<{ exit: ConsoleExit | null }, ConsoleClientMessage> | undefined;
+    private _call: ConsoleCall | undefined;
+    private readonly _detachKeys: DetachKeys;
     private _mode: ConsoleMode | undefined;
     private _signals: readonly ConsoleSignal[] = [];
     private _input: { dispose(): void } | undefined;
@@ -88,9 +136,11 @@ class ConsoleSession<TExtra extends { readonly t: string }> {
     constructor(
         private readonly _options: ConsoleSessionOptions,
         private readonly _onExtra: ((message: TExtra) => void) | undefined,
-    ) {}
+    ) {
+        this._detachKeys = _options.detachKeys ?? DEFAULT_DETACH_KEYS;
+    }
 
-    async run(start: (onMessage: (message: ConsoleServerMessage | TExtra) => void) => StreamingCall<{ exit: ConsoleExit | null }, ConsoleClientMessage>): Promise<ConsoleSessionResult> {
+    async run(start: (onMessage: (message: ConsoleServerMessage | TExtra) => void) => ConsoleCall): Promise<ConsoleSessionResult> {
         const onSignal = () => this._interrupt();
         const onTerminate = () => this.close();
         process.on('SIGINT', onSignal);
@@ -122,7 +172,7 @@ class ConsoleSession<TExtra extends { readonly t: string }> {
 
     close(): void {
         this._closedLocally = true;
-        void this._call?.cancel().catch(() => {});
+        try { void Promise.resolve(this._call?.cancel()).catch(() => {}); } catch { /* already settled */ }
     }
 
     private _onMessage(message: ConsoleServerMessage | TExtra): void {
@@ -143,7 +193,7 @@ class ConsoleSession<TExtra extends { readonly t: string }> {
                 this._write(console.stream === 'stderr' ? process.stderr : process.stdout, decodeConsoleData(console.data));
                 return;
             case 'notice':
-                process.stderr.write(this._mode === 'tty' ? `\r\n[hub] ${console.text}\r\n` : `${console.text}\n`);
+                process.stderr.write(this._mode === 'tty' ? `\r\n[console] ${console.text}\r\n` : `${console.text}\n`);
                 return;
             case 'live':
                 if (this._options.untilLive) this.close();
@@ -169,8 +219,8 @@ class ConsoleSession<TExtra extends { readonly t: string }> {
         const reattach = this._options.reattachCommand;
         if (this._mode === 'tty') {
             process.stderr.write(owner
-                ? 'Foreground (TTY). Keys go to the program; Ctrl+P, Ctrl+Q stops and removes the service.\n'
-                : 'Attached (TTY). Keys go to the program; Ctrl+P, Ctrl+Q detaches.\n');
+                ? `Foreground (TTY). Keys go to the program; ${this._detachKeys.label} stops and removes the service.\n`
+                : `Attached (TTY). Keys go to the program; ${this._detachKeys.label} detaches.\n`);
         } else {
             const interrupt = owner ? 'Ctrl+C or ' : this._signals.includes('SIGINT') ? 'Ctrl+C interrupts; ' : '';
             process.stderr.write(owner
@@ -183,7 +233,7 @@ class ConsoleSession<TExtra extends { readonly t: string }> {
 
     private _startTerminalInput(): { dispose(): void } {
         const stdin = process.stdin;
-        const filter = stdin.isTTY ? new DetachKeyFilter() : undefined;
+        const filter = stdin.isTTY ? new DetachKeyFilter(this._detachKeys) : undefined;
         const wasRaw = stdin.isRaw;
         if (stdin.isTTY) {
             stdin.setRawMode(true);
@@ -234,6 +284,6 @@ class ConsoleSession<TExtra extends { readonly t: string }> {
     }
 
     private _send(message: ConsoleClientMessage): void {
-        void this._call?.send(message).catch(() => {});
+        try { void Promise.resolve(this._call?.send(message)).catch(() => {}); } catch { /* the call ended */ }
     }
 }

@@ -1,5 +1,6 @@
 import { defineInterface, requestType } from '@hediet/linkrpc';
 import {
+    ConsoleTemplate,
     consoleAttachParamsSchema,
     consoleClientMessageSchema,
     consoleExitSchema,
@@ -43,8 +44,8 @@ export const endpointStatus = endpointAddress.extend({
     owned: z.boolean(),
     sourceKind: z.enum(['process', 'connection']),
     rpc: z.boolean(),
-    /** Process endpoints serve `linkrpc.console` at this service ID. */
-    console: z.object({ serviceId: z.string(), mode: consoleModeSchema }).optional(),
+    /** Process endpoints have a console, reachable through the `consoles` template instance. */
+    console: z.object({ mode: consoleModeSchema }).optional(),
     runtime: ServiceStatusSchema,
 });
 export type EndpointStatus = z.infer<typeof endpointStatus>;
@@ -70,11 +71,15 @@ export const watchEvent = z.discriminatedUnion('t', [
 ]);
 export type WatchEvent = z.infer<typeof watchEvent>;
 
+/** Console template parameters: the endpoint whose process console to use. */
+export const consoleAddress = z.object({ namespace: z.string().min(1), id: z.string().min(1) });
+
 export const managedEndpointsInterface = defineInterface({
     id: 'linkrpc.managedEndpoints',
     description: 'Manage named processes and connections on this execution host. Starting endpoints executes with this host user\'s privileges. '
-        + 'Process endpoints serve `linkrpc.console` at `status.console.serviceId`.',
+        + 'Process consoles are served by the `consoles` instance of the `linkrpc.console.v1` template, with the endpoint address as params.',
 }, {
+    consoles: ConsoleTemplate({ params: consoleAddress }).mapMembers({ info: 'consoleInfo', attach: 'attachConsole' }),
     info: requestType(z.object({}), z.object({ hostname: z.string(), platform: z.string(), cwd: z.string(), servicePrefix: z.string() })),
     list: requestType(z.object({ namespace: z.string().optional() }), z.array(endpointStatus)),
     create: requestType(endpointDefinition.extend({ replace }), endpointStatus),

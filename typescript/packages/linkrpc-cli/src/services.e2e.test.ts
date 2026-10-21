@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectToHub } from '@hediet/linkrpc/node';
-import { consoleInterface, decodeConsoleData, type ConsoleServerMessage } from '@hediet/linkrpc-infra/console';
+import { decodeConsoleData, type ConsoleServerMessage } from '@hediet/linkrpc-infra/console';
 import { HubHome, readEndpointDiscovery, connectToHubManagement, managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -80,6 +80,32 @@ async function fixture(isolated = false) {
 }
 
 describe('hub services CLI', { timeout: 120_000 }, () => {
+    it('uses the always-existing root context when no folder context applies', async () => {
+        const f = await fixture();
+        const status = JSON.parse(await f.ok(['services', 'run', '-x', '--detach', '--id', 'scratch', '--', process.execPath, '-e', 'setInterval(() => {}, 1000)']));
+        expect({ namespace: status.namespace, id: status.id }).toEqual({ namespace: ':root', id: 'scratch' });
+        expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ namespace: ':root', id: 'scratch' }]);
+        await f.ok(['services', 'stop', '--id', 'scratch']);
+
+        const implicit = await f.run(['context', 'set', '--principal', 'user:shared']);
+        expect(implicit.code).not.toBe(0);
+        expect(implicit.stderr).toContain('select it explicitly with --context :root');
+        const created = await f.run(['context', '--new-context', ':root']);
+        expect(created.stderr).toContain('The root context always exists');
+        await f.ok(['context', 'set', '--context', ':root', '--principal', 'user:shared']);
+        expect(await f.ok(['context', 'list'])).toBe(':root\n');
+        expect(await f.ok(['context', 'show'])).toMatch(/Reference: :root[\s\S]*--principal = user:shared/);
+        expect(await f.ok(['context', 'remove', '--context', ':root'])).toContain('Reset context :root');
+        expect(await f.ok(['context', 'show'])).not.toContain('--principal');
+        const empty = await f.run(['--context', ':empty', 'services', 'list']);
+        expect(empty.stderr).toContain('The :empty context has no namespace');
+
+        // Both spellings create a context and show it.
+        expect(await f.ok(['context', '--new-context', 'id:first', '--principal', 'user:one'])).toMatch(/Reference: id:first[\s\S]*--principal = user:one/);
+        expect(await f.ok(['context', 'create', 'id:second'])).toContain('Reference: id:second');
+        expect((await f.run(['context', 'create', 'id:second'])).stderr).toContain('context id:second already exists');
+        expect(await f.ok(['context', 'list'])).toBe(':root\nid:first\nid:second\n');
+    });
     it.each([false, true])('prints matching reattach guidance for an attachment and duplicate launches (routed: %s)', async routed => {
         const f = await fixture();
         await f.ok(['context', '--new-context', '.']);
@@ -183,16 +209,24 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
             { rpc: false, sourceKind: 'process', runtime: { state: 'running', connections: 0 } },
         ]), { timeout: 15_000 });
         const [running] = await client.list({});
-        expect(running!.console).toEqual({ serviceId: expect.stringMatching(/^hub\/daemon\/consoles\//), mode: 'pipe' });
+        expect(running!.console).toEqual({ mode: 'pipe' });
+        const address = { namespace: running!.namespace, id: running!.id };
         const messages: ConsoleServerMessage[] = [];
-        const observation = hub.connection.get(consoleInterface, { serviceId: running!.console!.serviceId }).attach({ interactive: false }, {
+        const observation = client.consoles.attach({ params: address, interactive: false }, {
             onMessage: message => { messages.push(message); },
         });
         const observed = observation.then(result => result, (error: unknown) => String(error));
         const observerOutput = () => messages.flatMap(message => message.t === 'output' && message.stream === 'stdout'
             ? [new TextDecoder().decode(decodeConsoleData(message.data))] : []).join('');
         const attached = f.start(['services', 'attach']);
-        const generic = f.start(['--endpoint', readEndpointDiscovery(f.home.discoveryFile)!.endpoint, 'attach', running!.console!.serviceId, '--read-only']);
+        // The generic command finds the template instance through directory tags and reflection.
+        const hubEndpoint = ['--endpoint', readEndpointDiscovery(f.home.discoveryFile)!.endpoint];
+        const listing = await f.run([...hubEndpoint, 'attach']);
+        expect(listing.stdout, listing.stderr).toMatch(/hub\/daemon {2}linkrpc\.managedEndpoints {2}consoles {2}\{/);
+        const invalid = await f.run([...hubEndpoint, 'attach', 'hub/daemon', '--params', '{"id":"main"}']);
+        expect(invalid.code).not.toBe(0);
+        expect(invalid.stderr).toContain('--params does not match the params of console "consoles"');
+        const generic = f.start([...hubEndpoint, 'attach', 'hub/daemon', '--params', JSON.stringify(address), '--read-only']);
         await vi.waitFor(() => {
             expect(attached.stdout, attached.stderr).toContain('1\n2\n');
             expect(generic.stdout, generic.stderr).toContain('1\n2\n');
@@ -217,26 +251,38 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         expect(() => process.kill(running!.runtime.pid!, 0)).toThrow();
     });
 
-    it('runs a TTY service: keys reach the program, attachments see the screen, and Ctrl+P, Ctrl+Q detaches or stops', async () => {
+    it('runs a TTY service: keys reach the program, attachments see the screen, and detach keys detach or stop', async () => {
         const f = await fixture();
         await f.ok(['context', '--new-context', '.']);
         const script = 'console.log("tty=" + process.stdout.isTTY); process.stdin.setRawMode(true);'
             + ' process.stdin.on("data", data => process.stdout.write("key=" + JSON.stringify(String(data)) + "\\r\\n"));';
-        const owner = f.start(['services', 'run', '-x', '-t', '--foreground', '--', process.execPath, '-e', script], true);
+        const owner = f.start(['--detach-keys', 'ctrl-p,ctrl-q', 'services', 'run', '-x', '-t', '--foreground', '--', process.execPath, '-e', script], true);
         await vi.waitFor(() => expect(screenText(owner.stdout), owner.stderr).toContain('tty=true'), { timeout: 15_000 });
-        expect(owner.stderr).toContain('Foreground (TTY). Keys go to the program; Ctrl+P, Ctrl+Q stops and removes the service.');
-        owner.child.stdin.write('\x03');
-        await vi.waitFor(() => expect(screenText(owner.stdout)).toContain('key="\\u0003"'), { timeout: 10_000 });
+        expect(owner.stderr).toContain('Foreground (TTY). Keys go to the program; Ctrl+P, then Ctrl+Q stops and removes the service.');
+        // The owner's sequence is Ctrl+P, Ctrl+Q, so the default Ctrl+B, then d reaches the program.
+        owner.child.stdin.write('\x03\x02d');
+        await vi.waitFor(() => expect(screenText(owner.stdout)).toMatch(/key="\\u0003(\\u0002d)?"/), { timeout: 10_000 });
+        await vi.waitFor(() => expect(screenText(owner.stdout)).toContain('\\u0002'), { timeout: 10_000 });
 
         const attached = f.start(['services', 'attach'], true);
         await vi.waitFor(() => expect(screenText(attached.stdout), attached.stderr).toContain('tty=true'), { timeout: 15_000 });
-        expect(attached.stderr).toContain('Attached (TTY). Keys go to the program; Ctrl+P, Ctrl+Q detaches.');
+        expect(attached.stderr).toContain('Attached (TTY). Keys go to the program; Ctrl+B, then d detaches.');
         attached.child.stdin.write('a');
         await vi.waitFor(() => expect(screenText(owner.stdout)).toContain('key="a"'), { timeout: 10_000 });
-        attached.child.stdin.write('\x10\x11');
+        attached.child.stdin.write('\x02d');
         await vi.waitFor(() => expect(attached.child.exitCode, attached.stderr).toBe(0), { timeout: 5000 });
         expect(attached.stderr).toContain('Detached. Reattach: hub services attach --id main');
         expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ owned: true, console: { mode: 'tty' }, runtime: { state: 'running' } }]);
+
+        const invalidKeys = await f.run(['--detach-keys', 'alt-x', 'services', 'attach']);
+        expect(invalidKeys.code).not.toBe(0);
+        expect(invalidKeys.stderr).toContain('Invalid detach key "alt-x"');
+
+        await f.ok(['context', 'set', '--detach-keys', 'ctrl-],q']);
+        const stored = f.start(['services', 'attach'], true);
+        await vi.waitFor(() => expect(stored.stderr).toContain('Attached (TTY). Keys go to the program; Ctrl+], then q detaches.'), { timeout: 15_000 });
+        stored.child.stdin.write('\x1dq');
+        await vi.waitFor(() => expect(stored.child.exitCode, stored.stderr).toBe(0), { timeout: 5000 });
 
         owner.child.stdin.write('\x10\x11');
         await vi.waitFor(() => expect(owner.child.exitCode, owner.stderr).toBe(0), { timeout: 5000 });
@@ -335,7 +381,7 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         const f = await fixture();
         const missing = await f.run(['services', 'list', '--all-contexts']);
         expect(missing.code).not.toBe(0);
-        expect(missing.stderr).toContain('no local services are running');
+        expect(missing.stderr).toContain('the local Hub daemon is not running');
         await f.ok(['services', 'run', '--new-context', '.', '--detach', '--readiness', 'spawned', '--',
             process.execPath, '-e', 'console.log("background-output"); setInterval(() => {}, 1000)']);
         const list = JSON.parse(await f.ok(['services', 'list']));
@@ -344,8 +390,8 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         expect(await f.ok(['services', 'logs'])).toContain('background-output');
         await f.ok(['services', 'stop']);
         expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
-        const noServices = await f.run(['ls']);
-        expect(noServices.stderr).toContain('no local services are running');
+        // A running daemon is enough; it needs no services.
+        expect(await f.ok(['ls', '--json'])).toContain('linkrpc.managedEndpoints');
     });
 
     it.each([false, true])('streams output and preserves process exit status (foreground: %s)', async foreground => {
@@ -372,11 +418,13 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         await f.ok(['services', '--namespace', 'other-project', 'stop']);
     });
 
-    it('explicit local discovery works without services, overrides ambient endpoints, and never bootstraps', async () => {
+    it('uses the local daemon without services, implicitly or explicitly, and never bootstraps it', async () => {
         const f = await fixture();
         const absent = await f.run(['--endpoint', 'linkrpc:local', 'ls']);
         expect(absent.code).not.toBe(0);
         expect(absent.stderr).toContain('local LinkRPC hub is not running');
+        const implicitAbsent = await f.run(['--context', ':empty', 'ls']);
+        expect(implicitAbsent.stderr).toContain('the local Hub daemon is not running');
         expect(readEndpointDiscovery(f.home.discoveryFile)).toBeUndefined();
         await f.ok(['--context', ':empty', 'services', 'restart']);
         const explicit = await f.run(['--endpoint', 'linkrpc:local', 'ls', '--json'], {
@@ -384,13 +432,9 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         });
         expect({ code: explicit.code, error: explicit.code ? explicit.stderr : '' }).toEqual({ code: 0, error: '' });
         expect(explicit.stdout).toContain('linkrpc.managedEndpoints');
+        expect(await f.ok(['--context', ':empty', 'ls', '--json'])).toContain('linkrpc.managedEndpoints');
         await f.ok(['context', '--new-context', '.', '--endpoint', 'linkrpc:local']);
         expect(await f.ok(['ls', '--json'])).toContain('linkrpc.managedEndpoints');
-        const implicit = await f.run(['--context', ':empty', 'ls']);
-        expect(implicit.code).not.toBe(0);
-        expect(implicit.stderr).toContain('no local services are running');
-        const ui = await f.run(['--context', ':empty', 'ui']);
-        expect(ui.stderr).toContain('no local services are running');
         const invalid = await f.run(['--namespace', 'not-for-call', 'ls']);
         expect(invalid.stderr).toContain("unknown option '--namespace'");
     });

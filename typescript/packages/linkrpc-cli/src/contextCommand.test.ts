@@ -89,6 +89,7 @@ describe('context command', () => {
         });
 
         expect(output.split('\n')).toEqual([
+            'create\tCreate a context.',
             'list\tList stored contexts.',
             'remove\tRemove the selected context.',
             'set\tSet values on the selected context.',

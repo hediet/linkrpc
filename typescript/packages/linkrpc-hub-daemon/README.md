@@ -44,15 +44,18 @@ endpoint with the same address, including a persistent or owned one, is stopped
 and removed first within the same serialized operation; its console reports a
 notice and completes.
 
-Every process endpoint serves the standard
-[`linkrpc.console`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
-interface at `<hubServiceId>/daemon/consoles/<sha256(namespace)>/<id>`, reported
-as `status.console.serviceId`. Consoles are registered on the private management
-socket and on the routed daemon service. Attachments share input, observe the
+The management interface embeds the
+[`linkrpc.console.v1`](../linkrpc-infra/README.md#process-consoles-linkrpcconsole)
+template as its `consoles` instance (wire methods `consoleInfo` and
+`attachConsole`), with the endpoint address `{ namespace, id }` as params. This
+tags `linkrpc.managedEndpoints` with `linkrpc.console`, so generic clients such
+as `hub attach <hubServiceId>/daemon --params '{"namespace":…,"id":…}'` find
+process consoles without knowing this API. `status.console.mode` reports whether
+an endpoint has a pipe or TTY console. Attachments share input, observe the
 same output, and never stop the endpoint when cancelled. Pipe consoles replay up
 to 1 MiB of recent output and supervisor notices; TTY consoles replay the
 current screen and scrollback from a headless terminal (`@xterm/headless`). A
-console stays registered across automatic restarts; its attachments complete when
+console persists across automatic restarts; its attachments complete when
 no process runs and none is pending, and it closes when the endpoint is removed.
 
 `run` creates a process endpoint and attaches to its console in one call: the

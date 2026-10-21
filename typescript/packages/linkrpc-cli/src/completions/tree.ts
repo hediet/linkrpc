@@ -66,6 +66,7 @@ const ENDPOINT_GLOBAL_OPTIONS: readonly FlagDef[] = [
     { name: '--new-context', takesValue: true, valueType: 'free' },
     { name: '--schema', takesValue: true, valueType: 'free' },
     { name: '--daemon-service', takesValue: true, valueType: 'serviceId' },
+    { name: '--detach-keys', takesValue: true, valueType: 'free' },
     { name: '--validation', takesValue: true, valueType: 'free' },
     { name: '--use-env', takesValue: false },
     { name: '--no-use-env', takesValue: false },
@@ -175,9 +176,14 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
         },
     {
         name: 'attach',
-        description: 'Attach to a linkrpc.console service (pipe or TTY).',
+        description: 'Attach to a linkrpc.console template instance (pipe or TTY), or list consoles.',
         positionals: [{ name: 'serviceId', type: 'serviceId' }],
-        options: [{ name: '--read-only', takesValue: false }],
+        options: [
+            { name: '--params', takesValue: true, valueType: 'free' },
+            { name: '--interface', takesValue: true, valueType: 'free' },
+            { name: '--instance', takesValue: true, valueType: 'free' },
+            { name: '--read-only', takesValue: false },
+        ],
     },
     {
         name: 'batch',
@@ -233,6 +239,7 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
         options: [],
         subcommands: [
             { name: 'show', description: 'Show stored context defaults only.', positionals: [], options: [] },
+            { name: 'create', description: 'Create a context.', positionals: [{ name: 'selector', type: 'free' }], options: [] },
             { name: 'list', description: 'List stored contexts.', positionals: [], options: [] },
             {
                 name: 'set',

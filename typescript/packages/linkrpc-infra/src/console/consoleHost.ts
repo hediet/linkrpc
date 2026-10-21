@@ -14,9 +14,21 @@ import {
 } from './consoleInterface';
 
 /**
- * Serves `linkrpc.console` for one process slot. The owner reports process
+ * Handlers for a {@link ConsoleTemplate} instance: `resolve` maps the
+ * instance's `params` to the selected console, and may throw if none matches.
+ */
+export function consoleHandlers<P>(resolve: (params: P) => ConsoleHost) {
+    return {
+        info: ({ params }: { readonly params: P }) => resolve(params).info(),
+        attach: ({ params, ...options }: ConsoleAttachParams & { readonly params: P }, _context: unknown, stream: ConsoleStream) =>
+            resolve(params).attach(options, stream),
+    };
+}
+
+/**
+ * Serves one `linkrpc.console` console. The owner reports process
  * events (`started`, `output`, `exited`, `finish`); attachments drive input
- * through the {@link ConsoleBackend}. The slot may host successive processes
+ * through the {@link ConsoleBackend}. The console may host successive processes
  * (restarts) until it is closed.
  */
 export class ConsoleHost {
@@ -37,11 +49,9 @@ export class ConsoleHost {
     get mode(): ConsoleMode { return this._options.mode; }
     get size(): ConsoleSize | undefined { return this._size; }
 
+    /** Serve this console as the standalone {@link consoleInterface}. */
     register(connection: LinkRpcConnection, serviceId: string): { dispose(): void } {
-        return connection.register(consoleInterface, {
-            info: () => this.info(),
-            attach: (params, _context, stream) => this.attach(params, stream),
-        }, { serviceId });
+        return connection.register(consoleInterface, { console: consoleHandlers(() => this) }, { serviceId });
     }
 
     info(): ConsoleInfo {
