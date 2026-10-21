@@ -8,6 +8,7 @@ export default defineConfig([{
     sourcemap: true,
     clean: true,
     dts: true,
+    outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
     deps: { neverBundle: true },
 }, {
     entry: { browser: 'src/browser.ts' },
