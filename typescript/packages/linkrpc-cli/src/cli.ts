@@ -7,7 +7,7 @@ import { DetachKeys } from './commands/consoleSession';
 import { attachConsole, listConsoleTargets } from './commands/consoleAttach';
 import { bootstrapApprovalCapability } from '@hediet/linkrpc-infra/approval';
 import { LinkRpcConnection, type JsonValue } from '@hediet/linkrpc';
-import { formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
+import { connectNdjson, formatEndpointUri, isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
 import { connectionTokenBinderInterface } from '@hediet/linkrpc-hub/hub/server/connection-token-binder';
 import { tapTransport } from '@hediet/linkrpc-hub/hub/server/transit';
 import { callCommand, notifyCommand } from './commands/call';
@@ -40,7 +40,7 @@ import {
 } from './commands/participantWatch';
 import { schemaCommand } from './commands/schema';
 import { loadHubConfig, printHubConfigSchema, serveCommand } from './commands/serve';
-import { tunnelCommand } from './commands/tunnel';
+import { type OutboundForwarding, proxyCommand, tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpForwardCommand } from './commands/mcpForward';
@@ -55,6 +55,7 @@ import { cliIdentity, formatCliIdentity } from './commands/identity';
 import {
     connect as connectEndpoint,
     connectViaRootOverlay,
+    connectViaTransport,
     type CliConnection,
     type ConnectLogOptions,
 } from '@hediet/linkrpc-client-internal';
@@ -1184,7 +1185,7 @@ Batch options:
             });
         });
 
-    program
+    addTargetEndpointOptions(program
         .command('tunnel <serviceId>')
         .description(
             'Claim <serviceId> on the source hub (--endpoint*) and forward every request it ' +
@@ -1195,54 +1196,13 @@ Batch options:
             'and global --provision-identity[-slot] applies to it. With `-c, --config`, the ' +
             'source hub is instead appended to the config as an endpoint claiming <serviceId>, ' +
             'and the in-process hub serves it (the config provides the target). Runs until Ctrl-C.',
-        )
-        .option(
-            '--target-endpoint <uri>',
-            'target endpoint URI (unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
-            'cmd:?command=… or cmd-stdio:?command=…)',
-        )
-        .option(
-            '--target-endpoint-cmd <command>',
-            'spawn the target as a server, connect via an injected env socket; the child sees ' +
-            'grantedServiceIdNamespace = <serviceId> via hubGrantedServiceId::get',
-        )
-        .option(
-            '--target-endpoint-cmd-stdio <command>',
-            'spawn the target and talk linkrpc over its stdio',
-        )
-        .option(
-            '--target-endpoint-cmd-env <key=value>',
-            'env var for the --target-endpoint-cmd / --target-endpoint-cmd-stdio child (repeatable)',
-            (val: string, acc: Record<string, string> | undefined) => {
-                const eq = val.indexOf('=');
-                if (eq === -1) {
-                    throw new InvalidArgumentError(`expected key=value, got '${val}'`);
-                }
-                const next = acc ?? {};
-                next[val.slice(0, eq)] = val.slice(eq + 1);
-                return next;
-            },
-        )
-        .option(
-            '--target-endpoint-token <token>',
-            'token overriding the target URI token (no env fallback for the target)',
-        )
-        .option(
-            '--target-endpoint-cmd-cwd <dir>',
-            'working directory for the --target-endpoint-cmd / --target-endpoint-cmd-stdio child',
-        )
+        ))
         .option(
             '--bidi',
             'also forward every request/notification the target endpoint emits back to the ' +
             'source hub, exposing the hub to the endpoint (forwards everything, unsigned)',
         )
-        .action(async (serviceId: string, cmdOpts: {
-            targetEndpoint?: string;
-            targetEndpointCmd?: string;
-            targetEndpointCmdStdio?: string;
-            targetEndpointCmdEnv?: Record<string, string>;
-            targetEndpointToken?: string;
-            targetEndpointCmdCwd?: string;
+        .action(async (serviceId: string, cmdOpts: TargetEndpointCliOptions & {
             bidi?: boolean;
         }) => {
             const localEp = needEndpoint(endpoint);
@@ -1280,57 +1240,9 @@ Batch options:
             }
 
             const globalOpts = program.opts();
-            const targetRes = resolveTargetEndpoint({
-                targetEndpoint: cmdOpts.targetEndpoint,
-                targetEndpointCmd: cmdOpts.targetEndpointCmd,
-                targetEndpointCmdStdio: cmdOpts.targetEndpointCmdStdio,
-                targetEndpointCmdEnv: cmdOpts.targetEndpointCmdEnv,
-                targetEndpointToken: cmdOpts.targetEndpointToken,
-                targetEndpointCmdCwd: cmdOpts.targetEndpointCmdCwd,
-                provisionIdentity: globalOpts.provisionIdentity as boolean | undefined,
-                provisionIdentitySlot: globalOpts.provisionIdentitySlot as string | undefined,
-            });
-            if (targetRes.error) {
-                process.stderr.write(`linkrpc: ${targetRes.error}\n`);
-                process.exit(2);
-            }
-            if (!targetRes.endpoint) {
-                process.stderr.write(
-                    'linkrpc: tunnel requires --target-endpoint / --target-endpoint-cmd / --target-endpoint-cmd-stdio.\n',
-                );
-                process.exit(2);
-            }
-            const targetEp = targetRes.endpoint;
-            // Honor the legacy LINKRPC_REMOTE_ENDPOINT_TOKEN env var as a fallback
-            // for token-bearing target URIs.
-            const remoteTok = process.env.LINKRPC_REMOTE_ENDPOINT_TOKEN;
-            const targetEpWithToken: ResolvedEndpoint =
-                remoteTok !== undefined && (targetEp.kind === 'socket' || targetEp.kind === 'ws')
-                    && targetEp.token === undefined
-                    ? { ...targetEp, token: remoteTok }
-                    : targetEp;
-
+            const targetEp = resolveTargetEndpointOrExit(cmdOpts, globalOpts, 'tunnel');
             const local = await connectEndpoint(localEp, wireLog('source'));
-            // Connect straight to the target endpoint — no routing hub. For a
-            // spawned cmd-env child we front it with a RootOverlay: its root-form
-            // calls (identity::*, hubGrantedServiceId::*, reflection, hubAccess)
-            // are served locally while every claimed request the tunnel forwards
-            // is relayed to the child through the overlay splitter. This keeps
-            // --provision-identity working (identity::* is served) without the
-            // 'hub' service id / claim-wait dance a full local hub imposes.
-            let remote: CliConnection;
-            if (targetEpWithToken.kind === 'cmd-env') {
-                remote = await connectViaRootOverlay({
-                    command: targetEpWithToken.command,
-                    provisionSlot: targetEpWithToken.provisionSlot,
-                    env: targetEpWithToken.env,
-                    ...(targetEpWithToken.cwd !== undefined ? { cwd: targetEpWithToken.cwd } : {}),
-                    grantedNamespace: serviceId,
-                    log: wireLog('target'),
-                });
-            } else {
-                remote = await connectEndpoint(targetEpWithToken, wireLog('target'));
-            }
+            const remote = await connectTargetEndpoint(targetEp, serviceId);
             try {
                 // Sign the claim where the source hub requires it (managed
                 // identity with local-keypair fallback). The remote side is
@@ -1343,6 +1255,61 @@ Batch options:
             } finally {
                 remote.close();
                 local.close();
+            }
+        });
+
+    addTargetEndpointOptions(program
+        .command('proxy')
+        .description(
+            'Stand in for a participant on the hub (--endpoint*). The participant is this ' +
+            "process's stdin/stdout (--stdio) or a target endpoint (--target-endpoint*). Calls the " +
+            'participant emits are forwarded to the hub per --outbound: `signed` (default) re-signs ' +
+            'them as this CLI\'s --principal with capability negotiation, so participants that cannot ' +
+            'sign can call gated services; `verbatim` forwards them unsigned; `none` drops them. ' +
+            'With --claim, requests the hub routes to <serviceId> are forwarded to the participant. ' +
+            'Runs until the participant disconnects or Ctrl-C.',
+        ))
+        .option('--stdio', "use this process's stdin/stdout as the participant")
+        .option('--claim <serviceId>', 'claim <serviceId> on the hub and forward its requests to the participant')
+        .addOption(
+            new Option('--outbound <mode>', 'how participant calls reach the hub')
+                .choices(['signed', 'verbatim', 'none'])
+                .default('signed'),
+        )
+        .action(async (cmdOpts: TargetEndpointCliOptions & {
+            stdio?: boolean;
+            claim?: string;
+            outbound: OutboundForwarding;
+        }) => {
+            const localEp = needEndpoint(endpoint);
+            if (cmdOpts.stdio === hasTargetEndpoint(cmdOpts)) {
+                process.stderr.write('linkrpc: proxy requires exactly one of --stdio or --target-endpoint*.\n');
+                process.exit(2);
+            }
+            const targetEp = cmdOpts.stdio
+                ? undefined
+                : resolveTargetEndpointOrExit(cmdOpts, program.opts(), 'proxy');
+            const hub = await connectEndpoint(localEp, wireLog('hub'));
+            const session = await setupSigning(hub.channel, hub.signing, getPrincipalSpec(), {
+                negotiateHubCaps: isHubEndpoint(localEp),
+            });
+            reportIdentity(session);
+            // Connect the participant last: proxyCommand installs its forwarders
+            // synchronously, before any message the participant sent is dispatched.
+            const participant = targetEp === undefined
+                ? await connectStdioParticipant()
+                : { connection: await connectTargetEndpoint(targetEp, cmdOpts.claim ?? ''), closed: undefined };
+            try {
+                await proxyCommand({
+                    hub,
+                    participant: participant.connection,
+                    outbound: cmdOpts.outbound,
+                    ...(cmdOpts.claim !== undefined ? { claimServiceId: cmdOpts.claim } : {}),
+                    ...(participant.closed !== undefined ? { stop: participant.closed } : {}),
+                });
+            } finally {
+                participant.connection.close();
+                hub.close();
             }
         });
 
@@ -2267,6 +2234,125 @@ function needEndpoint(endpoint: ResolvedEndpoint | undefined): ResolvedEndpoint 
         process.exit(2);
     }
     return endpoint;
+}
+
+interface TargetEndpointCliOptions {
+    readonly targetEndpoint?: string;
+    readonly targetEndpointCmd?: string;
+    readonly targetEndpointCmdStdio?: string;
+    readonly targetEndpointCmdEnv?: Record<string, string>;
+    readonly targetEndpointToken?: string;
+    readonly targetEndpointCmdCwd?: string;
+}
+
+/** The `--target-endpoint*` options shared by `tunnel` and `proxy`. */
+function addTargetEndpointOptions(command: Command): Command {
+    return command
+        .option(
+            '--target-endpoint <uri>',
+            'target endpoint URI (unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
+            'cmd:?command=… or cmd-stdio:?command=…)',
+        )
+        .option(
+            '--target-endpoint-cmd <command>',
+            'spawn the target as a server, connect via an injected env socket; the child sees ' +
+            'the claimed service id as grantedServiceIdNamespace via hubGrantedServiceId::get',
+        )
+        .option(
+            '--target-endpoint-cmd-stdio <command>',
+            'spawn the target and talk linkrpc over its stdio',
+        )
+        .option(
+            '--target-endpoint-cmd-env <key=value>',
+            'env var for the --target-endpoint-cmd / --target-endpoint-cmd-stdio child (repeatable)',
+            (val: string, acc: Record<string, string> | undefined) => {
+                const eq = val.indexOf('=');
+                if (eq === -1) {
+                    throw new InvalidArgumentError(`expected key=value, got '${val}'`);
+                }
+                const next = acc ?? {};
+                next[val.slice(0, eq)] = val.slice(eq + 1);
+                return next;
+            },
+        )
+        .option(
+            '--target-endpoint-token <token>',
+            'token overriding the target URI token (no env fallback for the target)',
+        )
+        .option(
+            '--target-endpoint-cmd-cwd <dir>',
+            'working directory for the --target-endpoint-cmd / --target-endpoint-cmd-stdio child',
+        );
+}
+
+function hasTargetEndpoint(opts: TargetEndpointCliOptions): boolean {
+    return opts.targetEndpoint !== undefined
+        || opts.targetEndpointCmd !== undefined
+        || opts.targetEndpointCmdStdio !== undefined;
+}
+
+function resolveTargetEndpointOrExit(
+    opts: TargetEndpointCliOptions,
+    globalOpts: Record<string, unknown>,
+    commandName: string,
+): ResolvedEndpoint {
+    const targetRes = resolveTargetEndpoint({
+        ...opts,
+        provisionIdentity: globalOpts.provisionIdentity as boolean | undefined,
+        provisionIdentitySlot: globalOpts.provisionIdentitySlot as string | undefined,
+    });
+    if (targetRes.error) {
+        process.stderr.write(`linkrpc: ${targetRes.error}\n`);
+        process.exit(2);
+    }
+    if (!targetRes.endpoint) {
+        process.stderr.write(
+            `linkrpc: ${commandName} requires --target-endpoint / --target-endpoint-cmd / --target-endpoint-cmd-stdio.\n`,
+        );
+        process.exit(2);
+    }
+    // Honor the legacy LINKRPC_REMOTE_ENDPOINT_TOKEN env var as a fallback
+    // for token-bearing target URIs.
+    const targetEp = targetRes.endpoint;
+    const remoteTok = process.env.LINKRPC_REMOTE_ENDPOINT_TOKEN;
+    return remoteTok !== undefined && (targetEp.kind === 'socket' || targetEp.kind === 'ws')
+        && targetEp.token === undefined
+        ? { ...targetEp, token: remoteTok }
+        : targetEp;
+}
+
+/**
+ * Connect straight to a target endpoint — no routing hub. A spawned cmd-env
+ * child is fronted with a RootOverlay: its root-form calls (identity::*,
+ * hubGrantedServiceId::*, reflection, hubAccess) are served locally while every
+ * forwarded request is relayed to the child through the overlay splitter. This
+ * keeps --provision-identity working (identity::* is served) without the 'hub'
+ * service id / claim-wait dance a full local hub imposes.
+ */
+async function connectTargetEndpoint(target: ResolvedEndpoint, grantedNamespace: string): Promise<CliConnection> {
+    if (target.kind !== 'cmd-env') {
+        return connectEndpoint(target, wireLog('target'));
+    }
+    return connectViaRootOverlay({
+        command: target.command,
+        provisionSlot: target.provisionSlot,
+        env: target.env,
+        ...(target.cwd !== undefined ? { cwd: target.cwd } : {}),
+        grantedNamespace,
+        log: wireLog('target'),
+    });
+}
+
+/** This process's stdin/stdout as a participant; `closed` resolves when stdin ends. */
+async function connectStdioParticipant(): Promise<{ connection: CliConnection; closed: Promise<void>; }> {
+    let markClosed!: () => void;
+    const closed = new Promise<void>((resolve) => { markClosed = resolve; });
+    const { transport } = await connectNdjson({
+        input: process.stdin,
+        output: process.stdout,
+        onClose: () => markClosed(),
+    });
+    return { connection: connectViaTransport(transport), closed };
 }
 
 /**
