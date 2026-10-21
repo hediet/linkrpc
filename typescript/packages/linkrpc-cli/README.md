@@ -793,6 +793,35 @@ frame, and each remote frame is written as one JSON line:
 hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 ```
 
+### Participant proxy
+
+`proxy` stands in for a participant on the hub: the participant is either this
+process's stdin/stdout (`--stdio`) or a `--target-endpoint*`. It keeps full
+LinkRPC semantics (service ids, streaming, cancellation) and adds what the
+participant cannot do itself:
+
+- `--outbound signed` (default) re-signs every call the participant emits as
+  the CLI's `--principal` and negotiates capabilities, so a participant without
+  signing support can call services behind `forwardChecking`.
+  `--outbound verbatim` forwards calls unsigned (keeping any `$hubrpc` envelope
+  the participant attached); `--outbound none` drops them.
+- `--claim <serviceId>` claims the service id and forwards requests the hub
+  routes to it to the participant, verbatim (callers' signatures are kept).
+
+```sh
+# A Rust client that cannot sign yet reaches a gated remote service.
+# Point it at this cmd-stdio endpoint and address calls to the remote service id:
+#   cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio
+hub proxy --stdio
+
+# Serve a stdio program under a service id (equivalent to `tunnel`).
+hub proxy --claim my/service --outbound none --target-endpoint-cmd-stdio "my-server --stdio"
+```
+
+With `--stdio`, the proxy exits when stdin closes. `tunnel <serviceId>` is
+`proxy --claim <serviceId>` with `--bidi` selecting `--outbound verbatim`
+instead of `none`.
+
 ### Capabilities
 
 `linkrpc hub caps list [--json]` lists the selected principal's stored capabilities,
