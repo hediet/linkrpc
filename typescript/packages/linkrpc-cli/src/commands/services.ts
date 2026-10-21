@@ -101,7 +101,7 @@ export async function useLocalManagement<T>(start: boolean, action: (client: End
         if (result === 'started') process.stderr.write('linkrpc: local daemon started.\n');
     }
     const discovery = readEndpointDiscovery(home.managementFile);
-    if (!discovery) throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
+    if (!discovery) throw new Error('No endpoint configured through flags, environment, or context, and the local Hub daemon is not running.');
     const handle = await connectToHub({ endpoint: discovery.endpoint, token: discovery.token ?? '' });
     try {
         await checkDaemonInterfaces(handle.connection);

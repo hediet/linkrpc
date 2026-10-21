@@ -2239,13 +2239,13 @@ async function acquireConnection(
         };
     }
     if (endpoint === undefined && g_invocation?.profile === 'hub') {
-        await useLocalManagement(false, async client => {
-            const endpoints = await client.list({});
-            if (!endpoints.some(value => value.runtime.state === 'running')) {
-                throw new Error('No endpoint configured through flags, environment, or context, and no local services are running.');
-            }
-        });
-        return { ep: resolveLocalEndpoint() };
+        // Without a configured endpoint, the hub profile uses the local Hub daemon whenever it runs.
+        try {
+            return { ep: resolveLocalEndpoint() };
+        } catch {
+            throw new Error('No endpoint configured through flags, environment, or context, and the local Hub daemon is not running. '
+                + 'Pass --endpoint, or start the daemon (any `hub services run` starts it).');
+        }
     }
     return { ep: needEndpoint(endpoint) };
 }

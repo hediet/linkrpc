@@ -115,10 +115,10 @@ and argv, not a shell command string. Execution host, namespace, ID, command,
 and working directory are printed before creation. Local fallback is used only
 when no endpoint/config is selected. `run`, `connect`, and `start` may bootstrap
 the local daemon; reads never do. Without a selected endpoint, `hub ls`, `call`,
-and other connected commands (including `ui`) use the local Hub when any namespace
-has a running managed endpoint. An empty or unrelated context does not prevent
-this fallback. If none are running, the command reports an error without starting
-the daemon. A configured endpoint that fails never falls back to the local Hub.
+and other connected commands (including `ui`) use the local Hub whenever its
+daemon runs, whether or not any services do. If it is not running, the command
+reports an error without starting the daemon. A configured endpoint that fails
+never falls back to the local Hub.
 Use the full `serviceId` returned by `services list` for RPC
 calls; endpoint IDs and published RPC service IDs are different things.
 

@@ -381,7 +381,7 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         const f = await fixture();
         const missing = await f.run(['services', 'list', '--all-contexts']);
         expect(missing.code).not.toBe(0);
-        expect(missing.stderr).toContain('no local services are running');
+        expect(missing.stderr).toContain('the local Hub daemon is not running');
         await f.ok(['services', 'run', '--new-context', '.', '--detach', '--readiness', 'spawned', '--',
             process.execPath, '-e', 'console.log("background-output"); setInterval(() => {}, 1000)']);
         const list = JSON.parse(await f.ok(['services', 'list']));
@@ -390,8 +390,8 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         expect(await f.ok(['services', 'logs'])).toContain('background-output');
         await f.ok(['services', 'stop']);
         expect(JSON.parse(await f.ok(['services', 'list']))).toEqual([]);
-        const noServices = await f.run(['ls']);
-        expect(noServices.stderr).toContain('no local services are running');
+        // A running daemon is enough; it needs no services.
+        expect(await f.ok(['ls', '--json'])).toContain('linkrpc.managedEndpoints');
     });
 
     it.each([false, true])('streams output and preserves process exit status (foreground: %s)', async foreground => {
@@ -418,11 +418,13 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         await f.ok(['services', '--namespace', 'other-project', 'stop']);
     });
 
-    it('explicit local discovery works without services, overrides ambient endpoints, and never bootstraps', async () => {
+    it('uses the local daemon without services, implicitly or explicitly, and never bootstraps it', async () => {
         const f = await fixture();
         const absent = await f.run(['--endpoint', 'linkrpc:local', 'ls']);
         expect(absent.code).not.toBe(0);
         expect(absent.stderr).toContain('local LinkRPC hub is not running');
+        const implicitAbsent = await f.run(['--context', ':empty', 'ls']);
+        expect(implicitAbsent.stderr).toContain('the local Hub daemon is not running');
         expect(readEndpointDiscovery(f.home.discoveryFile)).toBeUndefined();
         await f.ok(['--context', ':empty', 'services', 'restart']);
         const explicit = await f.run(['--endpoint', 'linkrpc:local', 'ls', '--json'], {
@@ -430,13 +432,9 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         });
         expect({ code: explicit.code, error: explicit.code ? explicit.stderr : '' }).toEqual({ code: 0, error: '' });
         expect(explicit.stdout).toContain('linkrpc.managedEndpoints');
+        expect(await f.ok(['--context', ':empty', 'ls', '--json'])).toContain('linkrpc.managedEndpoints');
         await f.ok(['context', '--new-context', '.', '--endpoint', 'linkrpc:local']);
         expect(await f.ok(['ls', '--json'])).toContain('linkrpc.managedEndpoints');
-        const implicit = await f.run(['--context', ':empty', 'ls']);
-        expect(implicit.code).not.toBe(0);
-        expect(implicit.stderr).toContain('no local services are running');
-        const ui = await f.run(['--context', ':empty', 'ui']);
-        expect(ui.stderr).toContain('no local services are running');
         const invalid = await f.run(['--namespace', 'not-for-call', 'ls']);
         expect(invalid.stderr).toContain("unknown option '--namespace'");
     });
