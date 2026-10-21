@@ -221,6 +221,20 @@ describe("describeSchema", () => {
             }),
         ).toBe("{ a: string; b?: integer }");
     });
+
+    it("prints records and property-less objects", () => {
+        expect(describeSchema({ type: "object", additionalProperties: { type: "string" } }))
+            .toBe("Record<string, string>");
+        expect(describeSchema({ type: "object" })).toBe("object");
+        expect(describeObjectParams({
+            type: "object",
+            properties: { env: { type: "object", additionalProperties: { type: "string" } } },
+        })).toBe("  env  Record<string, string>  optional");
+    });
+
+    it("does not tabulate params without named properties", () => {
+        expect(describeObjectParams({ type: "object", additionalProperties: { type: "string" } })).toBeUndefined();
+    });
 });
 
 describe("describeObjectParams", () => {
