@@ -12,6 +12,12 @@ keeps the hub running.
   (persisted in the config), restart, and live logs per service; hub details;
   and a config editor that saves through the daemon (validated, conflict-checked,
   applied immediately).
+- **Calls:** the daemon's [call log](../../packages/linkrpc-hub-daemon/README.md#call-log).
+  "Record calls" and the level are saved in the daemon config (the tray menu
+  has the same toggle). The table reads the log files through the management
+  API (`queryCalls`), filters by text or errors, follows new calls live
+  (`watchCalls`), and shows caller, target, principal, and the (redacted)
+  payloads of a selected call. "Open Folder" opens the log directory.
 - **Startup:** "Start hub at login" and "Start tray at login" are independent.
 
 The daemon runs on Electron's own binary in Node.js mode, so an installed app

@@ -229,3 +229,56 @@ textarea {
     padding: 12px 0;
     color: var(--muted);
 }
+
+.toolbar { margin-bottom: 8px; }
+.toolbar input[type="search"] {
+    flex: 1;
+    min-width: 220px;
+    font: inherit;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+}
+
+select {
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--fg);
+}
+
+.calls {
+    max-height: 420px;
+    overflow: auto;
+}
+
+.calls thead th {
+    position: sticky;
+    top: 0;
+    background: var(--card);
+}
+
+tr.call { cursor: pointer; }
+tr.call:hover td { background: var(--badge-bg); }
+tr.details td { padding-top: 0; }
+tr.details pre.log { max-height: 260px; }
+td.nowrap { white-space: nowrap; }
+td code { overflow-wrap: anywhere; }
+.error { color: var(--bad); }
+.card h2 label, .card h2 select {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
+}
+.call-details {
+    display: grid;
+    gap: 8px;
+    padding: 4px 0 8px;
+}
+.call-details dl { margin: 0; }
+.call-details pre.log { max-height: 180px; }
