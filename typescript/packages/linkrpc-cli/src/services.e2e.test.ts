@@ -87,21 +87,21 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         expect(JSON.parse(await f.ok(['services', 'list']))).toMatchObject([{ namespace: ':root', id: 'scratch' }]);
         await f.ok(['services', 'stop', '--id', 'scratch']);
 
-        const implicit = await f.run(['context', 'set', '--namespace', 'shared']);
+        const implicit = await f.run(['context', 'set', '--principal', 'user:shared']);
         expect(implicit.code).not.toBe(0);
         expect(implicit.stderr).toContain('select it explicitly with --context :root');
         const created = await f.run(['context', '--new-context', ':root']);
         expect(created.stderr).toContain('The root context always exists');
-        await f.ok(['context', 'set', '--context', ':root', '--namespace', 'shared']);
+        await f.ok(['context', 'set', '--context', ':root', '--principal', 'user:shared']);
         expect(await f.ok(['context', 'list'])).toBe(':root\n');
-        expect(await f.ok(['context', 'show'])).toMatch(/Reference: :root[\s\S]*--namespace = shared/);
+        expect(await f.ok(['context', 'show'])).toMatch(/Reference: :root[\s\S]*--principal = user:shared/);
         expect(await f.ok(['context', 'remove', '--context', ':root'])).toContain('Reset context :root');
-        expect(await f.ok(['context', 'show'])).not.toContain('--namespace');
+        expect(await f.ok(['context', 'show'])).not.toContain('--principal');
         const empty = await f.run(['--context', ':empty', 'services', 'list']);
         expect(empty.stderr).toContain('The :empty context has no namespace');
 
         // Both spellings create a context and show it.
-        expect(await f.ok(['context', '--new-context', 'id:first', '--namespace', 'one'])).toMatch(/Reference: id:first[\s\S]*--namespace = one/);
+        expect(await f.ok(['context', '--new-context', 'id:first', '--principal', 'user:one'])).toMatch(/Reference: id:first[\s\S]*--principal = user:one/);
         expect(await f.ok(['context', 'create', 'id:second'])).toContain('Reference: id:second');
         expect((await f.run(['context', 'create', 'id:second'])).stderr).toContain('context id:second already exists');
         expect(await f.ok(['context', 'list'])).toBe(':root\nid:first\nid:second\n');
