@@ -386,3 +386,29 @@ table.resizable-columns {
 }
 
 .col-resizer:hover::after { background: var(--accent); width: 2px; }
+
+tr.selectable { cursor: pointer; }
+tr.selectable:hover td { background: var(--badge-bg); }
+
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px 2px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--accent);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.chip[hidden] { display: none; }
+
+.chip-remove {
+    padding: 0 6px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.chip-remove:hover { color: var(--fg); }

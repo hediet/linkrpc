@@ -1,4 +1,4 @@
-import { CallQuery, type CallTarget, callTargetOf, excludeMethodTerm } from '@hediet/linkrpc-hub-daemon/call-query';
+import { CallQuery, type CallTarget, callTargetOf, excludeMethodTerm, serviceTerm } from '@hediet/linkrpc-hub-daemon/call-query';
 import type { CallFilter, CallLogLevel, CallRecord, DaemonStatus } from '../protocol';
 import { type ContextMenuItem, type ContextMenuSection, showContextMenu } from './contextMenu';
 import { ColumnWidths, type ResizableColumn } from './columnWidths';
@@ -47,6 +47,9 @@ export class CallsView {
     private readonly _info = h('div', { class: 'row muted' });
     private readonly _table = h('div', { class: 'calls' });
     private readonly _widths = new ColumnWidths(this._table, Object.values(COLUMNS), () => void this._saveSettings());
+    /** Shows the selected service, if any, next to the filter. */
+    private readonly _serviceChip = h('span', { class: 'chip', hidden: true });
+    private _service: string | undefined;
     private _status: DaemonStatus | undefined;
     private _selected: string | undefined;
     private _truncated = false;
@@ -55,7 +58,11 @@ export class CallsView {
     /** Resolves once the saved filter is in the inputs; queries wait for it. */
     private readonly _settingsLoaded: Promise<void>;
 
-    constructor(private readonly _onError: (message: string) => void) {
+    constructor(
+        private readonly _onError: (message: string) => void,
+        /** Called when the user removes the service chip. */
+        private readonly _onClearService: () => void,
+    ) {
         this._settingsLoaded = this._run(async () => {
             const saved = await bridge.invoke('getCallsViewSettings');
             this._text.value = saved.query;
@@ -81,12 +88,27 @@ export class CallsView {
                 this._level,
                 h('button', { class: 'small', onClick: () => void this._run(() => bridge.invoke('openCallLogFolder')) }, 'Open Folder')),
             h('div', { class: 'row toolbar' },
+                this._serviceChip,
                 this._text,
                 h('label', { class: 'sub' }, this._errorsOnly, ' Errors only'),
                 h('label', { class: 'sub', title: 'Show new calls as they are recorded' }, this._live, ' Live'),
                 h('button', { class: 'small', onClick: () => void this._reload() }, 'Refresh')),
             this._table,
             this._info);
+    }
+
+    /** Limit the view to calls through a configured service (selected in the Services table), or not. */
+    public setService(name: string | undefined): void {
+        if (name === this._service) return;
+        this._service = name;
+        this._serviceChip.hidden = name === undefined;
+        this._serviceChip.replaceChildren(...(name === undefined ? [] : [
+            h('span', { class: 'muted' }, 'Through service '),
+            h('strong', {}, name),
+            h('button', { class: 'chip-remove', title: 'Show calls through all services', onClick: () => this._onClearService() }, '✕'),
+        ]));
+        clearTimeout(this._debounce);
+        void this._reload();
     }
 
     public onStatus(status: DaemonStatus | undefined): void {
@@ -112,8 +134,11 @@ export class CallsView {
         await this._run(() => bridge.invoke('setCallLogLevel', { level }));
     }
 
+    /** The saved query, limited to the selected service. */
     private _filter(): CallFilter {
-        const text = this._text.value.trim();
+        const text = [this._text.value.trim(), this._service !== undefined ? serviceTerm(this._service) : '']
+            .filter(part => part !== '')
+            .join(' ');
         return {
             ...(text ? { text } : {}),
             ...(this._errorsOnly.checked ? { minLevel: 'error' as const } : {}),
@@ -246,11 +271,10 @@ export class CallsView {
 }
 
 function _details(call: CallRecord): HTMLElement {
-    const peer = (side: CallRecord['from']) => [side.label, side.transport ? ` (${side.transport})` : ''].join('');
     const rows: Array<[string, string | undefined]> = [
         ['Started', new Date(call.at).toISOString()],
-        ['Caller', peer(call.from)],
-        ['Target', call.to ? peer(call.to) : undefined],
+        ['Caller', _describePeer(call.from)],
+        ['Target', call.to ? _describePeer(call.to) : undefined],
         ['Principal', call.principal],
         ['Error', call.error ? `${call.error.message} (code ${call.error.code})` : undefined],
         ['Stream frames', call.streamFrames?.toString()],
@@ -273,10 +297,15 @@ function _statusClass(call: CallRecord): string {
 
 function _peersTitle(call: CallRecord): string {
     return [
-        `caller: ${call.from.label}${call.from.transport ? ` (${call.from.transport})` : ''}`,
-        call.to ? `target: ${call.to.label}${call.to.transport ? ` (${call.to.transport})` : ''}` : undefined,
+        `caller: ${_describePeer(call.from)}`,
+        call.to ? `target: ${_describePeer(call.to)}` : undefined,
         call.principal ? `principal: ${call.principal}` : undefined,
     ].filter(line => line !== undefined).join('\n');
+}
+
+/** E.g. `e12 · service devtunnel (named-pipe \\.\pipe\…)`. */
+function _describePeer(peer: CallRecord['from']): string {
+    return `${peer.label}${peer.service ? ` · service ${peer.service}` : ''}${peer.transport ? ` (${peer.transport})` : ''}`;
 }
 
 function _time(at: number): string {

@@ -10,9 +10,9 @@ function call(method: string, serviceId: string | undefined, overrides: Partial<
 }
 
 const calls = [
-    call('hediet/devbox::hubrpc.directory::list', 'hediet/devbox'),
-    call('hediet/devbox/compute::linkrpc.computeNode.command::run', 'hediet/devbox/compute'),
-    call('hediet/pc2::hubrpc.directory::list', 'hediet/pc2', { from: { label: 'hediet/devbox' } }),
+    call('hediet/devbox::hubrpc.directory::list', 'hediet/devbox', { to: { label: 'hediet/devbox', service: 'devtunnel' } }),
+    call('hediet/devbox/compute::linkrpc.computeNode.command::run', 'hediet/devbox/compute', { to: { label: 'hediet/devbox', service: 'devtunnel' } }),
+    call('hediet/pc2::hubrpc.directory::list', 'hediet/pc2', { from: { label: 'hediet/devbox', service: 'devtunnel' } }),
     call('hediet/pc2/notes::test.echo::echo', 'hediet/pc2/notes', { status: 'failed', error: { code: 1, message: 'no route for x' } }),
     call('::hubrpc.node::getNodeId', undefined),
 ];
@@ -28,6 +28,8 @@ describe('CallQuery', () => {
             quotedPhrase: run('"no route"'),
             rootForm: run('method:::hubrpc.node::*'),
             principalLikeTextIsNotAQualifier: run('id:key:'),
+            throughService: run('service:DevTunnel'),
+            notThroughServiceButDirectory: run('-service:devtunnel directory'),
         }).toMatchInlineSnapshot(`
           {
             "negatedServiceAndInterface": [
@@ -35,6 +37,7 @@ describe('CallQuery', () => {
               "hediet/pc2/notes::test.echo::echo",
               "::hubrpc.node::getNodeId",
             ],
+            "notThroughServiceButDirectory": [],
             "principalLikeTextIsNotAQualifier": [],
             "quotedPhrase": [
               "hediet/pc2/notes::test.echo::echo",
@@ -47,6 +50,11 @@ describe('CallQuery', () => {
               "hediet/pc2::hubrpc.directory::list",
             ],
             "textAndNegatedText": [],
+            "throughService": [
+              "hediet/devbox::hubrpc.directory::list",
+              "hediet/devbox/compute::linkrpc.computeNode.command::run",
+              "hediet/pc2::hubrpc.directory::list",
+            ],
           }
         `);
     });

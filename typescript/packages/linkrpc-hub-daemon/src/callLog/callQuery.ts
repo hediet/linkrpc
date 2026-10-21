@@ -7,6 +7,8 @@
  *   principal, or error message. Quote terms with spaces: `"no route"`.
  * - `method:<glob>`: matches `service::interface::member` (the service is
  *   empty for root-form calls); `*` matches any characters.
+ * - `service:<name>`: the call came from or went to that configured daemon
+ *   service (e.g. `service:devtunnel`); case-insensitive, no wildcards.
  * - `-<term>` negates a term, e.g. `-method:hediet/devbox::*`.
  */
 import type { CallRecord } from './callRecord';
@@ -45,12 +47,17 @@ export function excludeMethodTerm(target: Partial<CallTarget>): string {
     return `-method:${methodPattern(target)}`;
 }
 
+/** The term that limits the log to calls through a configured daemon service. */
+export function serviceTerm(name: string): string {
+    return `service:${name}`;
+}
+
 interface Term {
     readonly negated: boolean;
     readonly test: (record: CallRecord) => boolean;
 }
 
-const TERM = /(-?)(method:)?("[^"]*"?|\S+)/g;
+const TERM = /(-?)(?:(method|service):)?("[^"]*"?|\S+)/g;
 
 export class CallQuery {
     public static parse(text: string): CallQuery {
@@ -60,7 +67,9 @@ export class CallQuery {
             if (value === '') continue;
             terms.push({
                 negated: negation === '-',
-                test: qualifier ? _methodTest(value) : _textTest(value.toLowerCase()),
+                test: qualifier === 'method' ? _methodTest(value)
+                    : qualifier === 'service' ? _serviceTest(value.toLowerCase())
+                        : _textTest(value.toLowerCase()),
             });
         }
         return new CallQuery(terms);
@@ -82,6 +91,10 @@ export class CallQuery {
 function _textTest(needle: string): (record: CallRecord) => boolean {
     return record => [record.method, record.from.label, record.to?.label, record.principal, record.error?.message]
         .some(value => value?.toLowerCase().includes(needle));
+}
+
+function _serviceTest(name: string): (record: CallRecord) => boolean {
+    return record => [record.from.service, record.to?.service].some(service => service?.toLowerCase() === name);
 }
 
 function _methodTest(glob: string): (record: CallRecord) => boolean {

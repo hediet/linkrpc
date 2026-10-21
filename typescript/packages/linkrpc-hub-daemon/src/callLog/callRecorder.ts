@@ -5,7 +5,8 @@ import { type FlowSummary, TrafficFlowAggregator } from '@hediet/linkrpc-hub';
 import type { CallLogConfig } from './callLogConfig';
 import { type CallPeer, type CallRecord, type CallRecordLevel, isCallLevelEnabled } from './callRecord';
 import { payloadBytes, shapePayload } from './payloadPolicy';
-import { PortTransports } from './portTransports';
+import { PortPeers } from './portPeers';
+import { serviceNameOf } from '../participantDescriptors';
 
 /** How long an unsettled call (e.g. a watch stream) is tracked before it is forgotten. */
 const GIVE_UP_MS = 24 * 60 * 60_000;
@@ -28,16 +29,16 @@ export interface CallRecorderOptions {
 export class CallRecorder {
     private readonly _idPrefix = randomBytes(4).toString('hex');
     private readonly _aggregator: TrafficFlowAggregator;
-    private readonly _transports: PortTransports;
+    private readonly _peers: PortPeers;
     private readonly _observation: { dispose(): void; };
 
     constructor(private readonly _options: CallRecorderOptions) {
-        this._transports = new PortTransports(() => _options.inspection.getGraph(''));
+        this._peers = new PortPeers(() => _options.inspection.getGraph(''));
         this._aggregator = new TrafficFlowAggregator({ onFlow: flow => this._onFlow(flow), giveUpMs: GIVE_UP_MS });
         this._observation = _options.inspection.observeTraffic(transit => {
             if (transit.kind === 'request' || transit.kind === 'notification') {
-                if (transit.in) this._transports.observe(transit.in.portId);
-                if (transit.out) this._transports.observe(transit.out.portId);
+                if (transit.in) this._peers.observe(transit.in.portId);
+                if (transit.out) this._peers.observe(transit.out.portId);
             }
             this._aggregator.add(transit);
         });
@@ -95,8 +96,13 @@ export class CallRecorder {
     }
 
     private _peer(portId: string): CallPeer {
-        const transport = this._transports.describe(portId);
-        return { label: this._aggregator.portLabel(portId), ...(transport !== undefined ? { transport } : {}) };
+        const { transport, descriptor } = this._peers.describe(portId);
+        const service = serviceNameOf(descriptor);
+        return {
+            label: this._aggregator.portLabel(portId),
+            ...(transport !== undefined ? { transport } : {}),
+            ...(service !== undefined ? { service } : {}),
+        };
     }
 }
 

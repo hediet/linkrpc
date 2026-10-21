@@ -16,6 +16,8 @@ import { SingleInstanceLock } from './singleInstance';
 import { type ServiceHost, ServiceSupervisor } from './supervisor';
 import * as path from 'node:path';
 import { ManagedEndpoints } from './managedEndpoints';
+import { serviceDescriptor } from './participantDescriptors';
+import type { ParticipantDescriptor } from '@hediet/linkrpc/inspection';
 
 export interface StartHubDaemonOptions {
     readonly home?: HubHome;
@@ -98,7 +100,8 @@ export class HubDaemon {
         this._appPath = home.defaultAppEndpoint;
         this._management = { path: home.allocEndpoint('management'), token: _token() };
         this._serviceHost = {
-            openSocket: (name, service, onConnectionCountChanged) => this._openServiceSocket(name, service, onConnectionCountChanged),
+            openSocket: (name, service, onConnectionCountChanged, descriptor) =>
+                this._openServiceSocket(name, service, onConnectionCountChanged, descriptor ?? serviceDescriptor(name, service.serviceId)),
             log: (name, line) => this._log.line(`[${name}] ${line}`),
         };
     }
@@ -326,6 +329,7 @@ export class HubDaemon {
         name: string,
         service: ManagedService,
         onConnectionCountChanged: (count: number) => void,
+        descriptor: ParticipantDescriptor,
     ) {
         if (!this._hub) throw new Error('the hub is not running');
         return this._hub.openParticipantSocket({
@@ -334,6 +338,7 @@ export class HubDaemon {
                 grantedServiceId: service.serviceId,
                 managedIdentity: service.managedIdentity ? { slot: `service:${name}` } : undefined,
             },
+            descriptor,
             onConnectionCountChanged,
         });
     }

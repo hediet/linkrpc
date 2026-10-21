@@ -235,6 +235,7 @@ describe('HubDaemon', () => {
                 "status": "completed",
                 "to": {
                   "label": "hub/a",
+                  "service": "a",
                   "transport": "<transport>",
                 },
                 "v": 1,
