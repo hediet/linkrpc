@@ -2,9 +2,12 @@
  * The contract between the main process and the sandboxed management window.
  * Types only: the renderer bundle must not pull in Node.js code.
  */
-import type { ConfigDocument, DaemonStatus, LogLine } from '@hediet/linkrpc-hub-daemon/client';
+import type { CallFilter, CallLogLevel, CallRecord, ConfigDocument, DaemonStatus, LogLine } from '@hediet/linkrpc-hub-daemon/client';
+import type { CallsViewSettings } from './desktopSettings';
 
-export type { ConfigDocument, DaemonStatus, LogLine, ServiceStatus } from '@hediet/linkrpc-hub-daemon/client';
+export type { CallsViewSettings } from './desktopSettings';
+
+export type { CallFilter, CallLogLevel, CallRecord, ConfigDocument, DaemonStatus, LogLine, ServiceStatus } from '@hediet/linkrpc-hub-daemon/client';
 
 export interface DesktopState {
     /** `connecting` until the first connection attempt settles. */
@@ -40,6 +43,17 @@ export interface DesktopActions {
     reloadConfig(): void;
     openConfigFile(): void;
     openLogFile(): void;
+    /** Persisted in the daemon config; `off` stops recording. */
+    setCallLogLevel(params: { level: CallLogLevel; }): void;
+    /** Recorded calls from the call-log files, newest first. */
+    queryCalls(params: { filter: CallFilter; limit: number; }): { calls: CallRecord[]; truncated: boolean; };
+    /** Push matching calls to the window ({@link IPC_CALLS}) as they are recorded; replaces the previous watch. */
+    watchCalls(params: { filter: CallFilter; }): void;
+    unwatchCalls(): void;
+    openCallLogFolder(): void;
+    /** The Calls view filter, saved in the tray app's settings file. */
+    getCallsViewSettings(): CallsViewSettings;
+    setCallsViewSettings(params: CallsViewSettings): void;
 }
 
 export type DesktopActionName = keyof DesktopActions;
@@ -51,7 +65,9 @@ export interface HubDesktopBridge {
         ...params: Parameters<DesktopActions[K]>
     ): Promise<ReturnType<DesktopActions[K]>>;
     onState(listener: (state: DesktopState) => void): () => void;
+    onCall(listener: (call: CallRecord) => void): () => void;
 }
 
 export const IPC_INVOKE = 'hub-desktop:invoke';
 export const IPC_STATE = 'hub-desktop:state';
+export const IPC_CALLS = 'hub-desktop:calls';

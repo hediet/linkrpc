@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyServiceChange, parseDaemonConfigText, setServiceEnabledInText, stableKey } from './config';
+import { classifyServiceChange, parseDaemonConfigText, setCallLogLevelInText, setServiceEnabledInText, stableKey } from './config';
 
 describe('daemon config', () => {
     it('applies service defaults and the per-user hub defaults', () => {
@@ -87,5 +87,57 @@ describe('daemon config', () => {
         expect(parseDaemonConfigText(disabled).services.a!.enabled).toBe(false);
         expect(setServiceEnabledInText(disabled, 'a', true)).not.toContain('enabled');
         expect(() => setServiceEnabledInText(text, 'missing', false)).toThrow(`unknown service 'missing'`);
+    });
+
+    it('defaults the call log to off with truncated, redacted payloads', () => {
+        expect(parseDaemonConfigText('{}').callLog).toMatchInlineSnapshot(`
+          {
+            "level": "off",
+            "payloads": {
+              "maxArrayItems": 50,
+              "maxDepth": 8,
+              "maxStringLength": 256,
+              "mode": "truncated",
+              "redactKeys": [
+                "password",
+                "passwd",
+                "secret",
+                "token",
+                "apikey",
+                "privatekey",
+                "authorization",
+                "cookie",
+                "credential",
+              ],
+            },
+            "rotation": {
+              "maxAgeDays": 14,
+              "maxFileSizeMb": 10,
+              "maxFiles": 20,
+            },
+          }
+        `);
+        expect(parseDaemonConfigText('{ "callLog": { "level": "debug", "payloads": { "mode": "full", "redactKeys": [] } } }').callLog)
+            .toMatchObject({ level: 'debug', payloads: { mode: 'full', redactKeys: [] } });
+        expect(() => parseDaemonConfigText('{ "callLog": { "level": "loud" } }')).toThrow(/level/);
+    });
+
+    it('sets the call-log level with a minimal edit; off removes it', () => {
+        const text = '{\n    // keep me\n    "services": {}\n}\n';
+        const enabled = setCallLogLevelInText(text, 'info');
+        expect(enabled).toMatchInlineSnapshot(`
+          "{
+              // keep me
+              "services": {},
+              "callLog": {
+                  "level": "info"
+              }
+          }
+          "
+        `);
+        expect(parseDaemonConfigText(enabled).callLog.level).toBe('info');
+        expect(setCallLogLevelInText(enabled, 'off')).toBe(text);
+        const tuned = setCallLogLevelInText('{ "callLog": { "level": "debug", "payloads": { "mode": "none" } } }', 'off');
+        expect(parseDaemonConfigText(tuned).callLog).toMatchObject({ level: 'off', payloads: { mode: 'none' } });
     });
 });

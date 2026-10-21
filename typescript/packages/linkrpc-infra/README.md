@@ -512,4 +512,6 @@ external transports from TypeScript.
 
 The `@hediet/linkrpc-infra/logging` entry point defines the protocol-only
 `linkrpc.logging` interface and its revisioned structured-log schemas.
-Implementations remain responsible for storage, retention, and sinks.
+Implementations remain responsible for storage, retention, and sinks. For
+example, the [hub daemon](../linkrpc-hub-daemon/README.md#call-log) serves its
+persistent call log through it at `<hubServiceId>/daemon`.

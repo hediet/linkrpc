@@ -1,6 +1,8 @@
 import { type HubConfig, hubConfigJsonSchema, parseHubConfig } from '@hediet/linkrpc-hub';
 import * as jsonc from 'jsonc-parser';
 import { z } from 'zod';
+import { type CallLogConfig, CallLogConfigSchema } from './callLog/callLogConfig';
+import type { CallLogLevel } from './callLog/callRecord';
 
 const SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -65,6 +67,7 @@ export type LocalEndpointConfig = z.output<typeof LocalEndpointSchema>;
 export interface DaemonConfig {
     readonly hub: HubConfig;
     readonly localEndpoint: LocalEndpointConfig;
+    readonly callLog: CallLogConfig;
     readonly services: Readonly<Record<string, ManagedService>>;
 }
 
@@ -96,11 +99,13 @@ export function parseDaemonConfig(raw: unknown): DaemonConfig {
     const record = raw as Record<string, unknown>;
     let hub: HubConfig;
     let localEndpoint: LocalEndpointConfig;
+    let callLog: CallLogConfig;
     let parsedServices: Record<string, z.output<typeof ManagedServiceSchema>>;
     try {
         const { $schema: _editorSchema, ...hubFields } = parseHubConfig({ ...record, forwardChecking: record.forwardChecking ?? false });
         hub = hubFields;
         localEndpoint = LocalEndpointSchema.parse(record.localEndpoint);
+        callLog = CallLogConfigSchema.parse(record.callLog);
         parsedServices = ServicesSchema.parse(record.services);
     } catch (error) {
         if (error instanceof z.ZodError) throw new Error(z.prettifyError(error));
@@ -117,7 +122,7 @@ export function parseDaemonConfig(raw: unknown): DaemonConfig {
         owners.set(serviceId, name);
         services[name] = { ...service, serviceId };
     }
-    return { hub, localEndpoint, services };
+    return { hub, localEndpoint, callLog, services };
 }
 
 /** How applying `next` over a running `previous` service must proceed. */
@@ -149,7 +154,20 @@ export function stableKey(value: unknown): string {
 export function setServiceEnabledInText(text: string, name: string, enabled: boolean): string {
     const config = parseDaemonConfigText(text);
     if (!(name in config.services)) throw new Error(`unknown service '${name}'`);
-    const edits = jsonc.modify(text, ['services', name, 'enabled'], enabled ? undefined : false, {
+    return _modify(text, ['services', name, 'enabled'], enabled ? undefined : false);
+}
+
+/** Persist `callLog.level` with a minimal text edit. `off` removes the key (the default), and `callLog` once empty. */
+export function setCallLogLevelInText(text: string, level: CallLogLevel): string {
+    parseDaemonConfigText(text);
+    const edited = _modify(text, ['callLog', 'level'], level === 'off' ? undefined : level);
+    const callLog: unknown = jsonc.parse(edited, [], { allowTrailingComma: true })?.callLog;
+    const empty = callLog !== null && typeof callLog === 'object' && Object.keys(callLog).length === 0;
+    return empty ? _modify(edited, ['callLog'], undefined) : edited;
+}
+
+function _modify(text: string, path: jsonc.JSONPath, value: unknown): string {
+    const edits = jsonc.modify(text, path, value, {
         formattingOptions: { insertSpaces: true, tabSize: 4, eol: text.includes('\r\n') ? '\r\n' : '\n' },
     });
     return jsonc.applyEdits(text, edits);
@@ -159,7 +177,7 @@ export function setServiceEnabledInText(text: string, name: string, enabled: boo
 export function daemonConfigJsonSchema(): unknown {
     const hubSchema = hubConfigJsonSchema() as { properties?: Record<string, Record<string, unknown>>; };
     const servicesSchema = z.toJSONSchema(
-        z.object({ services: ServicesSchema, localEndpoint: LocalEndpointSchema }),
+        z.object({ services: ServicesSchema, localEndpoint: LocalEndpointSchema, callLog: CallLogConfigSchema }),
         { target: 'draft-2020-12', io: 'input' },
     ) as { properties: Record<string, unknown>; };
     const forwardChecking = hubSchema.properties?.forwardChecking;
@@ -169,6 +187,7 @@ export function daemonConfigJsonSchema(): unknown {
             ...hubSchema.properties,
             ...(forwardChecking ? { forwardChecking: { ...forwardChecking, default: false } } : {}),
             localEndpoint: servicesSchema.properties.localEndpoint,
+            callLog: servicesSchema.properties.callLog,
             services: servicesSchema.properties.services,
         },
     };

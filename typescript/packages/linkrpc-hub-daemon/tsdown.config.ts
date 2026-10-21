@@ -4,6 +4,7 @@ export default defineConfig({
     entry: {
         'index': 'src/index.ts',
         'client': 'src/client.ts',
+        'call-query': 'src/callLog/callQuery.ts',
         'cli': 'src/cli.ts',
     },
     format: 'esm',

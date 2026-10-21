@@ -1,9 +1,11 @@
+import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { app, shell } from 'electron';
 import { derived, type IObservable, observableValue } from '@vscode/observables';
 import {
     type AutostartManager,
+    type CallRecord,
     connectToHubManagement,
     createAutostartManager,
     type DaemonLaunch,
@@ -15,6 +17,7 @@ import {
     XdgAutostart,
 } from '@hediet/linkrpc-hub-daemon';
 import { appArgs, electronDaemonLaunch, homeArgs } from './electronLaunch';
+import { DesktopSettings } from './desktopSettings';
 import type { DesktopActions, DesktopState, StartupState } from './protocol';
 import type { TrayIconState } from './trayIcon';
 
@@ -27,7 +30,8 @@ const RECONNECT_MS = 1_500;
  */
 export class DesktopModel {
     public static async create(home: HubHome): Promise<DesktopModel> {
-        const model = new DesktopModel(home, await createAutostartManager({ home }), electronDaemonLaunch(home));
+        const settings = DesktopSettings.load(path.join(app.getPath('userData'), 'settings.json'));
+        const model = new DesktopModel(home, await createAutostartManager({ home }), electronDaemonLaunch(home), settings);
         await model._refreshStartup();
         void model._connectLoop();
         return model;
@@ -56,6 +60,8 @@ export class DesktopModel {
     });
 
     private readonly _trayLogin: TrayLoginItem;
+    private readonly _callListeners = new Set<(call: CallRecord) => void>();
+    private _callWatch: { cancel(): Promise<void>; } | undefined;
     private _management: HubManagementConnection | undefined;
     private _wake: (() => void) | undefined;
     private _disposed = false;
@@ -64,6 +70,7 @@ export class DesktopModel {
         public readonly home: HubHome,
         private readonly _autostart: AutostartManager,
         private readonly _launch: DaemonLaunch,
+        private readonly _settings: DesktopSettings,
     ) {
         this._trayLogin = new TrayLoginItem([...appArgs(), ...homeArgs(home)]);
     }
@@ -112,7 +119,36 @@ export class DesktopModel {
             const error = await shell.openPath(this.home.logFile);
             if (error) throw new Error(error);
         },
+        setCallLogLevel: ({ level }) => this._run(undefined, async () => {
+            await this._requireManagement().setCallLogLevel({ level });
+        }),
+        queryCalls: async ({ filter, limit }) => {
+            const { calls, truncated } = await this._requireManagement().queryCalls({ filter, limit });
+            return { calls: [...calls], truncated };
+        },
+        watchCalls: async ({ filter }) => {
+            this._stopCallWatch();
+            const watch = this._requireManagement().watchCalls({ filter }, {
+                onMessage: call => { for (const listener of [...this._callListeners]) listener(call); },
+            });
+            watch.catch(() => { /* cancelled, or ended with the connection */ });
+            this._callWatch = watch;
+        },
+        unwatchCalls: async () => this._stopCallWatch(),
+        openCallLogFolder: async () => {
+            await fs.promises.mkdir(this.home.callLogDir, { recursive: true });
+            const error = await shell.openPath(this.home.callLogDir);
+            if (error) throw new Error(error);
+        },
+        getCallsViewSettings: async () => this._settings.callsView,
+        setCallsViewSettings: async settings => this._settings.setCallsView(settings),
     };
+
+    /** Calls streamed by {@link actions.watchCalls}. */
+    public onCall(listener: (call: CallRecord) => void): { dispose(): void; } {
+        this._callListeners.add(listener);
+        return { dispose: () => this._callListeners.delete(listener) };
+    }
 
     public dispose(): void {
         this._disposed = true;
@@ -123,6 +159,11 @@ export class DesktopModel {
     private _requireManagement(): HubManagementConnection['management'] {
         if (!this._management) throw new Error('The hub is not running.');
         return this._management.management;
+    }
+
+    private _stopCallWatch(): void {
+        this._callWatch?.cancel().catch(() => { /* already ended */ });
+        this._callWatch = undefined;
     }
 
     /** Run a user action, reporting progress and failures in the state. */

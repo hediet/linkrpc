@@ -2,10 +2,12 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, Menu, type MenuItemConstructorOptions, nativeImage, Tray } from 'electron';
 import { autorun } from '@vscode/observables';
+import { CallFilterSchema, CallLogLevelSchema } from '@hediet/linkrpc-hub-daemon/client';
 import { z } from 'zod';
 import { DesktopModel } from './desktopModel';
+import { CallsViewSettingsSchema } from './desktopSettings';
 import { homeFromArgs } from './electronLaunch';
-import { type DesktopActionName, type DesktopState, IPC_INVOKE, IPC_STATE } from './protocol';
+import { type DesktopActionName, type DesktopState, IPC_CALLS, IPC_INVOKE, IPC_STATE } from './protocol';
 import { type TrayIconState, trayIconPng } from './trayIcon';
 
 const distDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -26,6 +28,13 @@ const ACTION_PARAMS: Record<DesktopActionName, z.ZodType> = {
     reloadConfig: z.undefined(),
     openConfigFile: z.undefined(),
     openLogFile: z.undefined(),
+    setCallLogLevel: z.object({ level: CallLogLevelSchema }),
+    queryCalls: z.object({ filter: CallFilterSchema, limit: z.number().int().positive().max(5_000) }),
+    watchCalls: z.object({ filter: CallFilterSchema }),
+    unwatchCalls: z.undefined(),
+    openCallLogFolder: z.undefined(),
+    getCallsViewSettings: z.undefined(),
+    setCallsViewSettings: CallsViewSettingsSchema,
 };
 
 /** The tray icon, its menu, and the single management window. */
@@ -66,6 +75,7 @@ class TrayApp {
         autorun(reader => {
             this._tray.setImage(_trayImage(this._model.iconState.read(reader)));
         });
+        this._model.onCall(call => this._window?.webContents.send(IPC_CALLS, call));
     }
 
     public showWindow(): void {
@@ -98,6 +108,7 @@ class TrayApp {
         window.webContents.on('did-finish-load', () => window.webContents.send(IPC_STATE, this._model.state.get()));
         window.on('closed', () => {
             this._window = undefined;
+            void this._model.actions.unwatchCalls();
             app.dock?.hide();
         });
         void window.loadFile(path.join(distDir, 'renderer', 'index.html'));
@@ -120,6 +131,13 @@ class TrayApp {
                 ? { label: 'Stop Hub', enabled: !state.busy, click: () => void actions.stopHub() }
                 : { label: 'Start Hub', enabled: !state.busy, click: () => void actions.startHub() },
             { label: 'Restart Hub', enabled: running && !state.busy, click: () => void actions.restartHub() },
+            {
+                label: 'Record Calls',
+                type: 'checkbox',
+                enabled: running,
+                checked: running && state.status!.callLog.level !== 'off',
+                click: item => void actions.setCallLogLevel({ level: item.checked ? 'info' : 'off' }),
+            },
             { type: 'separator' },
             {
                 label: 'Start Hub at Login',

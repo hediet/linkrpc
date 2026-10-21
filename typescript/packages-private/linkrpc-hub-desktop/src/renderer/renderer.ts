@@ -1,6 +1,7 @@
-import type { DaemonStatus, DesktopState, HubDesktopBridge, LogLine, ServiceStatus } from '../protocol';
+import type { DaemonStatus, DesktopState, LogLine, ServiceStatus } from '../protocol';
+import { CallsView } from './callsView';
+import { bridge, errorMessage, h } from './dom';
 
-const bridge = (window as unknown as { hubDesktop: HubDesktopBridge; }).hubDesktop;
 const LOG_REFRESH_MS = 2_000;
 
 /** The management window: renders main-process state and invokes actions. */
@@ -10,17 +11,20 @@ class ManagerView {
     private _logLines: LogLine[] = [];
     private _localError: string | undefined;
     private readonly _editor = new ConfigEditor(message => this._showError(message));
+    private readonly _calls = new CallsView(message => this._showError(message));
 
     constructor() {
         bridge.onState(state => this._setState(state));
         void bridge.invoke('getState').then(state => this._setState(state));
         setInterval(() => void this._refreshLogs(), LOG_REFRESH_MS);
         _byId('config').replaceChildren(this._editor.element);
+        _byId('calls').replaceChildren(this._calls.element);
     }
 
     private _setState(state: DesktopState): void {
         this._state = state;
         this._editor.onStatus(state.status);
+        this._calls.onStatus(state.connection === 'connected' ? state.status : undefined);
         this._render();
     }
 
@@ -150,7 +154,7 @@ class ManagerView {
             this._logLines = lines;
             this._renderLogs();
         } catch (error) {
-            this._showError(_message(error));
+            this._showError(errorMessage(error));
         }
     }
 
@@ -175,7 +179,7 @@ class ManagerView {
         try {
             await action();
         } catch (error) {
-            this._showError(_message(error));
+            this._showError(errorMessage(error));
         }
         this._render();
     }
@@ -241,7 +245,7 @@ class ConfigEditor {
             this._textarea.value = document.text;
             this._message.textContent = document.path;
         } catch (error) {
-            this._onError(_message(error));
+            this._onError(errorMessage(error));
         }
         this._updateButtons();
     }
@@ -255,7 +259,7 @@ class ConfigEditor {
             this._loadedText = text;
             this._message.textContent = `Saved and applied at ${new Date().toLocaleTimeString()}.`;
         } catch (error) {
-            this._message.textContent = `Not saved: ${_message(error)}`;
+            this._message.textContent = `Not saved: ${errorMessage(error)}`;
         }
         this._updateButtons();
     }
@@ -275,32 +279,8 @@ function _serviceDetails(service: ServiceStatus): string {
     return '';
 }
 
-type Child = Node | string | undefined | false;
-type Props = Record<string, unknown> & { class?: string; };
-
-function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Props = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
-    const element = document.createElement(tag);
-    for (const [key, value] of Object.entries(props)) {
-        if (value === undefined) continue;
-        if (key === 'class') element.className = value as string;
-        else if (key.startsWith('on') && typeof value === 'function') {
-            element.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
-        } else if (key in element) (element as unknown as Record<string, unknown>)[key] = value;
-        else element.setAttribute(key, String(value));
-    }
-    for (const child of children) {
-        if (child !== undefined && child !== false) element.append(child);
-    }
-    return element;
-}
-
 function _byId(id: string): HTMLElement {
     return document.getElementById(id)!;
-}
-
-function _message(error: unknown): string {
-    const message = error instanceof Error ? error.message : String(error);
-    return message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
 new ManagerView();

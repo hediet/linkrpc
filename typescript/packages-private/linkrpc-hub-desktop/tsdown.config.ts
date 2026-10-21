@@ -31,6 +31,8 @@ export default defineConfig([
         clean: true,
         outExtensions: () => ({ js: '.js' }),
         outputOptions: { entryFileNames: '[name].js' },
+        // The sandboxed window cannot load modules: bundle its only runtime dependency.
+        deps: { alwaysBundle: ['@hediet/linkrpc-hub-daemon/call-query'] },
         copy: ['src/renderer/index.html', 'src/renderer/styles.css'],
     },
 ]);

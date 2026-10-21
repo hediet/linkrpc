@@ -229,3 +229,109 @@ textarea {
     padding: 12px 0;
     color: var(--muted);
 }
+
+.toolbar { margin-bottom: 8px; }
+.toolbar input[type="search"] {
+    flex: 1;
+    min-width: 220px;
+    font: inherit;
+    padding: 4px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+}
+
+select {
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--fg);
+}
+
+.calls {
+    max-height: 420px;
+    overflow: auto;
+}
+
+.calls thead th {
+    position: sticky;
+    top: 0;
+    background: var(--card);
+}
+
+tr.call { cursor: pointer; }
+tr.call:hover td { background: var(--badge-bg); }
+tr.details td { padding-top: 0; }
+tr.details pre.log { max-height: 260px; }
+td.nowrap { white-space: nowrap; }
+td code { overflow-wrap: anywhere; }
+td.method code { overflow-wrap: normal; word-break: normal; }
+.error { color: var(--bad); }
+.card h2 label, .card h2 select {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: 400;
+}
+.call-details {
+    display: grid;
+    gap: 8px;
+    padding: 4px 0 8px;
+}
+.call-details dl { margin: 0; }
+.call-details pre.log { max-height: 180px; }
+
+td.service { white-space: nowrap; }
+
+.context-menu {
+    position: fixed;
+    z-index: 10;
+    min-width: 260px;
+    max-width: min(640px, calc(100vw - 8px));
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+}
+
+.context-menu-section + .context-menu-section {
+    margin-top: 4px;
+    padding-top: 4px;
+    border-top: 1px solid var(--border);
+}
+
+.context-menu-title {
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    overflow-wrap: anywhere;
+}
+
+.context-menu-item {
+    display: flex;
+    width: 100%;
+    gap: 12px;
+    justify-content: space-between;
+    padding: 4px 8px 4px 16px;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.context-menu-item:hover, .context-menu-item:focus {
+    outline: none;
+    background: var(--badge-bg);
+}
+
+.context-menu-detail {
+    font-family: ui-monospace, "Cascadia Code", Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+}
