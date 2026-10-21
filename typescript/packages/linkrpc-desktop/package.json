@@ -1,0 +1,36 @@
+{
+    "name": "@hediet/linkrpc-desktop",
+    "version": "0.0.1",
+    "description": "Hub-controlled WebRTC desktops implementing the parameterized LinkRPC desktop template.",
+    "type": "module",
+    "license": "MIT",
+    "exports": {
+        ".": { "@hediet/source": "./src/index.ts", "default": "./dist/index.js" },
+        "./browser": { "@hediet/source": "./src/browser.ts", "default": "./dist/browser.js" }
+    },
+    "bin": { "linkrpc-desktop": "./dist/cli.js" },
+    "files": ["dist"],
+    "scripts": {
+        "build": "tsdown",
+        "test": "vitest --run",
+        "test:e2e": "vitest --run test/desktop.e2e.test.ts"
+    },
+    "dependencies": {
+        "@hediet/linkrpc": "workspace:*",
+        "@hediet/linkrpc-hub": "workspace:*",
+        "@hediet/linkrpc-infra": "workspace:*",
+        "@novnc/novnc": "1.7.0",
+        "werift": "^0.22.0",
+        "ws": "^8.18.0",
+        "zod": "^4.4.3"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.56.0",
+        "@types/node": "^22.0.0",
+        "@types/ws": "^8.5.13",
+        "tsdown": "^0.22.3",
+        "tsx": "4.22.4",
+        "typescript": "^6.0.3",
+        "vitest": "^3.0.0"
+    }
+}

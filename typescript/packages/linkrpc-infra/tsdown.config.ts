@@ -5,6 +5,7 @@ export default defineConfig({
         index: 'src/index.ts',
         'approval/index': 'src/approval/index.ts',
         'console/index': 'src/console/index.ts',
+        'desktop/index': 'src/desktop/index.ts',
         'compute-node/index': 'src/compute-node/index.ts',
         'compute-node/node': 'src/compute-node/node.ts',
         'graph/index': 'src/graph/index.ts',

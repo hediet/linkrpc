@@ -30,6 +30,10 @@
             "@hediet/source": "./src/console/index.ts",
             "default": "./dist/console/index.js"
         },
+        "./desktop": {
+            "@hediet/source": "./src/desktop/index.ts",
+            "default": "./dist/desktop/index.js"
+        },
         "./graph": {
             "@hediet/source": "./src/graph/index.ts",
             "default": "./dist/graph/index.js"
@@ -96,6 +100,7 @@
             "./compute-node": "./dist/compute-node/index.js",
             "./compute-node/node": "./dist/compute-node/node.js",
             "./console": "./dist/console/index.js",
+            "./desktop": "./dist/desktop/index.js",
             "./graph": "./dist/graph/index.js",
             "./graph/source": "./dist/graph/source.js",
             "./inspection": "./dist/inspection/index.js",
