@@ -269,6 +269,7 @@ tr.details td { padding-top: 0; }
 tr.details pre.log { max-height: 260px; }
 td.nowrap { white-space: nowrap; }
 td code { overflow-wrap: anywhere; }
+td.method code { overflow-wrap: normal; word-break: normal; }
 .error { color: var(--bad); }
 .card h2 label, .card h2 select {
     text-transform: none;
@@ -289,7 +290,7 @@ td.service { white-space: nowrap; }
     position: fixed;
     z-index: 10;
     min-width: 260px;
-    max-width: 520px;
+    max-width: min(640px, calc(100vw - 8px));
     padding: 4px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -321,6 +322,7 @@ td.service { white-space: nowrap; }
     border-radius: 4px;
     background: none;
     text-align: left;
+    white-space: nowrap;
 }
 
 .context-menu-item:hover, .context-menu-item:focus {
