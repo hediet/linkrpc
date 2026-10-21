@@ -9,6 +9,26 @@ approval clients, manifest aggregation, and permission/discovery helpers.
 It depends on core LinkRPC, not the hub package. The CLI and hub consume these
 helpers directly; terminal prompting remains outside infra.
 
+## Compute nodes
+
+`@hediet/linkrpc-infra/compute-node` defines browser-safe interfaces for
+remote machine access: `linkrpc.computeNode.status`, `.command` (streamed
+output and stdin), `.filesystem`, `.http`, and `.tcpForward` (multiplexed TCP
+with credit-based flow control).
+
+`@hediet/linkrpc-infra/compute-node/node` implements them on Node.js.
+`registerComputeNode(registrar)` registers all five interfaces on anything with
+`register(iface, handlers)`, such as `connection.service(id)`:
+
+```ts
+import { registerComputeNode } from '@hediet/linkrpc-infra/compute-node/node';
+
+registerComputeNode(connection.service('my-hub/compute'));
+```
+
+Compute nodes grant full shell and file system access as the hosting user.
+Only expose them to trusted principals.
+
 ## Immutable graphs (experimental)
 
 `@hediet/linkrpc-infra/graph` provides a generic, JSON-valued immutable graph

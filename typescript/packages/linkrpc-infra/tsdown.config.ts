@@ -4,6 +4,8 @@ export default defineConfig({
     entry: {
         index: 'src/index.ts',
         'approval/index': 'src/approval/index.ts',
+        'compute-node/index': 'src/compute-node/index.ts',
+        'compute-node/node': 'src/compute-node/node.ts',
         'graph/index': 'src/graph/index.ts',
         'graph/source': 'src/graph/source.ts',
         'inspection/index': 'src/inspection/index.ts',
