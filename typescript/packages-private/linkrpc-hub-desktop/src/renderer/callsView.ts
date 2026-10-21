@@ -16,13 +16,13 @@ const LEVELS: ReadonlyArray<readonly [CallLogLevel, string]> = [
     ['trace', 'Everything, with stream frames'],
 ];
 
-/** Column widths in px, including padding; the defaults fill the default window. */
+/** Widths in px; the flexible columns share the table width left by the others, in proportion. */
 const COLUMNS = {
     time: { id: 'time', title: 'Time', defaultWidth: 90 },
     status: { id: 'status', title: 'Status', defaultWidth: 110 },
-    peers: { id: 'peers', title: 'Caller → Target', defaultWidth: 150 },
-    service: { id: 'service', title: 'Service', defaultWidth: 130 },
-    method: { id: 'method', title: 'Method', defaultWidth: 190 },
+    peers: { id: 'peers', title: 'Caller → Target', defaultWidth: 150, flexible: true },
+    service: { id: 'service', title: 'Service', defaultWidth: 130, flexible: true },
+    method: { id: 'method', title: 'Method', defaultWidth: 190, flexible: true },
     duration: { id: 'duration', title: 'Duration', defaultWidth: 80 },
     size: { id: 'size', title: 'Size', defaultWidth: 110 },
 } as const satisfies Record<string, ResizableColumn>;

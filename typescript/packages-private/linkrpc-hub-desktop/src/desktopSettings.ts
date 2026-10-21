@@ -7,8 +7,8 @@ export const CallsViewSettingsSchema = z.object({
     query: z.string().max(10_000).default(''),
     errorsOnly: z.boolean().default(false),
     live: z.boolean().default(true),
-    /** Max width in px per column id; columns without an entry use their default. */
-    columnWidths: z.record(z.string().max(40), z.number().int().min(40).max(2_000)).default({}),
+    /** Changed column widths: px for fixed columns, relative weights for flexible ones. */
+    columnWidths: z.record(z.string().max(40), z.number().positive().max(1_000_000)).default({}),
 });
 export type CallsViewSettings = z.output<typeof CallsViewSettingsSchema>;
 

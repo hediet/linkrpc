@@ -23,9 +23,11 @@ keeps the hub running.
   services). "Errors only" limits the table to failures, and "Open Folder"
   opens the log directory. The filter, "Errors only", and "Live" are saved in
   the tray app's `settings.json` (Electron's user data directory) and
-  restored on the next start. Columns truncate long content (hover for the
-  full text); drag a header's right edge to change a column's max width, and
-  double-click it to reset. The widths are saved in `settings.json` as well.
+  restored on the next start. Long content truncates (hover for the full text). Caller → Target,
+  Service, and Method share the width the other columns leave, in proportion,
+  so resizing the window redistributes the space among them. Drag a header's
+  right edge to resize a column and double-click it to reset; the widths are
+  saved in `settings.json` as well.
 - **Startup:** "Start hub at login" and "Start tray at login" are independent.
 
 The daemon runs on Electron's own binary in Node.js mode, so an installed app
