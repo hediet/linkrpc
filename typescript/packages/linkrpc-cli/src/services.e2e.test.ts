@@ -99,6 +99,12 @@ describe('hub services CLI', { timeout: 120_000 }, () => {
         expect(await f.ok(['context', 'show'])).not.toContain('--namespace');
         const empty = await f.run(['--context', ':empty', 'services', 'list']);
         expect(empty.stderr).toContain('The :empty context has no namespace');
+
+        // Both spellings create a context and show it.
+        expect(await f.ok(['context', '--new-context', 'id:first', '--namespace', 'one'])).toMatch(/Reference: id:first[\s\S]*--namespace = one/);
+        expect(await f.ok(['context', 'create', 'id:second'])).toContain('Reference: id:second');
+        expect((await f.run(['context', 'create', 'id:second'])).stderr).toContain('context id:second already exists');
+        expect(await f.ok(['context', 'list'])).toBe(':root\nid:first\nid:second\n');
     });
     it.each([false, true])('prints matching reattach guidance for an attachment and duplicate launches (routed: %s)', async routed => {
         const f = await fixture();

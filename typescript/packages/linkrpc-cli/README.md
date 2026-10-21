@@ -529,6 +529,7 @@ hub call app::api::get --new-context id:working-copy
 hub call app::api::get --validation off --context-set
 
 hub context                         # same as `hub context show`
+hub context create id:working-copy  # same as: hub context --new-context id:working-copy
 hub context resolve --context id:working-copy
 hub context list                    # always includes :root
 hub context remove --context .
@@ -537,8 +538,9 @@ hub context remove --context :root  # resets :root to no defaults
 hub call app::api::get --context :empty --endpoint ws://localhost:7700
 ```
 
-Context creation is explicit: use `--new-context <selector>` (for example,
-`hub context --new-context .` to create a folder context from effective defaults).
+Context creation is explicit: use `hub context create <selector>` or
+`--new-context <selector>` (for example, `hub context --new-context .` creates a
+folder context from effective defaults and shows it).
 `--context <selector>` only selects an existing context; missing-context errors
 show how to create it. `context set` and `--context-set` update existing contexts
 and do not implicitly create a cwd context. Use `context set --new-context <selector>`

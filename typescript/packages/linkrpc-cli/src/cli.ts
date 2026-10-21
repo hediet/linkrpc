@@ -243,6 +243,16 @@ export async function main(
             readonly reference: Exclude<ContextReference, { readonly kind: 'empty'; }>;
         }
         | undefined;
+    /** Create a context from the effective values, then make it the selected context of this invocation. */
+    const createAndSelectContext = async (reference: Exclude<ContextReference, { readonly kind: 'empty'; }>) => {
+        if (g_contextStore === undefined || g_invocation === undefined) throw new Error('context resolver is unavailable');
+        await createContextFromInvocation(g_contextStore, reference, g_invocation.values);
+        const useEnvironment = explicitOption<boolean>(program, 'useEnv');
+        g_invocation = await resolveInvocationContext({
+            profile, store: g_contextStore, selector: formatContextReference(reference),
+            cliOverrides: g_invocation.cliOverrides, ...(useEnvironment !== undefined ? { useEnvironment } : {}),
+        });
+    };
     program.hook('preAction', async (_thisCommand, actionCommand) => {
         const commandPath = getCommandPath(actionCommand);
         const store = new ContextStore();
@@ -295,6 +305,11 @@ export async function main(
         }
         if (commandPath.startsWith('services ') && preparedNewContext !== undefined) {
             await createContextFromInvocation(preparedNewContext.store, preparedNewContext.reference, g_invocation.values);
+            pendingNewContext = undefined;
+        }
+        if ((commandPath === 'context' || commandPath === 'context show') && preparedNewContext !== undefined) {
+            // Create first, so that the command shows the new context rather than the one it was derived from.
+            await createAndSelectContext(preparedNewContext.reference);
             pendingNewContext = undefined;
         }
 
@@ -991,6 +1006,18 @@ Batch options:
         .command('show')
         .description('Show only the selected context and its stored defaults.')
         .action(() => {
+            printSelectedContext(false);
+        });
+
+    context
+        .command('create <selector>')
+        .description('Create a context (a folder, id:<name>) from the effective values, including flags on this command; same as hub context --new-context <selector>.')
+        .action(async (selector: string) => {
+            if (g_contextStore === undefined) throw new Error('context store is unavailable');
+            if (preparedNewContext !== undefined) throw new Error('Use either context create <selector> or --new-context, not both');
+            const reference = mutableReference(await g_contextStore.resolveReference(selector));
+            await g_contextStore.assertCanCreate(reference);
+            await createAndSelectContext(reference);
             printSelectedContext(false);
         });
 

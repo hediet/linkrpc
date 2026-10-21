@@ -239,6 +239,7 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
         options: [],
         subcommands: [
             { name: 'show', description: 'Show stored context defaults only.', positionals: [], options: [] },
+            { name: 'create', description: 'Create a context.', positionals: [{ name: 'selector', type: 'free' }], options: [] },
             { name: 'list', description: 'List stored contexts.', positionals: [], options: [] },
             {
                 name: 'set',
