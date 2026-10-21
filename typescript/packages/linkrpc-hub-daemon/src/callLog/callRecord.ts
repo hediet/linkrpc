@@ -24,6 +24,8 @@ export const CallPeerSchema = z.object({
     label: z.string(),
     /** E.g. `named-pipe \\.\pipe\linkrpc-hub-user` or `websocket 10.0.0.2:51234`. */
     transport: z.string().optional(),
+    /** The configured daemon service connected through this port, e.g. `devtunnel`. */
+    service: z.string().optional(),
 });
 export type CallPeer = z.infer<typeof CallPeerSchema>;
 

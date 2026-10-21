@@ -16,6 +16,7 @@ import {
 } from './endpointInterface';
 import { ManagedServiceSchema, type ManagedService } from './config';
 import { writePrivateJson } from './discovery';
+import { endpointDescriptor } from './participantDescriptors';
 import { processSignals } from './processIo';
 import { ScreenHistory } from './screenHistory';
 import { ServiceSupervisor, type ServiceHost } from './supervisor';
@@ -235,7 +236,10 @@ export class ManagedEndpoints {
         };
         let entry: Entry;
         const host: ServiceHost = {
-            openSocket: (...args) => this._options.host.openSocket(...args),
+            openSocket: (socketName, socketService, onConnectionCountChanged) => this._options.host.openSocket(
+                socketName, socketService, onConnectionCountChanged,
+                endpointDescriptor(definition.id, definition.namespace, serviceId),
+            ),
             log: (...args) => this._options.host.log(...args),
             output: (_name, stream, data) => entry.console?.output(stream, data),
             notice: (_name, text) => entry.console?.notice(text),

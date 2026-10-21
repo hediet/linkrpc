@@ -1,5 +1,6 @@
 import { StringDecoder } from 'node:string_decoder';
 import type { ConsoleSignal, ConsoleSize } from '@hediet/linkrpc-infra/console';
+import type { ParticipantDescriptor } from '@hediet/linkrpc/inspection';
 import type { ManagedService } from './config';
 import { LogBuffer } from './logBuffer';
 import type { LogLine, ServiceState, ServiceStatus } from './managementInterface';
@@ -14,11 +15,15 @@ const KILL_WAIT_MS = 5_000;
 
 /** The hub-side resources a supervisor needs. */
 export interface ServiceHost {
-    /** Open the private hub socket the service dials (`LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`). */
+    /**
+     * Open the private hub socket the service dials (`LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`).
+     * `descriptor` describes its peers in the hub's topology; the host picks one by default.
+     */
     openSocket(
         name: string,
         service: ManagedService,
         onConnectionCountChanged: (count: number) => void,
+        descriptor?: ParticipantDescriptor,
     ): Promise<ServiceSocket>;
     log(name: string, line: string): void;
     output?(name: string, stream: 'stdout' | 'stderr' | 'tty', data: Uint8Array): void;
