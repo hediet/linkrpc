@@ -51,7 +51,7 @@ import type {
 import { spawnCommand } from '../spawn';
 import { HubAccessManifestHost, registerHubAccessManifest } from './hubAccessManifest';
 import { hubAccessManifestInterface, mapTransport } from '@hediet/linkrpc/hub/common';
-import type { InspectionHost } from '@hediet/linkrpc/inspection';
+import type { InspectionHost, ParticipantDescriptor } from '@hediet/linkrpc/inspection';
 import { runManifestApprover } from './manifestApprover';
 import { endpointCommand, endpointLabel, forwardStdin, killChild, pipeChildLogs } from './cmdEndpoint';
 import { configureParticipants } from './configuredParticipants';
@@ -130,6 +130,11 @@ export interface ParticipantSocketOptions {
     /** Named pipe / UDS path. Defaults to a freshly allocated path. */
     readonly path?: string;
     readonly provision: ProvisionConfig;
+    /**
+     * Shown on each connected peer's topology node as an `attacher` descriptor,
+     * e.g. which configured service or endpoint it is. Diagnostic only.
+     */
+    readonly descriptor?: ParticipantDescriptor;
     /** Fired whenever a peer connects to or disconnects from this socket. */
     readonly onConnectionCountChanged?: (count: number) => void;
 }
@@ -749,6 +754,7 @@ async function _wireCmdEnvEndpoint(
             managedIdentity: ep.managedIdentity,
             connectionTokenBinder: ep.connectionTokenBinder,
         },
+        descriptor: { type: 'linkrpc.hub.cmdEndpoint', label },
     });
 
     const child = spawnCommand(endpointCommand(ep), {
@@ -800,6 +806,7 @@ async function _openParticipantSocket(
         hub: factory.hub,
         ..._buildGate(factory.forwardChecking, factory.hubServiceId),
         handlers: [anonymousHandler(provision)],
+        ...(options.descriptor !== undefined ? { describePeer: () => options.descriptor } : {}),
     });
     return {
         path: socketPath,

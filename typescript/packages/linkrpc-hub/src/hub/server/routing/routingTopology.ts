@@ -22,6 +22,8 @@ export interface ManagedRoutingTopology {
     readonly peerPortId: string;
     readonly peerLinkLabel?: string;
     readonly peerTransport?: TopologyTransportInfo;
+    /** What the attacher knows about the peer (e.g. which managed service it is), shown on the peer node. */
+    readonly peerDescriptors?: readonly ParticipantDescriptorSource[];
     readonly adjacentNodes?: TopologyGraph['nodes'];
     readonly adjacentLinks?: TopologyGraph['links'];
 }
@@ -188,6 +190,9 @@ export class RoutingTopology {
             }
             if (!peerNode.ports.some((port) => port.portId === peer.portId)) {
                 peerNode.ports.push({ portId: peer.portId });
+            }
+            if (managed?.peerDescriptors !== undefined && managed.peerDescriptors.length > 0) {
+                peerNode.descriptors = [...peerNode.descriptors ?? [], ...managed.peerDescriptors];
             }
             if (managed !== undefined) {
                 nodes.push({

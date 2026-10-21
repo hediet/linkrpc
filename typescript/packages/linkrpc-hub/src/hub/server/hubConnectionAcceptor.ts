@@ -13,6 +13,7 @@ import type { LinkRpcConnection } from '@hediet/linkrpc';
 import type { DirectoryEntry } from '@hediet/linkrpc-infra/approval';
 import type { AttachedLink, Hub } from './routing/routingHub';
 import type { ITransportServer, Transport } from '@hediet/linkrpc/hub/common';
+import type { ParticipantDescriptor } from '@hediet/linkrpc/inspection';
 
 /**
  * A data shape describing an imperative consent front door — the handlers plus
@@ -60,6 +61,12 @@ export interface HubConnectionAcceptorBaseOptions<TTransport extends Transport> 
      * then no consent surface is served.
      */
     installHubAccess?(root: LinkRpcConnection<unknown>): void;
+    /**
+     * Describe an accepted peer in the hub's topology (an `attacher`
+     * descriptor on its node), e.g. which managed service it is. Diagnostic
+     * only; never used for authorization.
+     */
+    describePeer?(transport: TTransport): ParticipantDescriptor | undefined;
     /** Fired after a participant's overlay is attached. */
     onAttached?(info: { overlay: RootOverlay; }): void;
     /** Fired when accepting a connection throws. */
@@ -228,7 +235,7 @@ export class HubConnectionAcceptor<TTransport extends Transport> {
         });
         const topology = this._options.hub.registerManagedRoutingTopology(
             upstream,
-            overlay.managedTopology(upstream.edgeId, transport.topologyInfo),
+            overlay.managedTopology(upstream.edgeId, transport.topologyInfo, this._options.describePeer?.(transport)),
         );
 
         const policy = this._options.policy;

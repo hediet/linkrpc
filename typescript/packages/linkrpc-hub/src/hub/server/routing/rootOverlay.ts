@@ -6,7 +6,7 @@ import {
     LinkRpcConnection,
     TransportPair,
 } from '@hediet/linkrpc';
-import { nodeInterface, type TopologyTransportInfo } from '@hediet/linkrpc/inspection';
+import { nodeInterface, type ParticipantDescriptor, type TopologyTransportInfo } from '@hediet/linkrpc/inspection';
 import { randomUUID } from 'node:crypto';
 import { OverlaySplitter, type OverlaySplitterInspection } from './overlaySplitter';
 import type { ManagedRoutingTopology } from './routingTopology';
@@ -92,6 +92,7 @@ export class RootOverlay<TContext = undefined> {
     public managedTopology(
         edgeLabel?: string,
         peerTransport?: TopologyTransportInfo,
+        peerDescriptor?: ParticipantDescriptor,
     ): ManagedRoutingTopology {
         return {
             node: {
@@ -111,6 +112,9 @@ export class RootOverlay<TContext = undefined> {
             }],
             peerPortId: this.participantPortId,
             ...(peerTransport !== undefined ? { peerTransport } : {}),
+            ...(peerDescriptor !== undefined
+                ? { peerDescriptors: [{ source: 'attacher' as const, descriptor: peerDescriptor }] }
+                : {}),
             adjacentNodes: [{
                 nodeId: this.rootNodeId,
                 kind: 'endpoint',

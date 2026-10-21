@@ -152,6 +152,23 @@ describe('HubConnectionAcceptor (end-to-end)', () => {
             })]);
     });
 
+    it('describes accepted peers on their topology node when asked to', async () => {
+        const hub = new Hub({ nodeId: 'hub-a' });
+        const server = new FakeTransportServer<AttestedTransport>();
+        new HubConnectionAcceptor<AttestedTransport>({
+            server,
+            hub,
+            handlers: [attestedIdentityHandler],
+            describePeer: (transport) => ({ type: 'test.service', label: transport.provenance?.identityKey }),
+        });
+
+        server.emit(makeAttested('docker/echo').transport);
+        await flush();
+
+        expect(hub.getTopologyGraph('observer').nodes.flatMap((node) => node.descriptors ?? []))
+            .toEqual([{ source: 'attacher', descriptor: { type: 'test.service', label: 'docker/echo' } }]);
+    });
+
     it('serves identity.storage::* from a SQLite-backed slot', async () => {
         const hub = new Hub();
         createHubServiceInterfaces(hub);
