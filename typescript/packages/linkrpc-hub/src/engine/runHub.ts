@@ -51,6 +51,7 @@ import type {
 import { spawnCommand } from '../spawn';
 import { HubAccessManifestHost, registerHubAccessManifest } from './hubAccessManifest';
 import { hubAccessManifestInterface, mapTransport } from '@hediet/linkrpc/hub/common';
+import type { InspectionHost } from '@hediet/linkrpc/inspection';
 import { runManifestApprover } from './manifestApprover';
 import { endpointCommand, endpointLabel, forwardStdin, killChild, pipeChildLogs } from './cmdEndpoint';
 import { configureParticipants } from './configuredParticipants';
@@ -106,6 +107,13 @@ export interface ListenerInfo {
 /** A running hub. Connect a local client via {@link controlEndpoint}. */
 export interface RunningHub {
     readonly hub: Hub;
+    /**
+     * The hub's inspection scope, also served as `hubrpc.traffic` and
+     * `hubrpc.topology` under `hubServiceId`. In-process consumers observe
+     * traffic with `observeTraffic` (unbounded, with payloads) and resolve
+     * transit ports with `getGraph`.
+     */
+    readonly inspection: InspectionHost;
     readonly listeners: readonly ListenerInfo[];
     /** Private local socket (allow-all) for in-process CLI clients. */
     readonly controlEndpoint: { readonly path: string; readonly token: string; };
@@ -162,8 +170,10 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
     const identities = new IdentityProvisioner(identityStoreDir);
     disposers.push(() => identities.dispose());
 
+    const services = createHubServiceInterfaces(hub, { hubServiceId: config.hubServiceId });
+    disposers.push(() => services.dispose());
     const forwardChecking = await _setupForwardChecking(
-        hub, config, log, disposers, tokenStore, identityStoreDir,
+        services, config, log, disposers, tokenStore, identityStoreDir,
     );
     const participantSockets: ParticipantSocketFactory = {
         hub,
@@ -270,7 +280,7 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
             return { ...socket, dispose: disposeSocket };
         };
 
-        return { hub, listeners, controlEndpoint, openParticipantSocket, dispose };
+        return { hub, inspection: services.inspector.host, listeners, controlEndpoint, openParticipantSocket, dispose };
     } catch (e) {
         dispose();
         throw e;
@@ -280,9 +290,9 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
 // -- forward checking -----------------------------------------------------
 
 /**
- * Install the hub's global services and, when {@link HubConfig.forwardChecking}
- * is enabled, the `hubAccess` consent front door + the hub-served
- * `hubAccessManifest`.
+ * Register the connection-token binder on the hub's global `services` and,
+ * when {@link HubConfig.forwardChecking} is enabled, install the `hubAccess`
+ * consent front door + the hub-served `hubAccessManifest`.
  *
  * The hub itself is **keyless park-and-relay**: a `hubAccess` request is parked
  * as a desired manifest entry and blocks; an *approver* decides it by relaying a
@@ -302,7 +312,7 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
  * for an open (unchecked) hub.
  */
 async function _setupForwardChecking(
-    hub: Hub,
+    services: HubServices,
     config: HubConfig,
     log: (line: string) => void,
     disposers: Array<() => void>,
@@ -315,8 +325,7 @@ async function _setupForwardChecking(
 
     if (!verifySignatures && !requireCapability) {
         // Open hub: no admin identity, no signed register, no consent surface.
-        const openServices = createHubServiceInterfaces(hub, { hubServiceId: config.hubServiceId });
-        _registerCentralConnectionTokenBinder(openServices, config, tokenStore, log);
+        _registerCentralConnectionTokenBinder(services, config, tokenStore, log);
         return undefined;
     }
 
@@ -338,9 +347,6 @@ async function _setupForwardChecking(
         adminId = admin.publicSigningIdentity.principal;
     }
 
-    const services = createHubServiceInterfaces(hub, {
-        hubServiceId: config.hubServiceId,
-    });
     _registerCentralConnectionTokenBinder(services, config, tokenStore, log);
 
     // The accepted capability roots: the hub's own admin identity (when a local

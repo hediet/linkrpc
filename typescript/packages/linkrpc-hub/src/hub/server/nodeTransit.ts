@@ -101,6 +101,13 @@ export interface FlowSummary {
     readonly durationMs: number;
     /** Ordered, interleaved edge/node labels the message traversed. */
     readonly path: readonly string[];
+    /**
+     * Topology port the message entered the observed nodes on (its edge id for
+     * emitters without ports). Absent when an observed node originated it.
+     */
+    readonly entryPortId?: string;
+    /** Port the message last left the observed nodes on. Absent when consumed or dropped there. */
+    readonly exitPortId?: string;
     /** True when reported while still in flight (slow / stuck). */
     readonly partial: boolean;
     /**
@@ -287,6 +294,7 @@ export class TransitAggregator {
             endTs: transit.timeMs,
             durationMs: transit.timeMs - startTs,
             path: this._buildStreamPath(transit),
+            ..._entryExit(transit, transit),
             partial: false,
             stream: [msg],
         });
@@ -399,6 +407,8 @@ export class TransitAggregator {
         const durationMs = (endTs ?? this._now()) - startTs;
 
         const stream = _streamMessagesOf(transits);
+        const forward = transits.filter((t) => t.kind === 'request' || t.kind === 'notification');
+        const entryExit = forward.length > 0 ? _entryExit(forward[0]!, forward[forward.length - 1]!) : {};
 
         return {
             id: flow.id,
@@ -411,14 +421,14 @@ export class TransitAggregator {
             startTs,
             endTs,
             durationMs,
-            path: this._buildPath(transits),
+            path: this._buildPath(forward),
+            ...entryExit,
             partial: status === 'pending',
             ...(stream.length > 0 ? { stream } : {}),
         };
     }
 
-    private _buildPath(transits: NodeTransit[]): string[] {
-        const forward = transits.filter((t) => t.kind === 'request' || t.kind === 'notification');
+    private _buildPath(forward: NodeTransit[]): string[] {
         const path: string[] = [];
         const push = (s: string): void => {
             if (path[path.length - 1] !== s) path.push(s);
@@ -436,6 +446,9 @@ export class TransitAggregator {
     }
 }
 
+/** Edge labels {@link TrafficFlowAggregator} remembers; the least recently active ports are forgotten beyond. */
+const MAX_EDGE_LABELS = 4_096;
+
 /**
  * Presentation adapter that coalesces the public traffic stream into legacy
  * {@link FlowSummary} values. Routing and endpoint observation stay entirely
@@ -443,16 +456,27 @@ export class TransitAggregator {
  */
 export class TrafficFlowAggregator {
     private readonly _portLabels = new Map<string, string>();
+    /** The latest friendly edge id seen per port, most recent last; the default label. */
+    private readonly _edgeLabels = new Map<string, string>();
     private readonly _aggregator: TransitAggregator;
+    private readonly _labelOf: (portId: string) => string | undefined;
 
     constructor(options: TransitAggregatorOptions) {
-        this._aggregator = new TransitAggregator({
-            ...options,
-            labelOf: (portId) => this._portLabels.get(portId) ?? options.labelOf?.(portId),
-        });
+        this._labelOf = (portId) => this._portLabels.get(portId)
+            ?? options.labelOf?.(portId)
+            ?? this._edgeLabels.get(portId);
+        this._aggregator = new TransitAggregator({ ...options, labelOf: this._labelOf });
     }
 
     public add(transit: TrafficTransitEvent): void {
+        for (const endpoint of [transit.in, transit.out]) {
+            if (endpoint !== undefined && endpoint.edgeId !== endpoint.portId) {
+                // Ports are never reused; keep the recently active ones so long-lived consumers stay bounded.
+                this._edgeLabels.delete(endpoint.portId);
+                this._edgeLabels.set(endpoint.portId, endpoint.edgeId);
+                if (this._edgeLabels.size > MAX_EDGE_LABELS) this._edgeLabels.delete(this._edgeLabels.keys().next().value!);
+            }
+        }
         this._aggregator.add({
             timeMs: transit.timeMs,
             nodeId: transit.nodeId,
@@ -477,6 +501,11 @@ export class TrafficFlowAggregator {
         this._portLabels.set(portId, label);
     }
 
+    /** The label summaries use for `portId`, e.g. for a summary's `entryPortId`. */
+    public portLabel(portId: string): string {
+        return this._labelOf(portId) ?? portId;
+    }
+
     public flush(): void {
         this._aggregator.flush();
     }
@@ -484,6 +513,7 @@ export class TrafficFlowAggregator {
     public dispose(): void {
         this._aggregator.dispose();
         this._portLabels.clear();
+        this._edgeLabels.clear();
     }
 }
 
@@ -561,6 +591,16 @@ function _trunc(value: unknown, max: number): string {
         str = String(value);
     }
     return str.length > max ? `${str.slice(0, max)}…` : str;
+}
+
+/** The ports a flow entered and left the observed nodes on. */
+function _entryExit(first: NodeTransit, last: NodeTransit): Pick<FlowSummary, 'entryPortId' | 'exitPortId'> {
+    const entry = first.in?.portId ?? first.in?.edgeId;
+    const exit = last.out?.portId ?? last.out?.edgeId;
+    return {
+        ...(entry !== undefined ? { entryPortId: entry } : {}),
+        ...(exit !== undefined ? { exitPortId: exit } : {}),
+    };
 }
 
 /** Extract the `$stream::send` frames from a flow's transits, in arrival order. */

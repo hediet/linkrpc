@@ -175,8 +175,66 @@ describe('TransitAggregator', () => {
                 endTs: 5,
                 durationMs: 5,
                 path: ['app', 'overlay', 'uplink', 'hub', 'target'],
+                entryPortId: 'app',
+                exitPortId: 'target',
                 partial: false,
             });
+            frontend.dispose();
+        });
+
+        it('labels ports with the friendly edge ids of the observed transits', () => {
+            const clock = new FakeClock();
+            const summaries: FlowSummary[] = [];
+            const frontend = new TrafficFlowAggregator({
+                onFlow: (summary) => summaries.push(summary),
+                now: clock.now,
+                setTimer: clock.setTimer,
+                clearTimer: clock.clearTimer,
+            });
+            frontend.setPortLabel('p2', 'explicit');
+
+            frontend.add(trafficTransit({
+                nodeId: 'hub',
+                kind: 'request',
+                in: { edgeId: 'hediet/devbox', portId: 'p1', requestId: 7 },
+                out: { edgeId: 'hediet/pc2/compute', portId: 'p2', requestId: 1 },
+            }));
+            frontend.add(trafficTransit({
+                timeMs: 3,
+                nodeId: 'hub',
+                kind: 'response',
+                in: { edgeId: 'hediet/pc2/compute', portId: 'p2', requestId: 1 },
+                out: { edgeId: 'hediet/devbox', portId: 'p1', requestId: 7 },
+            }));
+            clock.advance(60);
+
+            expect(summaries.map(({ path, entryPortId, exitPortId }) => ({ path, entryPortId, exitPortId })))
+                .toMatchInlineSnapshot(`
+                  [
+                    {
+                      "entryPortId": "p1",
+                      "exitPortId": "p2",
+                      "path": [
+                        "hediet/devbox",
+                        "hub",
+                        "explicit",
+                      ],
+                    },
+                  ]
+                `);
+            expect(['p1', 'p2', 'p3'].map(port => frontend.portLabel(port))).toEqual(['hediet/devbox', 'explicit', 'p3']);
+            frontend.dispose();
+        });
+
+        it('remembers edge labels only for the most recently active ports', () => {
+            const frontend = new TrafficFlowAggregator({ onFlow: () => undefined });
+            const notification = (port: number) => trafficTransit({
+                nodeId: 'hub', kind: 'notification', in: { edgeId: `client-${port}`, portId: `port-${port}` },
+            });
+            frontend.add(notification(0));
+            for (let port = 1; port <= 4_096; port++) frontend.add(notification(port));
+            expect([frontend.portLabel('port-0'), frontend.portLabel('port-1'), frontend.portLabel('port-4096')])
+                .toEqual(['port-0', 'client-1', 'client-4096']);
             frontend.dispose();
         });
     });
