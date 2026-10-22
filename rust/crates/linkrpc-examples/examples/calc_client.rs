@@ -53,7 +53,7 @@ async fn main() {
     // Introspect the server through the typed directory reflection client.
     let directory = DirectoryServiceClient::new(conn);
     let listing = directory
-        .list(None, None, None, None, None)
+        .list(DirectoryListParams::default())
         .await
         .expect("directory list");
     println!("services exposed by the server:");

@@ -81,7 +81,7 @@ async fn consumer_spawns_calc_server_over_stdio() {
     // (no raw JSON) — the calculator shows up in the listing, fully typed.
     let directory = DirectoryServiceClient::new(conn);
     let listing = directory
-        .list(None, None, None, None, None)
+        .list(DirectoryListParams::default())
         .await
         .expect("directory list");
     assert!(listing
