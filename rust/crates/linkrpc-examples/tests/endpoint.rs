@@ -76,7 +76,7 @@ async fn server_dials_into_consumer_hosted_endpoint_via_env() {
     // Reflection over the same connection, through the typed directory client (no raw JSON).
     let directory = DirectoryServiceClient::new(conn);
     let listing = directory
-        .list(None, None, None, None, None)
+        .list(DirectoryListParams::default())
         .await
         .expect("directory list");
     assert!(listing

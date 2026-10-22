@@ -80,7 +80,7 @@ async fn main() {
 
     let directory = DirectoryServiceClient::new(conn);
     let listing = directory
-        .list(None, None, None, None, None)
+        .list(DirectoryListParams::default())
         .await
         .expect("directory list");
     println!("services exposed by the connected server:");

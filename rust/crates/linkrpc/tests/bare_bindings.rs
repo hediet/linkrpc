@@ -163,6 +163,25 @@ fn reflection_defaults_schema_and_hash_match_shared_fixture() {
 }
 
 #[test]
+fn reflection_directory_schema_and_hash_match_shared_fixture() {
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("conformance")
+        .join("vectors")
+        .join("reflection_directory.json");
+    let text =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let expected: Value = serde_json::from_str(&text).expect("reflection directory vector parses");
+    let iface = linkrpc::connection::reflection::directory_interface();
+    let mut actual = serde_json::to_value(iface.to_schema()).unwrap();
+    actual.as_object_mut().unwrap().remove("hash");
+    assert_eq!(actual, expected["schema"]);
+    assert_eq!(iface.schema_hash(), expected["hash"].as_str().unwrap());
+}
+
+#[test]
 fn builtin_reflection_contracts_keep_their_inline_schema_layout() {
     for interface in [
         linkrpc::connection::reflection::defaults_interface(),
