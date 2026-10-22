@@ -40,7 +40,7 @@ import {
 } from './commands/participantWatch';
 import { schemaCommand } from './commands/schema';
 import { loadHubConfig, printHubConfigSchema, serveCommand } from './commands/serve';
-import { type OutboundForwarding, proxyCommand, tunnelCommand } from './commands/tunnel';
+import { proxyCommand, tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpForwardCommand } from './commands/mcpForward';
@@ -1263,37 +1263,43 @@ Batch options:
         .description(
             'Stand in for a participant on the hub (--endpoint*). The participant is this ' +
             "process's stdin/stdout (--stdio) or a target endpoint (--target-endpoint*). Calls the " +
-            'participant emits are forwarded to the hub per --outbound: `signed` (default) re-signs ' +
-            'them as this CLI\'s --principal with capability negotiation, so participants that cannot ' +
-            'sign can call gated services; `verbatim` forwards them unsigned; `none` drops them. ' +
-            'With --claim, requests the hub routes to <serviceId> are forwarded to the participant. ' +
+            'participant emits are forwarded to the hub unsigned, keeping any signature the participant ' +
+            'attached. Pass --sign explicitly to re-sign them as --principal (default: the managed ' +
+            'Hub identity) with capability negotiation, so participants that cannot sign can call ' +
+            'gated services; --no-outbound drops them instead. With --claim, requests the hub routes ' +
+            'to <serviceId> are forwarded to the participant. ' +
             'Runs until the participant disconnects or Ctrl-C.',
         ))
         .option('--stdio', "use this process's stdin/stdout as the participant")
         .option('--claim <serviceId>', 'claim <serviceId> on the hub and forward its requests to the participant')
-        .addOption(
-            new Option('--outbound <mode>', 'how participant calls reach the hub')
-                .choices(['signed', 'verbatim', 'none'])
-                .default('signed'),
-        )
+        .option('--no-outbound', 'do not forward calls the participant emits to the hub')
         .action(async (cmdOpts: TargetEndpointCliOptions & {
             stdio?: boolean;
             claim?: string;
-            outbound: OutboundForwarding;
+            outbound: boolean;
         }) => {
             const localEp = needEndpoint(endpoint);
             if (cmdOpts.stdio === hasTargetEndpoint(cmdOpts)) {
                 process.stderr.write('linkrpc: proxy requires exactly one of --stdio or --target-endpoint*.\n');
                 process.exit(2);
             }
+            // Re-signing grants the participant this CLI's identity, so it requires an explicit
+            // --sign on this command line; the Hub profile's signing default does not count.
+            const signOutbound = g_invocation?.cliOverrides.sign === true;
+            if (signOutbound && !cmdOpts.outbound) {
+                process.stderr.write('linkrpc: proxy --sign has no effect with --no-outbound.\n');
+                process.exit(2);
+            }
             const targetEp = cmdOpts.stdio
                 ? undefined
                 : resolveTargetEndpointOrExit(cmdOpts, program.opts(), 'proxy');
             const hub = await connectEndpoint(localEp, wireLog('hub'));
-            const session = await setupSigning(hub.channel, hub.signing, getPrincipalSpec(), {
-                negotiateHubCaps: isHubEndpoint(localEp),
-            });
-            reportIdentity(session);
+            // The proxy's own calls (e.g. the --claim registration) follow the usual signing default.
+            if (resolveSigning(g_invocation?.profile ?? 'hub', g_invocation?.values ?? {})) {
+                reportIdentity(await setupSigning(hub.channel, hub.signing, getPrincipalSpec(), {
+                    negotiateHubCaps: isHubEndpoint(localEp),
+                }));
+            }
             // Connect the participant last: proxyCommand installs its forwarders
             // synchronously, before any message the participant sent is dispatched.
             const participant = targetEp === undefined
@@ -1303,7 +1309,7 @@ Batch options:
                 await proxyCommand({
                     hub,
                     participant: participant.connection,
-                    outbound: cmdOpts.outbound,
+                    outbound: !cmdOpts.outbound ? 'none' : signOutbound ? 'signed' : 'verbatim',
                     ...(cmdOpts.claim !== undefined ? { claimServiceId: cmdOpts.claim } : {}),
                     ...(participant.closed !== undefined ? { stop: participant.closed } : {}),
                 });
