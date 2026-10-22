@@ -73,11 +73,13 @@ export async function proxyCommand(opts: ProxyOptions): Promise<void> {
 
     if (opts.claimServiceId !== undefined) {
         await _claimServiceId(opts.hub, opts.claimServiceId);
-        log(`proxy: claimed '${opts.claimServiceId}' — forwarding its requests to the participant`);
+        log(`proxy: claimed '${opts.claimServiceId}' — forwarding its requests to the participant unchanged`);
     }
-    if (opts.outbound !== 'none') {
-        log(`proxy: forwarding participant calls to the hub (${opts.outbound})`);
-    }
+    log({
+        signed: 'proxy: forwarding participant calls to the hub, signed as the identity above',
+        verbatim: 'proxy: forwarding participant calls to the hub as they are (not signed by the proxy)',
+        none: 'proxy: dropping participant calls',
+    }[opts.outbound]);
 
     await (opts.stop ?? _untilSignalled());
     log('proxy: stopping');

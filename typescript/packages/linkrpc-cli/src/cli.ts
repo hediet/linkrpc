@@ -1261,20 +1261,32 @@ Batch options:
     addTargetEndpointOptions(program
         .command('proxy')
         .description(
-            'Stand in for a participant on the hub (--endpoint*). The participant is this ' +
-            "process's stdin/stdout (--stdio) or a target endpoint (--target-endpoint*). Calls the " +
-            'participant emits are forwarded to the hub unsigned, keeping any signature the participant ' +
-            'attached. Pass --sign explicitly to re-sign them as --principal (default: the managed ' +
-            'Hub identity) with capability negotiation, so participants that cannot sign can call ' +
-            'gated services; --no-outbound drops them instead. With --claim, requests the hub routes ' +
-            'to <serviceId> are forwarded to the participant. ' +
+            'Connect a participant to the hub (--endpoint*) through this process. The participant is ' +
+            "this process's stdin/stdout (--stdio) or a target endpoint (--target-endpoint*). By " +
+            'default the proxy does not sign anything: calls the participant makes are forwarded to ' +
+            'the hub as they are (unsigned, or with the signature the participant attached). ' +
+            '--sign-as re-signs them with an identity of this machine, --no-outbound drops them, and ' +
+            '--claim makes the hub route a service id to the participant. ' +
             'Runs until the participant disconnects or Ctrl-C.',
         ))
         .option('--stdio', "use this process's stdin/stdout as the participant")
-        .option('--claim <serviceId>', 'claim <serviceId> on the hub and forward its requests to the participant')
-        .option('--no-outbound', 'do not forward calls the participant emits to the hub')
+        .option(
+            '--sign-as [principal]',
+            'sign every call the participant makes as <principal> ("managed", "user:<id>" or ' +
+            '"file:<path>"; default: --principal, i.e. the managed Hub identity falling back to ' +
+            'user:hubrpc-cli) and request capabilities for those calls, prompting for approval ' +
+            'when needed. This lends the participant that identity; use it for participants that ' +
+            'cannot sign but must call services behind forwardChecking',
+        )
+        .option(
+            '--claim <serviceId>',
+            'register <serviceId> on the hub (this registration is signed as --principal) and ' +
+            "forward requests for it to the participant unchanged, keeping callers' signatures",
+        )
+        .option('--no-outbound', 'drop calls the participant makes instead of forwarding them to the hub')
         .action(async (cmdOpts: TargetEndpointCliOptions & {
             stdio?: boolean;
+            signAs?: string | true;
             claim?: string;
             outbound: boolean;
         }) => {
@@ -1283,20 +1295,25 @@ Batch options:
                 process.stderr.write('linkrpc: proxy requires exactly one of --stdio or --target-endpoint*.\n');
                 process.exit(2);
             }
-            // Re-signing grants the participant this CLI's identity, so it requires an explicit
-            // --sign on this command line; the Hub profile's signing default does not count.
-            const signOutbound = g_invocation?.cliOverrides.sign === true;
-            if (signOutbound && !cmdOpts.outbound) {
-                process.stderr.write('linkrpc: proxy --sign has no effect with --no-outbound.\n');
+            if (g_invocation?.cliOverrides.sign === true) {
+                process.stderr.write('linkrpc: proxy does not use --sign; pass --sign-as [principal] to sign participant calls.\n');
+                process.exit(2);
+            }
+            if (cmdOpts.signAs !== undefined && !cmdOpts.outbound) {
+                process.stderr.write('linkrpc: proxy --sign-as has no effect with --no-outbound.\n');
                 process.exit(2);
             }
             const targetEp = cmdOpts.stdio
                 ? undefined
                 : resolveTargetEndpointOrExit(cmdOpts, program.opts(), 'proxy');
             const hub = await connectEndpoint(localEp, wireLog('hub'));
-            // The proxy's own calls (e.g. the --claim registration) follow the usual signing default.
-            if (resolveSigning(g_invocation?.profile ?? 'hub', g_invocation?.values ?? {})) {
-                reportIdentity(await setupSigning(hub.channel, hub.signing, getPrincipalSpec(), {
+            // The proxy signs only what was asked for: participant calls with --sign-as,
+            // and its own --claim registration.
+            if (cmdOpts.signAs !== undefined || cmdOpts.claim !== undefined) {
+                const principal = typeof cmdOpts.signAs === 'string'
+                    ? parsePrincipalSpec(cmdOpts.signAs)
+                    : getPrincipalSpec();
+                reportIdentity(await setupSigning(hub.channel, hub.signing, principal, {
                     negotiateHubCaps: isHubEndpoint(localEp),
                 }));
             }
@@ -1309,7 +1326,7 @@ Batch options:
                 await proxyCommand({
                     hub,
                     participant: participant.connection,
-                    outbound: !cmdOpts.outbound ? 'none' : signOutbound ? 'signed' : 'verbatim',
+                    outbound: !cmdOpts.outbound ? 'none' : cmdOpts.signAs !== undefined ? 'signed' : 'verbatim',
                     ...(cmdOpts.claim !== undefined ? { claimServiceId: cmdOpts.claim } : {}),
                     ...(participant.closed !== undefined ? { stop: participant.closed } : {}),
                 });
