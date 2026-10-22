@@ -19,6 +19,7 @@ const { positionals, values } = parseArgs({
         params: { type: 'string', default: '{}' },
         help: { type: 'boolean' },
         'managed-identity': { type: 'boolean' },
+        'negotiate-caps': { type: 'boolean' },
     },
 });
 
@@ -26,7 +27,8 @@ async function main() {
     if (values.help) {
         console.log(`linkrpc-desktop serve --source ws://127.0.0.1:6080/websockify [--dpi http://127.0.0.1:6080/api/dpi]
 linkrpc-desktop view --service SERVICE [--interface ID --instance NAME --params '{}']
-Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims the hub-granted namespace.`);
+Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims the hub-granted namespace.
+--managed-identity signs with a provisioned identity. --negotiate-caps explicitly enables interactive capability requests.`);
         return;
     }
     const control = new AbortController();
@@ -45,13 +47,14 @@ Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims
         await host.done;
     } else if (positionals[0] === 'view') {
         if (!values.service) throw new Error('view requires --service');
+        console.log('Discovering desktop template...');
         const viewer = await startDesktopViewer({
             connect: async () => {
                 if (!values['managed-identity']) return connectToHub({ endpoint: values.endpoint });
                 const raw = await openHubChannel({ endpoint: values.endpoint });
                 try {
                     const signed = await createManagedSigningChannel(raw, {
-                        autoNegotiateCaps: true, consumer: { name: 'LinkRPC Desktop Viewer' },
+                        autoNegotiateCaps: values['negotiate-caps'] === true, consumer: { name: 'LinkRPC Desktop Viewer' },
                     });
                     return { connection: new LinkRpcConnection(signed.channel), close: () => raw.close() };
                 } catch (error) { raw.close(); throw error; }

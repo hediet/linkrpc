@@ -50,7 +50,10 @@ This prints a loopback HTTP URL. Open it in a local browser. Keep the command
 running; stopping it disconnects the viewer. `LINKRPC_ENDPOINT` and
 `LINKRPC_TOKEN` can replace `--endpoint`. Use `--managed-identity` when that
 connection is provisioned with the hub's managed identity overlay; it signs calls
-and negotiates capabilities through the standard consent front door. The CLI
+using capabilities already stored for that identity. Add `--negotiate-caps` to
+explicitly enable capability requests through the standard consent front door.
+Those requests can wait for user consent, even before discovery, so they are
+not enabled merely by selecting managed signing. The CLI
 does not independently load the main `linkrpc` CLI's context configuration.
 
 Selectors: `--interface ID --instance NAME --params '{"id":"screen-1"}'`.
