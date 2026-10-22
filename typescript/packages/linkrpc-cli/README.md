@@ -800,27 +800,30 @@ process's stdin/stdout (`--stdio`) or a `--target-endpoint*`. It keeps full
 LinkRPC semantics (service ids, streaming, cancellation) and adds what the
 participant cannot do itself:
 
-- `--outbound signed` (default) re-signs every call the participant emits as
-  the CLI's `--principal` and negotiates capabilities, so a participant without
-  signing support can call services behind `forwardChecking`.
-  `--outbound verbatim` forwards calls unsigned (keeping any `$hubrpc` envelope
-  the participant attached); `--outbound none` drops them.
+- Calls the participant emits are forwarded to the hub unsigned by default,
+  keeping any `$hubrpc` envelope the participant attached. `--sign` (explicitly
+  on the `proxy` command line; the Hub profile's signing default does not
+  apply) re-signs them as `--principal`, by default the managed Hub identity,
+  and negotiates capabilities, so a participant without signing support can
+  call services behind `forwardChecking`. This lends the participant that
+  identity. `--no-outbound` drops its calls instead.
 - `--claim <serviceId>` claims the service id and forwards requests the hub
   routes to it to the participant, verbatim (callers' signatures are kept).
 
 ```sh
 # A Rust client that cannot sign yet reaches a gated remote service.
 # Point it at this cmd-stdio endpoint and address calls to the remote service id:
-#   cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio
-hub proxy --stdio
+#   cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign
+hub proxy --stdio --sign
+hub proxy --stdio --sign --principal user:automation
 
 # Serve a stdio program under a service id (equivalent to `tunnel`).
-hub proxy --claim my/service --outbound none --target-endpoint-cmd-stdio "my-server --stdio"
+hub proxy --claim my/service --no-outbound --target-endpoint-cmd-stdio "my-server --stdio"
 ```
 
 With `--stdio`, the proxy exits when stdin closes. `tunnel <serviceId>` is
-`proxy --claim <serviceId>` with `--bidi` selecting `--outbound verbatim`
-instead of `none`.
+`proxy --claim <serviceId> --no-outbound`; with `--bidi` it forwards the
+target's calls unsigned.
 
 ### Capabilities
 
