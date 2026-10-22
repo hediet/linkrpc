@@ -60,6 +60,34 @@ Selectors: `--interface ID --instance NAME --params '{"id":"screen-1"}'`.
 Ambiguous matches and invalid parameters fail explicitly. `startDesktopViewer`
 also accepts a caller-supplied authorized hub connection factory.
 
+For a durable managed-identity grant, use the hub's standard
+`hubAccess::requestAccess` / approval flow and persist the returned capabilities
+in that identity's cap bag. Pin permissions to the selected service:
+
+- `hubrpc.directory::list`, with the requested `serviceId`.
+- `hubrpc.schemas::get`, with the selected interface ID.
+- The reflected `info` member, with the selected `params`.
+- The reflected `attach` member, with the selected `params` and explicit
+  `{ any: true }` matchers for `offer` and `viewport`.
+
+Parameter matchers must declare **every** top-level key; matching only `params`
+does not authorize an attach containing `offer` and `viewport`. Keep `info` and
+`attach` in separate permissions because their parameter keys differ. Do not
+grant wildcards over other services. Managed signing by itself does not grant
+authority, and one-shot negotiation does not provision durable access.
+
+When the source runs in WSL, systemd Docker alone may not keep the distribution
+alive. An existing hub daemon can supervise the Windows-side WSL process too:
+
+```text
+linkrpc hub services run --id desktop-wsl --persistent --restart always --detach --no-rpc -- C:\Windows\System32\wsl.exe -d DISTRO -u root --exec docker start --attach CONTAINER
+```
+
+This assumes the container already exists. Verify its loopback HTTP/WebSocket
+endpoint separately: `--no-rpc` readiness reports process spawn, not container
+health. Stop the managed endpoint explicitly when the desktop is no longer
+wanted. This does not install Windows login startup for the hub daemon.
+
 ## Lifetime and scope
 
 - Exactly one controller per source, across all caller connections.
