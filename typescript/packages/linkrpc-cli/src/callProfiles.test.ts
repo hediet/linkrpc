@@ -44,6 +44,14 @@ async function fixture(values: ContextValues = {}) {
 }
 
 describe('shared call signing profile overrides', () => {
+    it('ls disables broad up-front and sign-time negotiation', async () => {
+        const f = await fixture();
+        try {
+            await f.invoke(['ls'], 'hub');
+            expect(f.reflection).not.toHaveBeenCalled();
+            expect(f.signing.mock.calls[0][3]).toMatchObject({ autoNegotiatePerCall: false });
+        } finally { f.dispose(); }
+    });
     it.each(['--request-cap', '--allow-param', '--duration'])('rejects obsolete flag %s', async flag => {
         const f = await fixture();
         try {

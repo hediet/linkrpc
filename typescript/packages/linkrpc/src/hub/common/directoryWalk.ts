@@ -2,6 +2,7 @@ import type { IRequestSender, RawStreamingCall } from '../../connection/channel'
 import { DEFAULT_RPC_TIMEOUT_MS, withRpcTimeout } from '../../connection/requestTimeout';
 import type { SigningCallCtx } from '../../identity/signingSender';
 import type { JsonValue } from '../../protocol/jsonValue';
+import { ErrorCode } from '../../protocol/jsonRpc';
 import type { LinkRpcInterfaceSchema, MethodSchema } from '../../schema/linkRpcInterfaceSchema';
 import {
     directoryInterface,
@@ -336,7 +337,8 @@ export interface WalkHubOptions {
      */
     readonly rootTarget?: string;
     /**
-     * Invoked once per gated sub-directory the walk encounters. Return `true`
+     * Invoked only after a permissionRequired error, never for timeouts or
+     * transport errors. Return `true`
      * if a capability for its `hubrpc.directory::list` was granted and the
      * directory should be re-listed; `false` (or omitted hook) leaves it in
      * {@link WalkHubResult.inaccessible}. Called at most once per `serviceId`.
@@ -541,9 +543,9 @@ export class HubDirectoryExplorer {
             .filter((item) => this._options.serviceId === undefined
                 || item.serviceId === this._options.serviceId);
         const inaccessible = [...this._nodes.values()]
-            .filter((node) => node.key !== ROOT_NODE_KEY && node.inaccessibleReason !== undefined)
+            .filter((node) => node.inaccessibleReason !== undefined)
             .map((node) => ({
-                serviceId: node.target!,
+                serviceId: node.target ?? '',
                 reason: node.inaccessibleReason!,
             }));
         return { listings, inaccessible };
@@ -653,7 +655,7 @@ export class HubDirectoryExplorer {
                     if (this._disposed) break;
                 } catch (error) {
                     if (this._disposed) break;
-                    if (await this._tryUnlock(node)) {
+                    if (await this._tryUnlock(node, error)) {
                         node.reloadRequested = true;
                         continue;
                     }
@@ -692,9 +694,11 @@ export class HubDirectoryExplorer {
         }
     }
 
-    private async _tryUnlock(node: DirectoryNode): Promise<boolean> {
+    private async _tryUnlock(node: DirectoryNode, error: unknown): Promise<boolean> {
         if (
-            node.target === undefined
+            typeof error !== 'object' || error === null || !('code' in error)
+            || error.code !== ErrorCode.permissionRequired
+            || node.target === undefined
             || this._options.unlockGatedDirectory === undefined
             || this._unlockAttempted.has(node.target)
         ) {
@@ -703,7 +707,10 @@ export class HubDirectoryExplorer {
         this._unlockAttempted.add(node.target);
         try {
             return await this._options.unlockGatedDirectory(node.target);
-        } catch {
+        } catch (approvalError) {
+            this._options.log?.(
+                `hub directory access request(${node.target}) failed: ${errorMessage(approvalError)}`,
+            );
             return false;
         }
     }

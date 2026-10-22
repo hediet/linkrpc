@@ -1,6 +1,6 @@
 import { mkdir, open, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { LinkRpcInterfaceSchema } from "@hediet/linkrpc";
+import { ErrorCode, type LinkRpcInterfaceSchema } from "@hediet/linkrpc";
 import {
     DEFAULT_WALK_DEPTH,
     HubDirectoryExplorer,
@@ -14,7 +14,7 @@ import {
     type ServiceListing,
     type WalkHubOptions,
 } from "@hediet/linkrpc/hub/common";
-import type { CliChannel } from "@hediet/linkrpc-client-internal";
+import type { CliChannel, SigningSession } from "@hediet/linkrpc-client-internal";
 import { formatJson } from "../output";
 import { createDisplayForest, type DisplayForestNode } from "./displayForest";
 import { createJsonPatch, type JsonValue } from "./jsonPatch";
@@ -23,6 +23,8 @@ import { StateJsonlWriter } from "./stateJsonl";
 export type LsFormat = "pretty" | "json" | "jsonl";
 
 export interface LsOptions {
+    readonly requestDirectoryAccess?: (serviceId: string) => Promise<boolean>;
+    readonly log?: (message: string) => void;
     readonly interfaceId?: string;
     readonly interfacePrefix?: string;
     readonly serviceId?: string;
@@ -77,7 +79,7 @@ export async function lsCommand(channel: CliChannel, opts: LsOptions = {}): Prom
     validateLsOptions(opts);
     const legacyOutput = opts.format === undefined;
     if (opts.dumpPath !== undefined) {
-        const dump = await createHubDump(channel, { maxDepth: opts.maxDepth });
+        const dump = await createHubDump(channel, opts);
         const dumpPath = path.resolve(opts.dumpPath);
         await mkdir(path.dirname(dumpPath), { recursive: true });
         await writeFile(dumpPath, `${formatJson(dump)}\n`, "utf8");
@@ -100,10 +102,49 @@ export async function lsCommand(channel: CliChannel, opts: LsOptions = {}): Prom
     explorer.dispose();
     const all = state.listings;
     const output = opts.withMembers
-        ? await addMembers(channel, all, (listing) => listing.discoveredFrom)
+        ? await addMembers(createSchemaFetcher(channel, opts), all, (listing) => listing.discoveredFrom)
         : all;
-    if (format === "json") return formatJson(legacyOutput ? output : state);
-    return renderTree(output, opts.interfaceId);
+    if (format === "json") {
+        for (const item of state.inaccessible) opts.log?.(`Inaccessible directory ${item.serviceId || "(root)"}: ${item.reason}`);
+        return formatJson(legacyOutput ? output : state);
+    }
+    return [
+        renderTree(output, opts.interfaceId),
+        ...state.inaccessible.map(item => `! Inaccessible directory ${item.serviceId || "(root)"}: ${item.reason}`),
+    ].join("\n");
+}
+
+export async function requestDirectoryAccess(
+    session: Pick<SigningSession, "requestAccess">,
+    serviceId: string,
+    options: Pick<LsOptions, "watch" | "withMembers" | "dumpPath" | "dumpPatchesPath">,
+): Promise<boolean> {
+    const result = await session.requestAccess({
+        consumer: { name: "linkrpc-cli", purpose: `Discover interfaces in ${serviceId}.` },
+        permissions: [{
+            target: {
+                serviceId: { exact: serviceId },
+                interfaceId: { exact: "hubrpc.directory" },
+                members: [
+                    { exact: "list" },
+                    ...(options.watch ? [{ exact: "watch" }] : []),
+                ],
+            },
+            canInvoke: true,
+        }, ...(options.withMembers || options.dumpPath !== undefined || options.dumpPatchesPath !== undefined ? [{
+            target: {
+                serviceId: { exact: serviceId },
+                interfaceId: { exact: "hubrpc.schemas" },
+                members: [{ exact: "get" }],
+            },
+            canInvoke: true,
+        }] : [])],
+        duration: "shortLived",
+    });
+    if (result.status !== "granted") {
+        throw new Error(`Directory access ${result.status}${"reason" in result && result.reason ? `: ${result.reason}` : ""}`);
+    }
+    return true;
 }
 
 function validateLsOptions(opts: LsOptions): void {
@@ -187,6 +228,8 @@ function validateSearchExpression(search: string | undefined, command: string): 
 
 function explorerOptions(opts: LsOptions): WalkHubOptions {
     return {
+        unlockGatedDirectory: opts.requestDirectoryAccess,
+        log: opts.log,
         maxDepth: opts.serviceId === undefined
             ? opts.maxDepth ?? DEFAULT_WALK_DEPTH
             : 0,
@@ -408,8 +451,29 @@ interface LsListing extends ServiceListing {
     readonly members?: readonly LsMember[];
 }
 
+function createSchemaFetcher(channel: CliChannel, opts: Pick<LsOptions, "requestDirectoryAccess">) {
+    const approvals = new Map<string, Promise<boolean>>();
+    return async (interfaceId: string, hash: string, target: string | undefined) => {
+        try {
+            return await fetchSchema(channel, interfaceId, hash, target);
+        } catch (error) {
+            if (typeof error !== "object" || error === null || !("code" in error)
+                || error.code !== ErrorCode.permissionRequired || !target || !opts.requestDirectoryAccess) {
+                throw error;
+            }
+            let approval = approvals.get(target);
+            if (!approval) {
+                approval = opts.requestDirectoryAccess(target);
+                approvals.set(target, approval);
+            }
+            if (!await approval) throw error;
+            return fetchSchema(channel, interfaceId, hash, target);
+        }
+    };
+}
+
 async function addMembers<T extends ServiceListing>(
-    channel: CliChannel,
+    getSchema: ReturnType<typeof createSchemaFetcher>,
     listings: readonly T[],
     getTarget: (listing: T) => string | undefined,
 ): Promise<LsListing[]> {
@@ -419,8 +483,7 @@ async function addMembers<T extends ServiceListing>(
         const cacheKey = `${target ?? ""}\0${listing.interfaceId}\0${listing.hash}`;
         let members = cache.get(cacheKey);
         if (members === undefined) {
-            members = fetchSchema(
-                channel,
+            members = getSchema(
                 listing.interfaceId,
                 listing.hash,
                 target === "" ? undefined : target,
@@ -489,13 +552,11 @@ export function createInitialHubDump(): HubDump {
 
 export async function createHubDump(
     channel: CliChannel,
-    opts: Pick<LsOptions, "maxDepth"> = {},
+    opts: Pick<LsOptions, "maxDepth" | "timeoutMs" | "requestDirectoryAccess" | "log"> = {},
 ): Promise<HubDump> {
-    const explorer = new HubDirectoryExplorer(channel, {
-        maxDepth: opts.maxDepth ?? DEFAULT_WALK_DEPTH,
-    });
+    const explorer = new HubDirectoryExplorer(channel, explorerOptions(opts));
     await explorer.explore();
-    const cache = await fetchDumpSchemas(channel, explorer.graphSnapshot);
+    const cache = await fetchDumpSchemas(createSchemaFetcher(channel, opts), explorer.graphSnapshot);
     const dump = buildHubDump(explorer.graphSnapshot, cache, true);
     explorer.dispose();
     return dump;
@@ -513,7 +574,7 @@ interface DumpSchemaCache {
 }
 
 async function fetchDumpSchemas(
-    channel: CliChannel,
+    getSchema: ReturnType<typeof createSchemaFetcher>,
     snapshot: HubDirectoryGraphSnapshot,
     cache: DumpSchemaCache = { schemas: new Map(), errors: new Map() },
 ): Promise<DumpSchemaCache> {
@@ -524,8 +585,7 @@ async function fetchDumpSchemas(
         const attempts: { reportedBy: string; interfaceId: string; error: string; }[] = [];
         for (const candidate of candidates) {
             try {
-                const schema = await fetchSchema(
-                    channel,
+                const schema = await getSchema(
                     candidate.interfaceId,
                     hash,
                     candidate.target,
@@ -603,6 +663,7 @@ function collectSchemaCandidates(
 }
 
 async function runStreamingLs(channel: CliChannel, opts: LsOptions): Promise<string> {
+    const getSchema = createSchemaFetcher(channel, opts);
     const explorer = new HubDirectoryExplorer(channel, explorerOptions(opts));
     const patchMode = opts.dumpPatchesPath !== undefined;
     const patchPath = patchMode && opts.dumpPatchesPath !== "-"
@@ -627,7 +688,7 @@ async function runStreamingLs(channel: CliChannel, opts: LsOptions): Promise<str
         queue = queue.then(async () => {
             if (patchMode) {
                 if (event.type === "settled") {
-                    await fetchDumpSchemas(channel, event.snapshot, schemaCache);
+                    await fetchDumpSchemas(getSchema, event.snapshot, schemaCache);
                 }
                 const schemasComplete = event.snapshot.complete
                     && [...collectSchemaCandidates(event.snapshot).keys()].every((hash) =>
