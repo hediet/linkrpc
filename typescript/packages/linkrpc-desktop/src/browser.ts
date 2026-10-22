@@ -4,10 +4,19 @@ import {
     DESKTOP_DATA_CHANNEL, desktopInterface, desktopViewportSchema, maintainDesktopLease,
     type DesktopAttachOptions, type DesktopAttachResult, type DesktopClientMessage,
     type DesktopServerMessage, type DesktopViewport,
+    desktopHubInterface, DesktopRelay,
 } from '@hediet/linkrpc-infra/desktop';
 
 /** Opens the loopback control bridge. The peer data channel remains end-to-end. */
 export async function createViewerClient(url: string, signal: AbortSignal) {
+    return (await openViewerControl(url, signal)).get(desktopInterface).desktop;
+}
+
+export async function createHubViewerClient(url: string, signal: AbortSignal) {
+    return (await openViewerControl(url, signal)).get(desktopHubInterface).desktop;
+}
+
+async function openViewerControl(url: string, signal: AbortSignal) {
     signal.throwIfAborted();
     const socket = new WebSocket(url);
     const close = () => socket.close();
@@ -45,7 +54,116 @@ export async function createViewerClient(url: string, signal: AbortSignal) {
     }
     signal.throwIfAborted();
     const connection = LinkRpcConnection.fromTransport(new WebSocketTransport(socket, () => connection.close()));
-    return connection.get(desktopInterface).desktop;
+    return connection;
+}
+
+/** WebSocket-compatible byte adapter; noVNC remains independent of hub framing. */
+export class HubDesktopChannel extends EventTarget implements WebSocket {
+    readonly CONNECTING = 0;
+    readonly OPEN = 1;
+    readonly CLOSING = 2;
+    readonly CLOSED = 3;
+    readonly extensions = '';
+    readonly protocol = '';
+    readonly url = '';
+    binaryType: BinaryType = 'arraybuffer';
+    readyState: WebSocket['readyState'] = 0;
+    onopen: WebSocket['onopen'] = null;
+    onmessage: WebSocket['onmessage'] = null;
+    onclose: WebSocket['onclose'] = null;
+    onerror: WebSocket['onerror'] = null;
+    constructor(private readonly _relay: DesktopRelay, private readonly _close: () => void) { super(); }
+    get bufferedAmount(): number { return this._relay.bufferedAmount; }
+    send(data: Parameters<WebSocket['send']>[0]): void {
+        if (this.readyState !== this.OPEN) { throw new Error('Desktop hub channel not open'); }
+        const bytes = data instanceof ArrayBuffer ? new Uint8Array(data)
+            : ArrayBuffer.isView(data) ? new Uint8Array(data.buffer, data.byteOffset, data.byteLength) : undefined;
+        if (!bytes) { throw new Error('Desktop hub channel requires binary input'); }
+        try { this._relay.write(bytes); }
+        catch (error) { this._close(); throw error; }
+    }
+    close(): void { this._close(); }
+    open(): void {
+        if (this.readyState !== this.CONNECTING) { throw new Error('Duplicate desktop hub ready'); }
+        this.readyState = this.OPEN;
+        const event = new Event('open');
+        this.onopen?.call(this, event); this.dispatchEvent(event);
+    }
+    receive(data: Uint8Array): void {
+        if (this.readyState !== this.OPEN) { throw new Error('Desktop hub data before ready'); }
+        const event = new MessageEvent('message', { data: data.slice().buffer });
+        this.onmessage?.call(this, event); this.dispatchEvent(event);
+    }
+    end(): void {
+        if (this.readyState === this.CLOSED) { return; }
+        this.readyState = this.CLOSED;
+        const event = new CloseEvent('close', { wasClean: true, code: 1000 });
+        this.onclose?.call(this, event); this.dispatchEvent(event);
+    }
+}
+
+/** Explicit hub fallback. Data and authorization share one cancellable attach request. */
+export function connectHubDesktop(
+    client: Awaited<ReturnType<typeof createHubViewerClient>>,
+    viewport: DesktopViewport,
+    options: { signal: AbortSignal },
+) {
+    options.signal.throwIfAborted();
+    desktopViewportSchema.parse(viewport);
+    let ended = false;
+    let resolveDone!: () => void;
+    let rejectDone!: (error: Error) => void;
+    const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+    void done.catch(() => {});
+    let call: ReturnType<typeof client.attach> | undefined;
+    let lease: ReturnType<typeof maintainDesktopLease> | undefined;
+    const close = (error?: Error) => {
+        if (ended) { return; }
+        ended = true;
+        clearTimeout(timeout); lease?.dispose(); relay.dispose();
+        options.signal.removeEventListener('abort', abort);
+        channel.end();
+        if (error) { rejectDone(error); } else { resolveDone(); }
+        if (call) {
+            void call.cancel('desktopHubClosed').finally(() => call?.dispose?.())
+                .catch(error => console.error('Desktop hub cancellation failed:', error));
+        }
+    };
+    const relay: DesktopRelay = new DesktopRelay(
+        frame => {
+            if (!call) { return Promise.reject(new Error('Desktop hub not attached')); }
+            return call.send(frame);
+        },
+        data => channel.receive(data),
+        error => close(error),
+    );
+    const channel: HubDesktopChannel = new HubDesktopChannel(relay, () => close());
+    const abort = () => close(new Error('Desktop hub cancelled'));
+    const timeout = setTimeout(() => close(new Error('Desktop hub setup timed out')), 60_000);
+    options.signal.addEventListener('abort', abort, { once: true });
+    try {
+        call = client.attach({ params: {}, viewport }, {
+            onMessage: message => {
+                try {
+                    if (message.t === 'ready') { channel.open(); clearTimeout(timeout); }
+                    else if (message.t !== 'viewport') { relay.receive(message); }
+                } catch (error) { close(error instanceof Error ? error : new Error(String(error))); }
+            },
+        });
+        void call.then(() => close(), error => close(error instanceof Error ? error : new Error(String(error))));
+        lease = maintainDesktopLease(() => call!.ping(), error => close(error));
+    } catch (error) {
+        close(error instanceof Error ? error : new Error(String(error)));
+        throw error;
+    }
+    return {
+        channel, done, close: () => close(),
+        setViewport: (viewport: DesktopViewport) => {
+            desktopViewportSchema.parse(viewport);
+            if (ended || !call) { return Promise.reject(new Error('Desktop hub closed')); }
+            return call.send({ t: 'viewport', viewport });
+        },
+    };
 }
 
 /** A template instance selected through reflection or a typed containing interface. */

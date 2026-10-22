@@ -1,5 +1,5 @@
 import { hostParticipant, type ParticipantHostHandle, type ParticipantHostOptions } from '@hediet/linkrpc-hub/participant-host';
-import { DesktopHost, desktopHandlers, desktopInterface } from '@hediet/linkrpc-infra/desktop';
+import { DesktopHost, desktopHandlers, desktopInterface, desktopHubHandlers, desktopHubInterface } from '@hediet/linkrpc-infra/desktop';
 import { VncBackend, type VncSource } from './vncBackend';
 
 export async function hostVncDesktop(
@@ -14,6 +14,7 @@ export async function hostVncDesktop(
             registrationMode: 'grantedServiceId',
             setup: ({ services, connection, serviceId }) => {
                 services.register(desktopInterface, { desktop: desktopHandlers(() => desktop) });
+                services.register(desktopHubInterface, { desktop: desktopHubHandlers(() => desktop) });
                 connection.enableReflection();
                 if (serviceId !== undefined) connection.enableReflection({ serviceId });
             },

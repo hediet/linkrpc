@@ -17,6 +17,7 @@ const { positionals, values } = parseArgs({
         interface: { type: 'string' },
         instance: { type: 'string' },
         params: { type: 'string', default: '{}' },
+        transport: { type: 'string', default: 'webrtc' },
         help: { type: 'boolean' },
         'managed-identity': { type: 'boolean' },
         'negotiate-caps': { type: 'boolean' },
@@ -26,7 +27,7 @@ const { positionals, values } = parseArgs({
 async function main() {
     if (values.help) {
         console.log(`linkrpc-desktop serve --source ws://127.0.0.1:6080/websockify [--dpi http://127.0.0.1:6080/api/dpi]
-linkrpc-desktop view --service SERVICE [--interface ID --instance NAME --params '{}']
+linkrpc-desktop view --service SERVICE [--interface ID --instance NAME --params '{}' --transport webrtc|hub]
 Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims the hub-granted namespace.
 --managed-identity signs with a provisioned identity. --negotiate-caps explicitly enables interactive capability requests.`);
         return;
@@ -47,6 +48,7 @@ Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims
         await host.done;
     } else if (positionals[0] === 'view') {
         if (!values.service) throw new Error('view requires --service');
+        if (values.transport !== 'webrtc' && values.transport !== 'hub') throw new Error('Expected --transport webrtc or hub');
         console.log('Discovering desktop template...');
         const viewer = await startDesktopViewer({
             connect: async () => {
@@ -61,6 +63,7 @@ Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims
             },
             serviceId: values.service, params: JSON.parse(values.params!),
             interfaceId: values.interface, instance: values.instance,
+            transport: values.transport,
         });
         console.log(viewer.url);
         try {

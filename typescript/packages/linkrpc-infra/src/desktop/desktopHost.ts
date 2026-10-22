@@ -4,6 +4,7 @@ import {
     type DesktopInfo, type DesktopServerMessage, type DesktopViewport,
 } from './desktopInterface';
 import { maintainDesktopLease } from './desktopLease';
+import { DesktopRelay, type DesktopHubClientMessage, type DesktopHubServerMessage } from './desktopHub';
 
 export interface DesktopSession {
     readonly answer: string;
@@ -18,6 +19,9 @@ export interface DesktopBackend {
     readonly title: string;
     /** Must observe signal during setup and release partially created resources on failure. */
     open(options: DesktopAttachOptions, signal: AbortSignal): Promise<DesktopSession>;
+    openHub?(viewport: DesktopViewport, signal: AbortSignal, relay: DesktopRelay): Promise<DesktopSession & {
+        send(data: Uint8Array): Promise<void>;
+    }>;
 }
 
 export type DesktopStream = StreamApi<DesktopClientMessage, DesktopServerMessage>;
@@ -39,6 +43,50 @@ export class DesktopHost {
     }
 
     async attach(options: DesktopAttachOptions, stream: DesktopStream): Promise<DesktopAttachResult> {
+        return this.attachSession(options, stream, signal => this._backend.open(options, signal));
+    }
+
+    async attachHub(viewport: DesktopViewport, stream: StreamApi<DesktopHubClientMessage, DesktopHubServerMessage>): Promise<DesktopAttachResult> {
+        const open = this._backend.openHub;
+        if (!open) { throw new Error('Desktop source does not support hub transport'); }
+        const control = new AbortController();
+        const signal = AbortSignal.any([stream.signal, control.signal]);
+        let session: Awaited<ReturnType<NonNullable<DesktopBackend['openHub']>>> | undefined;
+        const relay = new DesktopRelay(
+            frame => stream.send(frame),
+            data => {
+                if (!session) { throw new Error('Desktop hub input before ready'); }
+                return session.send(data);
+            },
+            error => control.abort(error),
+            true,
+        );
+        try {
+            return await this.attachSession({ offer: '', viewport }, {
+                signal,
+                ping: () => stream.ping(),
+                send: async message => {
+                    await stream.send(message.t === 'answer' ? { t: 'ready' } : message);
+                    if (message.t === 'answer') { relay.start(); }
+                },
+                onMessage: listener => stream.onMessage(message => {
+                    try {
+                        if (message.t === 'viewport') { listener(message); }
+                        else { relay.receive(message); }
+                    } catch (error) { control.abort(error); }
+                }),
+            }, async signal => {
+                session = await open.call(this._backend, viewport, signal, relay);
+                return session;
+            });
+        } finally { relay.dispose(); }
+    }
+
+    private async attachSession(
+        options: DesktopAttachOptions,
+        stream: Pick<DesktopStream, 'signal' | 'ping' | 'send' | 'onMessage'>,
+        open: (signal: AbortSignal) => Promise<DesktopSession>,
+    ): Promise<DesktopAttachResult> {
         stream.signal.throwIfAborted();
         if (this._disposed) throw new Error('Desktop service closed');
         if (this._active) throw new Error('Desktop already has a controller');
@@ -59,7 +107,7 @@ export class DesktopHost {
         let updates = Promise.resolve();
         let pendingUpdates = 0;
         try {
-            const opening = this._backend.open(options, control.signal).then(value => {
+            const opening = open(control.signal).then(value => {
                 if (control.signal.aborted) value.dispose();
                 else session = value;
             });
@@ -75,6 +123,7 @@ export class DesktopHost {
                     control.abort(new Error('Too many pending viewport updates'));
                     return;
                 }
+
                 pendingUpdates++;
                 updates = updates.then(async () => {
                     control.signal.throwIfAborted();
@@ -101,5 +150,13 @@ export function desktopHandlers<P>(resolve: (params: P) => DesktopHost) {
         info: ({ params }: { readonly params: P }) => resolve(params).info(),
         attach: ({ params, ...options }: DesktopAttachOptions & { readonly params: P }, _context: unknown, stream: DesktopStream) =>
             resolve(params).attach(options, stream),
+    };
+}
+
+export function desktopHubHandlers<P>(resolve: (params: P) => DesktopHost) {
+    return {
+        info: ({ params }: { readonly params: P }) => resolve(params).info(),
+        attach: ({ params, viewport }: { readonly params: P; readonly viewport: DesktopViewport }, _context: unknown,
+            stream: StreamApi<DesktopHubClientMessage, DesktopHubServerMessage>) => resolve(params).attachHub(viewport, stream),
     };
 }

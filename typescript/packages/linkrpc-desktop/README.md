@@ -9,7 +9,7 @@ browser <-- loopback LinkRPC control --> viewer <-- hub control --> DesktopHost
 ```
 
 The hub and local viewer handle signaling, viewport/DPI and request lifetime.
-They never forward desktop bytes. The local viewer keeps hub credentials out of
+With WebRTC they never forward desktop bytes. The local viewer keeps hub credentials out of
 the page and discovers any compatible template instance, including instances
 with different containing interfaces, method names or parameter schemas.
 
@@ -45,6 +45,17 @@ Use the returned service ID to open a generic viewer:
 ```text
 node packages/linkrpc-desktop/dist/cli.js view --service SERVICE --endpoint ENDPOINT
 ```
+
+When direct WebRTC connectivity is unavailable, add `--transport hub`. This
+explicit fallback discovers the separate `linkrpc.desktop.hub.v1` template and
+transports the same lossless RFB bytes through the authorized attach stream.
+It is desktop-specific, not an arbitrary TCP forwarder. Both transports share
+one exclusive controller and the same cancellation and 20s/60s control lease.
+Hub frames carry at most 16 KiB of binary data encoded as canonical base64
+(about 33% overhead), with 256 KiB of credit in each direction. Credit returns
+only after consumption; a stalled receiver backpressures the VNC source.
+The trusted hub can read these bytes; this is not WebRTC's end-to-end DTLS.
+There is no automatic retry or transport switching yet.
 
 This prints a loopback HTTP URL. Open it in a local browser. Keep the command
 running; stopping it disconnects the viewer. `LINKRPC_ENDPOINT` and
@@ -137,7 +148,8 @@ WebSocket Origin, and does not expose hub tokens. Treat its URL as a secret.
 The local bridge is for a trusted single-user machine, not a public web server.
 
 RFB runs inside DTLS-protected WebRTC. Full SDP necessarily contains connection
-candidates; avoid logging SDP or capability URLs. There is no hub-data fallback.
+candidates; avoid logging SDP or capability URLs. The explicit hub fallback
+relies on hub transport security and authorization rather than DTLS.
 `VncSource.peerConfig` and browser `connectDesktop`'s `iceServers` allow trusted
 STUN/TURN configuration programmatically. The CLI defaults to host candidates;
 WAN/NAT traversal and TURN deployments are not automatically configured.

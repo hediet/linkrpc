@@ -2,7 +2,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from '@playwri
 import { execFileSync } from 'node:child_process';
 import { LinkRpcConnection, isRequest, type JsonRpcMessage } from '@hediet/linkrpc';
 import { Hub } from '@hediet/linkrpc-hub/hub/server';
-import { DesktopHost, desktopHandlers, desktopInterface } from '@hediet/linkrpc-infra/desktop';
+import { DesktopHost, desktopHandlers, desktopInterface, desktopHubInterface, desktopHubHandlers } from '@hediet/linkrpc-infra/desktop';
 import { WebSocketServer } from 'ws';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { VncBackend } from '../src/vncBackend';
@@ -18,7 +18,7 @@ beforeAll(async () => {
 });
 afterAll(async () => { await browser?.close(); });
 
-async function fixture(sourceUrl?: string, dpiUrl?: string) {
+async function fixture(sourceUrl?: string, dpiUrl?: string, transport: 'webrtc' | 'hub' = 'webrtc') {
     const hub = new Hub();
     const source = new WebSocketServer({ host: '127.0.0.1', port: 0 });
     await new Promise<void>(resolve => source.once('listening', resolve));
@@ -46,13 +46,14 @@ async function fixture(sourceUrl?: string, dpiUrl?: string) {
     provider.addPrefixRoute('test/desktop');
     const providerConnection = LinkRpcConnection.fromTransport(provider.transport);
     providerConnection.register(desktopInterface, { desktop: desktopHandlers(() => host) }, { serviceId: 'test/desktop' });
+    providerConnection.register(desktopHubInterface, { desktop: desktopHubHandlers(() => host) }, { serviceId: 'test/desktop' });
     providerConnection.enableReflection({ serviceId: 'test/desktop' });
     let blackhole = false;
     const links: ReturnType<Hub['attachOut']>[] = [];
     const callers: (() => void)[] = [];
     const messages: JsonRpcMessage[] = [];
     const viewer = await startDesktopViewer({
-        serviceId: 'test/desktop', params: {},
+        serviceId: 'test/desktop', params: {}, transport,
         connect: async () => {
             const link = hub.attachOut();
             links.push(link);
@@ -75,7 +76,7 @@ async function fixture(sourceUrl?: string, dpiUrl?: string) {
         get closed() { return sourceClosed; },
         get connections() { return sourceConnections; },
         disconnectCaller: () => { for (const close of callers) close(); for (const link of links) link.dispose(); },
-        disconnectProvider: () => provider.dispose(),
+        disconnectProvider: () => { providerConnection.close(); provider.dispose(); },
         blackhole: () => { blackhole = true; },
         restoreControl: () => { blackhole = false; },
         sendSource: (bytes: Buffer) => { for (const socket of source.clients) socket.send(bytes, { binary: true }); },
@@ -92,21 +93,25 @@ async function fixture(sourceUrl?: string, dpiUrl?: string) {
     };
 }
 
-async function openControl(context: BrowserContext, url: string) {
+async function openControl(context: BrowserContext, url: string, transport: 'webrtc' | 'hub' = 'webrtc') {
     const page = await context.newPage();
     await page.route('**/viewer.js', route => route.abort());
     await page.goto(url);
     await page.addScriptTag({ type: 'module', content: "import * as api from './browser.js'; window.testDesktopApi = api;" });
     await page.waitForFunction(() => !!window.testDesktopApi);
-    await page.evaluate(async () => {
-        const { connectDesktop, createViewerClient } = window.testDesktopApi;
+    await page.evaluate(async transport => {
+        const { connectDesktop, createViewerClient, connectHubDesktop, createHubViewerClient } = window.testDesktopApi;
         const controller = new AbortController();
-        const client = await createViewerClient(new URL('control', location.href).href.replace('http:', 'ws:'), controller.signal);
-        const desktop = await connectDesktop(client, {}, {
-            width: 800, height: 600, devicePixelRatio: 1.25,
-        }, { signal: controller.signal });
+        const url = new URL('control', location.href).href.replace('http:', 'ws:');
+        const viewport = { width: 800, height: 600, devicePixelRatio: 1.25 };
+        const desktop = transport === 'hub'
+            ? connectHubDesktop(await createHubViewerClient(url, controller.signal), viewport, { signal: controller.signal })
+            : await connectDesktop(await createViewerClient(url, controller.signal), {}, viewport, { signal: controller.signal });
         const received: number[][] = [];
-        desktop.channel.addEventListener('message', (event: MessageEvent<ArrayBuffer>) => received.push([...new Uint8Array(event.data)]));
+        desktop.channel.addEventListener('message', event => {
+            if (!(event instanceof MessageEvent)) { throw new Error('Expected binary message'); }
+            received.push([...new Uint8Array(event.data)]);
+        });
         Object.assign(globalThis, { testDesktop: { desktop, controller, received, ended: false, error: '' } });
         void desktop.done.then(
             () => { (globalThis as typeof globalThis & { testDesktop: { ended: boolean } }).testDesktop.ended = true; },
@@ -114,13 +119,13 @@ async function openControl(context: BrowserContext, url: string) {
                 Object.assign((globalThis as typeof globalThis & { testDesktop: object }).testDesktop, { ended: true, error: error.message });
             },
         );
-        if (desktop.channel.readyState !== 'open') {
+        if (desktop.channel.readyState !== 'open' && desktop.channel.readyState !== 1) {
             await new Promise<void>((resolve, reject) => {
                 desktop.channel.addEventListener('open', () => resolve(), { once: true });
                 desktop.channel.addEventListener('close', () => reject(new Error('Data channel closed before open')), { once: true });
             });
         }
-    });
+    }, transport);
     return page;
 }
 
@@ -129,7 +134,7 @@ declare global {
     interface Window {
         testDesktopApi: typeof import('../src/browser');
         testDesktop: {
-            desktop: import('../src/browser').DesktopConnection;
+            desktop: import('../src/browser').DesktopConnection | ReturnType<typeof import('../src/browser').connectHubDesktop>;
             controller: AbortController;
             received: number[][];
             ended: boolean;
@@ -141,6 +146,35 @@ const state = (page: Page) => page.evaluate(() => ({
     readyState: window.testDesktop.desktop.channel.readyState,
     ended: window.testDesktop.ended,
 }));
+
+describe('Hub-stream desktop fallback', () => {
+    for (const ending of ['browser cancel', 'caller hub disconnect', 'provider disconnect', 'service shutdown'] as const) {
+        it(`transfers binary RFB bytes through the hub and closes source on ${ending}`, async () => {
+            const f = await fixture(undefined, undefined, 'hub');
+            const context = await browser.newContext();
+            try {
+                const page = await openControl(context, f.viewer.url, 'hub');
+                await vi.waitFor(() => expect(f.connections).toBe(1));
+                const payload = Array.from({ length: 65_536 }, (_, index) => index % 256);
+                await page.evaluate(payload => window.testDesktop.desktop.channel.send(Uint8Array.from(payload)), payload);
+                await vi.waitFor(async () => expect(await page.evaluate(() => window.testDesktop.received.flat())).toEqual(payload));
+                expect(f.messages.some(message => JSON.stringify(message).includes('"t":"data"'))).toBe(true);
+                // A single source frame exceeds both the credit window and individual stream frame size.
+                f.sendSource(Buffer.alloc(1024 * 1024, 123));
+                await vi.waitFor(async () => expect(await page.evaluate(
+                    () => window.testDesktop.received.reduce((sum, bytes) => sum + bytes.length, 0),
+                )).toBe(payload.length + 1024 * 1024));
+                if (ending === 'browser cancel') await page.evaluate(() => window.testDesktop.controller.abort());
+                else if (ending === 'caller hub disconnect') f.disconnectCaller();
+                else if (ending === 'provider disconnect') f.disconnectProvider();
+                else f.host.dispose();
+                await vi.waitFor(() => expect(f.closed).toBe(1));
+                await vi.waitFor(async () => expect(await state(page)).toEqual({ readyState: 3, ended: true }));
+                expect(f.host.info().available).toBe(ending !== 'service shutdown');
+            } finally { await context.close(); await f.dispose(); }
+        }, 30_000);
+    }
+});
 
 describe('Hub-controlled native-browser WebRTC desktop', () => {
     for (const ending of ['browser cancel', 'caller hub disconnect', 'provider disconnect', 'service shutdown'] as const) {

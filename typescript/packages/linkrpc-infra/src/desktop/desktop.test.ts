@@ -3,7 +3,8 @@ import { object, string } from 'zod/mini';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     DesktopHost, DesktopTemplate, desktopHandlers, desktopInstances, maintainDesktopLease,
-    type DesktopSession, type DesktopStream,
+    type DesktopSession, type DesktopStream, type DesktopHubClientMessage, type DesktopHubServerMessage,
+    DesktopHubTemplate,
 } from './index';
 
 afterEach(() => vi.useRealTimers());
@@ -102,10 +103,41 @@ describe('DesktopHost', () => {
         expect({ result: await attached, disposed: live.dispose.mock.calls.length, available: host.info().available }).toEqual({
             result: 'Desktop control lease expired', disposed: 1, available: true,
         });
+
+        it('shares exclusivity across hub and WebRTC and expires hub control at 60 seconds', async () => {
+            vi.useFakeTimers();
+            const live = { ...session(), send: async () => {} };
+            const host = new DesktopHost({ title: 'shared', open: async () => live, openHub: async () => live });
+            const control = new AbortController();
+            const hubStream = {
+                signal: control.signal,
+                send: vi.fn(async (_message: DesktopHubServerMessage) => {}),
+                onMessage: (_listener: (message: DesktopHubClientMessage) => void) => {},
+                ping: () => new Promise<void>(() => {}),
+            };
+            const attached = host.attachHub(viewport, hubStream).catch(error => error.message);
+            await vi.advanceTimersByTimeAsync(1);
+            await expect(host.attach({ offer: 'offer', viewport }, stream(new AbortController()))).rejects.toThrow('already has a controller');
+            await expect(host.attachHub(viewport, hubStream)).rejects.toThrow('already has a controller');
+            await vi.advanceTimersByTimeAsync(59_999);
+            expect({ result: await attached, disposed: live.dispose.mock.calls.length, available: host.info().available,
+                frames: hubStream.send.mock.calls }).toEqual({
+                result: 'Desktop control lease expired', disposed: 1, available: true, frames: [[{ t: 'ready' }]],
+            });
+        });
     });
 });
 
 describe('Desktop template', () => {
+    it('discovers the separate parameterized hub template without altering WebRTC discovery', () => {
+        const definition = defineInterface({ id: 'test.hubSources' }, {
+            screens: DesktopHubTemplate({ params: object({ source: string() }) }).mapMembers({ info: 'describeScreen', attach: 'controlScreen' }),
+        });
+        expect({
+            webrtc: desktopInstances(definition.toSchema()),
+            hub: desktopInstances(definition.toSchema(), 'hub').map(({ name, info, attach }) => ({ name, info, attach })),
+        }).toEqual({ webrtc: [], hub: [{ name: 'screens', info: 'describeScreen', attach: 'controlScreen' }] });
+    });
     it('discovers mapped members and selects interchangeable sources using typed params', async () => {
         const definition = defineInterface({ id: 'test.sources' }, {
             screens: DesktopTemplate({ params: object({ source: string() }) }).mapMembers({ info: 'describeScreen', attach: 'controlScreen' }),

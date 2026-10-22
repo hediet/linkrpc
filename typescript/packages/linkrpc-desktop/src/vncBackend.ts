@@ -1,8 +1,8 @@
 import { RTCPeerConnection, type PeerConfig, type RTCDataChannel } from 'werift';
-import WebSocket from 'ws';
+import WebSocket, { createWebSocketStream } from 'ws';
 import {
     DESKTOP_DATA_CHANNEL, type DesktopAttachOptions, type DesktopBackend,
-    type DesktopSession, type DesktopViewport,
+    type DesktopSession, type DesktopViewport, type DesktopRelay, DESKTOP_RELAY_CHUNK,
 } from '@hediet/linkrpc-infra/desktop';
 
 const HIGH_WATER = 256 * 1024;
@@ -25,6 +25,58 @@ export class VncBackend implements DesktopBackend {
         this.title = _source.title;
         const url = new URL(_source.websocketUrl);
         if (url.protocol !== 'ws:' && url.protocol !== 'wss:') throw new Error('VNC source must be ws: or wss:');
+    }
+
+    async openHub(viewport: DesktopViewport, signal: AbortSignal, relay: DesktopRelay): Promise<DesktopSession & {
+        send(data: Uint8Array): Promise<void>;
+    }> {
+        signal.throwIfAborted();
+        await this.setViewport(viewport, signal);
+        signal.throwIfAborted();
+        const socket = new WebSocket(this._source.websocketUrl, ['binary'], { maxPayload: MAX_BUFFER });
+        const source = createWebSocketStream(socket);
+        const dispose = () => { source.destroy(); socket.terminate(); };
+        signal.addEventListener('abort', dispose, { once: true });
+        const done = (async () => {
+            try {
+                for await (const chunk of source) {
+                    const bytes: Buffer = chunk;
+                    for (let offset = 0; offset < bytes.length; offset += DESKTOP_RELAY_CHUNK) {
+                        await relay.drain();
+                        signal.throwIfAborted();
+                        relay.write(bytes.subarray(offset, offset + DESKTOP_RELAY_CHUNK));
+                    }
+                }
+            } finally {
+                signal.removeEventListener('abort', dispose);
+                dispose();
+            }
+        })();
+        void done.catch(() => {});
+        return {
+            answer: '', done, dispose,
+            setViewport: value => this.setViewport(value, signal),
+            send: data => new Promise<void>((resolve, reject) => {
+                if (signal.aborted || source.destroyed) { reject(new Error('Desktop hub source closed')); return; }
+                source.write(data, error => error ? reject(error) : resolve());
+            }),
+        };
+    }
+
+    private async setViewport(viewport: DesktopViewport, signal: AbortSignal): Promise<void> {
+        signal.throwIfAborted();
+        if (Math.round(viewport.width * viewport.devicePixelRatio)
+            * Math.round(viewport.height * viewport.devicePixelRatio) > 33_554_432) {
+            throw new Error('Desktop framebuffer exceeds 32 megapixels');
+        }
+        if (!this._source.dpiUrl) return;
+        const response = await fetch(this._source.dpiUrl, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ devicePixelRatio: viewport.devicePixelRatio }),
+            signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+        });
+        if (!response.ok) throw new Error(`VNC DPI update failed: HTTP ${response.status}`);
     }
 
     async open(options: DesktopAttachOptions, signal: AbortSignal): Promise<DesktopSession> {
@@ -57,18 +109,7 @@ export class VncBackend implements DesktopBackend {
         const setViewport = async (viewport: DesktopViewport) => {
             signal.throwIfAborted();
             if (closed) throw new Error('Desktop data plane closed');
-            if (Math.round(viewport.width * viewport.devicePixelRatio)
-                * Math.round(viewport.height * viewport.devicePixelRatio) > 33_554_432) {
-                throw new Error('Desktop framebuffer exceeds 32 megapixels');
-            }
-            if (!this._source.dpiUrl) return;
-            const response = await fetch(this._source.dpiUrl, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ devicePixelRatio: viewport.devicePixelRatio }),
-                signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-            });
-            if (!response.ok) throw new Error(`VNC DPI update failed: HTTP ${response.status}`);
+            await this.setViewport(viewport, signal);
         };
         peer.connectionStateChange.subscribe(state => {
             if (state === 'failed' || state === 'disconnected') fail(new Error(`WebRTC ${state}`));

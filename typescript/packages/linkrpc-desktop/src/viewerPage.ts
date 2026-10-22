@@ -10,8 +10,8 @@ button:focus-visible{outline:2px solid Highlight;outline-offset:2px}
 <header><strong>LinkRPC Desktop</strong><span id="status" role="status">Connecting…</span><button id="disconnect">Disconnect</button></header>
 <main id="desktop" aria-label="Remote Desktop" aria-description="Remote pixels are not readable by screen readers. Press Control Alt Escape to return keyboard focus to Disconnect."></main><script type="module" src="./viewer.js"></script></html>`;
 
-export const viewerScript = `
-import { connectDesktop, createViewerClient } from './browser.js';
+export function viewerScript(transport: 'webrtc' | 'hub' = 'webrtc') { return `
+import { connectDesktop, createViewerClient, connectHubDesktop, createHubViewerClient } from './browser.js';
 import RFB from './novnc/core/rfb.js';
 const target = document.getElementById('desktop');
 const status = document.getElementById('status');
@@ -34,14 +34,14 @@ addEventListener('keydown', event => {
   }
 }, {capture:true});
 try {
-  const client = await createViewerClient(new URL('./control', location.href).href.replace('http:', 'ws:'), abort.signal);
+  const client = await ${transport === 'hub' ? 'createHubViewerClient' : 'createViewerClient'}(new URL('./control', location.href).href.replace('http:', 'ws:'), abort.signal);
   const info = await client.info({params:{}});
   document.title = info.title + ' — LinkRPC Desktop';
-  connection = await connectDesktop(client, {}, viewport(), {signal:abort.signal});
+  connection = ${transport === 'hub' ? 'connectHubDesktop(client, viewport(), {signal:abort.signal})' : 'await connectDesktop(client, {}, viewport(), {signal:abort.signal})'};
   rfb = new RFB(target, connection.channel);
   rfb.scaleViewport = true;
   rfb.resizeSession = true;
-  rfb.addEventListener('connect', () => { status.textContent = 'Connected · Lossless WebRTC'; });
+  rfb.addEventListener('connect', () => { status.textContent = 'Connected · Lossless ${transport === 'hub' ? 'hub stream' : 'WebRTC'}'; });
   rfb.addEventListener('disconnect', () => { if (!abort.signal.aborted) { status.textContent = 'Disconnected'; stop(); } });
   rfb.addEventListener('credentialsrequired', () => { status.textContent = 'This source requires unsupported VNC credentials'; stop(); });
   const resize = () => {
@@ -68,4 +68,4 @@ try {
 } finally {
   stop();
 }
-`;
+`; }

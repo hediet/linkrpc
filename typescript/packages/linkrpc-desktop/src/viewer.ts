@@ -12,6 +12,7 @@ import { WebSocketTransport } from '@hediet/linkrpc/node';
 import {
     desktopInterface, desktopInstances, desktopInfoSchema, desktopAttachResultSchema,
     desktopServerMessageSchema, maintainDesktopLease,
+    desktopHubInterface, desktopHubServerMessageSchema,
 } from '@hediet/linkrpc-infra/desktop';
 import type { SigningCallCtx } from '@hediet/linkrpc';
 import { viewerHtml, viewerScript } from './viewerPage';
@@ -24,6 +25,7 @@ export async function startDesktopViewer(options: {
     params: JsonValue;
     interfaceId?: string;
     instance?: string;
+    transport?: 'webrtc' | 'hub';
 }) {
     const discovery = await options.connect();
     let selected: { interfaceId: string; info: string; attach: string } | undefined;
@@ -35,10 +37,10 @@ export async function startDesktopViewer(options: {
             });
             for (const entry of page.items) {
                 if (options.interfaceId && entry.interfaceId !== options.interfaceId) continue;
-                if (!entry.tags?.includes('linkrpc.desktop')) continue;
+                if (!entry.tags?.includes(options.transport === 'hub' ? 'linkrpc.desktop.hub' : 'linkrpc.desktop')) continue;
                 const { schema } = await discovery.connection.get(schemasInterface, { serviceId: options.serviceId })
                     .get({ interfaceId: entry.interfaceId });
-                for (const instance of desktopInstances(schema as LinkRpcInterfaceSchema)) {
+                for (const instance of desktopInstances(schema as LinkRpcInterfaceSchema, options.transport)) {
                     if (options.instance && options.instance !== instance.name) continue;
                     if (selected) throw new Error('Several desktop instances match; select --interface and --instance');
                     const parsed = createSchemaToZod(instance.params.components?.schemas ?? {}).toZod(instance.params.schema).safeParse(options.params);
@@ -71,7 +73,7 @@ export async function startDesktopViewer(options: {
             response.setHeader('Cache-Control', 'no-store');
             response.setHeader('Referrer-Policy', 'no-referrer');
             if (path === '') { response.setHeader('Content-Type', 'text/html'); response.end(viewerHtml); return; }
-            if (path === 'viewer.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(viewerScript); return; }
+            if (path === 'viewer.js') { response.setHeader('Content-Type', 'text/javascript'); response.end(viewerScript(options.transport)); return; }
             if (path === 'browser.js') {
                 response.setHeader('Content-Type', 'text/javascript');
                 response.end(await readFile(new URL('../dist/browser.js', import.meta.url)));
@@ -109,7 +111,40 @@ export async function startDesktopViewer(options: {
                 const entry = { close: () => { local.close(); hub.close(); websocket.close(); } };
                 clients.add(entry);
                 websocket.once('close', () => { entry.close(); clients.delete(entry); });
-                local.register(desktopInterface, {
+                if (options.transport === 'hub') {
+                    local.register(desktopHubInterface, {
+                        desktop: {
+                            info: async () => desktopInfoSchema.parse(await hub.connection.channel.sendRequest(
+                                `${options.serviceId}::${target.interfaceId}::${target.info}`, { params: options.params },
+                            )),
+                            attach: async ({ viewport }, _context, stream) => {
+                                const remote = hub.connection.channel.sendRequestWithStream(
+                                    `${options.serviceId}::${target.interfaceId}::${target.attach}`,
+                                    { params: options.params, viewport },
+                                    { onStreamMessage: payload => {
+                                        const message = desktopHubServerMessageSchema.safeParse(payload);
+                                        if (!message.success) { entry.close(); return; }
+                                        void stream.send(message.data).catch(() => entry.close());
+                                    } },
+                                );
+                                const cancel = () => {
+                                    remote.dispose?.('desktopHubControlClosed');
+                                    entry.close();
+                                };
+                                stream.signal.addEventListener('abort', cancel, { once: true });
+                                stream.onMessage(message => { void Promise.resolve(remote.send(message)).catch(cancel); });
+                                const browserLease = maintainDesktopLease(() => stream.ping(), cancel);
+                                const hubLease = maintainDesktopLease(() => remote.ping(), cancel);
+                                try { return desktopAttachResultSchema.parse(await remote.result); }
+                                finally {
+                                    browserLease.dispose(); hubLease.dispose();
+                                    stream.signal.removeEventListener('abort', cancel);
+                                    remote.dispose?.('desktopHubEnded');
+                                }
+                            },
+                        },
+                    });
+                } else local.register(desktopInterface, {
                     desktop: {
                         info: async () => desktopInfoSchema.parse(await hub.connection.channel.sendRequest(
                             `${options.serviceId}::${target.interfaceId}::${target.info}`, { params: options.params },
