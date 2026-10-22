@@ -31,7 +31,7 @@ import { completionsCommand } from './commands/completions';
 import { defaultsCommand } from './commands/defaults';
 import { hashCommand } from './commands/hash';
 import { internalCompleteCommand } from './commands/internalComplete';
-import { lsCommand } from './commands/ls';
+import { lsCommand, requestDirectoryAccess } from './commands/ls';
 import { topologyCommand, type TopologyFormat } from './commands/topology';
 import { pingCommand } from './commands/ping';
 import {
@@ -435,7 +435,7 @@ export async function main(
         .option('--stream', 'legacy patch-log JSONL; use --format jsonl for reconstructable graph state')
         .option('--watch', 'continue observing directory changes until interrupted')
         .action(async (opts) => {
-            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+            await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
                 const format = resolveGraphFormat(opts.format, {
                     json: opts.json === true,
                     stream: opts.stream === true,
@@ -443,6 +443,14 @@ export async function main(
                 });
                 const legacyOutput = opts.format === undefined && opts.watch !== true;
                 const out = await lsCommand(channel, {
+                    requestDirectoryAccess: session === undefined ? undefined : serviceId =>
+                        requestDirectoryAccess(session, serviceId, {
+                            watch: opts.watch,
+                            withMembers: opts.withMembers,
+                            dumpPath: opts.dump,
+                            dumpPatchesPath: opts.dumpPatches,
+                        }),
+                    log: message => { process.stderr.write(`linkrpc: ${message}\n`); },
                     interfaceId: opts.interface,
                     interfacePrefix: opts.interfacePrefix,
                     serviceId: opts.service,
@@ -463,7 +471,7 @@ export async function main(
                         undefined,
                 });
                 if (out.length > 0) process.stdout.write(out + '\n');
-            });
+            }, { requestReflectionAccess: false, autoNegotiatePerCall: false });
         });
 
     if (profile === 'hub') {

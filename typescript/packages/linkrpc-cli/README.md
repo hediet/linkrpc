@@ -9,6 +9,25 @@ interfaces (`hubrpc.defaults`, `hubrpc.directory`, `hubrpc.schemas`) are
 used to discover what the endpoint exposes. Generic RPC commands work with any
 reflected interface; compiled-in views add specialized CLI and TUI renderers.
 
+## Directory discovery and consent
+
+`linkrpc hub ls` first tries directory reads using its current identity and
+capabilities. On `permissionRequired`, it asks the connected hub's approval
+service for short-lived access to `hubrpc.directory::list` on that exact
+directory service, then retries once. Watch mode also requests `watch`;
+schema/member dump modes additionally request `hubrpc.schemas::get`.
+Unsigned connections (`--no-sign`) do not request capabilities.
+
+Timeouts, missing methods, and transport errors never trigger consent. Plain
+output shows inaccessible directories and their errors. `--format json` and
+`--format jsonl` include an `inaccessible` report; legacy `--json` preserves its
+flat array and reports failures on stderr.
+
+Approval is not automatic authorization: the destination must accept the
+issued capability's root. If the connected hub cannot obtain a grant from an
+accepted issuer, discovery still reports that directory as inaccessible.
+No trust roots are added and no service is made public.
+
 ## Daemon-owned endpoints (`hub services`)
 
 `hub services` manages processes and existing connections **through the daemon
