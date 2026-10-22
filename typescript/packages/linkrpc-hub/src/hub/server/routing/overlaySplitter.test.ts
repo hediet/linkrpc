@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { defineInterface, requestType, LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
+import { defineInterface, requestType, LinkRpcConnection, TransportPair, STREAM_METHOD, StreamDir, type JsonRpcMessage } from '@hediet/linkrpc';
 import { z } from 'zod';
 import { OverlaySplitter } from './overlaySplitter';
 
@@ -55,6 +55,41 @@ function makeRig() {
 }
 
 describe('OverlaySplitter', () => {
+    it.each([
+        ['H', 'duplex::connect', 'C'],
+        ['C', 'duplex::connect', 'C'],
+        ['H', 'svc::duplex::connect', 'H'],
+        ['C', 'svc::duplex::connect', 'H'],
+    ])('preserves caller IDs tagged by another overlay (%s, %s)', async (tag, method, target) => {
+        const p = new TransportPair();
+        const c = new TransportPair();
+        const h = new TransportPair();
+        const splitter = new OverlaySplitter(p.a, c.a, h.a);
+        const root: JsonRpcMessage[] = [];
+        const uplink: JsonRpcMessage[] = [];
+        c.b.setListener(m => { root.push(m); });
+        h.b.setListener(m => { uplink.push(m); });
+        const id = `${tag}\u0000n\u0000123`;
+        const request = { jsonrpc: '2.0', id, method, params: {} } as const;
+        const frames = [
+            { payload: { frame: 7 } },
+            { control: { type: 'ping' } },
+            { control: { type: 'cancel', reason: 'done' } },
+        ].map(body => ({
+            jsonrpc: '2.0' as const,
+            method: STREAM_METHOD,
+            params: { requestId: id, dir: StreamDir.toCallee, ...body },
+        }));
+        try {
+            await p.b.send(request);
+            for (const frame of frames) await p.b.send(frame);
+            expect(target === 'C' ? root : uplink).toEqual([request, ...frames]);
+            expect(target === 'C' ? uplink : root).toEqual([]);
+        } finally {
+            splitter.dispose();
+        }
+    });
+
     it('routes a root-addressed participant call to the root connection (P·root → C)', async () => {
         const rig = makeRig();
         rig.root.register(pingInterface, { ping: ({ n }) => ({ n: n + 1 }) });

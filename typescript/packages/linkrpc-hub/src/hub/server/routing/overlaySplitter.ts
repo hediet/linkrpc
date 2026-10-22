@@ -12,7 +12,7 @@ import type { NodeTransit, NodeTransitObserver, TransitError, TransitKind } from
 /** Which upstream port an inbound-to-participant request came from. */
 type Origin = 'H' | 'C';
 
-/** Separator for return-path tags. NUL never appears in JSON-RPC ids. */
+/** Separator for return-path tags; nested overlays can supply already-tagged ids. */
 const SEP = '\u0000';
 
 /**
@@ -67,10 +67,9 @@ export interface OverlaySplitterInspection {
  *   which for a request it serves is the tag the splitter stamped on the
  *   delivered request id (`H\0…` / `C\0…`). We {@link _decodeId | decode} that
  *   tag, restore the original id, and forward to the tagged origin (H or C) —
- *   the same demux responses get. An **untagged** `requestId` means the
- *   participant *initiated* the request (P→H or P→C); we cannot tell which
- *   statelessly, so we default to the **uplink** (the common case: streaming
- *   to a fully-qualified service via the parent).
+ *   the same demux responses get. Only `toCaller` frames decode the tag.
+ *   `toCallee` frames belong to participant-initiated requests (P→H or P→C);
+ *   their ids stay verbatim, even when another overlay already tagged them.
  * - **H/C → P**: forwarded verbatim to the participant (never dropped), as a
  *   response would be — the parent has already restored P's original
  *   `requestId`, symmetric to response-id rewriting.
@@ -78,7 +77,7 @@ export interface OverlaySplitterInspection {
  * PARTICIPANT-INITIATED STREAMS — the one stateful case: because `requestId`
  * lives in `params` (not a structural top-level id the splitter rewrites in
  * lock-step), a stream frame for a request the participant *initiated* (`P→C`
- * or `P→H`) carries P's *own untagged* id, which alone cannot say whether the
+ * or `P→H`) carries P's own id, which alone cannot say whether the
  * call went to the root (C) or the uplink (H). The splitter therefore keeps a
  * small `requestId → target` map ({@link _pInitiated}), populated when P sends
  * such a request and cleared when its response returns, and consults it to
@@ -202,7 +201,7 @@ export class OverlaySplitter<TContext = undefined> {
         // root-form → local root services (C); prefixed → parent (H). The context
         // stamp (if any) rides along verbatim so the root connection can read it.
         // Remember the resolved target for a participant-initiated *request* so
-        // its (untagged) stream frames can be routed back to the same port.
+        // its toCallee stream frames can be routed back to the same port.
         if (rootForm) {
             if (this._inspect) {
                 this._emit(this._mkForward(this._inspect.edges.p, m, this._inspect.edges.c, method, 'forwarded'));
@@ -223,13 +222,14 @@ export class OverlaySplitter<TContext = undefined> {
      * mirroring how a {@link _onFromParticipant | response} is demuxed. The
      * participant streams with the id it *observed*; for a request it serves
      * that id carries the origin tag the splitter stamped, so decoding it
-     * yields the return port and the original id. Untagged → a request the
-     * participant *initiated*; recover its target (C or H) from {@link
-     * _pInitiated}, defaulting to the uplink.
+     * yields the return port and the original id. For toCallee frames the
+     * participant initiated the request; preserve its id and recover the
+     * target from {@link _pInitiated}, defaulting to the uplink.
      */
     private _routeParticipantStream(m: MessageWithCtx<TContext>): void {
         const requestId = _streamRequestId(m);
-        const dec = requestId !== undefined ? _decodeId(requestId) : undefined;
+        const dec = _streamDir(m) === StreamDir.toCaller && requestId !== undefined
+            ? _decodeId(requestId) : undefined;
         if (dec) {
             const restored = _withRequestId(m, dec.id);
             if (dec.origin === 'H') {
@@ -239,8 +239,7 @@ export class OverlaySplitter<TContext = undefined> {
             }
             return;
         }
-        // Untagged → participant-initiated request: its id is P's own, so the
-        // form-derived target was recorded when the request was forwarded.
+        // Caller ids can themselves carry tags from another overlay.
         const initiated = requestId !== undefined ? this._pInitiated.get(requestId) : undefined;
         if (initiated?.target === 'C') {
             void this._root.send(m as MessageWithCtx<TContext>);
