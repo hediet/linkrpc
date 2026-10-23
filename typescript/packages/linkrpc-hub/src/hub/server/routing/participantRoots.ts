@@ -14,6 +14,7 @@ export interface ParticipantRootsOptions {
         link: IMessageTransport,
         method: string,
         params: JsonValue,
+        timeoutMs: number,
     ) => Promise<JsonValue | undefined>;
     readonly watchOnLink: (
         link: IMessageTransport,
@@ -26,6 +27,33 @@ export interface ParticipantRootsOptions {
     readonly onDidChangeRouting: (listener: () => void) => () => void;
 }
 
+export interface ParticipantRootsQueryOptions {
+    /** Prefix whose owning link is skipped (typically the hub's own services). */
+    readonly excludePrefix?: ServiceId;
+    /** How long to wait for answers before returning the ones that arrived. */
+    readonly budgetMs: number;
+    /** Hard per-participant deadline; an unanswered request is cancelled then. */
+    readonly requestTimeoutMs: number;
+}
+
+/**
+ * The answers of one fan-out. A participant that does not answer within the
+ * budget must not block the others, so it is reported as `truncated` instead
+ * and keeps running in the background until its hard deadline.
+ */
+export interface ParticipantRootsAnswer {
+    /** Successful answers that arrived within the budget. */
+    readonly results: JsonValue[];
+    /** Whether some participant had not settled when the budget elapsed. */
+    readonly truncated: boolean;
+    /**
+     * Settles once every participant outstanding at the budget has answered,
+     * failed, or hit its hard deadline: `true` if any of them answered, i.e.
+     * a fresh query could return more than `results`.
+     */
+    readonly lateAnswers: Promise<boolean>;
+}
+
 /** Reconciles participant-root queries and watches over the Hub's routing links. */
 export class ParticipantRoots {
     constructor(private readonly _options: ParticipantRootsOptions) {}
@@ -33,16 +61,39 @@ export class ParticipantRoots {
     public async query(
         method: string,
         params: JsonValue,
-        excludePrefix?: ServiceId,
-    ): Promise<JsonValue[]> {
-        const settled = await Promise.all(
-            [...this._participantLinks(excludePrefix)].map((link) =>
-                this._options.requestOnLink(link, method, params).then(
-                    (result) => result,
-                    () => undefined,
-                )),
-        );
-        return settled.filter((result): result is JsonValue => result !== undefined);
+        options: ParticipantRootsQueryOptions,
+    ): Promise<ParticipantRootsAnswer> {
+        const requests = [...this._participantLinks(options.excludePrefix)].map((link) => {
+            const outcome: { settled: boolean; result?: JsonValue } = { settled: false };
+            const done = this._options
+                .requestOnLink(link, method, params, options.requestTimeoutMs)
+                .then(
+                    (result) => {
+                        outcome.settled = true;
+                        outcome.result = result;
+                    },
+                    () => {
+                        outcome.settled = true;
+                    },
+                );
+            return { outcome, done };
+        });
+
+        let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+        const budgetElapsed = new Promise<void>((resolve) => {
+            budgetTimer = setTimeout(resolve, options.budgetMs);
+        });
+        await Promise.race([Promise.all(requests.map((request) => request.done)), budgetElapsed]);
+        clearTimeout(budgetTimer);
+
+        const late = requests.filter((request) => !request.outcome.settled);
+        return {
+            results: requests.flatMap(({ outcome }) =>
+                outcome.result === undefined ? [] : [outcome.result]),
+            truncated: late.length > 0,
+            lateAnswers: Promise.all(late.map((request) => request.done))
+                .then(() => late.some((request) => request.outcome.result !== undefined)),
+        };
     }
 
     public watch(

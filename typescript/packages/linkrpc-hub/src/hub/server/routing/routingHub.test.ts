@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import {
     ErrorCode,
@@ -549,6 +549,8 @@ describe('Hub routing', () => {
 });
 
 describe('Hub.queryParticipantRoots', () => {
+    const queryOptions = { budgetMs: 1_000, requestTimeoutMs: 5_000 };
+
     /**
      * Attach a participant link that answers a root-form `hubrpc.directory::list`
      * with `items` (or replies with an error when `items === 'throw'`). Claims
@@ -582,7 +584,11 @@ describe('Hub.queryParticipantRoots', () => {
         attachRootDir(hub, ['calc'], [{ serviceId: 'calc', interfaceId: 'hubrpc.directory' }]);
         attachRootDir(hub, ['fs'], [{ serviceId: 'fs', interfaceId: 'hubrpc.directory' }]);
 
-        const results = await hub.queryParticipantRoots('hubrpc.directory::list', {}, 'hub');
+        const { results } = await hub.queryParticipantRoots(
+            'hubrpc.directory::list',
+            {},
+            { ...queryOptions, excludePrefix: 'hub' },
+        );
         const sids = results
             .flatMap((r) => (r as { items: { serviceId: string; }[]; }).items)
             .map((i) => i.serviceId)
@@ -596,10 +602,81 @@ describe('Hub.queryParticipantRoots', () => {
         attachRootDir(hub, ['a', 'a/b'], [{ serviceId: 'a', interfaceId: 'hubrpc.directory' }]);
         attachRootDir(hub, ['boom'], 'throw');
 
-        const results = await hub.queryParticipantRoots('hubrpc.directory::list', {});
+        const { results } = await hub.queryParticipantRoots('hubrpc.directory::list', {}, queryOptions);
         // The failing participant is dropped; the multi-prefix one answers once.
         expect(results).toHaveLength(1);
         expect((results[0] as { items: { serviceId: string; }[]; }).items[0].serviceId).toBe('a');
+    });
+
+    describe('with a participant that does not answer', () => {
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        /** Claims `prefix` on a link that records root list requests without answering. */
+        function attachSilentRootDir(hub: Hub, prefix: string): {
+            readonly requests: RequestId[];
+            readonly cancelled: RequestId[];
+            answer(id: RequestId, serviceId: string): void;
+        } {
+            const pair = new TransportPair();
+            hub.claimPrefix(pair.a, prefix);
+            const requests: RequestId[] = [];
+            const cancelled: RequestId[] = [];
+            pair.b.setListener((message) => {
+                if (isRequest(message) && message.method === 'hubrpc.directory::list') {
+                    requests.push(message.id);
+                } else if ('method' in message && message.method === STREAM_METHOD) {
+                    const control = message.params as StreamSendParams;
+                    if (control.dir === StreamDir.toCallee && control.control?.type === StreamControlType.cancel) {
+                        cancelled.push(control.requestId);
+                    }
+                }
+            });
+            return {
+                requests,
+                cancelled,
+                answer: (id, serviceId) => void pair.b.send({
+                    jsonrpc: '2.0',
+                    id,
+                    result: { items: [{ serviceId, interfaceId: 'hubrpc.directory' }] },
+                } as JsonRpcResponse),
+            };
+        }
+
+        it('returns the answers within the budget and reports the straggler as truncated', async () => {
+            vi.useFakeTimers({ now: 0 });
+            const hub = new Hub();
+            attachRootDir(hub, ['calc'], [{ serviceId: 'calc', interfaceId: 'hubrpc.directory' }]);
+            const silent = attachSilentRootDir(hub, 'stuck');
+
+            const answer = hub.queryParticipantRoots('hubrpc.directory::list', {}, queryOptions);
+            await vi.advanceTimersByTimeAsync(queryOptions.budgetMs);
+            const { results, truncated } = await answer;
+
+            expect({ results, truncated }).toEqual({
+                results: [{ items: [{ serviceId: 'calc', interfaceId: 'hubrpc.directory' }] }],
+                truncated: true,
+            });
+            silent.answer(silent.requests[0]!, 'stuck');
+            expect(await (await answer).lateAnswers).toBe(true);
+        });
+
+        it('cancels the straggler at the hard deadline and reports no late answer', async () => {
+            vi.useFakeTimers({ now: 0 });
+            const hub = new Hub();
+            const silent = attachSilentRootDir(hub, 'stuck');
+
+            const answer = hub.queryParticipantRoots('hubrpc.directory::list', {}, queryOptions);
+            await vi.advanceTimersByTimeAsync(queryOptions.budgetMs);
+            const { lateAnswers } = await answer;
+            await vi.advanceTimersByTimeAsync(queryOptions.requestTimeoutMs);
+
+            expect(await lateAnswers).toBe(false);
+            expect(silent.requests).toHaveLength(1);
+            expect(silent.cancelled.filter((id) => silent.requests.includes(id)))
+                .toEqual(silent.requests);
+        });
     });
 
     it('retries a participant watch that settles before root reflection is installed', async () => {

@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { defineInterface, requestType, LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
+import {
+    defineInterface,
+    isRequest,
+    requestType,
+    LinkRpcConnection,
+    TransportPair,
+    type JsonRpcResponse,
+    type RequestId,
+} from '@hediet/linkrpc';
 import { z } from 'zod';
 import { directoryInterface, directoryWatchNever } from '@hediet/linkrpc';
 import { hubGrantedServiceIdInterface, walkHub } from '@hediet/linkrpc/hub/common';
@@ -57,6 +65,39 @@ function attachConsumer(hub: Hub): LinkRpcConnection {
     const pair = new TransportPair();
     hub.attach(pair.a);
     return LinkRpcConnection.fromTransport(pair.b);
+}
+
+/**
+ * Claim `prefix` on a raw link whose root directory refers to `prefix` but
+ * does not answer root list requests until `answer()` is called.
+ */
+function attachRootDirectory(hub: Hub, prefix: string): { answer(): void } {
+    const pair = new TransportPair();
+    hub.attach(pair.a).addPrefixRoute(prefix);
+    const unanswered: RequestId[] = [];
+    let answering = false;
+    const reply = (id: RequestId) => void pair.b.send({
+        jsonrpc: '2.0',
+        id,
+        result: {
+            items: [{
+                serviceId: prefix,
+                interfaceId: directoryInterface.info.id,
+                interfaceHash: directoryInterface.schemaHash,
+            }],
+        },
+    } as JsonRpcResponse);
+    pair.b.setListener((message) => {
+        if (!isRequest(message) || message.method !== 'hubrpc.directory::list') return;
+        if (answering) reply(message.id);
+        else unanswered.push(message.id);
+    });
+    return {
+        answer: () => {
+            answering = true;
+            for (const id of unanswered.splice(0)) reply(id);
+        },
+    };
 }
 
 describe('RootOverlay + hub services (end-to-end)', () => {
@@ -209,6 +250,35 @@ describe('RootOverlay + hub services (end-to-end)', () => {
             interfaceId: directoryInterface.info.id,
         });
         expect(after.items.some((item) => item.serviceId === 'child')).toBe(false);
+        watch.cancel('done');
+    });
+
+    it('does not let a silent participant hang the global directory, and ticks when it answers', async () => {
+        const hub = new Hub();
+        createHubServiceInterfaces(hub);
+        await joinParticipant(hub, 'calc');
+        const stuck = attachRootDirectory(hub, 'stuck');
+        const consumer = attachConsumer(hub);
+        const directory = consumer.service('hub').get(directoryInterface);
+        let ticks = 0;
+        const watch = directory.watch(
+            { interfaceId: directoryInterface.info.id },
+            { onMessage: () => ticks++ },
+        );
+
+        const truncated = await directory.list({ interfaceId: directoryInterface.info.id, timeoutMs: 50 });
+        expect({
+            truncated: truncated.truncated,
+            serviceIds: truncated.items.map((item) => item.serviceId).sort(),
+        }).toEqual({ truncated: true, serviceIds: ['', 'calc', 'hub'] });
+
+        stuck.answer();
+        await until(() => ticks >= 1);
+        const complete = await directory.list({ interfaceId: directoryInterface.info.id, timeoutMs: 50 });
+        expect({
+            truncated: complete.truncated,
+            serviceIds: complete.items.map((item) => item.serviceId).sort(),
+        }).toEqual({ truncated: undefined, serviceIds: ['', 'calc', 'hub', 'stuck'] });
         watch.cancel('done');
     });
 
