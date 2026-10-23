@@ -389,6 +389,9 @@ importers:
       '@vscode/observables':
         specifier: ^0.1.1-10
         version: 0.1.1-24
+      ws:
+        specifier: ^8.21.0
+        version: 8.21.3(bufferutil@4.1.0)(utf-8-validate@5.0.10)
     devDependencies:
       '@hediet/linkrpc':
         specifier: workspace:*
@@ -396,6 +399,9 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.43
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsdown:
         specifier: ^0.22.3
         version: 0.22.14(tsx@4.22.4)(typescript@6.0.3)

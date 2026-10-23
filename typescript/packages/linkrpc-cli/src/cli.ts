@@ -45,6 +45,8 @@ import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpForwardCommand } from './commands/mcpForward';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
+import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
+import { validateJsonRpcExport } from '@hediet/linkrpc-infra/json-rpc/node';
 import {
     createHubApprovalCommandClient,
     formatApprovalDecision,
@@ -1125,6 +1127,49 @@ Batch options:
             });
         });
     if (profile === 'hub') {
+        const exportRoutes = new JsonRpcExportRoutes();
+        program
+            .command('json-rpc-export')
+            .description('Export Hub JSON-RPC services through one authenticated raw WebSocket listener.')
+            .requiredOption('--target-endpoint <uri>', 'Listener URI, e.g. listen:ws://127.0.0.1:8123')
+            .option('--target-token <token>', 'Local client authentication token (or put token in target URI)')
+            .option('--serviceId <id>', 'Begin a route; follow each occurrence with --path', value => {
+                exportRoutes.serviceId(value);
+                return value;
+            })
+            .option('--path <path>', 'Path for the preceding service ID; repeat pairs for multiple routes', value => {
+                exportRoutes.path(value);
+                return value;
+            })
+            .action(async (opts: { targetEndpoint: string; targetToken?: string }) => {
+                const options = {
+                    targetEndpoint: opts.targetEndpoint,
+                    token: opts.targetToken,
+                    routes: exportRoutes.getRoutes(),
+                };
+                validateJsonRpcExport(options);
+                const localEp = needEndpoint(endpoint);
+                const local = await connectEndpoint(localEp, wireLog('hub'));
+                try {
+                    const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
+                        negotiateHubCaps: isHubEndpoint(localEp),
+                    });
+                    reportIdentity(session);
+                    const server = await jsonRpcExportCommand({
+                        ...options,
+                        local,
+                        onError: error => process.stderr.write(`linkrpc: ${error.message}\n`),
+                    });
+                    try {
+                        process.stderr.write(`linkrpc: JSON-RPC export listening at ${server.endpoint}\n`);
+                        await _untilSignalled();
+                    } finally {
+                        await server.close();
+                    }
+                } finally {
+                    local.close();
+                }
+            });
         program
             .command('json-rpc-stdio <serviceId>')
             .description(

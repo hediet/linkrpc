@@ -50,6 +50,10 @@
             "@hediet/source": "./src/json-rpc/index.ts",
             "default": "./dist/json-rpc/index.js"
         },
+        "./json-rpc/node": {
+            "@hediet/source": "./src/json-rpc/node.ts",
+            "default": "./dist/json-rpc/node.js"
+        },
         "./json-rpc/protocol": {
             "@hediet/source": "./src/json-rpc/protocol.ts",
             "default": "./dist/json-rpc/protocol.js"
@@ -74,6 +78,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
+        "ws": "^8.21.0",
         "@vscode/observables": "^0.1.1-10"
     },
     "peerDependencies": {
@@ -81,6 +86,7 @@
         "zod": "^4.4.3"
     },
     "devDependencies": {
+        "@types/ws": "^8.18.1",
         "@hediet/linkrpc": "workspace:*",
         "@types/node": "^20.0.0",
         "tsdown": "^0.22.3",
@@ -101,6 +107,7 @@
             "./inspection": "./dist/inspection/index.js",
             "./json-document": "./dist/json-document/index.js",
             "./json-rpc": "./dist/json-rpc/index.js",
+            "./json-rpc/node": "./dist/json-rpc/node.js",
             "./json-rpc/protocol": "./dist/json-rpc/protocol.js",
             "./logging": "./dist/logging/index.js",
             "./package.json": "./package.json"
