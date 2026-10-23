@@ -26,7 +26,7 @@ hubrpc.directory::list
   result: {
     items:       ServiceListing[],
     nextCursor?: string, // omitted means no more pages
-    truncated?:  boolean // true when timeoutMs cut the page short
+    truncated?:  boolean // true when gathering stopped before every source answered
   }
 
 ServiceListing = {
@@ -65,6 +65,14 @@ When a filter is present, every returned item MUST satisfy it.
 least one pattern. An empty `serviceIdScopes` matches no items. A provider MAY
 return fewer than `limit` items and MUST set `nextCursor` when more matching
 items remain. A cursor is opaque to the caller.
+
+A provider that gathers its listing from other sources MAY stop gathering when
+`timeoutMs` elapses or when its own gathering limit elapses, and return what it
+has. It MUST then set `truncated: true`. Content omitted this way counts as a
+change under section 1.1 when it becomes available: a watching caller learns
+about it through a tick. A provider SHOULD bound its gathering time below
+common caller deadlines so that one unresponsive source cannot make the whole
+directory unavailable.
 
 For a service-id pattern, `{ exact: s }` matches only `s`. `{ prefix: s }`
 matches `s` and every segment-descendant of `s`; the empty prefix matches every
