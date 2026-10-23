@@ -1133,6 +1133,7 @@ Batch options:
             .description('Export Hub JSON-RPC services through one authenticated raw WebSocket listener.')
             .requiredOption('--target-endpoint <uri>', 'Listener URI, e.g. listen:ws://127.0.0.1:8123')
             .option('--target-token <token>', 'Local client authentication token (or put token in target URI)')
+            .option('--target-token-query-param <name>', 'Accepted token query parameter (repeatable; replaces defaults tkn and token)', collectOption)
             .option('--serviceId <id>', 'Begin a route; follow each occurrence with --path', value => {
                 exportRoutes.serviceId(value);
                 return value;
@@ -1141,10 +1142,11 @@ Batch options:
                 exportRoutes.path(value);
                 return value;
             })
-            .action(async (opts: { targetEndpoint: string; targetToken?: string }) => {
+            .action(async (opts: { targetEndpoint: string; targetToken?: string; targetTokenQueryParam?: readonly string[] }) => {
                 const options = {
                     targetEndpoint: opts.targetEndpoint,
                     token: opts.targetToken,
+                    tokenQueryParameters: opts.targetTokenQueryParam,
                     routes: exportRoutes.getRoutes(),
                 };
                 validateJsonRpcExport(options);

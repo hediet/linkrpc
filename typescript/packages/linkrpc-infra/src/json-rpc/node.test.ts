@@ -1,4 +1,5 @@
 import { once } from 'node:events';
+import type { ClientRequestArgs } from 'node:http';
 import { connect as connectTcp } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
@@ -140,6 +141,49 @@ describe('JSON-RPC WebSocket export', () => {
         await expect.poll(() => pair.b.closed).toBe(true);
     });
 
+    it('accepts configured query names and rejects ambiguous or malformed credentials', async () => {
+        let opened = 0;
+        const server = await startJsonRpcWebSocketExport({
+            targetEndpoint, token, routes,
+            tokenQueryParameters: ['connectionToken', 'api_key'],
+            openTransport: async () => {
+                opened++;
+                return new JsonRpcTransportPair().a;
+            },
+            onError: error => { throw error; },
+        });
+        servers.push(server);
+        await connect(server, '/foo', `?connectionToken=${token}`);
+        await connect(server, '/bar', `?api_key=${token}`);
+        const attempts = [
+            { query: `?tkn=${token}` },
+            { query: `?token=${token}` },
+            { query: `?connectionToken=${token}&connectionToken=${token}` },
+            { query: `?connectionToken=${token}&api_key=wrong` },
+            { query: `?connectionToken=${token}`, authorization: `Bearer ${token}` },
+            { query: `?connectionToken=${token}`, authorization: 'Basic invalid' },
+            { query: '', authorization: token },
+            { query: '', authorization: [`Bearer ${token}`, `Bearer ${token}`] },
+        ];
+        const statuses: number[] = [];
+        for (const { query, authorization } of attempts) {
+            const options: ClientRequestArgs = {
+                headers: authorization === undefined ? {} : { Authorization: authorization },
+            };
+            const client = new WebSocket(`${server.endpoint}foo${query}`, options);
+            clients.push(client);
+            statuses.push(await new Promise<number>(resolve => {
+                client.on('error', () => {});
+                client.on('unexpected-response', (_request, response) => {
+                    response.resume();
+                    resolve(response.statusCode!);
+                    client.terminate();
+                });
+            }));
+        }
+        expect({ opened, statuses }).toEqual({ opened: 2, statuses: attempts.map(() => 401) });
+    });
+
     it('isolates upstream factory failures', async () => {
         const errors: Error[] = [];
         const server = await start(async serviceId => {
@@ -257,6 +301,9 @@ describe('JSON-RPC WebSocket export', () => {
         { targetEndpoint: 'listen:wss://127.0.0.1:8123' },
         { targetEndpoint: 'listen:ws://127.0.0.1:8123/path' },
         { token: '' },
+        { tokenQueryParameters: [''] },
+        { tokenQueryParameters: ['a&b'] },
+        { tokenQueryParameters: ['tkn', 'tkn'] },
         { routes: [] },
         { routes: [routes[0], routes[0]] },
         { routes: [{ serviceId: '', path: '/foo' }] },

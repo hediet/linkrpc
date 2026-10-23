@@ -16,6 +16,8 @@ export interface JsonRpcExportRoute {
 export interface JsonRpcWebSocketExportOptions {
     readonly targetEndpoint: string;
     readonly token?: string;
+    /** Accepted query parameter names; defaults to tkn and token. Bearer headers are always accepted. */
+    readonly tokenQueryParameters?: readonly string[];
     readonly routes: readonly JsonRpcExportRoute[];
     readonly openTransport: (serviceId: string, signal: AbortSignal) => Promise<JsonRpcTransport>;
     /** Connection failures. Must not throw. */
@@ -29,9 +31,10 @@ export interface JsonRpcWebSocketExport {
 }
 
 /** Validate before opening the source Hub connection or binding a listener. */
-export function validateJsonRpcExport(options: Pick<JsonRpcWebSocketExportOptions, 'targetEndpoint' | 'token' | 'routes'>): {
+export function validateJsonRpcExport(options: Pick<JsonRpcWebSocketExportOptions, 'targetEndpoint' | 'token' | 'tokenQueryParameters' | 'routes'>): {
     readonly url: URL;
     readonly token: string;
+    readonly tokenQueryParameters: readonly string[];
 } {
     if (!options.targetEndpoint.startsWith('listen:')) {
         throw new Error('JSON-RPC export requires a listen:ws:// target endpoint.');
@@ -50,6 +53,11 @@ export function validateJsonRpcExport(options: Pick<JsonRpcWebSocketExportOption
     }
     const token = options.token ?? target.token;
     if (!token) throw new Error('JSON-RPC export requires --target-token or a token in the target endpoint.');
+    const tokenQueryParameters = options.tokenQueryParameters ?? ['tkn', 'token'];
+    if (tokenQueryParameters.some(name => !/^[A-Za-z0-9_.~-]+$/.test(name))
+        || new Set(tokenQueryParameters).size !== tokenQueryParameters.length) {
+        throw new Error('Token query parameter names must be nonempty, unique URL-safe names.');
+    }
     if (!options.routes.length) throw new Error('Specify at least one --serviceId / --path pair.');
     const paths = new Set<string>();
     for (const route of options.routes) {
@@ -61,7 +69,7 @@ export function validateJsonRpcExport(options: Pick<JsonRpcWebSocketExportOption
         if (paths.has(route.path)) throw new Error(`Duplicate export path '${route.path}'.`);
         paths.add(route.path);
     }
-    return { url, token };
+    return { url, token, tokenQueryParameters };
 }
 
 /**
@@ -69,7 +77,7 @@ export function validateJsonRpcExport(options: Pick<JsonRpcWebSocketExportOption
  * Like personal-bot's JSON-RPC gateway, routes select a transport factory, not a shared session.
  */
 export async function startJsonRpcWebSocketExport(options: JsonRpcWebSocketExportOptions): Promise<JsonRpcWebSocketExport> {
-    const { url, token } = validateJsonRpcExport(options);
+    const { url, token, tokenQueryParameters } = validateJsonRpcExport(options);
     const routes = new Map(options.routes.map(route => [route.path, route.serviceId]));
     const server = createServer((_request, response) => {
         response.writeHead(404);
@@ -100,8 +108,15 @@ export async function startJsonRpcWebSocketExport(options: JsonRpcWebSocketExpor
         }
         const serviceId = routes.get(requestUrl.pathname);
         if (!serviceId) return reject('404 Not Found');
-        const supplied = request.headers.authorization?.replace(/^Bearer /, '')
-            ?? requestUrl.searchParams.get('tkn') ?? requestUrl.searchParams.get('token') ?? '';
+        const credentials = tokenQueryParameters.flatMap(name => requestUrl.searchParams.getAll(name));
+        for (let index = 0; index < request.rawHeaders.length; index += 2) {
+            if (request.rawHeaders[index].toLowerCase() !== 'authorization') continue;
+            const bearer = /^Bearer +(\S+)$/i.exec(request.rawHeaders[index + 1]);
+            if (!bearer) return reject('401 Unauthorized');
+            credentials.push(bearer[1]);
+        }
+        if (credentials.length !== 1) return reject('401 Unauthorized');
+        const supplied = credentials[0];
         const expectedBytes = Buffer.from(token);
         const suppliedBytes = Buffer.from(supplied);
         if (expectedBytes.length !== suppliedBytes.length || !timingSafeEqual(expectedBytes, suppliedBytes)) {

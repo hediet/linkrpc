@@ -39,6 +39,7 @@ it('exports two routes through the built CLI and shuts down gracefully', { timeo
         '--endpoint', `${host.endpoint}?token=upstream-token`,
         'json-rpc-export', '--target-endpoint', 'listen:ws://127.0.0.1:0',
         '--target-token', 'export-token',
+        '--target-token-query-param', 'connectionToken', '--target-token-query-param', 'api_key',
         '--serviceId', 'foo', '--path', 'foo',
         '--serviceId', 'bar', '--path', '/bar',
     ], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe', 'ipc'] });
@@ -59,7 +60,7 @@ it('exports two routes through the built CLI and shuts down gracefully', { timeo
             { jsonrpc: '2.0', method: 'notification' },
         ];
         const responses = await Promise.all(['foo', 'bar'].map(async (path, index) => {
-            const socket = new WebSocket(`${endpoint}${path}?tkn=export-token`);
+            const socket = new WebSocket(`${endpoint}${path}?${index === 0 ? 'connectionToken' : 'api_key'}=export-token`);
             sockets.push(socket);
             await new Promise<void>((resolve, reject) => {
                 socket.addEventListener('open', () => resolve(), { once: true });

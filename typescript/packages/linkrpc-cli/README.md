@@ -800,13 +800,16 @@ hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 linkrpc hub json-rpc-export \
   --target-endpoint "listen:ws://127.0.0.1:8123" \
   --target-token "$EXPORT_TOKEN" \
+  --target-token-query-param tkn \
   --serviceId foo --path /foo \
   --serviceId bar --path /bar
 ```
 
 Each `--serviceId` must be followed by its `--path`; a leading slash is optional. Missing pairs, duplicate paths, and unsupported endpoints fail before connecting to the Hub. Each WebSocket client opens an independent `<serviceId>::jsonRpcConnection::connectRaw` session, including clients on the same route. Requests, responses, notifications, and server-initiated requests pass unchanged, without a `hubrpc::initialize` handshake.
 
-The nonempty export token is separate from the source Hub credentials. Clients authenticate during the WebSocket upgrade with `Authorization: Bearer <token>`, `?tkn=<token>` (AHP), or `?token=<token>`. Alternatively, configure the listener token in the target URI as `listen:ws://127.0.0.1:8123?token=...`. Readiness output never includes the token. Unknown routes return 404 and missing/invalid credentials return 401 without opening an upstream session. Anyone holding this token can access all configured routes using the export process's Hub identity; use a narrowly scoped identity and protect the token.
+The nonempty export token is separate from the source Hub credentials. Clients authenticate during the WebSocket upgrade with `Authorization: Bearer <token>` or a configured query parameter. Without `--target-token-query-param`, the accepted query names are `tkn` (VS Code sends its `connectionToken` under this name) and `token`. Supplying the repeatable option replaces those defaults: for example `--target-token-query-param connectionToken --target-token-query-param api_key` accepts either custom name. Bearer headers remain accepted. Exactly one credential is required: duplicate query parameters, multiple Authorization headers, or a header combined with a recognized query parameter are rejected, even if their values match. Unrecognized parameters are not credentials.
+
+Alternatively, configure the listener token in the target URI as `listen:ws://127.0.0.1:8123?token=...`; this configuration syntax is independent of the accepted client query names. Readiness output never includes the token. Unknown routes return 404 and missing/invalid/ambiguous credentials return 401 without opening an upstream session. Anyone holding this token can access all configured routes using the export process's Hub identity; use a narrowly scoped identity and protect the token. Client credentials are consumed by the listener and never forwarded to the upstream factory.
 
 Only `listen:ws://` TCP listeners are currently supported, not named pipes or TLS listeners. Bind loopback for local use. For remote access, terminate TLS in a trusted reverse proxy rather than sending tokens over unencrypted networks. The gateway limits connections to 100, frames to 16 MiB, and pending input per client to 32 MiB / 1024 frames; slow consumers and failed upstreams close only their own connection. Factories must open within 30 seconds.
 

@@ -33,6 +33,7 @@ export async function jsonRpcExportCommand(options: {
     readonly local: Pick<CliConnection, 'rpcChannel'>;
     readonly targetEndpoint: string;
     readonly token?: string;
+    readonly tokenQueryParameters?: readonly string[];
     readonly routes: readonly JsonRpcExportRoute[];
     readonly onError: (error: Error) => void;
 }): Promise<JsonRpcWebSocketExport> {
