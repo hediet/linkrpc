@@ -134,6 +134,9 @@ importers:
       '@lydell/node-pty':
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.30.0(zod@4.4.3)
       '@xterm/addon-serialize':
         specifier: 0.14.0
         version: 0.14.0

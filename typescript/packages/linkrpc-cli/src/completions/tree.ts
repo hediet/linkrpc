@@ -532,6 +532,12 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             ],
         },
     {
+            name: 'mcp',
+            description: 'Aggregate discoverable Hub MCP tools on stdio.',
+            positionals: [],
+            options: [],
+        },
+    {
             name: 'mcp-forward',
             description: 'Expose an MCP server through the hub.',
             positionals: [],
