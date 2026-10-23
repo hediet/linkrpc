@@ -78,11 +78,13 @@ daemon's `linkrpc.managedEndpoints` `run` call.
 
 `@hediet/linkrpc-infra/compute-node` defines browser-safe interfaces for
 remote machine access: `linkrpc.computeNode.status`, `.command` (streamed
-output and stdin), `.filesystem`, `.http`, and `.tcpForward` (multiplexed TCP
-with credit-based flow control).
+output and stdin), `.filesystem`, `.http`, `.tcpForward` (multiplexed TCP
+with credit-based flow control), and `.power` (`keepAwake` prevents sleep while
+the call stays open; see the
+[compute node package](../linkrpc-compute-node/README.md#keeping-the-machine-awake)).
 
 `@hediet/linkrpc-infra/compute-node/node` implements them on Node.js.
-`registerComputeNode(registrar)` registers all five interfaces on anything with
+`registerComputeNode(registrar)` registers all six interfaces on anything with
 `register(iface, handlers)`, such as `connection.service(id)`:
 
 ```ts

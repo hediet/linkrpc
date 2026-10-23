@@ -36,7 +36,10 @@ linkrpc hub call 'me/laptop/compute::linkrpc.computeNode.command::run' --params 
 ```
 
 (`me/laptop/compute` being a [compute node](../linkrpc-compute-node/README.md)
-service on the laptop.)
+service on the laptop.) A hub drops off while its machine sleeps; to keep the
+laptop reachable while you work with it remotely, hold a
+[keep-awake call](../linkrpc-compute-node/README.md#keeping-the-machine-awake)
+open on its compute node.
 
 ## How it works
 

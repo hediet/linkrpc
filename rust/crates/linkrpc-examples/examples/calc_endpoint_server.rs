@@ -3,7 +3,7 @@
 //! the endpoint already exists, and this process reaches it entirely through the environment:
 //!
 //! - `LINKRPC_ENDPOINT` — a `unix:/path` or `npipe://./pipe/name` URI naming the hub to dial, and
-//! - `LINKRPC_TOKEN`    — the auth token written in the `hello` preamble on connect.
+//! - `LINKRPC_TOKEN`    — the auth token sent in the `hubrpc::initialize` handshake on connect.
 //!
 //! That's the standard `LINKRPC_ENDPOINT` / `LINKRPC_TOKEN` contract a hub uses to hand a child
 //! process its connection details.

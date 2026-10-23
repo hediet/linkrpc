@@ -3,8 +3,8 @@
 //! Unix-domain socket on Unix, a Windows named pipe on Windows. The test binds a [`HubListener`],
 //! publishes `LINKRPC_ENDPOINT` (a `unix:` / `npipe://` URI) + `LINKRPC_TOKEN`, spawns the server
 //! example (which inherits them and dials back in via
-//! [`connect_to_hub`](linkrpc_tokio::connect_to_hub)), accepts the connection, verifies the `hello`
-//! preamble token, then drives the remote service through the typed `CalculatorClient` plus the
+//! [`connect_to_hub`](linkrpc_tokio::connect_to_hub)), accepts the connection, verifies the token of its
+//! `hubrpc::initialize` handshake, then drives the remote service through the typed `CalculatorClient` plus the
 //! `DirectoryServiceClient` reflection proxy. linkrpc is bidirectional, so the accepting side calls
 //! the service the dialing side registered. Nothing here is platform-specific.
 
@@ -42,14 +42,12 @@ async fn server_dials_into_consumer_hosted_endpoint_via_env() {
         .spawn()
         .expect("spawn calc_endpoint_server");
 
-    // Accept the server's connection and verify its `hello` preamble token.
+    // Accept the server's connection and verify its `hubrpc::initialize` token.
     let transport = listener.accept().await.expect("accept server connection");
-    let preamble = transport
-        .read_preamble()
+    transport
+        .accept_initialize(|presented| presented == Some(token.as_str()))
         .await
-        .expect("read preamble")
-        .expect("preamble present");
-    assert_eq!(preamble.token.as_deref(), Some(token.as_str()));
+        .expect("initialize handshake");
 
     let conn = LinkRpcConnection::new(Box::new(transport));
     let driver = conn.clone();
@@ -78,7 +76,7 @@ async fn server_dials_into_consumer_hosted_endpoint_via_env() {
     // Reflection over the same connection, through the typed directory client (no raw JSON).
     let directory = DirectoryServiceClient::new(conn);
     let listing = directory
-        .list(None, None, None, None, None)
+        .list(DirectoryListParams::default())
         .await
         .expect("directory list");
     assert!(listing

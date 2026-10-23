@@ -9,6 +9,25 @@ interfaces (`hubrpc.defaults`, `hubrpc.directory`, `hubrpc.schemas`) are
 used to discover what the endpoint exposes. Generic RPC commands work with any
 reflected interface; compiled-in views add specialized CLI and TUI renderers.
 
+## Directory discovery and consent
+
+`linkrpc hub ls` first tries directory reads using its current identity and
+capabilities. On `permissionRequired`, it asks the connected hub's approval
+service for short-lived access to `hubrpc.directory::list` on that exact
+directory service, then retries once. Watch mode also requests `watch`;
+schema/member dump modes additionally request `hubrpc.schemas::get`.
+Unsigned connections (`--no-sign`) do not request capabilities.
+
+Timeouts, missing methods, and transport errors never trigger consent. Plain
+output shows inaccessible directories and their errors. `--format json` and
+`--format jsonl` include an `inaccessible` report; legacy `--json` preserves its
+flat array and reports failures on stderr.
+
+Approval is not automatic authorization: the destination must accept the
+issued capability's root. If the connected hub cannot obtain a grant from an
+accepted issuer, discovery still reports that directory as inaccessible.
+No trust roots are added and no service is made public.
+
 ## Daemon-owned endpoints (`hub services`)
 
 `hub services` manages processes and existing connections **through the daemon
@@ -814,6 +833,41 @@ Alternatively, configure the listener token in the target URI as `listen:ws://12
 Only `listen:ws://` TCP listeners are currently supported, not named pipes or TLS listeners. Bind loopback for local use. For remote access, terminate TLS in a trusted reverse proxy rather than sending tokens over unencrypted networks. The gateway limits connections to 100, frames to 16 MiB, and pending input per client to 32 MiB / 1024 frames; slow consumers and failed upstreams close only their own connection. Factories must open within 30 seconds.
 
 The command stays in the foreground until SIGINT/SIGTERM, then closes clients and the listener. Use the existing Hub daemon/service lifecycle to supervise it; this command neither installs a service nor starts remote AHP hosts. Diagnostics and the bound address (including an assigned port when using port 0) go to stderr.
+
+### Participant proxy
+
+`proxy` stands in for a participant on the hub: the participant is either this
+process's stdin/stdout (`--stdio`) or a `--target-endpoint*`. It keeps full
+LinkRPC semantics (service ids, streaming, cancellation) and adds what the
+participant cannot do itself:
+
+- By default the proxy signs nothing: calls the participant makes are
+  forwarded to the hub as they are (unsigned, or keeping the `$hubrpc`
+  envelope the participant attached). `--sign-as [principal]` re-signs every
+  such call as `principal` (`managed`, `user:<id>`, or `file:<path>`; default:
+  `--principal`, i.e. the managed Hub identity) and requests capabilities for
+  those calls, so a participant without signing support can call services
+  behind `forwardChecking`. This lends the participant that identity.
+  `--no-outbound` drops the participant's calls instead. The global `--sign`
+  is rejected here to keep this choice explicit.
+- `--claim <serviceId>` registers the service id (that registration is signed
+  as `--principal`) and forwards requests the hub routes to it to the
+  participant unchanged, keeping callers' signatures.
+
+```sh
+# A Rust client that cannot sign yet reaches a gated remote service.
+# Point it at this cmd-stdio endpoint and address calls to the remote service id:
+#   cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as
+hub proxy --stdio --sign-as
+hub proxy --stdio --sign-as user:automation
+
+# Serve a stdio program under a service id (equivalent to `tunnel`).
+hub proxy --claim my/service --no-outbound --target-endpoint-cmd-stdio "my-server --stdio"
+```
+
+With `--stdio`, the proxy exits when stdin closes. `tunnel <serviceId>` is
+`proxy --claim <serviceId> --no-outbound`; with `--bidi` it forwards the
+target's calls unsigned.
 
 ### Capabilities
 

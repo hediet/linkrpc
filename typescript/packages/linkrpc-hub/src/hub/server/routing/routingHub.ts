@@ -20,7 +20,11 @@ import {
     type TopologyIdGenerator,
 } from '@hediet/linkrpc/inspection';
 import type { ServiceId } from '@hediet/linkrpc/hub/common';
-import { ParticipantRoots } from './participantRoots';
+import {
+    ParticipantRoots,
+    type ParticipantRootsAnswer,
+    type ParticipantRootsQueryOptions,
+} from './participantRoots';
 import {
     GET_NODE_ID_METHOD,
     RoutingTopology,
@@ -265,7 +269,8 @@ export class Hub {
             forwardingEntries: () => this._table.entries(),
             prefixOwner: (prefix) => this._table.get(prefix),
             uplink: () => this._uplink,
-            requestOnLink: (link, method, params) => this._requestOnLink(link, method, params),
+            requestOnLink: (link, method, params, timeoutMs) =>
+                this._requestOnLink(link, method, params, timeoutMs),
             watchOnLink: (link, method, params, onTick, onSettled, onEstablished) =>
                 this._watchOnLink(link, method, params, onTick, onSettled, onEstablished),
             onDidChangeRouting: (listener) => this.onDidChangeRouting(listener),
@@ -664,10 +669,12 @@ export class Hub {
     /**
      * Fan a **root-form** request out to every distinct downstream participant
      * link (the claimed-prefix owners), skipping the link that owns
-     * `excludePrefix` (typically the hub's own services prefix) and the uplink.
-     * Each participant is queried **once** even if it owns several prefixes.
-     * Failures (unreachable participant, timeout, no root handler) are dropped,
-     * so the result holds one entry per link that answered.
+     * `options.excludePrefix` (typically the hub's own services prefix) and the
+     * uplink. Each participant is queried **once** even if it owns several
+     * prefixes. Failures (unreachable participant, timeout, no root handler)
+     * are dropped. Participants that have not answered when
+     * `options.budgetMs` elapses are reported as `truncated` rather than
+     * awaited; their requests continue until `options.requestTimeoutMs`.
      *
      * The request is delivered to each participant's **root** services — on an
      * overlay uplink the splitter routes a root-form method to the participant
@@ -678,9 +685,9 @@ export class Hub {
     public async queryParticipantRoots(
         method: string,
         params: JsonValue,
-        excludePrefix?: ServiceId,
-    ): Promise<JsonValue[]> {
-        return this._participantRoots.query(method, params, excludePrefix);
+        options: ParticipantRootsQueryOptions,
+    ): Promise<ParticipantRootsAnswer> {
+        return this._participantRoots.query(method, params, options);
     }
 
     /**

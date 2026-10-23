@@ -44,7 +44,7 @@ impl HubListener {
         }
     }
 
-    /// Accept the next connection. Read its `hello` preamble before serving RPC.
+    /// Accept the next connection. Run [`accept_initialize`](NdjsonTransport::accept_initialize) before serving RPC.
     pub async fn accept(&mut self) -> io::Result<NdjsonTransport> {
         #[cfg(any(unix, windows))]
         {

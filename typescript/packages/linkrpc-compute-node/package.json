@@ -1,7 +1,7 @@
 {
     "name": "@hediet/linkrpc-compute-node",
     "version": "0.0.1",
-    "description": "A LinkRPC service that gives remote shell, file system, HTTP, and TCP access to this machine.",
+    "description": "A LinkRPC service that gives remote shell, file system, HTTP, and TCP access to this machine and keeps it awake on request.",
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",

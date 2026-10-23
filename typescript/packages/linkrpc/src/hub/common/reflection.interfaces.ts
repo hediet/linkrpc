@@ -109,7 +109,7 @@ export const directoryInterface = defineInterface(
                 items: array(zServiceListing),
                 /** Omitted => no more pages. */
                 nextCursor: optional(string()),
-                /** True if `timeoutMs` cut the page short before exhausting results. */
+                /** True if gathering stopped (e.g. `timeoutMs` elapsed) before every source answered. */
                 truncated: optional(boolean()),
             }),
         ),

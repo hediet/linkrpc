@@ -44,6 +44,16 @@ interface Listing {
     reachableServiceIds?: readonly ServiceIdPattern[];
 }
 
+/**
+ * How long the global directory waits for participant root listings. It stays
+ * well below the 5s default client deadline (`DEFAULT_RPC_TIMEOUT_MS`), so a
+ * truncated page reaches the caller instead of the caller timing out first.
+ * A caller's smaller `timeoutMs` lowers it further.
+ */
+const PARTICIPANT_ROOT_LIST_BUDGET_MS = 2_000;
+/** Hard deadline after which an unanswered participant root listing is cancelled. */
+const PARTICIPANT_ROOT_LIST_TIMEOUT_MS = 30_000;
+
 export function createHubServiceInterfaces(hub: Hub, options: HubServicesOptions = {}): HubServices {
     const hubServiceId = options.hubServiceId ?? 'hub';
     const link = hub.attachOut({ exclusiveHubRootHandler: true, routePrefixes: [hubServiceId] });
@@ -85,6 +95,11 @@ export function createHubServiceInterfaces(hub: Hub, options: HubServicesOptions
  * returned by participant connection-root directories. Routing claims do not
  * create directory entries: a routable service that is not explicitly listed
  * remains callable when already known but is not discoverable.
+ *
+ * A participant that does not answer within the gathering budget is omitted
+ * and the page is marked `truncated`, so one stuck participant cannot hang
+ * the directory for every client. If it answers later, directory watchers get
+ * a tick and re-list.
  */
 function registerHubReflection(
     connection: LinkRpcConnection,
@@ -92,6 +107,7 @@ function registerHubReflection(
     hubServiceId: string,
     beforeDirectoryQuery: (() => void | Promise<void>) | undefined,
 ): void {
+    const lateAnswerListeners = new Set<() => void>();
     // Every hub is also a participant on each adjacent connection. Its
     // connection-root directory explicitly refers to the addressed global
     // directory; parents discover this entry through their 1:1 root call.
@@ -129,7 +145,7 @@ function registerHubReflection(
     });
 
     connection.register(directoryInterface, {
-        list: async ({ interfaceId, interfaceIdPrefix, serviceId, serviceIdScopes }) => {
+        list: async ({ interfaceId, interfaceIdPrefix, serviceId, serviceIdScopes, timeoutMs }) => {
             await beforeDirectoryQuery?.();
             const items: Listing[] = [];
 
@@ -146,12 +162,26 @@ function registerHubReflection(
             // this needs no signing or capabilities. Consumers recurse into the
             // referrals via `walkHubDetailed`; transitive root-node-id
             // requirements are folded in during that walk, not here.
-            const rootListings = await hub.queryParticipantRoots(
+            const roots = await hub.queryParticipantRoots(
                 `${directoryInterface.info.id}::list`,
                 { interfaceId: directoryInterface.info.id },
-                hubServiceId,
+                {
+                    excludePrefix: hubServiceId,
+                    budgetMs: Math.min(
+                        PARTICIPANT_ROOT_LIST_BUDGET_MS,
+                        timeoutMs ?? PARTICIPANT_ROOT_LIST_BUDGET_MS,
+                    ),
+                    requestTimeoutMs: PARTICIPANT_ROOT_LIST_TIMEOUT_MS,
+                },
             );
-            for (const raw of rootListings) {
+            if (roots.truncated) {
+                // The page lacks the stragglers' referrals; watchers must hear
+                // about it once one of them answers.
+                void roots.lateAnswers.then((answered) => {
+                    if (answered) for (const listener of [...lateAnswerListeners]) listener();
+                });
+            }
+            for (const raw of roots.results) {
                 const page = raw as { items?: Listing[]; } | null;
                 if (!page || !Array.isArray(page.items)) continue;
                 for (const it of page.items) {
@@ -213,7 +243,7 @@ function registerHubReflection(
                         ? { reachableServiceIds: [...it.reachableServiceIds] }
                         : {}),
                 }));
-            return { items: filtered };
+            return { items: filtered, ...(roots.truncated ? { truncated: true } : {}) };
         },
         watch: async (params, _ctx, stream) => {
             await beforeDirectoryQuery?.();
@@ -237,6 +267,7 @@ function registerHubReflection(
                 };
                 const unsubscribeRouting = hub.onDidChangeRouting(notify);
                 const unsubscribeLocal = connection.onDidChangeDirectory(notify);
+                lateAnswerListeners.add(notify);
                 const participantWatches = hub.watchParticipantRoots(
                     `${directoryInterface.info.id}::watch`,
                     params,
@@ -248,6 +279,7 @@ function registerHubReflection(
                     () => {
                         unsubscribeRouting();
                         unsubscribeLocal();
+                        lateAnswerListeners.delete(notify);
                         participantWatches.dispose();
                         resolve({});
                     },
