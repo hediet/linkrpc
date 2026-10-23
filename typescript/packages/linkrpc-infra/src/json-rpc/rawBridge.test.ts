@@ -6,6 +6,32 @@ import { registerJsonRpcConnectionService } from './server';
 import { JsonRpcTransportPair } from './transport';
 
 describe('raw JSON-RPC bridge', () => {
+    it('cancels an opening factory through an AbortSignal', async () => {
+        const link = new TransportPair();
+        const server = LinkRpcConnection.fromTransport(link.a);
+        const client = LinkRpcConnection.fromTransport(link.b);
+        let factorySignal: AbortSignal | undefined;
+        const registration = registerJsonRpcConnectionService({
+            connection: server,
+            openTransport: (_params, signal) => {
+                factorySignal = signal;
+                return new Promise((_resolve, reject) => {
+                    signal.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+                });
+            },
+        });
+        const controller = new AbortController();
+        const opening = connectRawJsonRpcTransport(client.get(jsonRpcConnectionInterface), undefined, controller.signal);
+        const rejected = expect(opening).rejects.toThrow('cancelled');
+        await expect.poll(() => factorySignal !== undefined).toBe(true);
+        controller.abort();
+        await rejected;
+        await expect.poll(() => factorySignal?.aborted).toBe(true);
+        registration.dispose();
+        link.a.dispose();
+        link.b.dispose();
+    });
+
     it('forwards opaque frames in both directions', async () => {
         const link = new TransportPair();
         const server = LinkRpcConnection.fromTransport(link.a);

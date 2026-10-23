@@ -13,6 +13,7 @@ export default defineConfig({
         'json-document/index': 'src/json-document/index.ts',
         'json-rpc/index': 'src/json-rpc/index.ts',
         'json-rpc/protocol': 'src/json-rpc/protocol.ts',
+        'json-rpc/node': 'src/json-rpc/node.ts',
         'logging/index': 'src/logging/index.ts',
     },
     format: 'esm',
