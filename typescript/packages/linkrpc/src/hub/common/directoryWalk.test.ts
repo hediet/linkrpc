@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest';
-import type {
-    IRequestSender,
-    RawStreamingCall,
-    StreamSendOpts,
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+    RpcError,
+    type IRequestSender,
+    type RawStreamingCall,
+    type StreamSendOpts,
 } from '../../connection/channel';
 import type { SigningCallCtx } from '../../identity/signingSender';
+import { ErrorCode } from '../../protocol/jsonRpc';
 import type { JsonValue } from '../../protocol/jsonValue';
 import type { ServiceIdPattern } from './reflection.interfaces';
 import {
@@ -415,6 +417,132 @@ describe('HubDirectoryExplorer', () => {
     });
 });
 
+describe('HubDirectoryExplorer failed watches', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('retries a rejected watch only on its backoff schedule, re-listing once per attempt', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('static')]);
+        endpoint.set('static', [listing('static', 'demo')]);
+        endpoint.rejectWatches('static', watchNotFound('static'));
+        const logs: string[] = [];
+        const explorer = new HubDirectoryExplorer(endpoint, { log: (line) => logs.push(line) });
+
+        const stop = await explorer.watch(() => undefined);
+        await vi.advanceTimersByTimeAsync(10_000);
+
+        expect({
+            watchAttemptsAt: watchTimes(endpoint, 'static'),
+            lists: endpoint.listCount('static'),
+            rootWatches: endpoint.watchCount(undefined),
+            staticWatching: explorer.graphSnapshot.directories[0]?.watching,
+            complete: explorer.graphSnapshot.complete,
+            listings: explorer.result.listings.map((item) => item.interfaceId),
+        }).toMatchInlineSnapshot(`
+          {
+            "complete": true,
+            "listings": [
+              "hubrpc.directory",
+              "demo",
+            ],
+            "lists": 7,
+            "rootWatches": 1,
+            "staticWatching": false,
+            "watchAttemptsAt": [
+              0,
+              200,
+              600,
+              1400,
+              3000,
+              6200,
+            ],
+          }
+        `);
+        expect(logs.filter((line) => !line.includes('watch(static) ended: method not found')))
+            .toEqual([]);
+        stop();
+        explorer.dispose();
+    });
+
+    it('resets the backoff once a recovered watch ticks', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [listing('svc', 'demo')]);
+        endpoint.rejectWatches(undefined, watchNotFound('<root>'));
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        endpoint.acceptWatches(undefined);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(explorer.graphSnapshot.root.watching).toBe(true);
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        endpoint.endWatches(undefined);
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        // Failures at 0, 200, 600; accepted at 1400; ended at 2000 and retried after the initial delay.
+        expect(watchTimes(endpoint, undefined)).toEqual([0, 200, 600, 1400, 2200]);
+        stop();
+        explorer.dispose();
+    });
+
+    it('cancels pending retries when the watch is stopped', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [listing('svc', 'demo')]);
+        endpoint.rejectWatches(undefined, watchNotFound('<root>'));
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+
+        stop();
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(watchTimes(endpoint, undefined)).toEqual([0]);
+        expect(vi.getTimerCount()).toBe(0);
+        explorer.dispose();
+    });
+
+    it('does not retry the watch of a directory that is no longer referred to', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('static')]);
+        endpoint.set('static', [listing('static', 'demo')]);
+        endpoint.rejectWatches('static', watchNotFound('static'));
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+
+        endpoint.set(undefined, []);
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect({
+            staticWatches: watchTimes(endpoint, 'static'),
+            directories: explorer.graphSnapshot.directories.length,
+            pendingTimers: vi.getTimerCount(),
+        }).toEqual({ staticWatches: [0], directories: 0, pendingTimers: 0 });
+        stop();
+        explorer.dispose();
+    });
+});
+
+function watchNotFound(target: string): RpcError {
+    return new RpcError(
+        `method not found: ${target}::hubrpc.directory::watch`,
+        ErrorCode.methodNotFound,
+        undefined,
+        'remote',
+    );
+}
+
+function watchTimes(endpoint: FakeDirectoryEndpoint, target: string | undefined): number[] {
+    return endpoint.watchLog.filter((call) => call.target === target).map((call) => call.at);
+}
+
 it('cancels and reports a directory service that exceeds its timeout', async () => {
     const endpoint = new FakeDirectoryEndpoint();
     endpoint.set(undefined, [referral('slow')]);
@@ -456,6 +584,9 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
     private readonly _failures = new Map<string, string>();
     private readonly _watchers = new Map<string, Set<() => void>>();
     private readonly _watchCalls = new Map<string, number>();
+    private readonly _watchFailures = new Map<string, Error>();
+    /** `Date.now()` of every watch request, in call order. */
+    public readonly watchLog: Array<{ target: string | undefined; at: number }> = [];
     private readonly _watchSettlers = new Map<string, Set<() => void>>();
     private readonly _afterList = new Map<string, () => void>();
     private readonly _hanging = new Set<string>();
@@ -468,6 +599,15 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
 
     public fail(target: string | undefined, reason: string): void {
         this._failures.set(key(target), reason);
+    }
+
+    /** Reject subsequent watch requests for `target` asynchronously, like a remote error response. */
+    public rejectWatches(target: string | undefined, error: Error): void {
+        this._watchFailures.set(key(target), error);
+    }
+
+    public acceptWatches(target: string | undefined): void {
+        this._watchFailures.delete(key(target));
     }
 
     public hang(target: string | undefined): void {
@@ -556,6 +696,16 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
         const target = parseTarget(method, 'watch');
         const targetKey = key(target);
         this._watchCalls.set(targetKey, (this._watchCalls.get(targetKey) ?? 0) + 1);
+        this.watchLog.push({ target, at: Date.now() });
+        const failure = this._watchFailures.get(targetKey);
+        if (failure !== undefined) {
+            return {
+                result: Promise.resolve().then(() => { throw failure; }),
+                send: () => undefined,
+                cancel: () => undefined,
+                ping: async () => undefined,
+            };
+        }
         const watchers = this._watchers.get(targetKey) ?? new Set();
         const listener = () => opts?.onStreamMessage?.({});
         watchers.add(listener);
