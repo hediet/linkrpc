@@ -35,6 +35,8 @@ The interop-critical behavior is byte-level and is pinned by a corpus of vectors
 | `normalize.json` | JSON Schema normalization (the canonical form before hashing) | 04 §3.1 |
 | `interface_hash.json` | full interface-hash derivation from a schema | 04 §4 |
 | `pizza_interface.json` | a complete worked interface schema + its hash (the running example) | 04 |
+| `reflection_defaults.json` | the exact `hubrpc.defaults` schema and hash every implementation serves | 05 §2 |
+| `reflection_directory.json` | the exact `hubrpc.directory` schema (`list` + `watch`) and hash every implementation serves | 09 §1 |
 
 > **Note.** Vectors for the optional layers (signed-call signing input and content hash, capability content hash and the gate's accept/reject decisions, endpoint-URI parsing) extend the corpus as those layers are exercised. The canonicalization, hashing, and signing-input vectors are the load-bearing ones: they are the only behavior two independent implementations cannot rederive from primitives, and a mismatch there breaks identity and authorization interop silently.
 

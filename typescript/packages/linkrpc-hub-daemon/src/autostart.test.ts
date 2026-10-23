@@ -24,7 +24,8 @@ const windowsLaunch: DaemonLaunch = {
 function recordingExec(results: Record<string, { code: number; stdout?: string; }> = {}): { exec: Exec; calls: string[]; } {
     const calls: string[] = [];
     const exec: Exec = async (file, args) => {
-        const call = [path.basename(file), ...args].join(' ');
+        // win32 splits at both separators: commands use Windows paths on every host.
+        const call = [path.win32.basename(file), ...args].join(' ');
         calls.push(call);
         const match = Object.entries(results).find(([prefix]) => call.startsWith(prefix))?.[1];
         return { code: match?.code ?? 0, stdout: match?.stdout ?? '', stderr: '' };

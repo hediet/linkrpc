@@ -10,7 +10,7 @@
 import { writeFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { normalizeJsonSchema } from "../../typescript/packages/linkrpc/dist/index.js";
+import { defaultsInterface, directoryInterface, normalizeJsonSchema } from "../../typescript/packages/linkrpc/dist/index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, "..", "vectors");
@@ -467,6 +467,15 @@ write(
   "normalize.json",
   normalizeFixtures.map(({ name, raw }) => ({ name, raw, normalized: normalizeJsonSchema(raw) }))
 );
+
+// ── built-in reflection contracts (pinned so every implementation serves the same hash) ──
+for (const [name, iface] of [
+  ["reflection_defaults.json", defaultsInterface],
+  ["reflection_directory.json", directoryInterface],
+]) {
+  const { hash: _hash, id, description, methods, ...rest } = iface.toSchema();
+  write(name, { hash: iface.schemaHash, schema: { id, description, methods, ...rest } });
+}
 
 // ── endpoint URIs (delegated to gen-endpoint.mjs) ──────────────────────────────
 await import("./gen-endpoint.mjs");

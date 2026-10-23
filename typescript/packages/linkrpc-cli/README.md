@@ -856,6 +856,41 @@ start workspace builds or explorer daemons. Each forwarded connection spawns
 the configured MCP child, so producers must use attach-only commands when
 heavyweight services are managed separately.
 
+### Participant proxy
+
+`proxy` stands in for a participant on the hub: the participant is either this
+process's stdin/stdout (`--stdio`) or a `--target-endpoint*`. It keeps full
+LinkRPC semantics (service ids, streaming, cancellation) and adds what the
+participant cannot do itself:
+
+- By default the proxy signs nothing: calls the participant makes are
+  forwarded to the hub as they are (unsigned, or keeping the `$hubrpc`
+  envelope the participant attached). `--sign-as [principal]` re-signs every
+  such call as `principal` (`managed`, `user:<id>`, or `file:<path>`; default:
+  `--principal`, i.e. the managed Hub identity) and requests capabilities for
+  those calls, so a participant without signing support can call services
+  behind `forwardChecking`. This lends the participant that identity.
+  `--no-outbound` drops the participant's calls instead. The global `--sign`
+  is rejected here to keep this choice explicit.
+- `--claim <serviceId>` registers the service id (that registration is signed
+  as `--principal`) and forwards requests the hub routes to it to the
+  participant unchanged, keeping callers' signatures.
+
+```sh
+# A Rust client that cannot sign yet reaches a gated remote service.
+# Point it at this cmd-stdio endpoint and address calls to the remote service id:
+#   cmd-stdio:?argv=linkrpc&argv=hub&argv=proxy&argv=--stdio&argv=--sign-as
+hub proxy --stdio --sign-as
+hub proxy --stdio --sign-as user:automation
+
+# Serve a stdio program under a service id (equivalent to `tunnel`).
+hub proxy --claim my/service --no-outbound --target-endpoint-cmd-stdio "my-server --stdio"
+```
+
+With `--stdio`, the proxy exits when stdin closes. `tunnel <serviceId>` is
+`proxy --claim <serviceId> --no-outbound`; with `--bidi` it forwards the
+target's calls unsigned.
+
 ### Capabilities
 
 `linkrpc hub caps list [--json]` lists the selected principal's stored capabilities,

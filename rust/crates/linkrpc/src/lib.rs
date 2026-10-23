@@ -60,7 +60,8 @@ pub mod prelude {
     // can introspect an endpoint without hand-rolling `call_member` calls.
     pub use crate::connection::reflection::iface::{
         BareBindingListing, DefaultsGetResult, DefaultsListBindingsResult, DefaultsServiceClient,
-        DirectoryListResult, DirectoryServiceClient, SchemasGetResult, SchemasServiceClient,
+        DirectoryListParams, DirectoryListResult, DirectoryServiceClient, DirectoryWatchParams,
+        EmptyObject, RootPrincipalReq, SchemasGetResult, SchemasServiceClient, ServiceIdPattern,
         ServiceListing,
     };
     pub use crate::protocol::json_value::JsonValue;

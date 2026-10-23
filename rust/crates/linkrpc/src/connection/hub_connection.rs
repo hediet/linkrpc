@@ -9,21 +9,25 @@
 
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    Arc, RwLock, Weak,
+    Arc, Mutex, RwLock, Weak,
 };
 
 use async_trait::async_trait;
+use futures::channel::mpsc;
+use futures::{FutureExt, StreamExt};
 use serde_json::json;
 
 use crate::connection::channel::{Channel, RequestHandler};
 use crate::connection::dispatch::{CallCtx, InterfaceHandler, ServiceExport};
 use crate::connection::interface_def::{InterfaceDefinition, Member};
 use crate::connection::reflection::iface::{
-    BareBindingListing, DefaultsGetResult, DefaultsListBindingsResult, DefaultsService,
-    DefaultsServiceServer, DirectoryListResult, DirectoryService, DirectoryServiceServer,
-    SchemasGetResult, SchemasService, SchemasServiceServer, ServiceListing,
+    service_id_matches_scopes, BareBindingListing, DefaultsGetResult, DefaultsListBindingsResult,
+    DefaultsService, DefaultsServiceServer, DirectoryListParams, DirectoryListResult,
+    DirectoryService, DirectoryServiceServer, DirectoryWatchParams, EmptyObject, SchemasGetResult,
+    SchemasService, SchemasServiceServer, ServiceIdPattern, ServiceListing,
 };
 use crate::connection::reflection::DEFAULTS_ID;
+use crate::connection::streaming::StreamSender;
 use crate::protocol::json_value::JsonValue;
 use crate::protocol::jsonrpc::{error_codes, JsonRpcError};
 use crate::protocol::method_name::{parse_method_name, ParsedMethodName};
@@ -94,6 +98,46 @@ struct RegistryState {
 struct RegistryInner {
     state: RwLock<RegistryState>,
     next_registration_id: AtomicU64,
+    watchers: Mutex<Vec<DirectoryWatcher>>,
+    next_watcher_id: AtomicU64,
+}
+
+/// A live `hubrpc.directory::watch` subscription. `tick` is a zero-capacity channel: `try_send`
+/// fails while a tick is already pending, which coalesces bursts of changes into one tick.
+struct DirectoryWatcher {
+    id: u64,
+    filter: DirectoryFilter,
+    tick: mpsc::Sender<()>,
+}
+
+/// The filters shared by `hubrpc.directory::list` and `::watch` (TS `directoryWatcherMatchesEntry`).
+#[derive(Default)]
+struct DirectoryFilter {
+    /// The service a scoped reflection mount is restricted to.
+    mounted_service_id: Option<String>,
+    interface_id: Option<String>,
+    interface_id_prefix: Option<String>,
+    service_id: Option<String>,
+    service_id_scopes: Option<Vec<ServiceIdPattern>>,
+}
+
+impl DirectoryFilter {
+    fn matches(&self, service_id: Option<&str>, interface_id: &str) -> bool {
+        let sid = service_id.unwrap_or("");
+        self.mounted_service_id
+            .as_deref()
+            .is_none_or(|mounted| service_id == Some(mounted))
+            && self
+                .interface_id
+                .as_deref()
+                .is_none_or(|f| interface_id == f)
+            && self
+                .interface_id_prefix
+                .as_deref()
+                .is_none_or(|p| interface_id.starts_with(p))
+            && self.service_id.as_deref().is_none_or(|f| sid == f)
+            && service_id_matches_scopes(sid, self.service_id_scopes.as_deref())
+    }
 }
 
 fn registry_key(service_id: Option<&str>, interface_id: &str) -> String {
@@ -101,6 +145,21 @@ fn registry_key(service_id: Option<&str>, interface_id: &str) -> String {
 }
 
 impl RegistryInner {
+    /// Signal every watcher whose filter covers `(service_id, interface_id)`. Over-emission is
+    /// fine (consumers re-list); a tick already pending absorbs this one.
+    fn notify_directory_watchers(&self, service_id: Option<&str>, interface_id: &str) {
+        let mut watchers = self.watchers.lock().unwrap();
+        watchers.retain_mut(|watcher| {
+            if !watcher.filter.matches(service_id, interface_id) {
+                return true;
+            }
+            match watcher.tick.try_send(()) {
+                Ok(()) => true,
+                Err(e) => e.is_full(),
+            }
+        });
+    }
+
     fn find(&self, service_id: Option<&str>, interface_id: &str) -> Option<RegisteredInterface> {
         let key = registry_key(service_id, interface_id);
         self.state
@@ -152,16 +211,19 @@ impl InterfaceRegistration {
             return false;
         };
         let mut state = inner.state.write().unwrap();
-        let old_len = state.entries.len();
-        state
+        let Some(index) = state
             .entries
-            .retain(|entry| entry.registration_id != self.registration_id);
-        if state.entries.len() == old_len {
+            .iter()
+            .position(|entry| entry.registration_id == self.registration_id)
+        else {
             return false;
-        }
+        };
+        let removed = state.entries.remove(index);
         state
             .bare_bindings
             .retain(|binding| binding.registration_id != self.registration_id);
+        drop(state);
+        inner.notify_directory_watchers(removed.service_id.as_deref(), removed.iface.id());
         true
     }
 }
@@ -355,7 +417,12 @@ impl InterfaceRouter {
                 hash: entry.iface.schema_hash().to_string(),
             });
         }
+        let notify_service_id = entry.service_id.clone();
+        let notify_interface_id = entry.iface.id().to_string();
         state.entries.push(entry);
+        drop(state);
+        self.inner
+            .notify_directory_watchers(notify_service_id.as_deref(), &notify_interface_id);
         Ok(InterfaceRegistration {
             inner: Arc::downgrade(&self.inner),
             registration_id,
@@ -381,28 +448,46 @@ impl LinkRpcConnection {
     /// Register the reflection interfaces (`defaults`, `directory`, `schemas`) backed by
     /// this connection's live registry. Idempotent.
     pub fn enable_reflection(&self) {
-        if self.inner.find(None, DEFAULTS_ID).is_some() {
+        self.mount_reflection(None);
+    }
+
+    /// Additionally mount the reflection interfaces under `service_id`, for participants that live
+    /// behind a hub: callers reach them via form-3 `<serviceId>::hubrpc.directory::list` (root-form
+    /// calls are never forwarded by a hub). The mounted directory lists only that service's
+    /// interfaces. Idempotent per service id.
+    pub fn enable_reflection_for(&self, service_id: impl Into<String>) {
+        self.mount_reflection(Some(service_id.into()));
+    }
+
+    fn mount_reflection(&self, service_id: Option<String>) {
+        if self
+            .inner
+            .find(service_id.as_deref(), DEFAULTS_ID)
+            .is_some()
+        {
             return;
         }
         let reflection = Arc::new(Reflection {
             inner: self.inner.clone(),
+            service_id: service_id.clone(),
         });
+        let opts = RegisterOptions {
+            service_id,
+            ..RegisterOptions::default()
+        };
         // Unwrap is safe: idempotency guard above guarantees these keys are free.
         self.register_service(
             Arc::new(DefaultsServiceServer::new(reflection.clone())),
-            RegisterOptions::default(),
+            opts.clone(),
         )
         .unwrap();
         self.register_service(
             Arc::new(DirectoryServiceServer::new(reflection.clone())),
-            RegisterOptions::default(),
+            opts.clone(),
         )
         .unwrap();
-        self.register_service(
-            Arc::new(SchemasServiceServer::new(reflection)),
-            RegisterOptions::default(),
-        )
-        .unwrap();
+        self.register_service(Arc::new(SchemasServiceServer::new(reflection)), opts)
+            .unwrap();
     }
 
     /// Snapshot of registered interfaces, in registration order.
@@ -719,6 +804,8 @@ fn not_found(reason: &str, method: &str) -> JsonRpcError {
 /// macro-generated `*Server` adapters in [`LinkRpcConnection::enable_reflection`].
 struct Reflection {
     inner: Arc<RegistryInner>,
+    /// The service this reflection is mounted under; its directory lists only that service.
+    service_id: Option<String>,
 }
 
 #[async_trait]
@@ -776,14 +863,24 @@ impl DirectoryService for Reflection {
     async fn list(
         &self,
         _ctx: &CallCtx,
-        interface_id: Option<String>,
-        service_id: Option<String>,
-        cursor: Option<String>,
-        limit: Option<u32>,
-        _timeout_ms: Option<u32>,
+        params: DirectoryListParams,
     ) -> Result<DirectoryListResult, JsonRpcError> {
-        let filter_iface = interface_id.as_deref();
-        let filter_service = service_id.as_deref();
+        let DirectoryListParams {
+            interface_id,
+            interface_id_prefix,
+            service_id,
+            service_id_scopes,
+            cursor,
+            limit,
+            timeout_ms: _,
+        } = params;
+        let filter = DirectoryFilter {
+            mounted_service_id: self.service_id.clone(),
+            interface_id,
+            interface_id_prefix,
+            service_id,
+            service_id_scopes,
+        };
         let cursor = cursor
             .as_deref()
             .and_then(|s| s.parse::<usize>().ok())
@@ -797,14 +894,15 @@ impl DirectoryService for Reflection {
             .unwrap()
             .entries
             .iter()
-            .filter(|e| filter_iface.is_none_or(|f| e.iface.id() == f))
-            .filter(|e| filter_service.is_none_or(|f| e.service_id.as_deref().unwrap_or("") == f))
+            .filter(|e| filter.matches(e.service_id.as_deref(), e.iface.id()))
             .map(|e| ServiceListing {
                 service_id: e.service_id.clone().unwrap_or_default(),
                 interface_id: e.iface.id().to_string(),
                 interface_hash: e.iface.schema_hash().to_string(),
                 tags: (!e.iface.info().tags.is_empty()).then(|| e.iface.info().tags.clone()),
                 service_description: e.service_description.clone(),
+                root_principal_sets: None,
+                reachable_service_ids: None,
             })
             .collect();
 
@@ -821,6 +919,63 @@ impl DirectoryService for Reflection {
             truncated: None,
         })
     }
+
+    async fn watch(
+        &self,
+        ctx: &CallCtx,
+        params: DirectoryWatchParams,
+        ticks: StreamSender<EmptyObject>,
+    ) -> Result<EmptyObject, JsonRpcError> {
+        let DirectoryWatchParams {
+            interface_id,
+            interface_id_prefix,
+            service_id,
+            service_id_scopes,
+        } = params;
+        let (tick, mut pending) = mpsc::channel(0);
+        let id = self.inner.next_watcher_id.fetch_add(1, Ordering::Relaxed);
+        self.inner.watchers.lock().unwrap().push(DirectoryWatcher {
+            id,
+            filter: DirectoryFilter {
+                mounted_service_id: self.service_id.clone(),
+                interface_id,
+                interface_id_prefix,
+                service_id,
+                service_id_scopes,
+            },
+            tick,
+        });
+        let inner = self.inner.clone();
+        let _unsubscribe = scopeguard(move || {
+            inner.watchers.lock().unwrap().retain(|w| w.id != id);
+        });
+
+        let cancelled = ctx.cancelled().fuse();
+        futures::pin_mut!(cancelled);
+        loop {
+            futures::select! {
+                _ = cancelled => return Ok(EmptyObject {}),
+                next = pending.next() => {
+                    if next.is_none() || ticks.send(EmptyObject {}).await.is_err() {
+                        return Ok(EmptyObject {});
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Runs `f` on drop (watcher cleanup on every exit path, including future cancellation).
+fn scopeguard<F: FnOnce()>(f: F) -> impl Drop {
+    struct Guard<F: FnOnce()>(Option<F>);
+    impl<F: FnOnce()> Drop for Guard<F> {
+        fn drop(&mut self) {
+            if let Some(f) = self.0.take() {
+                f();
+            }
+        }
+    }
+    Guard(Some(f))
 }
 
 #[async_trait]

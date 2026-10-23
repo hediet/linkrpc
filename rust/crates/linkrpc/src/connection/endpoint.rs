@@ -39,7 +39,7 @@ pub enum ResolvedEndpoint {
     Socket {
         /// Filesystem path (UDS) or Windows pipe path.
         path: String,
-        /// Auth token written in the `hello` preamble.
+        /// Auth token sent in the `hubrpc::initialize` handshake.
         token: Option<String>,
     },
     /// A running WebSocket hub; the token rides in the `Authorization` header.

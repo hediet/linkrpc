@@ -8,8 +8,33 @@ use std::process::Stdio;
 use linkrpc::prelude::*;
 use linkrpc_examples::calc::CalculatorClient;
 use linkrpc_examples::example_server_command;
-use linkrpc_tokio::NdjsonTransport;
+use linkrpc_tokio::{connect_to_hub, ConnectOptions, NdjsonTransport};
 use tokio::process::Command;
+
+#[tokio::test]
+async fn connect_to_hub_spawns_cmd_stdio_endpoint() {
+    let program = example_server_command("calc_server");
+    let endpoint = format_endpoint_uri(
+        &ResolvedEndpoint::CmdStdio {
+            command: EndpointCommand::Argv(vec![program.get_program().to_string_lossy().into()]),
+            env: None,
+        },
+        FormatEndpointOptions::default(),
+    );
+    let conn = connect_to_hub(ConnectOptions {
+        endpoint: Some(endpoint),
+        ..Default::default()
+    })
+    .await
+    .expect("spawn cmd-stdio endpoint");
+    let driver = conn.clone();
+    tokio::spawn(async move { driver.run().await });
+
+    assert_eq!(
+        CalculatorClient::new(conn).add(2, 40).await.expect("add"),
+        42
+    );
+}
 
 #[tokio::test]
 async fn consumer_spawns_calc_server_over_stdio() {
@@ -56,7 +81,7 @@ async fn consumer_spawns_calc_server_over_stdio() {
     // (no raw JSON) — the calculator shows up in the listing, fully typed.
     let directory = DirectoryServiceClient::new(conn);
     let listing = directory
-        .list(None, None, None, None, None)
+        .list(DirectoryListParams::default())
         .await
         .expect("directory list");
     assert!(listing

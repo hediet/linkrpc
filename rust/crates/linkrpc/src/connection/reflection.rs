@@ -68,6 +68,57 @@ pub mod iface {
     }
 
     // ── hubrpc.directory ──────────────────────────────────────────────────────
+    // Plain (non-doc) comments on schema types below: doc comments become schema descriptions,
+    // which are hashed and would break parity with the TS `hubrpc.directory` schema.
+    //
+    // A single root-principal requirement. `transitive: true` means the requirement also applies
+    // to every service reachable *through* this one.
+    #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct RootPrincipalReq {
+        pub principal: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "bool")]
+        pub transitive: Option<bool>,
+    }
+
+    // One OR-set: satisfied by holding *any one* of its principals.
+    pub type RootPrincipalSet = Vec<RootPrincipalReq>;
+
+    // A service-id region: an exact id, or a segment-aware prefix (`foo` includes `foo/bar`,
+    // not `foobar`; the empty prefix matches everything).
+    #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+    #[serde(untagged)]
+    pub enum ServiceIdPattern {
+        Exact { exact: String },
+        Prefix { prefix: String },
+    }
+
+    impl ServiceIdPattern {
+        /// Mirrors TS `serviceIdMatchesPattern`.
+        pub fn matches(&self, service_id: &str) -> bool {
+            match self {
+                ServiceIdPattern::Exact { exact } => service_id == exact,
+                ServiceIdPattern::Prefix { prefix } => {
+                    prefix.is_empty()
+                        || service_id == prefix
+                        || service_id
+                            .strip_prefix(prefix.as_str())
+                            .is_some_and(|rest| rest.starts_with('/'))
+                }
+            }
+        }
+    }
+
+    /// Whether `service_id` is included by a union of patterns; `None` means unfiltered.
+    /// Mirrors TS `serviceIdMatchesScopes`.
+    pub fn service_id_matches_scopes(
+        service_id: &str,
+        scopes: Option<&[ServiceIdPattern]>,
+    ) -> bool {
+        scopes.is_none_or(|scopes| scopes.iter().any(|p| p.matches(service_id)))
+    }
+
     #[derive(Serialize, Deserialize, JsonSchema, Clone)]
     #[serde(rename_all = "camelCase")]
     pub struct ServiceListing {
@@ -75,31 +126,111 @@ pub mod iface {
         pub interface_id: String,
         pub interface_hash: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Vec<String>")]
         pub tags: Option<Vec<String>>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
         pub service_description: Option<String>,
+        // Root principals required to access this service, in CNF (AND of OR-sets).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Vec<RootPrincipalSet>")]
+        pub root_principal_sets: Option<Vec<RootPrincipalSet>>,
+        // Service-id regions reachable through this referral (`hubrpc.directory` entries only).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Vec<ServiceIdPattern>")]
+        pub reachable_service_ids: Option<Vec<ServiceIdPattern>>,
     }
+
+    // Empty result / stream tick of `hubrpc.directory::watch`.
+    #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq, Eq)]
+    pub struct EmptyObject {}
 
     #[derive(Serialize, Deserialize, JsonSchema)]
     #[serde(rename_all = "camelCase")]
     pub struct DirectoryListResult {
         pub items: Vec<ServiceListing>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
         pub next_cursor: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "bool")]
         pub truncated: Option<bool>,
+    }
+
+    // A bare `{"type": "integer"}` schema, matching zod's `number().check(int(), ...)` export
+    // (schemars would add a `format` and nullability for `Option<u32>`).
+    fn integer_schema(_: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::InstanceType::Integer.into()),
+            ..Default::default()
+        }
+        .into()
+    }
+
+    // `hubrpc.directory::list` params. All fields optional; `limit` > 0, `timeout_ms` >= 0.
+    #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DirectoryListParams {
+        // Only services implementing this interface id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub interface_id: Option<String>,
+        // Only services whose interface id starts with this prefix.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub interface_id_prefix: Option<String>,
+        // Only entries for this service id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub service_id: Option<String>,
+        // Union filter used to constrain a transitive directory walk.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Vec<ServiceIdPattern>")]
+        pub service_id_scopes: Option<Vec<ServiceIdPattern>>,
+        // Paging: opaque continuation token from a previous response.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub cursor: Option<String>,
+        // Paging: max items in this page. Server MAY return fewer.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(schema_with = "integer_schema")]
+        pub limit: Option<u32>,
+        // Soft cap on time the server spends gathering this page, in ms.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(schema_with = "integer_schema")]
+        pub timeout_ms: Option<u32>,
+    }
+
+    // `hubrpc.directory::watch` params: relevance hints mirroring the `list` filters.
+    #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq, Eq)]
+    #[serde(rename_all = "camelCase")]
+    pub struct DirectoryWatchParams {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub interface_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub interface_id_prefix: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
+        pub service_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "Vec<ServiceIdPattern>")]
+        pub service_id_scopes: Option<Vec<ServiceIdPattern>>,
     }
 
     /// Reflection: list services exposed by this endpoint. Can also list other directory services that can be explored.
     #[link_rpc_interface(id = "hubrpc.directory", schema = "inline")]
     pub trait DirectoryService {
         async fn list(
-            interface_id: Option<String>,
-            service_id: Option<String>,
-            cursor: Option<String>,
-            limit: Option<u32>,
-            timeout_ms: Option<u32>,
+            #[params] params: DirectoryListParams,
         ) -> Result<DirectoryListResult, JsonRpcError>;
+
+        // Coarse change tap: emits an empty tick whenever the (optionally filtered) directory
+        // *might* have changed. Ticks are coalesced; resolves when the caller cancels.
+        #[output_stream(EmptyObject)]
+        async fn watch(#[params] params: DirectoryWatchParams)
+            -> Result<EmptyObject, JsonRpcError>;
     }
 
     // ── hubrpc.schemas ────────────────────────────────────────────────────────

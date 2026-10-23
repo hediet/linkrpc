@@ -14,8 +14,8 @@ function makeDir(entries: readonly DirectoryEntry[]): DirectorySource {
 describe('internalCompleteCommand', () => {
     it('emits TAB-separated `text\\ttooltip` lines', async () => {
         const out = await internalCompleteCommand({
-            line: 'hub ca',
-            point: 6,
+            line: 'hub cal',
+            point: 7,
             skipConnect: true,
         });
         expect(out).toBe('call\tInvoke a request.');
