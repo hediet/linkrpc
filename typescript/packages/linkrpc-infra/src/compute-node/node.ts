@@ -24,17 +24,24 @@ import {
     type ComputeNodeFileKind,
     type ComputeNodeFileStat,
     type ComputeNodeHttpRequest,
+    type ComputeNodeKeepAwakeEvent,
+    type ComputeNodeKeepAwakeParams,
+    type ComputeNodeKeepAwakeResult,
     type ComputeNodeMultiplexedTcpClientFrame,
     type ComputeNodeMultiplexedTcpServerFrame,
     type ComputeNodeStatus,
     computeNodeCommandInterface,
     computeNodeFileSystemInterface,
     computeNodeHttpInterface,
+    computeNodePowerInterface,
     computeNodeStatusInterface,
     computeNodeTcpForwardInterface,
     type ComputeNodeTcpClientFrame,
     type ComputeNodeTcpServerFrame,
 } from './index';
+import { holdSleepInhibitor, type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
+
+export { type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_TERMINATION_GRACE_MS = 2_000;
@@ -50,7 +57,14 @@ const MAX_MULTIPLEXED_TCP_FRAME_BYTES = 64 * 1_024;
 
 type LoopbackHost = 'localhost' | '127.0.0.1' | '::1';
 
+export interface ComputeNodeOptions {
+    /** Chooses the helper that keeps the machine awake. Defaults to the current platform's {@link sleepInhibitorCommand}. */
+    readonly sleepInhibitor?: (options: SleepInhibitorOptions) => SleepInhibitorCommand;
+}
+
 export class ComputeNode {
+    constructor(private readonly _options: ComputeNodeOptions = {}) { }
+
     async getStatus(): Promise<ComputeNodeStatus> {
         const cpuInfo = os.cpus();
         const usage = process.cpuUsage();
@@ -375,6 +389,23 @@ export class ComputeNode {
     ): Promise<{ reason: 'cancelled' | 'error'; message?: string; }> {
         return new MultiplexedTcpSession(host, port, stream).run();
     }
+
+    /**
+     * Keeps the machine awake until `signal` aborts or `params.maxDurationMs`
+     * elapses. Every call holds its own lease; `onActive` reports when sleep
+     * prevention is in effect.
+     */
+    async keepAwake(
+        params: ComputeNodeKeepAwakeParams,
+        signal: AbortSignal,
+        onActive: (event: ComputeNodeKeepAwakeEvent) => void,
+    ): Promise<ComputeNodeKeepAwakeResult> {
+        const inhibitor = (this._options.sleepInhibitor ?? sleepInhibitorCommand)({
+            displayOn: params.displayOn ?? false,
+            reason: params.reason ?? 'Kept awake by a LinkRPC caller',
+        });
+        return holdSleepInhibitor(inhibitor, params.maxDurationMs, signal, onActive);
+    }
 }
 
 /** Anything that registers interface handlers, e.g. a connection or `ParticipantServices`. */
@@ -404,6 +435,11 @@ export function registerComputeNode(registrar: InterfaceRegistrar, node: Compute
         registrar.register(computeNodeTcpForwardInterface, {
             connect: (params, _ctx, stream) => node.forwardTcp(params.port, params.host ?? 'localhost', stream),
             multiplex: (params, _ctx, stream) => node.forwardTcpMultiplexed(params.port, params.host ?? 'localhost', stream),
+        }),
+        registrar.register(computeNodePowerInterface, {
+            keepAwake: (params, _ctx, stream) => node.keepAwake(params, stream.signal, event => {
+                stream.send(event).catch(() => { /* the caller went away */ });
+            }),
         }),
     ];
     return { dispose: () => { for (const registration of registrations) registration.dispose(); } };
