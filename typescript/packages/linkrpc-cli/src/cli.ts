@@ -1306,7 +1306,17 @@ Batch options:
                     negotiateHubCaps: isHubEndpoint(localEp),
                 });
                 reportIdentity(session);
-                await tunnelCommand({ serviceId, local, remote, bidi: cmdOpts.bidi });
+                // Stop when either side goes away, and exit non-zero so a
+                // supervisor (e.g. the hub daemon) restarts the tunnel: a
+                // claim without a live target would only time out calls.
+                const lost = Promise.race([
+                    local.closed.then(() => 'source'),
+                    remote.closed.then(() => 'target'),
+                ]).then((side) => {
+                    process.stderr.write(`linkrpc: tunnel: the ${side} connection closed\n`);
+                    process.exitCode = 1;
+                });
+                await tunnelCommand({ serviceId, local, remote, bidi: cmdOpts.bidi, stop: Promise.race([lost, _untilSignalled()]) });
             } finally {
                 remote.close();
                 local.close();
@@ -1376,7 +1386,7 @@ Batch options:
             // synchronously, before any message the participant sent is dispatched.
             const participant = targetEp === undefined
                 ? await connectStdioParticipant()
-                : { connection: await connectTargetEndpoint(targetEp, cmdOpts.claim ?? ''), closed: undefined };
+                : await connectTargetEndpoint(targetEp, cmdOpts.claim ?? '').then((connection) => ({ connection, closed: connection.closed }));
             try {
                 await proxyCommand({
                     hub,
