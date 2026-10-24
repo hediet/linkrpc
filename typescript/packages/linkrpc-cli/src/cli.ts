@@ -689,9 +689,11 @@ export async function main(
             return;
         }
         if (endpoint === undefined) {
+            const ignoredEnvironmentHint = ignoredEndpointEnvironmentHint();
             process.stdout.write(
-                '\n(No endpoint configured: pass --endpoint / --endpoint-cmd or set LINKRPC_ENDPOINT\n'
-                + 'to see method-specific --p:<name> flags here.)\n',
+                `\n(No endpoint configured: pass ${endpointOptionsDescription()}.\n`
+                + (ignoredEnvironmentHint === undefined ? '' : `${ignoredEnvironmentHint}.\n`)
+                + 'To see method-specific --p:<name> flags here.)\n',
             );
             return;
         }
@@ -2298,8 +2300,10 @@ async function acquireConnection(
         try {
             return { ep: resolveLocalEndpoint() };
         } catch {
+            const ignoredEnvironmentHint = ignoredEndpointEnvironmentHint();
             throw new Error('No endpoint configured through flags, environment, or context, and the local Hub daemon is not running. '
-                + 'Pass --endpoint, or start the daemon (any `hub services run` starts it).');
+                + `Pass ${endpointOptionsDescription()}, or start the daemon (any \`hub services run\` starts it).`
+                + (ignoredEnvironmentHint === undefined ? '' : ` ${ignoredEnvironmentHint}.`));
         }
     }
     return { ep: needEndpoint(endpoint) };
@@ -2315,13 +2319,35 @@ function reportIdentity(session: SigningSession): void {
 
 function needEndpoint(endpoint: ResolvedEndpoint | undefined): ResolvedEndpoint {
     if (!endpoint) {
+        const ignoredEnvironmentHint = ignoredEndpointEnvironmentHint();
         process.stderr.write(
-            'linkrpc: this command requires --endpoint / --endpoint-cmd / --endpoint-cmd-stdio ' +
-            'or the LINKRPC_ENDPOINT env var to be set.\n',
+            `linkrpc: this command requires ${endpointOptionsDescription()}.\n`
+            + (ignoredEnvironmentHint === undefined ? '' : `linkrpc: ${ignoredEnvironmentHint}.\n`),
         );
         process.exit(2);
     }
     return endpoint;
+}
+
+function endpointOptionsDescription(): string {
+    const options = '--endpoint / --endpoint-cmd / --endpoint-cmd-stdio or a configured context';
+    return g_invocation?.profile === 'hub' && g_invocation.environmentApplied
+        ? `${options} or LINKRPC_ENDPOINT`
+        : options;
+}
+
+function ignoredEndpointEnvironmentHint(): string | undefined {
+    const invocation = g_invocation;
+    if (invocation === undefined || invocation.environmentApplied) return undefined;
+    const variable = process.env.LINKRPC_ENDPOINT !== undefined
+        ? 'LINKRPC_ENDPOINT'
+        : process.env.HUBRPC_ENDPOINT !== undefined
+            ? 'HUBRPC_ENDPOINT'
+            : undefined;
+    if (variable === undefined) return undefined;
+    return invocation.profile === 'rpc'
+        ? `${variable} is set but only used by hub commands: run \`linkrpc hub <command>\` (or pass --use-env)`
+        : `${variable} is set but ignored because environment overrides are disabled; pass --use-env to apply it`;
 }
 
 interface TargetEndpointCliOptions {

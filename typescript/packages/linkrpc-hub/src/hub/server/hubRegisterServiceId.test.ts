@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { defineInterface, directoryInterface, requestType, LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
+import {
+    defaultsInterface,
+    defineInterface,
+    directoryInterface,
+    requestType,
+    LinkRpcConnection,
+    TransportPair,
+} from '@hediet/linkrpc';
 import { z } from 'zod';
 import { walkHub } from '@hediet/linkrpc/hub/common';
 import { hubRegisterServiceId } from './hubRegisterServiceId';
@@ -48,6 +55,16 @@ describe('hubRegisterServiceId (in-process service)', () => {
             .list({});
         expect(items.some((it) => it.serviceId === 'vscode' && it.interfaceId === 'hubrpc.directory')).toBe(true);
         expect(items.some((it) => it.serviceId === 'vscode' && it.interfaceId === 'math')).toBe(false);
+        expect(items).toContainEqual(expect.objectContaining({
+            serviceId: hubServiceId,
+            interfaceId: defaultsInterface.info.id,
+            interfaceHash: defaultsInterface.schemaHash,
+        }));
+
+        await expect(hubConn.get(defaultsInterface).get({})).resolves.toEqual({});
+        await expect(hubConn.get(defaultsInterface).listBindings({})).resolves.toEqual({ bindings: [] });
+        await expect(hubConn.service(hubServiceId).get(defaultsInterface).get({})).resolves.toEqual({});
+        await expect(hubConn.service(hubServiceId).get(defaultsInterface).listBindings({})).resolves.toEqual({ bindings: [] });
 
         // The breadth-first walk recurses into the referral and finds the leaf.
         const leaves = await walkHub(consumer.channel, { rootTarget: hubServiceId });
