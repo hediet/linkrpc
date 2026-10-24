@@ -39,6 +39,11 @@ hubrpc.defaults::get
 
 A node MAY leave any field absent when it presets no default at that level.
 
+A hub MUST serve `hubrpc.defaults` at its connection root and at each addressed
+hub-service endpoint, and MUST advertise each served instance in the matching
+directory listing. When an endpoint has no bare-method bindings, `get` returns
+`{}` and `listBindings` returns `{ bindings: [] }`.
+
 > **Rationale.** A caller that connects to a single-purpose endpoint can discover, in one call, which service/interface its bare-form calls dispatch to — without hard-coding the binding.
 
 ### 2.1 Bare-method bindings

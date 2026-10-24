@@ -1,6 +1,7 @@
 import {
     directoryInterface,
     directoryWatchNever,
+    defaultsInterface,
     ErrorCode,
     type RootPrincipalSet,
     type ServiceIdPattern,
@@ -142,6 +143,10 @@ function registerHubReflection(
             }
             return { schema: iface.toSchema() as unknown };
         },
+    });
+    connection.register(defaultsInterface, {
+        get: () => ({}),
+        listBindings: () => ({ bindings: [] }),
     });
 
     connection.register(directoryInterface, {
@@ -301,5 +306,9 @@ function registerHubReflection(
             }
             return { schema: iface.toSchema() as unknown };
         },
+    }, { serviceId: hubServiceId });
+    connection.register(defaultsInterface, {
+        get: () => ({}),
+        listBindings: () => ({ bindings: [] }),
     }, { serviceId: hubServiceId });
 }

@@ -126,6 +126,9 @@ A client may present its token via `Authorization: Bearer <token>`
 
 ## Node client
 
+The hub exposes reflection at the connection root and under its `hub::` service,
+including `hubrpc.defaults` for the endpoint's bare-method bindings.
+
 ```ts
 import { connectToHubWs } from '@hediet/linkrpc-hub';
 
