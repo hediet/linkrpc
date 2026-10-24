@@ -7,9 +7,11 @@ import {
     TransportPair,
     type JsonRpcResponse,
     type RequestId,
+    defaultsInterface,
+    directoryInterface,
+    directoryWatchNever,
 } from '@hediet/linkrpc';
 import { z } from 'zod';
-import { directoryInterface, directoryWatchNever } from '@hediet/linkrpc';
 import { hubGrantedServiceIdInterface, walkHub } from '@hediet/linkrpc/hub/common';
 import { createHubServiceInterfaces } from '../hubServices';
 import { RootOverlay } from './rootOverlay';
@@ -101,6 +103,27 @@ function attachRootDirectory(hub: Hub, prefix: string): { answer(): void } {
 }
 
 describe('RootOverlay + hub services (end-to-end)', () => {
+    it('serves and advertises defaults on the participant root', async () => {
+        const hub = new Hub();
+        createHubServiceInterfaces(hub);
+        const { overlay } = makeOverlay(hub);
+        const pair = new TransportPair();
+        overlay.connectParticipant(pair.a);
+        const participant = LinkRpcConnection.fromTransport(pair.b);
+
+        await expect(participant.get(defaultsInterface).get({})).resolves.toEqual({});
+        await expect(participant.get(defaultsInterface).listBindings({})).resolves.toEqual({ bindings: [] });
+        const listing = await participant.get(directoryInterface).list({});
+        expect(listing.items).toContainEqual(expect.objectContaining({
+            serviceId: '',
+            interfaceId: defaultsInterface.info.id,
+            interfaceHash: defaultsInterface.schemaHash,
+        }));
+
+        participant.close();
+        overlay.dispose();
+    });
+
     it('retains interface tags across addressed hub referrals and the default root directory', async () => {
         const hub = new Hub();
         createHubServiceInterfaces(hub);
