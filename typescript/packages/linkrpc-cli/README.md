@@ -581,7 +581,7 @@ it**. Pick one of:
 | `--endpoint <uri>`               | A strict endpoint URI (see below).                                                                         |
 | `--endpoint-cmd <command>`       | Spawn a _server_, hand it a fresh socket + token via `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`, then connect to it. |
 | `--endpoint-cmd-stdio <command>` | Spawn a child and talk linkrpc over its stdio.                                                              |
-| `LINKRPC_ENDPOINT` (env)          | A URI, or a legacy bare socket path / `ws://` URL. Token from `LINKRPC_TOKEN`; enabled by default in the Hub profile. |
+| `LINKRPC_ENDPOINT` (env)          | A URI, or a legacy bare socket path / `ws://` URL. Token from `LINKRPC_TOKEN`; enabled by default in the Hub profile and with `--use-env` in the RPC profile. |
 
 Legacy `HUBRPC_ENDPOINT` and `HUBRPC_TOKEN` remain supported when the
 corresponding `LINKRPC_*` variable is absent.
