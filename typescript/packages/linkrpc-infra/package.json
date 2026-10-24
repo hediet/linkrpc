@@ -38,6 +38,10 @@
             "@hediet/source": "./src/graph/source.ts",
             "default": "./dist/graph/source.js"
         },
+        "./http-export/node": {
+            "@hediet/source": "./src/http-export/node.ts",
+            "default": "./dist/http-export/node.js"
+        },
         "./inspection": {
             "@hediet/source": "./src/inspection/index.ts",
             "default": "./dist/inspection/index.js"
@@ -104,6 +108,7 @@
             "./console": "./dist/console/index.js",
             "./graph": "./dist/graph/index.js",
             "./graph/source": "./dist/graph/source.js",
+            "./http-export/node": "./dist/http-export/node.js",
             "./inspection": "./dist/inspection/index.js",
             "./json-document": "./dist/json-document/index.js",
             "./json-rpc": "./dist/json-rpc/index.js",

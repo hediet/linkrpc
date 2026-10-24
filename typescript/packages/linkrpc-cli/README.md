@@ -794,6 +794,7 @@ initial document:
 | `connection destroy`                                  | Stop the configured connection broker through its local overlay. |
 | `json-rpc-stdio <serviceId> [--params <json>]`         | In the Hub profile, expose `<serviceId>::jsonRpcConnection::connectRaw` as newline-delimited JSON-RPC on stdin/stdout. Diagnostics remain on stderr. |
 | `json-rpc-export --target-endpoint <uri> --serviceId <id> --path <path> ...` | In the Hub profile, export multiple JSON-RPC factories through one authenticated raw WebSocket listener. |
+| `http-export [--port <n>] [--host <address>]... [--base-domain <domain>]` | In the Hub profile, serve loopback ports of Hub compute nodes at `<port>.<service>.localhost` over HTTP and WebSocket. |
 
 The inherited `--schema <path-or-url>` option also overlays static
 `hubrpc.defaults`, `hubrpc.directory`, and `hubrpc.schemas` reflection for
@@ -833,6 +834,44 @@ Alternatively, configure the listener token in the target URI as `listen:ws://12
 Only `listen:ws://` TCP listeners are currently supported, not named pipes or TLS listeners. Bind loopback for local use. For remote access, terminate TLS in a trusted reverse proxy rather than sending tokens over unencrypted networks. The gateway limits connections to 100, frames to 16 MiB, and pending input per client to 32 MiB / 1024 frames; slow consumers and failed upstreams close only their own connection. Factories must open within 30 seconds.
 
 The command stays in the foreground until SIGINT/SIGTERM, then closes clients and the listener. Use the existing Hub daemon/service lifecycle to supervise it; this command neither installs a service nor starts remote AHP hosts. Diagnostics and the bound address (including an assigned port when using port 0) go to stderr.
+
+### HTTP export
+
+`http-export` serves loopback TCP ports of Hub compute nodes (services offering
+`linkrpc.computeNode.tcpForward`) as `*.localhost` sites. `*.localhost` always
+resolves to this machine, so no DNS setup is needed:
+
+```sh
+linkrpc hub http-export            # listens on 127.0.0.1:80 and [::1]:80
+```
+
+| URL | Shows |
+| --- | --- |
+| `http://localhost/` | Services that can forward TCP (`?format=json` for JSON). |
+| `http://compute.tablet.hediet.localhost/` | Listening ports of `hediet/tablet/compute` (needs `linkrpc.computeNode.ports`). |
+| `http://3000.compute.tablet.hediet.localhost/` | Port 3000 of that compute node, including WebSocket upgrades. |
+
+Service IDs are written as reversed DNS labels. The leftmost label holds the
+parameters, starting with the port; further parameters follow as
+`--key-value` pairs (`3000--path-api`). A service ID whose segments are not
+plain lowercase DNS labels, or that would exceed DNS length limits (63
+characters per label, 253 per name), is written as one hashed label instead,
+`<slug>--h<hash>`, which the gateway resolves against the services it can
+reach. The index pages link to the right form.
+
+There is no gateway credential: forwarded applications authenticate their own
+users, and the `Host` header reaches them unchanged (with `X-Forwarded-Host`).
+Redirects to the target's own `localhost:<port>` are rewritten to the exported
+host. Because every website a browser visits can send requests to
+`*.localhost`, requests another site initiates (`Sec-Fetch-Site: cross-site`,
+or an `Origin` outside the base domain) are rejected with 403; direct
+navigation, links between exported sites, and command-line clients work.
+Bind loopback only: anyone who can reach the listener can use the export
+process's Hub identity to reach every forwarded port.
+
+Each service and port shares one `tcpForward.multiplex` session (up to 10
+logical connections, 8 of them for pooled HTTP keep-alive), closed after five
+idle minutes.
 
 ### Participant proxy
 

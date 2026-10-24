@@ -33,6 +33,7 @@ import {
     computeNodeCommandInterface,
     computeNodeFileSystemInterface,
     computeNodeHttpInterface,
+    computeNodePortsInterface,
     computeNodePowerInterface,
     computeNodeStatusInterface,
     computeNodeTcpForwardInterface,
@@ -40,6 +41,7 @@ import {
     type ComputeNodeTcpServerFrame,
 } from './index';
 import { holdSleepInhibitor, type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
+import { readListeningPorts } from './listeningPorts';
 
 export { type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
 
@@ -435,6 +437,9 @@ export function registerComputeNode(registrar: InterfaceRegistrar, node: Compute
         registrar.register(computeNodeTcpForwardInterface, {
             connect: (params, _ctx, stream) => node.forwardTcp(params.port, params.host ?? 'localhost', stream),
             multiplex: (params, _ctx, stream) => node.forwardTcpMultiplexed(params.port, params.host ?? 'localhost', stream),
+        }),
+        registrar.register(computeNodePortsInterface, {
+            listListening: async () => ({ ports: await readListeningPorts() }),
         }),
         registrar.register(computeNodePowerInterface, {
             keepAwake: (params, _ctx, stream) => node.keepAwake(params, stream.signal, event => {
