@@ -57,23 +57,23 @@ describe('http export', () => {
         expect(reply.toString()).toBe('echo:ping');
     });
 
-    it('rejects cross-site browser requests and unknown hosts, and lists services and ports', async () => {
+    it('passes cross-site requests through, rejects unknown hosts, and lists services and ports', async () => {
         const targetPort = await startTarget((_request, response) => response.end('target'));
         const gatewayPort = await startGateway();
         const forwarded = `${targetPort}.compute.test.localhost:${gatewayPort}`;
         const results = await Promise.all([
-            send(gatewayPort, { host: forwarded, headers: { 'sec-fetch-site': 'cross-site' } }),
-            send(gatewayPort, { host: forwarded, headers: { origin: 'https://evil.example' } }),
-            send(gatewayPort, { host: forwarded, headers: { origin: `http://other.localhost:${gatewayPort}`, 'sec-fetch-site': 'same-site' } }),
+            send(gatewayPort, { host: forwarded, headers: { 'sec-fetch-site': 'cross-site', origin: 'https://other.example' } }),
             send(gatewayPort, { host: `example.com:${gatewayPort}` }),
             send(gatewayPort, { host: `localhost:${gatewayPort}`, headers: { accept: 'application/json' } }),
             send(gatewayPort, { host: `compute.test.localhost:${gatewayPort}`, headers: { accept: 'application/json' } }),
         ]);
-        expect(results.map(result => result.status)).toEqual([403, 403, 200, 421, 200, 200]);
+        expect(results.map(result => result.status)).toEqual([200, 421, 200, 200]);
         expect({
-            services: JSON.parse(results[4].body),
-            ports: JSON.parse(results[5].body),
+            crossSite: results[0].body,
+            services: JSON.parse(results[2].body),
+            ports: JSON.parse(results[3].body),
         }).toEqual({
+            crossSite: 'target',
             services: { services: [{ serviceId, url: `http://compute.test.localhost:${gatewayPort}/` }], complete: true },
             ports: { serviceId, ports: [{ port: targetPort, addresses: ['127.0.0.1'], url: `http://${targetPort}.compute.test.localhost:${gatewayPort}/` }] },
         });

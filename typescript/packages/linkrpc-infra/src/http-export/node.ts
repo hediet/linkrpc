@@ -2,7 +2,8 @@
  * Local HTTP gateway from `*.localhost` hostnames to loopback ports of Hub compute nodes.
  * `localhost` lists services, `<service>.localhost` lists a service's ports, and
  * `<port>.<service>.localhost` proxies HTTP and WebSocket traffic through `tcpForward`.
- * There is no gateway credential: forwarded applications authenticate their own users.
+ * There is no gateway credential or origin check: forwarded applications authenticate their own users
+ * and decide which cross-site requests to accept.
  */
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -132,9 +133,6 @@ class HttpExportGateway {
         if (!parsed) {
             return sendText(response, 421, `This gateway only serves ${this._baseDomain} and its subdomains.`);
         }
-        if (isCrossSiteBrowserRequest(request, this._baseDomain)) {
-            return sendText(response, 403, 'Cross-site requests to forwarded services are not allowed. Open the page directly.');
-        }
         if (parsed.kind === 'index') {
             return this._renderServices(request, response);
         }
@@ -155,9 +153,6 @@ class HttpExportGateway {
         const parsed = parseHttpExportHost(request.headers.host ?? '', this._baseDomain);
         if (!parsed || parsed.kind !== 'service' || parsed.params.port === undefined) {
             return reject('404 Not Found');
-        }
-        if (isCrossSiteBrowserRequest(request, this._baseDomain)) {
-            return reject('403 Forbidden');
         }
         const serviceId = await this._resolveService(parsed.service);
         if (!serviceId) {
@@ -328,26 +323,6 @@ class HttpExportGateway {
         } else {
             response.destroy();
         }
-    }
-}
-
-/**
- * Forwarded services are trusted by loopback clients but reachable from any website a browser visits.
- * Allow navigation and same-site requests; reject requests another site initiates.
- */
-export function isCrossSiteBrowserRequest(request: IncomingMessage, baseDomain: string): boolean {
-    if (request.headers['sec-fetch-site'] === 'cross-site') {
-        return true;
-    }
-    const origin = request.headers.origin;
-    if (origin === undefined) {
-        return false;
-    }
-    try {
-        const hostname = new URL(origin).hostname;
-        return hostname !== baseDomain && !hostname.endsWith(`.${baseDomain}`);
-    } catch {
-        return true;
     }
 }
 

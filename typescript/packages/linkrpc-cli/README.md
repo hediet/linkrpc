@@ -859,15 +859,13 @@ characters per label, 253 per name), is written as one hashed label instead,
 `<slug>--h<hash>`, which the gateway resolves against the services it can
 reach. The index pages link to the right form.
 
-There is no gateway credential: forwarded applications authenticate their own
-users, and the `Host` header reaches them unchanged (with `X-Forwarded-Host`).
-Redirects to the target's own `localhost:<port>` are rewritten to the exported
-host. Because every website a browser visits can send requests to
-`*.localhost`, requests another site initiates (`Sec-Fetch-Site: cross-site`,
-or an `Origin` outside the base domain) are rejected with 403; direct
-navigation, links between exported sites, and command-line clients work.
-Bind loopback only: anyone who can reach the listener can use the export
-process's Hub identity to reach every forwarded port.
+There is no gateway credential and no origin check: forwarded applications
+authenticate their own users and decide which cross-site requests they accept,
+just as when they are reached on their own loopback port. The `Host` header
+reaches them unchanged (with `X-Forwarded-Host`). Redirects to the target's own
+`localhost:<port>` are rewritten to the exported host. Bind loopback only:
+anyone who can reach the listener can use the export process's Hub identity to
+reach every forwarded port.
 
 Each service and port shares one `tcpForward.multiplex` session (up to 10
 logical connections, 8 of them for pooled HTTP keep-alive), closed after five
