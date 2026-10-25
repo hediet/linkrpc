@@ -16,14 +16,22 @@ import {
     type ServiceReference,
 } from './hostname';
 import { HubTcpHttpAgent, HubTcpMultiplexer, type TcpForwardClient } from './tcpMultiplexer';
+import {
+    type ForwardTarget,
+    gatewayPortSuffix,
+    relayUpgradeResponse,
+    serializeHead,
+    translateRequestHeaders,
+    translateResponseHeaders,
+} from './originTranslation';
 
 export * from './hostname';
+export * from './originTranslation';
 export * from './tcpMultiplexer';
 
 const POOL_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Connections a pool's HTTP agent may use; the rest of the multiplex budget stays free for WebSocket upgrades. */
 const MAX_HTTP_SOCKETS = 8;
-const HOP_BY_HOP_HEADERS = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'te', 'trailer']);
 
 export interface HttpExportServiceList {
     readonly serviceIds: readonly string[];
@@ -158,6 +166,11 @@ class HttpExportGateway {
         if (!serviceId) {
             return reject('404 Not Found');
         }
+        const target = this._target(request, serviceId, parsed.params.port);
+        const requestHead = serializeHead(
+            `${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/${request.httpVersion}`,
+            await translateRequestHeaders(request.rawHeaders, target, reference => this._resolveService(reference), { keepUpgradeHeaders: true }),
+        );
         const pool = this._acquirePool(serviceId, parsed.params.port);
         let released = false;
         const release = (): void => {
@@ -179,7 +192,7 @@ class HttpExportGateway {
             upstream.destroy();
             return;
         }
-        upstream.write(serializeRequestHead(request));
+        upstream.write(requestHead);
         if (head.length > 0) {
             upstream.write(head);
         }
@@ -190,10 +203,13 @@ class HttpExportGateway {
         upstream.once('error', closeBoth);
         upstream.once('close', closeBoth);
         socket.once('error', closeBoth);
-        socket.pipe(upstream).pipe(socket);
+        socket.pipe(upstream);
+        relayUpgradeResponse(upstream, socket, target);
     }
 
     private async _proxyHttp(request: IncomingMessage, response: ServerResponse, serviceId: string, port: number): Promise<void> {
+        const target = this._target(request, serviceId, port);
+        const headers = await translateRequestHeaders(request.rawHeaders, target, reference => this._resolveService(reference), { keepUpgradeHeaders: false });
         const pool = this._acquirePool(serviceId, port);
         try {
             await new Promise<void>((resolve, reject) => {
@@ -203,13 +219,13 @@ class HttpExportGateway {
                     port,
                     method: request.method,
                     path: request.url,
-                    headers: forwardedRequestHeaders(request),
+                    headers,
                     setHost: false,
                 }, upstreamResponse => {
                     response.writeHead(
                         upstreamResponse.statusCode ?? 502,
                         upstreamResponse.statusMessage,
-                        forwardedResponseHeaders(upstreamResponse, port, request.headers.host ?? ''),
+                        translateResponseHeaders(upstreamResponse.rawHeaders, target, { keepUpgradeHeaders: false }),
                     );
                     upstreamResponse.pipe(response);
                     upstreamResponse.once('end', resolve);
@@ -227,6 +243,10 @@ class HttpExportGateway {
         } finally {
             this._releasePool(serviceId, port, pool);
         }
+    }
+
+    private _target(request: IncomingMessage, serviceId: string, port: number): ForwardTarget {
+        return { serviceId, port, baseDomain: this._baseDomain, gatewayPortSuffix: gatewayPortSuffix(request.headers.host) };
     }
 
     private _acquirePool(serviceId: string, port: number): Pool {
@@ -324,48 +344,6 @@ class HttpExportGateway {
             response.destroy();
         }
     }
-}
-
-function forwardedRequestHeaders(request: IncomingMessage): string[] {
-    const headers: string[] = [];
-    for (let index = 0; index < request.rawHeaders.length; index += 2) {
-        const name = request.rawHeaders[index];
-        if (!HOP_BY_HOP_HEADERS.has(name.toLowerCase())) {
-            headers.push(name, request.rawHeaders[index + 1]);
-        }
-    }
-    headers.push('X-Forwarded-Proto', 'http');
-    if (request.headers.host) {
-        headers.push('X-Forwarded-Host', request.headers.host);
-    }
-    return headers;
-}
-
-/** Keeps response headers, rewriting redirects that point at the target's own loopback address. */
-function forwardedResponseHeaders(response: IncomingMessage, port: number, exportedHost: string): string[] {
-    const headers: string[] = [];
-    const loopbackOrigin = new RegExp(`^https?://(?:localhost|127\\.0\\.0\\.1|\\[::1\\]):${port}(?=/|$)`, 'i');
-    for (let index = 0; index < response.rawHeaders.length; index += 2) {
-        const name = response.rawHeaders[index];
-        let value = response.rawHeaders[index + 1];
-        if (HOP_BY_HOP_HEADERS.has(name.toLowerCase())) {
-            continue;
-        }
-        if (name.toLowerCase() === 'location' && exportedHost) {
-            value = value.replace(loopbackOrigin, `http://${exportedHost}`);
-        }
-        headers.push(name, value);
-    }
-    return headers;
-}
-
-function serializeRequestHead(request: IncomingMessage): Buffer {
-    const lines = [`${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/${request.httpVersion}`];
-    for (let index = 0; index < request.rawHeaders.length; index += 2) {
-        lines.push(`${request.rawHeaders[index]}: ${request.rawHeaders[index + 1]}`);
-    }
-    lines.push('', '');
-    return Buffer.from(lines.join('\r\n'), 'latin1');
 }
 
 function wantsJson(request: IncomingMessage): boolean {

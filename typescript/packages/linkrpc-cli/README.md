@@ -859,13 +859,24 @@ characters per label, 253 per name), is written as one hashed label instead,
 `<slug>--h<hash>`, which the gateway resolves against the services it can
 reach. The index pages link to the right form.
 
-There is no gateway credential and no origin check: forwarded applications
-authenticate their own users and decide which cross-site requests they accept,
-just as when they are reached on their own loopback port. The `Host` header
-reaches them unchanged (with `X-Forwarded-Host`). Redirects to the target's own
-`localhost:<port>` are rewritten to the exported host. Bind loopback only:
-anyone who can reach the listener can use the export process's Hub identity to
-reach every forwarded port.
+There is no gateway credential and no origin check of its own. Instead, the
+gateway translates between a forwarded app's own origins
+(`http://localhost:<port>` on its machine) and their exported names, so the
+app's own Host, Origin, CORS, redirect, and cookie checks behave as they do for
+a browser on its machine:
+
+| Header | Translation |
+| --- | --- |
+| `Host` | Always `localhost:<port>`. The gateway itself only accepts `*.localhost` names, so DNS rebinding cannot reach it. |
+| `Origin`, `Referer` | Exported names of the same service map to `http://localhost:<port>`. Other services' exported names and foreign sites pass unchanged. This machine's own loopback origins have no counterpart on the target: `Origin` becomes `null` and `Referer` is dropped. |
+| `Location`, `Access-Control-Allow-Origin` | URLs naming the target machine's loopback map to their exported names. |
+| `Set-Cookie` | `Domain=localhost` becomes the service's name (e.g. `Domain=compute.tablet.hediet.localhost`), which reaches that machine's exported ports, as it reaches all of its ports there. Other domains are removed, making the cookie host-only. |
+
+WebSocket upgrades are translated the same way in both directions. No
+`X-Forwarded-*` headers are added. Absolute loopback URLs inside response
+bodies are not rewritten, so they fail rather than reach this machine. Bind
+loopback only: anyone who can reach the listener can use the export process's
+Hub identity to reach every forwarded port.
 
 Each service and port shares one `tcpForward.multiplex` session (up to 10
 logical connections, 8 of them for pooled HTTP keep-alive), closed after five

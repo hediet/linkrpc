@@ -17,7 +17,7 @@ afterEach(async () => {
 });
 
 describe('http export', () => {
-    it('forwards HTTP requests, preserving the exported Host and rewriting loopback redirects', async () => {
+    it('forwards HTTP requests as the target would see them from a browser on its own machine', async () => {
         const targetPort = await startTarget((incoming, response) => {
             if (incoming.url === '/redirect') {
                 response.writeHead(302, { location: `http://localhost:${targetPort}/landing` });
@@ -27,34 +27,69 @@ describe('http export', () => {
             let body = '';
             incoming.on('data', chunk => { body += chunk; });
             incoming.on('end', () => {
+                response.setHeader('set-cookie', ['shared=1; Domain=localhost; Path=/', 'foreign=2; Domain=example.com', 'hostOnly=3']);
+                response.setHeader('access-control-allow-origin', `http://localhost:${targetPort}`);
                 response.writeHead(200, { 'content-type': 'application/json' });
-                response.end(JSON.stringify({ method: incoming.method, url: incoming.url, host: incoming.headers.host, body }));
+                response.end(JSON.stringify({
+                    method: incoming.method,
+                    url: incoming.url,
+                    host: incoming.headers.host,
+                    origin: incoming.headers.origin,
+                    referer: incoming.headers.referer,
+                    forwardedHost: incoming.headers['x-forwarded-host'],
+                    body,
+                }));
             });
         });
         const gatewayPort = await startGateway();
         const host = `${targetPort}.compute.test.localhost:${gatewayPort}`;
-        const posted = await send(gatewayPort, { host, method: 'POST', path: '/echo?x=1', body: 'hello' });
+        const echo = async (headers: Record<string, string>) => {
+            const response = await send(gatewayPort, { host, method: 'POST', path: '/echo?x=1', body: 'hello', headers });
+            return { ...JSON.parse(response.body), cookies: response.headers['set-cookie'], allowOrigin: response.headers['access-control-allow-origin'] };
+        };
         const redirected = await send(gatewayPort, { host, path: '/redirect' });
         expect({
-            posted: { status: posted.status, body: JSON.parse(posted.body) },
+            sameService: await echo({ origin: `http://4000.compute.test.localhost:${gatewayPort}`, referer: `http://${host}/page?q=1` }),
+            otherService: (({ origin, referer }) => ({ origin, referer }))(await echo({ origin: `http://5000.compute.other.localhost:${gatewayPort}`, referer: `http://5000.compute.other.localhost:${gatewayPort}/page` })),
+            thisMachine: (({ origin, referer }) => ({ origin, referer }))(await echo({ origin: 'http://localhost:5173', referer: 'http://127.0.0.1:5173/page' })),
+            foreign: (({ origin, referer }) => ({ origin, referer }))(await echo({ origin: 'https://example.com', referer: 'https://example.com/page' })),
             redirect: { status: redirected.status, location: redirected.headers.location },
         }).toEqual({
-            posted: { status: 200, body: { method: 'POST', url: '/echo?x=1', host, body: 'hello' } },
+            sameService: {
+                method: 'POST',
+                url: '/echo?x=1',
+                host: `localhost:${targetPort}`,
+                origin: 'http://localhost:4000',
+                referer: `http://localhost:${targetPort}/page?q=1`,
+                body: 'hello',
+                cookies: ['shared=1; Domain=compute.test.localhost; Path=/', 'foreign=2', 'hostOnly=3'],
+                allowOrigin: `http://${host}`,
+            },
+            otherService: { origin: `http://5000.compute.other.localhost:${gatewayPort}`, referer: `http://5000.compute.other.localhost:${gatewayPort}/page` },
+            thisMachine: { origin: 'null' },
+            foreign: { origin: 'https://example.com', referer: 'https://example.com/page' },
             redirect: { status: 302, location: `http://${host}/landing` },
         });
     });
 
-    it('forwards WebSocket upgrades', async () => {
+    it('forwards WebSocket upgrades, translating both heads', async () => {
         const targetPort = await startTarget((_request, response) => response.end());
         const target = cleanupServer(new WebSocketServer({ server: targets.at(-1)! }));
-        target.on('connection', socket => socket.on('message', data => socket.send(`echo:${data.toString()}`)));
+        target.on('headers', headers => headers.push('Set-Cookie: session=1; Domain=localhost'));
+        target.on('connection', (socket, request) => socket.on('message', () => socket.send(JSON.stringify({ host: request.headers.host, origin: request.headers.origin }))));
         const gatewayPort = await startGateway();
-        const client = new WebSocket(`ws://127.0.0.1:${gatewayPort}/socket`, { headers: { host: `${targetPort}.compute.test.localhost:${gatewayPort}` } });
+        const host = `${targetPort}.compute.test.localhost:${gatewayPort}`;
+        const client = new WebSocket(`ws://127.0.0.1:${gatewayPort}/socket`, { headers: { host }, origin: `http://${host}` });
         cleanups.push(() => client.terminate());
+        let cookie: string[] | undefined;
+        client.on('upgrade', response => { cookie = response.headers['set-cookie']; });
         await once(client, 'open');
         client.send('ping');
         const [reply] = await once(client, 'message');
-        expect(reply.toString()).toBe('echo:ping');
+        expect({ seen: JSON.parse(reply.toString()), cookie }).toEqual({
+            seen: { host: `localhost:${targetPort}`, origin: `http://localhost:${targetPort}` },
+            cookie: ['session=1; Domain=compute.test.localhost'],
+        });
     });
 
     it('passes cross-site requests through, rejects unknown hosts, and lists services and ports', async () => {
