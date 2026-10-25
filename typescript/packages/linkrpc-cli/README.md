@@ -940,7 +940,7 @@ Value-taking options support both `--option=value` and `--option value`.
 Parameter assignment itself still uses `key=value`, e.g.
 `--param path=/docs/a` or `--param=path=/docs/a`. Use the equals form for
 dash-prefixed values. Quote JSON and strings containing spaces.
-`--cap:request` and `--cap:allow-any` are switches with no value.
+`--cap:request`, `--cap:allow-any`, and `--cap:delegate` are switches with no value.
 The older `--request-cap`, `--allow-param`, and `--duration` spellings have
 been replaced by the `--cap:` options.
 
@@ -950,6 +950,9 @@ Schema validation is mandatory for explicit requests: `--no-validate` and
 the permission; signed calls include that hash in their signed metadata.
 The default requested duration is `persistent`; `--cap:duration shortLived` and
 `--cap:duration longLived` are also supported. The Hub still decides what to grant.
+`--cap:delegate` also requests `canDelegate`, so the identity can issue narrower
+capabilities for that scope to other identities, e.g. a service it runs; a
+stored grant without delegation does not satisfy such a request.
 One-shot approval cannot satisfy a reusable scope and is rejected.
 
 Fresh durable grants for the selected principal are reused when they cover

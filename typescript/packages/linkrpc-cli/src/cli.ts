@@ -752,7 +752,8 @@ export async function main(
         .option('--cap:allow-enum <json>', 'allow one value from a JSON array for the preceding parameter')
         .option('--cap:allow-subset <json>', 'allow an array of items from a JSON string array for the preceding parameter')
         .addOption(new Option('--cap:duration <duration>', 'requested grant lifetime')
-            .choices(['shortLived', 'longLived', 'persistent']).default('persistent'));
+            .choices(['shortLived', 'longLived', 'persistent']).default('persistent'))
+        .option('--cap:delegate', 'also request the right to delegate this authority (canDelegate) to other identities');
 
     const configureCall = (cmd: Command, capabilityOnly: boolean): void => {
         cmd
@@ -788,6 +789,9 @@ export async function main(
             if (!capabilityOnly && cmd.getOptionValueSource('cap:duration') === 'cli' && !requestCap) {
                 throw new Error('--cap:duration requires --cap:request.');
             }
+            if (!capabilityOnly && opts['cap:delegate'] === true && !requestCap) {
+                throw new Error('--cap:delegate requires --cap:request.');
+            }
             resolveSigning(profile, g_invocation?.values ?? {}, capabilityOnly || requestCap);
             const validation = opts.validate === false ? 'off' : effectiveValidation(profile);
             if ((capabilityOnly || requestCap) && validation === 'off') {
@@ -804,6 +808,7 @@ export async function main(
                     capabilityOnly,
                     signingSession: session,
                     duration: opts['cap:duration'],
+                    delegate: opts['cap:delegate'] === true,
                 });
                 process.stdout.write(out + '\n');
             }, {
