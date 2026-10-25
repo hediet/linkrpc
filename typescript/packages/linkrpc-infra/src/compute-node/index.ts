@@ -237,6 +237,10 @@ const listeningPortSchema = z.object({
     addresses: z.array(z.string()),
     pid: z.number().int().nonnegative().optional(),
     processName: z.string().optional(),
+    /** The owning process's command line, when the compute node may inspect that process. May contain secrets. */
+    commandLine: z.string().optional(),
+    /** The owning process's working directory, when the compute node may inspect that process. */
+    cwd: z.string().optional(),
 });
 
 export const computeNodePortsInterface = defineInterface(

@@ -2,8 +2,9 @@
  * Local HTTP gateway from `*.localhost` hostnames to loopback ports of Hub compute nodes.
  * `localhost` lists services, `<service>.localhost` lists a service's ports, and
  * `<port>.<service>.localhost` proxies HTTP and WebSocket traffic through `tcpForward`.
- * There is no gateway credential or origin check: forwarded applications authenticate their own users
- * and decide which cross-site requests to accept.
+ * There is no gateway credential or origin check for forwarded ports: forwarded applications authenticate
+ * their own users and decide which cross-site requests to accept. The gateway's own pages, which list
+ * process command lines, only answer top-level navigations, same-origin requests, and non-browser clients.
  */
 import { createServer, request as httpRequest, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
@@ -141,17 +142,25 @@ class HttpExportGateway {
         if (!parsed) {
             return sendText(response, 421, `This gateway only serves ${this._baseDomain} and its subdomains.`);
         }
+        if (parsed.kind === 'service' && parsed.params.port !== undefined) {
+            const serviceId = await this._resolveService(parsed.service);
+            if (!serviceId) {
+                return sendText(response, 404, 'Unknown service.');
+            }
+            return this._proxyHttp(request, response, serviceId, parsed.params.port);
+        }
+        const rejection = gatewayPageRejection(request);
+        if (rejection) {
+            return sendGatewayText(response, rejection.status, rejection.message);
+        }
         if (parsed.kind === 'index') {
             return this._renderServices(request, response);
         }
         const serviceId = await this._resolveService(parsed.service);
         if (!serviceId) {
-            return sendText(response, 404, 'Unknown service.');
+            return sendGatewayText(response, 404, 'Unknown service.');
         }
-        if (parsed.params.port === undefined) {
-            return this._renderPorts(request, response, serviceId);
-        }
-        await this._proxyHttp(request, response, serviceId, parsed.params.port);
+        return this._renderPorts(request, response, serviceId);
     }
 
     private async _handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
@@ -320,7 +329,9 @@ class HttpExportGateway {
             return sendJson(response, { serviceId, ports: entries, ...(error === undefined ? {} : { error }) });
         }
         const rows = entries.map(port => `<tr><td><a href="${escapeHtml(port.url)}">${port.port}</a></td>`
-            + `<td>${escapeHtml(port.processName ?? '')}${port.pid === undefined ? '' : ` <span class="note">(${port.pid})</span>`}</td>`
+            + `<td>${escapeHtml(port.processName ?? '')}${port.pid === undefined ? '' : ` <span class="note">(${port.pid})</span>`}`
+            + `${port.commandLine === undefined ? '' : `<div>${renderCommandLine(port.commandLine)}</div>`}`
+            + `${port.cwd === undefined ? '' : `<div class="note">in <code>${escapeHtml(port.cwd)}</code></div>`}</td>`
             + `<td class="note">${escapeHtml(port.addresses.join(', '))}</td></tr>`).join('');
         sendHtml(response, serviceId, `
             <p><a href="${escapeHtml(this._url(request, this._baseDomain))}">All services</a></p>
@@ -350,26 +361,76 @@ function wantsJson(request: IncomingMessage): boolean {
     return /\bapplication\/json\b/.test(request.headers.accept ?? '') || new URL(request.url ?? '/', 'http://x').searchParams.get('format') === 'json';
 }
 
+/**
+ * The gateway's own pages list services, ports, and process command lines, which may contain
+ * secrets. Other origins, including forwarded apps of the same machine, must not read or frame
+ * them: only top-level navigations, same-origin requests, and non-browser clients are served.
+ */
+function gatewayPageRejection(request: IncomingMessage): { status: number; message: string } | undefined {
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return { status: 405, message: 'Gateway pages only support GET.' };
+    }
+    const site = request.headers['sec-fetch-site'];
+    const mode = request.headers['sec-fetch-mode'];
+    const destination = request.headers['sec-fetch-dest'];
+    const navigation = mode === 'navigate' && (destination === 'document' || destination === undefined);
+    if (site !== undefined && site !== 'none' && site !== 'same-origin' && !navigation) {
+        return { status: 403, message: 'Gateway pages can only be opened directly, not fetched or embedded by other sites.' };
+    }
+    const origin = request.headers.origin;
+    if (origin !== undefined && origin !== `http://${request.headers.host}`) {
+        return { status: 403, message: 'Gateway pages do not answer cross-origin requests.' };
+    }
+    return undefined;
+}
+
+const GATEWAY_PAGE_HEADERS = {
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+    'x-frame-options': 'DENY',
+    'referrer-policy': 'no-referrer',
+    'cross-origin-resource-policy': 'same-origin',
+    'cross-origin-opener-policy': 'same-origin',
+};
+
+function sendGatewayText(response: ServerResponse, status: number, text: string): void {
+    response.writeHead(status, { ...GATEWAY_PAGE_HEADERS, 'content-type': 'text/plain; charset=utf-8' });
+    response.end(`${text}\n`);
+}
+
 function sendText(response: ServerResponse, status: number, text: string): void {
     response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
     response.end(`${text}\n`);
 }
 
 function sendJson(response: ServerResponse, value: unknown): void {
-    response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+    response.writeHead(200, { ...GATEWAY_PAGE_HEADERS, 'content-type': 'application/json; charset=utf-8' });
     response.end(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 function sendHtml(response: ServerResponse, title: string, body: string): void {
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    response.writeHead(200, { ...GATEWAY_PAGE_HEADERS, 'content-type': 'text/html; charset=utf-8' });
     response.end(`<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title>`
         + '<style>body{font:14px system-ui,sans-serif;margin:2em;color-scheme:light dark}'
-        + 'td,th{padding:.2em 1em .2em 0;text-align:left}.note{opacity:.7}</style>'
+        + 'td,th{padding:.2em 1em .2em 0;text-align:left;vertical-align:top}.note{opacity:.7}'
+        + '.cmd{font-size:12px;white-space:pre-wrap;word-break:break-all}details[open]>summary .cmd{display:none}</style>'
         + body);
 }
 
 function escapeHtml(value: string): string {
     return value.replace(/[&<>"']/g, character => `&#${character.charCodeAt(0)};`);
+}
+
+const COMMAND_LINE_PREVIEW_LENGTH = 160;
+
+/** Long command lines (e.g. Electron's) collapse to a preview that expands without script. */
+function renderCommandLine(commandLine: string): string {
+    if (commandLine.length <= COMMAND_LINE_PREVIEW_LENGTH) {
+        return `<code class="cmd">${escapeHtml(commandLine)}</code>`;
+    }
+    return `<details><summary><code class="cmd">${escapeHtml(commandLine.slice(0, COMMAND_LINE_PREVIEW_LENGTH))}…</code></summary>`
+        + `<code class="cmd">${escapeHtml(commandLine)}</code></details>`;
 }
 
 function normalizeError(error: unknown): Error {

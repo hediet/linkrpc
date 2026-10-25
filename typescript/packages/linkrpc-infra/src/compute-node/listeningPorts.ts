@@ -4,6 +4,7 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import type { ComputeNodeListeningPort } from './index';
+import { readProcessDetails, type ProcessDetails } from './processDetails';
 
 const COMMAND_TIMEOUT_MS = 10_000;
 const MAX_OUTPUT_BYTES = 8 * 1_024 * 1_024;
@@ -16,7 +17,9 @@ export interface Listener {
 }
 
 export async function readListeningPorts(platform: NodeJS.Platform = process.platform): Promise<ComputeNodeListeningPort[]> {
-    return groupListeners((await readListeners(platform)).filter(listener => isLoopbackReachable(listener.address)));
+    const ports = groupListeners((await readListeners(platform)).filter(listener => isLoopbackReachable(listener.address)));
+    const details = await readProcessDetails(ports.flatMap(port => port.pid === undefined ? [] : [port.pid]), platform).catch(() => new Map<number, ProcessDetails>());
+    return ports.map(port => ({ ...port, ...(port.pid === undefined ? undefined : details.get(port.pid)) }));
 }
 
 async function readListeners(platform: NodeJS.Platform): Promise<Listener[]> {

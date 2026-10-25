@@ -848,7 +848,7 @@ linkrpc hub http-export            # listens on 127.0.0.1:80 and [::1]:80
 | URL | Shows |
 | --- | --- |
 | `http://localhost/` | Services that can forward TCP (`?format=json` for JSON). |
-| `http://hediet--tablet--compute.localhost/` | Listening ports of `hediet/tablet/compute` (needs `linkrpc.computeNode.ports`). |
+| `http://hediet--tablet--compute.localhost/` | Listening ports of `hediet/tablet/compute` with each owning process's name, command line, and working directory (needs `linkrpc.computeNode.ports`). |
 | `http://3000.hediet--tablet--compute.localhost/` | Port 3000 of that compute node, including WebSocket upgrades. |
 
 A service is always exactly one label directly below `localhost`, its
@@ -879,6 +879,17 @@ WebSocket upgrades are translated the same way in both directions. No
 bodies are not rewritten, so they fail rather than reach this machine. Bind
 loopback only: anyone who can reach the listener can use the export process's
 Hub identity to reach every forwarded port.
+
+The gateway's own pages (`localhost` and `<service>.localhost`, HTML and JSON)
+show command lines, which may contain secrets. They answer only top-level
+navigations, same-origin requests, and clients that send no `Sec-Fetch-*` or
+cross-origin `Origin` header (e.g. `curl`); other requests, including fetches,
+scripts, and iframes from forwarded apps of the same machine, get `403`. They
+send no CORS headers, forbid framing (`frame-ancestors 'none'`,
+`X-Frame-Options: DENY`), and set `nosniff`, `no-store`, `no-referrer`, and
+same-origin resource and opener policies. Command lines and working directories
+are only shown for processes the compute node may inspect, e.g. not for
+elevated or other users' processes on Windows.
 
 Each service and port shares one `tcpForward.multiplex` session (up to 10
 logical connections, 8 of them for pooled HTTP keep-alive), closed after five
