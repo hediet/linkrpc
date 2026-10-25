@@ -63,8 +63,8 @@ export async function translateRequestHeaders(
 
 /**
  * Response headers as a browser here should see them: redirects and CORS origins naming the
- * target machine's loopback map to their exported names, and `Domain=localhost` cookies are scoped
- * to that machine's exported ports, which is the set of hosts they reach on the target machine.
+ * target machine's loopback map to their exported names, and cookies are scoped to the service's
+ * exported ports, which is the set of hosts they reach on the target machine.
  */
 export function translateResponseHeaders(
     rawHeaders: readonly string[],
@@ -84,7 +84,11 @@ export function translateResponseHeaders(
         } else if (lowerName === 'access-control-allow-origin') {
             value = toExportedUrl(value, target, false);
         } else if (lowerName === 'set-cookie') {
-            value = translateCookie(value, target);
+            const cookie = translateCookie(value, target);
+            if (cookie === undefined) {
+                continue;
+            }
+            value = cookie;
         }
         headers.push(name, value);
     }
@@ -140,7 +144,6 @@ async function toTargetUrl(value: string, target: ForwardTarget, resolve: Servic
     if (parsed?.kind === 'service') {
         // Exported names are the same on every machine, so another service's name stays meaningful.
         const sameTarget = parsed.params.port !== undefined
-            && parsed.params.named === undefined
             && (url.port ? `:${url.port}` : '') === target.gatewayPortSuffix
             && await resolve(parsed.service) === target.serviceId;
         if (!sameTarget) {
@@ -168,21 +171,30 @@ function toExportedUrl(value: string, target: ForwardTarget, keepPath: boolean):
     return keepPath ? `${origin}${url.pathname}${url.search}${url.hash}` : origin;
 }
 
-/** Cookies scoped to `localhost` reach every port of their machine; other domains have no counterpart here. */
-function translateCookie(value: string, target: ForwardTarget): string {
+/**
+ * On its own machine, a cookie that is host-only or scoped to `localhost` reaches every port, so
+ * here it is scoped to the service label, which covers all of the service's exported ports. A
+ * browser there rejects other domains, so such cookies are dropped. `__Host-` cookies must stay
+ * host-only and so remain limited to one exported port.
+ */
+function translateCookie(value: string, target: ForwardTarget): string | undefined {
     const [pair, ...attributes] = value.split(';');
-    const kept = [pair];
+    const kept = [pair.trim()];
+    let domain: string | undefined;
     for (const attribute of attributes) {
         const separator = attribute.indexOf('=');
         const name = (separator < 0 ? attribute : attribute.slice(0, separator)).trim().toLowerCase();
-        if (name !== 'domain') {
+        if (name === 'domain') {
+            domain = attribute.slice(separator + 1).trim().replace(/^\./, '').toLowerCase();
+        } else if (attribute.trim()) {
             kept.push(attribute.trim());
-            continue;
         }
-        const domain = attribute.slice(separator + 1).trim().replace(/^\./, '').toLowerCase();
-        if (domain === 'localhost') {
-            kept.push(`Domain=${formatHttpExportHost({ serviceId: target.serviceId, params: {} }, target.baseDomain)}`);
-        }
+    }
+    if (domain !== undefined && domain !== 'localhost') {
+        return undefined;
+    }
+    if (!/^__host-/i.test(pair.trim())) {
+        kept.push(`Domain=${formatHttpExportHost({ serviceId: target.serviceId, params: {} }, target.baseDomain)}`);
     }
     return kept.join('; ');
 }

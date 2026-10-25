@@ -848,16 +848,18 @@ linkrpc hub http-export            # listens on 127.0.0.1:80 and [::1]:80
 | URL | Shows |
 | --- | --- |
 | `http://localhost/` | Services that can forward TCP (`?format=json` for JSON). |
-| `http://compute.tablet.hediet.localhost/` | Listening ports of `hediet/tablet/compute` (needs `linkrpc.computeNode.ports`). |
-| `http://3000.compute.tablet.hediet.localhost/` | Port 3000 of that compute node, including WebSocket upgrades. |
+| `http://hediet--tablet--compute.localhost/` | Listening ports of `hediet/tablet/compute` (needs `linkrpc.computeNode.ports`). |
+| `http://3000.hediet--tablet--compute.localhost/` | Port 3000 of that compute node, including WebSocket upgrades. |
 
-Service IDs are written as reversed DNS labels. The leftmost label holds the
-parameters, starting with the port; further parameters follow as
-`--key-value` pairs (`3000--path-api`). A service ID whose segments are not
-plain lowercase DNS labels, or that would exceed DNS length limits (63
-characters per label, 253 per name), is written as one hashed label instead,
-`<slug>--h<hash>`, which the gateway resolves against the services it can
-reach. The index pages link to the right form.
+A service is always exactly one label directly below `localhost`, its
+segments joined with `--`. Browsers treat `localhost` as a public suffix, so
+each service is its own site: pages of one machine get no `SameSite` cookies
+from another machine's apps and cannot set cookies for them, as with direct
+access. The ports of one service share that site, as the ports of `localhost`
+do on its machine. A service ID whose segments are not plain lowercase DNS
+labels, or whose label would exceed 63 characters, is written as a hashed label
+instead, `<slug>--h<hash>`, which the gateway resolves against the services it
+can reach. The index pages link to the right form.
 
 There is no gateway credential and no origin check of its own. Instead, the
 gateway translates between a forwarded app's own origins
@@ -870,7 +872,7 @@ a browser on its machine:
 | `Host` | Always `localhost:<port>`. The gateway itself only accepts `*.localhost` names, so DNS rebinding cannot reach it. |
 | `Origin`, `Referer` | Exported names of the same service map to `http://localhost:<port>`. Other services' exported names and foreign sites pass unchanged. This machine's own loopback origins have no counterpart on the target: `Origin` becomes `null` and `Referer` is dropped. |
 | `Location`, `Access-Control-Allow-Origin` | URLs naming the target machine's loopback map to their exported names. |
-| `Set-Cookie` | `Domain=localhost` becomes the service's name (e.g. `Domain=compute.tablet.hediet.localhost`), which reaches that machine's exported ports, as it reaches all of its ports there. Other domains are removed, making the cookie host-only. |
+| `Set-Cookie` | Host-only and `Domain=localhost` cookies get the service's domain (e.g. `Domain=hediet--tablet--compute.localhost`), which reaches that machine's exported ports, as such cookies reach all of its ports there. Cookies for other domains are dropped, as a browser there would reject them. `__Host-` cookies stay host-only, so they reach only one exported port. |
 
 WebSocket upgrades are translated the same way in both directions. No
 `X-Forwarded-*` headers are added. Absolute loopback URLs inside response
