@@ -1,3 +1,4 @@
+import { createInterface } from 'node:readline/promises';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
@@ -74,7 +75,7 @@ import {
     requestReflectionAccess,
     requestTopologyAccess,
 } from '@hediet/linkrpc-client-internal';
-import { logoutCliIdentity } from '@hediet/linkrpc-client-internal';
+import { cliIdentityTarget, deleteCliIdentity, readCliIdentity } from '@hediet/linkrpc-client-internal';
 import { MethodRefWithOptHash } from './methodRef';
 import { renderMethodParamHelp } from './methodHelp';
 import { rewriteParamShortcuts } from './paramFlags';
@@ -1717,15 +1718,33 @@ Batch options:
         program
             .command('logout')
             .description(
-                'Delete the stored CLI identity and cached capabilities. Next call will mint a fresh keypair and prompt for consent again.',
+                'Delete the stored keypair and cached capabilities of the identity selected by --principal '
+                + '(default: the user:hubrpc-cli fallback). Asks for confirmation unless --yes is given. '
+                + 'The next call mints a fresh keypair, which hubs that trusted the old key do not accept.',
             )
-            .action(async () => {
-                const removed = await logoutCliIdentity();
-                if (removed.length === 0) {
-                    process.stdout.write('linkrpc: no stored identity found.\n');
+            .option('-y, --yes', 'delete without asking for confirmation')
+            .action(async (opts: { yes?: boolean }) => {
+                const target = cliIdentityTarget(getPrincipalSpec());
+                const principal = await readCliIdentity(target);
+                if (principal === undefined) {
+                    process.stdout.write(`linkrpc: no stored identity for ${target.label} (${target.file}).\n`);
                     return;
                 }
-                for (const f of removed) {
+                const description = `identity ${target.label} (${principal}) at ${target.file}`;
+                if (opts.yes !== true) {
+                    if (process.stdin.isTTY !== true || process.stderr.isTTY !== true) {
+                        throw new Error(`Refusing to delete ${description} without confirmation; pass --yes.`);
+                    }
+                    const readline = createInterface({ input: process.stdin, output: process.stderr });
+                    const answer = await readline.question(
+                        `Delete ${description} and its cached capabilities? This cannot be undone. [y/N] `,
+                    ).finally(() => readline.close());
+                    if (!/^y(es)?$/i.test(answer.trim())) {
+                        process.stderr.write('linkrpc: logout cancelled.\n');
+                        return;
+                    }
+                }
+                for (const f of await deleteCliIdentity(target)) {
                     process.stdout.write(`removed ${f}\n`);
                 }
             });

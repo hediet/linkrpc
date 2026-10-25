@@ -16,6 +16,7 @@ export {
     type ConnectToHubOptions,
     type HubChannel,
     type HubClientHandle,
+    identityFilePath,
     loadOrCreateIdentity,
     type LoadOrCreateIdentityOptions,
     openHubChannel,
