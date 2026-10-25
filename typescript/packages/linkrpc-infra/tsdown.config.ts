@@ -9,6 +9,7 @@ export default defineConfig({
         'compute-node/node': 'src/compute-node/node.ts',
         'graph/index': 'src/graph/index.ts',
         'graph/source': 'src/graph/source.ts',
+        'http-export/node': 'src/http-export/node.ts',
         'inspection/index': 'src/inspection/index.ts',
         'json-document/index': 'src/json-document/index.ts',
         'json-rpc/index': 'src/json-rpc/index.ts',

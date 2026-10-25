@@ -47,6 +47,7 @@ import { openDialTransport, openTargetTransport, type DialEndpoint } from './com
 import { mcpForwardCommand } from './commands/mcpForward';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
+import { httpExportCommand } from './commands/httpExport';
 import { validateJsonRpcExport } from '@hediet/linkrpc-infra/json-rpc/node';
 import {
     createHubApprovalCommandClient,
@@ -1181,6 +1182,38 @@ Batch options:
                     });
                     try {
                         process.stderr.write(`linkrpc: JSON-RPC export listening at ${server.endpoint}\n`);
+                        await _untilSignalled();
+                    } finally {
+                        await server.close();
+                    }
+                } finally {
+                    local.close();
+                }
+            });
+        program
+            .command('http-export')
+            .description('Serve loopback ports of Hub compute nodes at <port>.<service>.localhost over HTTP and WebSocket.')
+            .option('--port <n>', 'Local port to listen on', value => parsePositiveInteger(value, '--port'), 80)
+            .option('--host <address>', 'Local address to bind (repeatable; default 127.0.0.1 and ::1)', collectOption)
+            .option('--base-domain <domain>', 'Base domain of exported hostnames', 'localhost')
+            .action(async (opts: { port: number; host?: readonly string[]; baseDomain: string }) => {
+                const localEp = needEndpoint(endpoint);
+                const local = await connectEndpoint(localEp, wireLog('hub'));
+                try {
+                    const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
+                        negotiateHubCaps: isHubEndpoint(localEp),
+                    });
+                    reportIdentity(session);
+                    const server = await httpExportCommand({
+                        local,
+                        requestDirectoryAccess: serviceId => requestDirectoryAccess(session, serviceId, {}),
+                        port: opts.port,
+                        hosts: opts.host ?? ['127.0.0.1', '::1'],
+                        baseDomain: opts.baseDomain,
+                        onError: error => process.stderr.write(`linkrpc: ${error.message}\n`),
+                    });
+                    try {
+                        process.stderr.write(`linkrpc: HTTP export listening at ${server.urls.join(', ')}\n`);
                         await _untilSignalled();
                     } finally {
                         await server.close();

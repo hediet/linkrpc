@@ -794,6 +794,7 @@ initial document:
 | `connection destroy`                                  | Stop the configured connection broker through its local overlay. |
 | `json-rpc-stdio <serviceId> [--params <json>]`         | In the Hub profile, expose `<serviceId>::jsonRpcConnection::connectRaw` as newline-delimited JSON-RPC on stdin/stdout. Diagnostics remain on stderr. |
 | `json-rpc-export --target-endpoint <uri> --serviceId <id> --path <path> ...` | In the Hub profile, export multiple JSON-RPC factories through one authenticated raw WebSocket listener. |
+| `http-export [--port <n>] [--host <address>]... [--base-domain <domain>]` | In the Hub profile, serve loopback ports of Hub compute nodes at `<port>.<service>.localhost` over HTTP and WebSocket. |
 
 The inherited `--schema <path-or-url>` option also overlays static
 `hubrpc.defaults`, `hubrpc.directory`, and `hubrpc.schemas` reflection for
@@ -833,6 +834,55 @@ Alternatively, configure the listener token in the target URI as `listen:ws://12
 Only `listen:ws://` TCP listeners are currently supported, not named pipes or TLS listeners. Bind loopback for local use. For remote access, terminate TLS in a trusted reverse proxy rather than sending tokens over unencrypted networks. The gateway limits connections to 100, frames to 16 MiB, and pending input per client to 32 MiB / 1024 frames; slow consumers and failed upstreams close only their own connection. Factories must open within 30 seconds.
 
 The command stays in the foreground until SIGINT/SIGTERM, then closes clients and the listener. Use the existing Hub daemon/service lifecycle to supervise it; this command neither installs a service nor starts remote AHP hosts. Diagnostics and the bound address (including an assigned port when using port 0) go to stderr.
+
+### HTTP export
+
+`http-export` serves loopback TCP ports of Hub compute nodes (services offering
+`linkrpc.computeNode.tcpForward`) as `*.localhost` sites. `*.localhost` always
+resolves to this machine, so no DNS setup is needed:
+
+```sh
+linkrpc hub http-export            # listens on 127.0.0.1:80 and [::1]:80
+```
+
+| URL | Shows |
+| --- | --- |
+| `http://localhost/` | Services that can forward TCP (`?format=json` for JSON). |
+| `http://hediet--tablet--compute.localhost/` | Listening ports of `hediet/tablet/compute` (needs `linkrpc.computeNode.ports`). |
+| `http://3000.hediet--tablet--compute.localhost/` | Port 3000 of that compute node, including WebSocket upgrades. |
+
+A service is always exactly one label directly below `localhost`, its
+segments joined with `--`. Browsers treat `localhost` as a public suffix, so
+each service is its own site: pages of one machine get no `SameSite` cookies
+from another machine's apps and cannot set cookies for them, as with direct
+access. The ports of one service share that site, as the ports of `localhost`
+do on its machine. A service ID whose segments are not plain lowercase DNS
+labels, or whose label would exceed 63 characters, is written as a hashed label
+instead, `<slug>--h<hash>`, which the gateway resolves against the services it
+can reach. The index pages link to the right form.
+
+There is no gateway credential and no origin check of its own. Instead, the
+gateway translates between a forwarded app's own origins
+(`http://localhost:<port>` on its machine) and their exported names, so the
+app's own Host, Origin, CORS, redirect, and cookie checks behave as they do for
+a browser on its machine:
+
+| Header | Translation |
+| --- | --- |
+| `Host` | Always `localhost:<port>`. The gateway itself only accepts `*.localhost` names, so DNS rebinding cannot reach it. |
+| `Origin`, `Referer` | Exported names of the same service map to `http://localhost:<port>`. Other services' exported names and foreign sites pass unchanged. This machine's own loopback origins have no counterpart on the target: `Origin` becomes `null` and `Referer` is dropped. |
+| `Location`, `Access-Control-Allow-Origin` | URLs naming the target machine's loopback map to their exported names. |
+| `Set-Cookie` | Host-only and `Domain=localhost` cookies get the service's domain (e.g. `Domain=hediet--tablet--compute.localhost`), which reaches that machine's exported ports, as such cookies reach all of its ports there. Cookies for other domains are dropped, as a browser there would reject them. `__Host-` cookies stay host-only, so they reach only one exported port. |
+
+WebSocket upgrades are translated the same way in both directions. No
+`X-Forwarded-*` headers are added. Absolute loopback URLs inside response
+bodies are not rewritten, so they fail rather than reach this machine. Bind
+loopback only: anyone who can reach the listener can use the export process's
+Hub identity to reach every forwarded port.
+
+Each service and port shares one `tcpForward.multiplex` session (up to 10
+logical connections, 8 of them for pooled HTTP keep-alive), closed after five
+idle minutes.
 
 ### Participant proxy
 

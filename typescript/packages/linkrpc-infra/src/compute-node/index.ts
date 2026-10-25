@@ -1,6 +1,6 @@
 /**
  * Interfaces of a compute node: one machine's status, processes, files,
- * loopback HTTP, loopback TCP, and sleep prevention. Browser-safe; the Node.js implementation
+ * loopback HTTP, loopback TCP, listening ports, and sleep prevention. Browser-safe; the Node.js implementation
  * is `@hediet/linkrpc-infra/compute-node/node`.
  *
  * SECURITY: `command`, `filesystem`, `http`, and `tcpForward` act with the
@@ -231,6 +231,24 @@ export const computeNodeTcpForwardInterface = defineInterface(
     },
 );
 
+const listeningPortSchema = z.object({
+    port,
+    /** Local addresses the port is bound to, e.g. `127.0.0.1`, `::1`, `0.0.0.0`. */
+    addresses: z.array(z.string()),
+    pid: z.number().int().nonnegative().optional(),
+    processName: z.string().optional(),
+});
+
+export const computeNodePortsInterface = defineInterface(
+    {
+        id: 'linkrpc.computeNode.ports',
+        description: 'Lists the TCP ports `tcpForward` can reach: ports listening on a loopback or wildcard address.',
+    },
+    {
+        listListening: requestType(empty, z.object({ ports: z.array(listeningPortSchema) })),
+    },
+);
+
 const keepAwakeParamsSchema = z.object({
     /** Also keep the display from turning off. Defaults to false. */
     displayOn: z.boolean().optional(),
@@ -268,6 +286,7 @@ export const computeNodeInterfaces = [
     computeNodeFileSystemInterface,
     computeNodeHttpInterface,
     computeNodeTcpForwardInterface,
+    computeNodePortsInterface,
     computeNodePowerInterface,
 ] as const;
 
@@ -282,6 +301,7 @@ export type ComputeNodeTcpClientFrame = z.infer<typeof clientTcpFrame>;
 export type ComputeNodeTcpServerFrame = z.infer<typeof serverTcpFrame>;
 export type ComputeNodeMultiplexedTcpClientFrame = z.infer<typeof clientMultiplexedTcpFrame>;
 export type ComputeNodeMultiplexedTcpServerFrame = z.infer<typeof serverMultiplexedTcpFrame>;
+export type ComputeNodeListeningPort = z.infer<typeof listeningPortSchema>;
 export type ComputeNodeKeepAwakeParams = z.infer<typeof keepAwakeParamsSchema>;
 export type ComputeNodeKeepAwakeEvent = z.infer<typeof keepAwakeEventSchema>;
 export type ComputeNodeKeepAwakeResult = z.infer<typeof keepAwakeResultSchema>;
