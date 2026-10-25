@@ -49,6 +49,11 @@ export async function translateRequestHeaders(
             headers.push(name, loopbackHost(target.port));
         } else if (lowerName === 'origin') {
             headers.push(name, await toTargetUrl(value, target, resolve, false) ?? 'null');
+        } else if (lowerName === 'cookie') {
+            const kept = value.split(';').filter(pair => !isGatewayCookieName(pair.split('=')[0].trim())).join(';').trim();
+            if (kept) {
+                headers.push(name, kept);
+            }
         } else if (lowerName === 'referer') {
             const referer = await toTargetUrl(value, target, resolve, true);
             if (referer !== undefined) {
@@ -84,7 +89,7 @@ export function translateResponseHeaders(
         } else if (lowerName === 'access-control-allow-origin') {
             value = toExportedUrl(value, target, false);
         } else if (lowerName === 'set-cookie') {
-            const cookie = translateCookie(value, target);
+            const cookie = isGatewayCookieName(value.split('=')[0].trim()) ? undefined : translateCookie(value, target);
             if (cookie === undefined) {
                 continue;
             }
@@ -201,6 +206,11 @@ function translateCookie(value: string, target: ForwardTarget): string | undefin
 
 function loopbackHost(port: number): string {
     return port === 80 ? 'localhost' : `localhost:${port}`;
+}
+
+/** The gateway's own cookies (browser approval) never reach forwarded apps, and apps cannot set them. */
+function isGatewayCookieName(name: string): boolean {
+    return name.toLowerCase().startsWith('linkrpc-gateway');
 }
 
 function isTargetLoopbackHostname(hostname: string): boolean {
