@@ -110,7 +110,7 @@ describe('http export', () => {
         }).toEqual({
             crossSite: 'target',
             services: { services: [{ serviceId, url: `http://test--compute.localhost:${gatewayPort}/` }], complete: true },
-            ports: { serviceId, ports: [{ port: targetPort, addresses: ['127.0.0.1'], url: `http://${targetPort}.test--compute.localhost:${gatewayPort}/` }] },
+            ports: { serviceId, ports: [{ port: targetPort, addresses: ['127.0.0.1'], commandLine: 'node server.js --token <secret>', cwd: '/srv/app', url: `http://${targetPort}.test--compute.localhost:${gatewayPort}/` }] },
         });
     });
 
@@ -119,6 +119,56 @@ describe('http export', () => {
         const unused = await unusedPort();
         const response = await send(gatewayPort, { host: `${unused}.test--compute.localhost:${gatewayPort}` });
         expect(response.status).toBe(502);
+    });
+
+    it('serves gateway pages only to navigations, same-origin requests, and non-browser clients', async () => {
+        await startTarget((_request, response) => response.end('target'));
+        const gatewayPort = await startGateway();
+        const pages = `test--compute.localhost:${gatewayPort}`;
+        const forwardedApp = `http://4000.test--compute.localhost:${gatewayPort}`;
+        const cases: Record<string, { host?: string; method?: string; headers?: Record<string, string> }> = {
+            nonBrowser: {},
+            typedInAddressBar: { headers: { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } },
+            linkFromServiceIndex: { headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } },
+            sameOriginFetch: { headers: { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' } },
+            forwardedAppFetch: { headers: { 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty', origin: forwardedApp } },
+            forwardedAppNoCors: { headers: { 'sec-fetch-site': 'same-site', 'sec-fetch-mode': 'no-cors', 'sec-fetch-dest': 'script' } },
+            otherSiteIframe: { headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'iframe' } },
+            otherSiteFetchIndex: { host: `localhost:${gatewayPort}`, headers: { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty', origin: 'https://evil.example' } },
+            legacyCrossOrigin: { headers: { origin: 'https://evil.example' } },
+            post: { method: 'POST' },
+        };
+        const results = Object.fromEntries(await Promise.all(Object.entries(cases).map(async ([name, request]) => {
+            const response = await send(gatewayPort, { host: request.host ?? pages, method: request.method, headers: { accept: 'application/json', ...request.headers } });
+            return [name, response] as const;
+        })));
+        const page = results.nonBrowser;
+        expect({
+            statuses: Object.fromEntries(Object.entries(results).map(([name, response]) => [name, response.status])),
+            headers: {
+                allowOrigin: page.headers['access-control-allow-origin'],
+                frameOptions: page.headers['x-frame-options'],
+                csp: page.headers['content-security-policy'],
+                resourcePolicy: page.headers['cross-origin-resource-policy'],
+                nosniff: page.headers['x-content-type-options'],
+            },
+            port: JSON.parse(page.body).ports[0],
+        }).toEqual({
+            statuses: {
+                nonBrowser: 200, typedInAddressBar: 200, linkFromServiceIndex: 200, sameOriginFetch: 200,
+                forwardedAppFetch: 403, forwardedAppNoCors: 403, otherSiteIframe: 403, otherSiteFetchIndex: 403, legacyCrossOrigin: 403, post: 405,
+            },
+            headers: {
+                allowOrigin: undefined,
+                frameOptions: 'DENY',
+                csp: "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+                resourcePolicy: 'same-origin',
+                nosniff: 'nosniff',
+            },
+            port: expect.objectContaining({ commandLine: 'node server.js --token <secret>', cwd: '/srv/app' }),
+        });
+        const html = await send(gatewayPort, { host: pages });
+        expect(html.body).toContain('<code class="cmd">node server.js --token &#60;secret&#62;</code>');
     });
 });
 
@@ -143,7 +193,7 @@ async function startGateway(): Promise<number> {
         listServices: async () => ({ serviceIds: [serviceId], complete: true }),
         listPorts: async () => targets.flatMap(target => {
             const address = target.address();
-            return address && typeof address === 'object' ? [{ port: address.port, addresses: ['127.0.0.1'] }] : [];
+            return address && typeof address === 'object' ? [{ port: address.port, addresses: ['127.0.0.1'], commandLine: 'node server.js --token <secret>', cwd: '/srv/app' }] : [];
         }).slice(-1),
         onError: () => { /* asserted through responses */ },
     });
