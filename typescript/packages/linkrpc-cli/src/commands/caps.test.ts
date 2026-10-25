@@ -216,6 +216,21 @@ describe('caps request and call --cap:request', () => {
         } finally { f.dispose(); }
     });
 
+    it('requests delegation only with --cap:delegate and reuses a delegable grant', async () => {
+        const f = await fixture();
+        try {
+            const opts = { methodRef: 'files::test.files::read', paramsArg: JSON.stringify(params), signingSession: f.session, capabilityOnly: true };
+            await callCommand(f.channel, opts);
+            await callCommand(f.channel, { ...opts, delegate: true });
+            const reused = JSON.parse(await callCommand(f.channel, { ...opts, delegate: true })).reused;
+            await callCommand(f.channel, opts);
+            expect({
+                requested: f.requestAccess.mock.calls.map(([request]) => request.permissions[0].canDelegate ?? false),
+                reused,
+            }).toEqual({ requested: [false, true], reused: true });
+        } finally { f.dispose(); }
+    });
+
     it.each(['denied', 'insufficient', 'one-shot'])('does not execute on %s approval', async outcome => {
         const f = await fixture();
         try {
