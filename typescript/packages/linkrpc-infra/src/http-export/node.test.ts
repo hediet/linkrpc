@@ -1,6 +1,6 @@
 import { once } from 'node:events';
 import { createServer, request, type IncomingHttpHeaders, type Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { LinkRpcConnection, TransportPair, type SignedCapability } from '@hediet/linkrpc';
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { computeNodeTcpForwardInterface } from '../compute-node/index';
 import { registerComputeNode } from '../compute-node/node';
-import { codeOf, startHttpExport, type BrowserAccessRequest, type BrowserAccessResult, type HttpExport, type HttpExportOptions } from './node';
+import { approvalScope, codeOf, startHttpExport, type BrowserAccessRequest, type BrowserAccessResult, type HttpExport, type HttpExportOptions } from './node';
 
 const serviceId = 'test/compute';
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -210,7 +210,7 @@ describe('http export', () => {
             tool: (await send(gatewayPort, { host: site, path: '/tool' })).body,
             stillWaiting: (await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: { ...navigate, cookie: sessionCookie } })).body.includes('Waiting for approval'),
         };
-        approve({ status: 'granted', capabilities: [fakeCapability(requests[0].principal)] });
+        approve({ status: 'granted', capabilities: [fakeCapability(requests[0].principal, requests[0].permissions[0].target.serviceId.prefix)] });
         await new Promise(resolve => setTimeout(resolve, 20));
         const approved = await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: { ...navigate, cookie: sessionCookie } });
         const handoff = new URL(approved.headers.location!);
@@ -253,6 +253,84 @@ describe('http export', () => {
             signedAsBrowser: true,
             replayed: 403,
             afterRestart: { status: 200, body: 'page /again', sameSession: true },
+        });
+    });
+
+    it('re-requests for services an older grant does not cover, but does not loop when an approver narrowed it', async () => {
+        const targetPort = await startTarget((_incoming, response) => response.end('page'));
+        const requests: BrowserAccessRequest[] = [];
+        const grants = ['test/other', 'test'];
+        const stateFile = join(mkdtempSync(join(tmpdir(), 'http-export-approval-')), 'sessions.json');
+        cleanups.push(() => rmSync(dirname(stateFile), { recursive: true, force: true }));
+        const gatewayPort = await startGateway({
+            approval: {
+                gatewayName: 'test-machine',
+                stateFile,
+                requestAccess: async request => {
+                    requests.push(request);
+                    const scope = grants[requests.length - 1];
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                    return { status: 'granted', capabilities: [fakeCapability(request.principal, scope)] };
+                },
+            },
+        });
+        const navigate = { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
+        const site = `${targetPort}.test--compute.localhost:${gatewayPort}`;
+        const loginPath = new URL((await send(gatewayPort, { host: site, path: '/', headers: navigate })).headers.location!);
+        const openLogin = (cookie: string | undefined, extra = '') => send(gatewayPort, { host: loginPath.host, path: `${loginPath.pathname}${loginPath.search}${extra}`, headers: { ...navigate, ...(cookie ? { cookie } : {}) } });
+        const started = await openLogin(undefined);
+        const firstSession = cookiePair(started.headers['set-cookie'], 'linkrpc-gateway');
+        await waitFor(() => requests.length === 1);
+        await new Promise(resolve => setTimeout(resolve, 40));
+        const narrowed = await openLogin(firstSession);
+        const reloaded = await openLogin(firstSession);
+        const askedAgain = await openLogin(firstSession, '&retry=1');
+        const secondSession = cookiePair(askedAgain.headers['set-cookie'], 'linkrpc-gateway');
+        await waitFor(() => requests.length === 2);
+        await new Promise(resolve => setTimeout(resolve, 40));
+        const approved = await openLogin(secondSession);
+
+        // A session from an older gateway asked for a narrower scope than this target needs: it asks again by itself.
+        const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+        state.sessions[0].requestedScope = 'test/other';
+        state.sessions[0].capabilities = [fakeCapability(state.sessions[0].capabilities[0].audience, 'test/other')];
+        writeFileSync(stateFile, JSON.stringify(state));
+        const restartedPort = await startGateway({ approval: { gatewayName: 'test-machine', stateFile, requestAccess: async request => { requests.push(request); await new Promise(resolve => setTimeout(resolve, 10)); return { status: 'denied' }; } } });
+        const restartedSite = `${targetPort}.test--compute.localhost:${restartedPort}`;
+        const restartedLogin = new URL((await send(restartedPort, { host: restartedSite, path: '/', headers: { ...navigate, cookie: secondSession } })).headers.location!);
+        const reRequested = await send(restartedPort, { host: restartedLogin.host, path: `${restartedLogin.pathname}${restartedLogin.search}`, headers: { ...navigate, cookie: secondSession } });
+        await waitFor(() => requests.length === 3);
+
+        expect({
+            requestedScopes: requests.map(request => request.permissions[0].target.serviceId.prefix),
+            narrowed: { status: narrowed.status, explains: narrowed.body.includes('Not approved for this machine'), offersRetry: narrowed.body.includes('retry=1') },
+            reloadedStaysPut: reloaded.body.includes('Not approved for this machine'),
+            askedAgain: { status: askedAgain.status, waiting: askedAgain.body.includes('Waiting for approval'), newSession: secondSession !== firstSession },
+            approved: { status: approved.status, handsOff: approved.headers.location?.includes('/.linkrpc/session') },
+            reRequested: { status: reRequested.status, waiting: reRequested.body.includes('Waiting for approval') },
+        }).toEqual({
+            requestedScopes: ['test', 'test', 'test'],
+            narrowed: { status: 200, explains: true, offersRetry: true },
+            reloadedStaysPut: true,
+            askedAgain: { status: 200, waiting: true, newSession: true },
+            approved: { status: 302, handsOff: true },
+            reRequested: { status: 200, waiting: true },
+        });
+    });
+
+    it('scopes approval requests to the owner of the opened service, independent of discovery', () => {
+        expect({
+            target: approvalScope('hediet/devbox/compute', []),
+            onlyTabletKnown: approvalScope('hediet/tablet/compute', ['hediet/tablet/compute']),
+            indexOneOwner: approvalScope(undefined, ['hediet/devbox/compute', 'hediet/tablet/compute']),
+            indexTwoOwners: approvalScope(undefined, ['hediet/devbox/compute', 'alice/pc/compute']),
+            indexNothingKnown: (() => { try { return approvalScope(undefined, []); } catch (error) { return (error as Error).message; } })(),
+        }).toEqual({
+            target: 'hediet',
+            onlyTabletKnown: 'hediet',
+            indexOneOwner: 'hediet',
+            indexTwoOwners: '',
+            indexNothingKnown: 'No forwardable services are known yet; reload this page in a moment.',
         });
     });
 });
@@ -298,8 +376,11 @@ function cookiePair(setCookie: readonly string[] | undefined, name: string): str
     return cookie.split(';')[0];
 }
 
-function fakeCapability(audience: string): SignedCapability {
-    return { issuer: 'id:key:approver', audience, nonce: 'n', permissions: [], $hubrpcSignature: {} } as unknown as SignedCapability;
+function fakeCapability(audience: string, prefix: string): SignedCapability {
+    return {
+        issuer: 'id:key:approver', audience, nonce: 'n', $hubrpcSignature: {},
+        permissions: [{ target: { serviceId: { prefix }, interfaceId: { exact: 'linkrpc.computeNode.tcpForward' }, members: [{ exact: 'multiplex' }] }, canInvoke: true }],
+    } as unknown as SignedCapability;
 }
 
 async function waitFor(condition: () => boolean): Promise<void> {

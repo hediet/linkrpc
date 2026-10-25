@@ -19,7 +19,7 @@ import { dirname } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { KeypairSigningIdentity, type SerializedKeypairSigningIdentity, type SignedCapability, type SigningIdentity } from '@hediet/linkrpc';
 import { computeNodePortsInterface, computeNodeTcpForwardInterface } from '../compute-node/index';
-import { parseHttpExportHost } from './hostname';
+import { parseHttpExportHost, type ServiceReference } from './hostname';
 
 /** The identity a request is forwarded with; absent for the gateway's own identity. */
 export interface HttpExportCaller {
@@ -58,6 +58,16 @@ export interface BrowserApprovalOptions {
     readonly gatewayName: string;
 }
 
+export interface BrowserApprovalServices {
+    /** Resolves a hostname's service reference to its service ID. */
+    readonly resolve: (reference: ServiceReference) => Promise<string | undefined>;
+    /**
+     * The service ID prefix a browser asks access for when it opens `target` (or `localhost` when
+     * absent). It must not depend on how much of the directory has been discovered so far.
+     */
+    readonly scope: (target: string | undefined) => Promise<string>;
+}
+
 export const SESSION_COOKIE = 'linkrpc-gateway';
 const STATE_COOKIE = 'linkrpc-gateway-state';
 export const GATEWAY_PATH_PREFIX = '/.linkrpc/';
@@ -74,6 +84,8 @@ interface Session {
     status: SessionStatus;
     capabilities: readonly SignedCapability[];
     reason?: string;
+    /** The service ID prefix the browser asked access for; unknown for sessions from older state files. */
+    requestedScope?: string;
     /** The browser's `localhost` cookie, hashed. */
     readonly secretHash: string;
 }
@@ -85,6 +97,7 @@ interface PersistedState {
         readonly secretHash: string;
         readonly identity: SerializedKeypairSigningIdentity;
         readonly capabilities: readonly SignedCapability[];
+        readonly requestedScope?: string;
     }[];
     /** Hashed site cookie → session ID and site. */
     readonly siteTokens: readonly { readonly hash: string; readonly sessionId: string; readonly site: string }[];
@@ -104,11 +117,11 @@ export class BrowserApproval {
     private constructor(
         private readonly _options: BrowserApprovalOptions,
         private readonly _baseDomain: string,
-        private readonly _servicePrefix: () => Promise<string>,
+        private readonly _services: BrowserApprovalServices,
     ) { }
 
-    static async create(options: BrowserApprovalOptions, baseDomain: string, servicePrefix: () => Promise<string>): Promise<BrowserApproval> {
-        const approval = new BrowserApproval(options, baseDomain, servicePrefix);
+    static async create(options: BrowserApprovalOptions, baseDomain: string, services: BrowserApprovalServices): Promise<BrowserApproval> {
+        const approval = new BrowserApproval(options, baseDomain, services);
         await approval._load();
         return approval;
     }
@@ -128,7 +141,7 @@ export class BrowserApproval {
             this._acceptTicket(request, response, site);
             return { kind: 'handled' };
         }
-        const session = this._sessionFor(request, site);
+        const session = this._sessionFor(request, site, await this._targetService(request.headers.host ?? ''));
         if (session) {
             return { kind: 'forward', caller: callerOf(session) };
         }
@@ -145,8 +158,8 @@ export class BrowserApproval {
     }
 
     /** For WebSocket upgrades: the caller, `undefined` for tools, or `'rejected'`. */
-    authorizeUpgrade(request: IncomingMessage): HttpExportCaller | undefined | 'rejected' {
-        const session = this._sessionFor(request, this._site(request));
+    async authorizeUpgrade(request: IncomingMessage): Promise<HttpExportCaller | undefined | 'rejected'> {
+        const session = this._sessionFor(request, this._site(request), await this._targetService(request.headers.host ?? ''));
         if (session) {
             return callerOf(session);
         }
@@ -163,7 +176,14 @@ export class BrowserApproval {
         return hostname;
     }
 
-    private _sessionFor(request: IncomingMessage, site: string): Session | undefined {
+    /** The service a `<port>.<service>` or `<service>` host addresses; `undefined` for `localhost`. */
+    private async _targetService(host: string): Promise<string | undefined> {
+        const parsed = parseHttpExportHost(host, this._baseDomain);
+        return parsed?.kind === 'service' ? this._services.resolve(parsed.service) : undefined;
+    }
+
+    /** An approved session for `site` whose grant covers `serviceId` (when given). */
+    private _sessionFor(request: IncomingMessage, site: string, serviceId: string | undefined): Session | undefined {
         const token = readCookie(request, SESSION_COOKIE);
         if (!token) {
             return undefined;
@@ -174,7 +194,7 @@ export class BrowserApproval {
                 const entry = this._siteTokens.get(hash(token));
                 return entry?.site === site ? this._sessions.get(entry.sessionId) : undefined;
             })();
-        return session?.status === 'approved' && hasFreshCapability(session) ? session : undefined;
+        return session?.status === 'approved' && hasFreshCapability(session) && (serviceId === undefined || covers(session, serviceId)) ? session : undefined;
     }
 
     private _redirectToLogin(request: IncomingMessage, response: ServerResponse, site: string): void {
@@ -200,13 +220,18 @@ export class BrowserApproval {
         let session = secret ? this._sessionsBySecret.get(hash(secret)) : undefined;
         const setCookie: string[] = [];
         const direct = request.headers['sec-fetch-site'] === undefined || request.headers['sec-fetch-site'] === 'none' || request.headers['sec-fetch-site'] === 'same-origin';
-        const retry = query.get('retry') === '1' && direct && session?.status === 'denied';
-        if (!session || retry || (session.status === 'approved' && !hasFreshCapability(session))) {
-            const created = await this._startSession(session);
+        const target = await this._targetService(returnUrl.host);
+        const wantedScope = await this._services.scope(target).catch(() => undefined);
+        const uncovered = session?.status === 'approved' && (!hasFreshCapability(session) || (target !== undefined && !covers(session, target)));
+        // An approver may grant less than requested; ask again automatically only for a different scope.
+        const narrowed = uncovered && session?.requestedScope !== undefined && session.requestedScope === wantedScope;
+        const retry = query.get('retry') === '1' && direct && (session?.status === 'denied' || narrowed);
+        if (!session || retry || (uncovered && !narrowed)) {
+            const created = await this._startSession(session, target, wantedScope);
             session = created.session;
             setCookie.push(`${SESSION_COOKIE}=${created.secret}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`);
         }
-        if (session.status === 'approved') {
+        if (session.status === 'approved' && !(narrowed && !retry)) {
             return this._handOff(response, session, returnUrl, state, setCookie);
         }
         const code = codeOf(session);
@@ -217,10 +242,14 @@ export class BrowserApproval {
                <p class="code">${escapeHtml(code)}</p>
                <p>Approve this browser on any approver, e.g. <code>linkrpc hub approval ui</code>.
                Only approve a request whose principal starts with <code>id:key:${escapeHtml(code.replace('-', ''))}</code>.</p>
-               <p class="note">It asks to open forwarded ports through ${escapeHtml(this._options.gatewayName)}. This page continues by itself.</p>`
-            : `<h1>Not approved</h1><p class="code">${escapeHtml(code)}</p>
-               <p>${escapeHtml(session.reason ?? 'The request was denied.')}</p>
-               <p><a href="${escapeHtml(retryUrl.href)}">Ask again</a></p>`;
+               <p class="note">It asks to open forwarded ports of <code>${escapeHtml(session.requestedScope ? `${session.requestedScope}/*` : 'all services')}</code> through ${escapeHtml(this._options.gatewayName)}. This page continues by itself.</p>`
+            : session.status === 'approved'
+                ? `<h1>Not approved for this machine</h1><p class="code">${escapeHtml(code)}</p>
+                   <p>This browser was approved for fewer services than it asked for, which do not include <code>${escapeHtml(target ?? '')}</code>.</p>
+                   <p><a href="${escapeHtml(retryUrl.href)}">Ask again</a></p>`
+                : `<h1>Not approved</h1><p class="code">${escapeHtml(code)}</p>
+                   <p>${escapeHtml(session.reason ?? 'The request was denied.')}</p>
+                   <p><a href="${escapeHtml(retryUrl.href)}">Ask again</a></p>`;
         sendPage(response, 200, session.status === 'pending' ? `Approve ${code}` : 'Not approved', body, {
             ...(session.status === 'pending' ? { refresh: '2' } : {}),
             ...(setCookie.length ? { 'set-cookie': setCookie } : {}),
@@ -270,7 +299,7 @@ export class BrowserApproval {
         response.end();
     }
 
-    private async _startSession(previous: Session | undefined): Promise<{ session: Session; secret: string }> {
+    private async _startSession(previous: Session | undefined, target: string | undefined, scope: string | undefined): Promise<{ session: Session; secret: string }> {
         if (previous) {
             this._sessions.delete(previous.id);
             this._sessionsBySecret.delete(previous.secretHash);
@@ -282,17 +311,19 @@ export class BrowserApproval {
             status: 'pending',
             capabilities: [],
             secretHash: hash(secret),
+            ...(scope === undefined ? {} : { requestedScope: scope }),
         };
         this._sessions.set(session.id, session);
         this._sessionsBySecret.set(session.secretHash, session);
-        void this._request(session);
+        void this._request(session, target);
         return { session, secret };
     }
 
-    private async _request(session: Session): Promise<void> {
+    private async _request(session: Session, target: string | undefined): Promise<void> {
         const code = codeOf(session);
         try {
-            const prefix = await this._servicePrefix();
+            const prefix = session.requestedScope ?? await this._services.scope(target);
+            session.requestedScope = prefix;
             const result = await this._options.requestAccess({
                 principal: session.identity.publicSigningIdentity.principal,
                 name: `Browser ${code} via http-export on ${this._options.gatewayName}`,
@@ -347,6 +378,7 @@ export class BrowserApproval {
                 status: 'approved',
                 capabilities: entry.capabilities,
                 secretHash: entry.secretHash,
+                ...(entry.requestedScope === undefined ? {} : { requestedScope: entry.requestedScope }),
             };
             this._sessions.set(session.id, session);
             this._sessionsBySecret.set(session.secretHash, session);
@@ -366,7 +398,7 @@ export class BrowserApproval {
         const approved = [...this._sessions.values()].filter(session => session.status === 'approved');
         const state: PersistedState = {
             version: 1,
-            sessions: approved.map(session => ({ id: session.id, secretHash: session.secretHash, identity: session.identity.toJson(), capabilities: session.capabilities })),
+            sessions: approved.map(session => ({ id: session.id, secretHash: session.secretHash, identity: session.identity.toJson(), capabilities: session.capabilities, ...(session.requestedScope === undefined ? {} : { requestedScope: session.requestedScope }) })),
             siteTokens: [...this._siteTokens].filter(([, entry]) => this._sessions.get(entry.sessionId)?.status === 'approved').map(([tokenHash, entry]) => ({ hash: tokenHash, ...entry })),
         };
         this._saving = this._saving.then(async () => {
@@ -395,6 +427,17 @@ function callerOf(session: Session): HttpExportCaller {
 function hasFreshCapability(session: Session): boolean {
     const now = Date.now();
     return session.capabilities.some(capability => capability.expiresAtMs === undefined || capability.expiresAtMs > now + 5_000);
+}
+
+/** Whether the session's grant addresses `serviceId`; prefixes match whole `/` segments, as the Hub matches them. */
+function covers(session: Session, serviceId: string): boolean {
+    return session.capabilities.some(capability => capability.permissions.some(permission => {
+        const pattern = permission.target.serviceId;
+        if ('exact' in pattern) {
+            return pattern.exact === serviceId;
+        }
+        return pattern.prefix === '' || serviceId === pattern.prefix || serviceId.startsWith(`${pattern.prefix}/`);
+    }));
 }
 
 /** Navigations may be redirected to approve; other browser requests are rejected; tools pass. */

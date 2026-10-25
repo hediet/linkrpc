@@ -67,10 +67,14 @@ export async function startHttpExport(options: HttpExportOptions): Promise<HttpE
         throw new Error('Specify at least one listen address.');
     }
     const baseDomain = options.baseDomain ?? HTTP_EXPORT_BASE_DOMAIN;
+    let gateway: HttpExportGateway | undefined;
     const approval = options.approval
-        ? await BrowserApproval.create(options.approval, baseDomain, async () => commonServicePrefix((await options.listServices()).serviceIds))
+        ? await BrowserApproval.create(options.approval, baseDomain, {
+            resolve: reference => gateway!.resolveService(reference),
+            scope: async target => approvalScope(target, (await options.listServices()).serviceIds),
+        })
         : undefined;
-    const gateway = new HttpExportGateway(options, approval);
+    gateway = new HttpExportGateway(options, approval);
     const servers: Server[] = [];
     try {
         for (const address of options.listen) {
@@ -159,7 +163,7 @@ class HttpExportGateway {
             caller = decision.caller;
         }
         if (parsed.kind === 'service' && parsed.params.port !== undefined) {
-            const serviceId = await this._resolveService(parsed.service);
+            const serviceId = await this.resolveService(parsed.service);
             if (!serviceId) {
                 return sendText(response, 404, 'Unknown service.');
             }
@@ -172,7 +176,7 @@ class HttpExportGateway {
         if (parsed.kind === 'index') {
             return this._renderServices(request, response);
         }
-        const serviceId = await this._resolveService(parsed.service);
+        const serviceId = await this.resolveService(parsed.service);
         if (!serviceId) {
             return sendGatewayText(response, 404, 'Unknown service.');
         }
@@ -187,18 +191,18 @@ class HttpExportGateway {
         if (!parsed || parsed.kind !== 'service' || parsed.params.port === undefined) {
             return reject('404 Not Found');
         }
-        const serviceId = await this._resolveService(parsed.service);
+        const serviceId = await this.resolveService(parsed.service);
         if (!serviceId) {
             return reject('404 Not Found');
         }
-        const caller = this._approval?.authorizeUpgrade(request);
+        const caller = await this._approval?.authorizeUpgrade(request);
         if (caller === 'rejected') {
             return reject('401 Unauthorized');
         }
         const target = this._target(request, serviceId, parsed.params.port);
         const requestHead = serializeHead(
             `${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/${request.httpVersion}`,
-            await translateRequestHeaders(request.rawHeaders, target, reference => this._resolveService(reference), { keepUpgradeHeaders: true }),
+            await translateRequestHeaders(request.rawHeaders, target, reference => this.resolveService(reference), { keepUpgradeHeaders: true }),
         );
         const pool = this._acquirePool(serviceId, parsed.params.port, caller);
         let released = false;
@@ -238,7 +242,7 @@ class HttpExportGateway {
 
     private async _proxyHttp(request: IncomingMessage, response: ServerResponse, serviceId: string, port: number, caller: HttpExportCaller | undefined): Promise<void> {
         const target = this._target(request, serviceId, port);
-        const headers = await translateRequestHeaders(request.rawHeaders, target, reference => this._resolveService(reference), { keepUpgradeHeaders: false });
+        const headers = await translateRequestHeaders(request.rawHeaders, target, reference => this.resolveService(reference), { keepUpgradeHeaders: false });
         const pool = this._acquirePool(serviceId, port, caller);
         try {
             await new Promise<void>((resolve, reject) => {
@@ -311,7 +315,7 @@ class HttpExportGateway {
         pool.idleTimer.unref?.();
     }
 
-    private async _resolveService(reference: ServiceReference): Promise<string | undefined> {
+    async resolveService(reference: ServiceReference): Promise<string | undefined> {
         if (reference.kind === 'readable') {
             return reference.serviceId;
         }
@@ -380,21 +384,21 @@ function poolKey(serviceId: string, port: number, caller: HttpExportCaller | und
     return `${caller?.id ?? ''}\n${serviceId}\n${port}`;
 }
 
-/** The longest whole-segment prefix shared by all service IDs, e.g. `hediet` for `hediet/devbox/compute` and `hediet/tablet/compute`. */
-export function commonServicePrefix(serviceIds: readonly string[]): string {
-    if (serviceIds.length === 0) {
-        return '';
+/**
+ * The service ID prefix a browser asks access for: the owner namespace (first segment) of the
+ * service it opens, e.g. `hediet` for `hediet/devbox/compute`, so one approval covers all of that
+ * owner's machines regardless of which ones have been discovered yet. Without a target, the owner
+ * shared by all known services; throws while none are known.
+ */
+export function approvalScope(target: string | undefined, knownServiceIds: readonly string[]): string {
+    if (target !== undefined) {
+        return target.split('/')[0];
     }
-    let prefix = serviceIds[0].split('/').slice(0, -1);
-    for (const serviceId of serviceIds.slice(1)) {
-        const segments = serviceId.split('/');
-        let shared = 0;
-        while (shared < prefix.length && shared < segments.length - 1 && prefix[shared] === segments[shared]) {
-            shared++;
-        }
-        prefix = prefix.slice(0, shared);
+    const owners = new Set(knownServiceIds.map(serviceId => serviceId.split('/')[0]));
+    if (owners.size === 0) {
+        throw new Error('No forwardable services are known yet; reload this page in a moment.');
     }
-    return prefix.join('/');
+    return owners.size === 1 ? [...owners][0] : '';
 }
 
 function wantsJson(request: IncomingMessage): boolean {
