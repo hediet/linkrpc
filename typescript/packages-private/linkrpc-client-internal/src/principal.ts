@@ -1,8 +1,10 @@
+import * as fs from 'node:fs/promises';
 import type { IRequestSender, Principal, SigningCallCtx } from '@hediet/linkrpc';
 import {
     createManagedPrincipal,
     createSelfManagedPrincipal,
     createSelfManagedPrincipalFromFile,
+    identityFilePath,
 } from '@hediet/linkrpc/node';
 
 /**
@@ -66,6 +68,12 @@ export type PrincipalSource =
 export interface ResolvedPrincipal {
     readonly principal: Principal;
     readonly source: PrincipalSource;
+    /**
+     * Set when no keypair was stored for a local identity, so a fresh one was
+     * just written to this file. Hubs that trusted a previous key for the same
+     * slot do not accept the new one.
+     */
+    readonly createdFile?: string;
 }
 
 /**
@@ -86,22 +94,23 @@ export async function resolvePrincipal(
                     source: { kind: 'managed' },
                 };
             } catch {
-                return {
-                    principal: await createSelfManagedPrincipal(MANAGED_FALLBACK_USER_ID),
-                    source: { kind: 'managed-fallback', userId: MANAGED_FALLBACK_USER_ID },
-                };
+                return _local(
+                    identityFilePath({ id: MANAGED_FALLBACK_USER_ID }),
+                    () => createSelfManagedPrincipal(MANAGED_FALLBACK_USER_ID),
+                    { kind: 'managed-fallback', userId: MANAGED_FALLBACK_USER_ID },
+                );
             }
         case 'user':
-            return {
-                principal: await createSelfManagedPrincipal(spec.id),
-                source: { kind: 'user', id: spec.id },
-            };
+            return _local(identityFilePath({ id: spec.id }), () => createSelfManagedPrincipal(spec.id), { kind: 'user', id: spec.id });
         case 'file':
-            return {
-                principal: await createSelfManagedPrincipalFromFile(spec.path),
-                source: { kind: 'file', path: spec.path },
-            };
+            return _local(spec.path, () => createSelfManagedPrincipalFromFile(spec.path), { kind: 'file', path: spec.path });
     }
+}
+
+async function _local(file: string, create: () => Promise<Principal>, source: PrincipalSource): Promise<ResolvedPrincipal> {
+    const existed = await fs.access(file).then(() => true, () => false);
+    const principal = await create();
+    return existed ? { principal, source } : { principal, source, createdFile: file };
 }
 
 /**

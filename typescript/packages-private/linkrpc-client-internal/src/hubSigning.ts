@@ -89,7 +89,14 @@ export async function setupSigning(
     principalSpec: PrincipalSpec,
     opts: { negotiateHubCaps: boolean; autoNegotiatePerCall?: boolean; },
 ): Promise<SigningSession> {
-    const { principal, source: principalSource } = await resolvePrincipal(principalSpec, channel);
+    const { principal, source: principalSource, createdFile } = await resolvePrincipal(principalSpec, channel);
+    if (createdFile !== undefined) {
+        process.stderr.write(
+            `linkrpc: warning: no stored keypair was found, so a new identity ${principal.id} was created at `
+            + `${createdFile}. Hubs that trusted a previous key for this identity will not accept it until `
+            + 'they trust or delegate to the new one.\n',
+        );
+    }
 
     signing.principal = principal;
     signing.oneShotCaps = undefined;
