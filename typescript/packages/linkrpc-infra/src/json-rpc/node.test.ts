@@ -235,37 +235,57 @@ describe('JSON-RPC WebSocket export', () => {
         expect(errors[0].cause).toEqual(new Error('JSON-RPC input queue exceeded'));
     });
 
-    it('enforces the 32 MiB pending byte limit independently of the frame count', async () => {
+    it('enforces the 200 MiB pending byte limit independently of the frame count', async () => {
         const errors: Error[] = [];
         const server = await start((_serviceId, signal) => new Promise((_resolve, reject) => {
             signal.addEventListener('abort', () => reject(new Error('aborted')));
         }), errors);
         const client = await connect(server);
-        const frame = JSON.stringify({ jsonrpc: '2.0', method: 'large', params: 'x'.repeat(12 * 1024 * 1024) });
+        const frame = JSON.stringify({ jsonrpc: '2.0', method: 'large', params: 'x'.repeat(70 * 1024 * 1024) });
         for (let i = 0; i < 3; i++) client.send(frame);
-        await expect.poll(() => client.readyState).toBe(WebSocket.CLOSED);
+        await expect.poll(() => client.readyState, { timeout: 20_000 }).toBe(WebSocket.CLOSED);
         expect(errors[0].cause).toEqual(new Error('JSON-RPC input queue exceeded'));
-    });
+    }, 30_000);
 
-    it('rejects an incoming frame exceeding 16 MiB', async () => {
+    it('forwards a frame of exactly 100 MiB in both directions', async () => {
         const pair = new JsonRpcTransportPair();
         const errors: Error[] = [];
         const server = await start(async () => pair.a, errors);
         const client = await connect(server);
-        client.send(JSON.stringify({ params: 'x'.repeat(16 * 1024 * 1024) }));
-        await expect.poll(() => pair.b.closed).toBe(true);
-        expect(errors[0].cause).toMatchObject({ code: 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH' });
-    });
+        const frame = { jsonrpc: '2.0', id: 1, result: '' };
+        frame.result = 'x'.repeat(100 * 1024 * 1024 - Buffer.byteLength(JSON.stringify(frame)));
+        const received = message(client);
+        const echo = pair.b.onMessage(value => { void pair.b.send(value); });
+        try {
+            client.send(JSON.stringify(frame));
+            expect(await received).toEqual(frame);
+            expect(errors).toEqual([]);
+        } finally {
+            echo.dispose();
+        }
+    }, 30_000);
 
-    it('rejects an outgoing frame exceeding 16 MiB', async () => {
+    it('rejects an incoming frame exceeding 100 MiB by one byte', async () => {
+        const pair = new JsonRpcTransportPair();
+        const errors: Error[] = [];
+        const server = await start(async () => pair.a, errors);
+        const client = await connect(server);
+        client.send(Buffer.alloc(100 * 1024 * 1024 + 1, 0x20), { binary: false });
+        await expect.poll(() => pair.b.closed, { timeout: 20_000 }).toBe(true);
+        expect(errors[0].cause).toMatchObject({ code: 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH' });
+    }, 30_000);
+
+    it('rejects an outgoing frame exceeding 100 MiB by one byte', async () => {
         const pair = new JsonRpcTransportPair();
         const errors: Error[] = [];
         const server = await start(async () => pair.a, errors);
         await connect(server);
-        await pair.b.send({ params: 'x'.repeat(16 * 1024 * 1024) });
+        const frame = { result: '' };
+        frame.result = 'x'.repeat(100 * 1024 * 1024 + 1 - Buffer.byteLength(JSON.stringify(frame)));
+        await pair.b.send(frame);
         await expect.poll(() => pair.b.closed).toBe(true);
         expect(errors[0].cause).toEqual(new Error('WebSocket output queue exceeded'));
-    });
+    }, 30_000);
 
     it('propagates bind failures and allows idempotent shutdown', async () => {
         const server = await start(async () => new JsonRpcTransportPair().a);

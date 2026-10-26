@@ -6,7 +6,7 @@ import type { JsonValue } from '@hediet/linkrpc';
 import { parseEndpointUri } from '@hediet/linkrpc/node';
 import type { JsonRpcTransport } from './transport';
 
-const maxFrameBytes = 16 * 1024 * 1024;
+const maxFrameBytes = 100 * 1024 * 1024;
 
 export interface JsonRpcExportRoute {
     readonly serviceId: string;
@@ -165,7 +165,7 @@ function attach(
     options: JsonRpcWebSocketExportOptions,
     onClose: () => void,
 ): () => void {
-    const maxQueuedBytes = 32 * 1024 * 1024;
+    const maxQueuedBytes = 2 * maxFrameBytes;
     let closed = false;
     let remote: JsonRpcTransport | undefined;
     let queuedBytes = 0;
