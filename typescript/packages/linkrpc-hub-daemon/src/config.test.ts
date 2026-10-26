@@ -68,16 +68,28 @@ describe('daemon config', () => {
             env: change({ env: { A: '1' } }),
             command: change({ command: ['y'] }),
             rpc: change({ rpc: false }),
+            endpoint: change({ command: undefined, endpoint: 'unix:/tmp/hub.sock' }),
         }).toMatchInlineSnapshot(`
           {
             "command": "restart",
             "enabled": "inPlace",
+            "endpoint": "restart",
             "env": "restart",
             "restartPolicy": "inPlace",
             "rpc": "restart",
             "same": "none",
           }
         `);
+    });
+
+    it('accepts endpoint services and rejects process settings on them', () => {
+        const parse = (service: object) => parseDaemonConfigText(JSON.stringify({ hubServiceId: 'mac', services: { vm: service } })).services.vm;
+        expect(parse({ endpoint: 'cmd-stdio:?argv=ssh&argv=vm&argv=bridge', serviceId: 'mac/vm-1', managedIdentity: false }))
+            .toMatchObject({ endpoint: 'cmd-stdio:?argv=ssh&argv=vm&argv=bridge', serviceId: 'mac/vm-1', managedIdentity: false });
+        expect(() => parse({})).toThrow('set exactly one of "command" and "endpoint"');
+        expect(() => parse({ command: ['x'], endpoint: 'unix:/a' })).toThrow('set exactly one of "command" and "endpoint"');
+        expect(() => parse({ endpoint: 'unix:/a', env: { A: '1' }, tty: true }))
+            .toThrow('"env", "tty" only apply to "command" services');
     });
 
     it('toggles enabled with a minimal edit that keeps comments', () => {

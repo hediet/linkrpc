@@ -1,9 +1,11 @@
 import * as net from 'node:net';
 import { LinkRpcConnection, type IMessageTransport } from '@hediet/linkrpc';
-import { connectNdjson, parseEndpointUri, runInitializeHandshake, WebSocketTransport } from '@hediet/linkrpc/node';
+import { connectNdjson, parseEndpointUri, runInitializeHandshake, WebSocketTransport, type ResolvedEndpoint } from '@hediet/linkrpc/node';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
+import { spawnCommand } from '@hediet/linkrpc-hub/spawn';
 import type { ManagedService } from './config';
-import type { ServiceStatus } from './managementInterface';
+import { LogBuffer } from './logBuffer';
+import type { LogLine, ServiceStatus } from './managementInterface';
 import type { ServiceHost, ServiceSocket } from './supervisor';
 
 interface TransportHandle {
@@ -12,6 +14,14 @@ interface TransportHandle {
     dispose(): void;
 }
 
+type ConnectableEndpoint = Extract<ResolvedEndpoint, { kind: 'socket' | 'ws' | 'cmd-stdio' }>;
+
+/**
+ * Keeps a service's `endpoint` connected to the hub: its traffic is relayed
+ * through the service's participant socket, so it may serve only the granted
+ * `serviceId` and its calls pass the hub's forwarded-call gate. Reconnects with
+ * backoff according to the restart policy.
+ */
 export class ConnectionSupervisor {
     private _state: ServiceStatus['state'] = 'stopped';
     private _error: string | undefined;
@@ -24,28 +34,34 @@ export class ConnectionSupervisor {
     private _timer: ReturnType<typeof setTimeout> | undefined;
     private _pending: Promise<void> | undefined;
     private _service: ManagedService;
+    private readonly _endpoint: ConnectableEndpoint;
+    private readonly _logs = new LogBuffer();
 
     constructor(
         readonly name: string,
-        private readonly _endpoint: string,
         service: ManagedService,
         private readonly _host: ServiceHost,
         private readonly _changed: () => void,
     ) {
-        const endpoint = parseEndpointUri(_endpoint);
-        if (endpoint.kind !== 'socket' && endpoint.kind !== 'ws') {
-            throw new Error('Managed connections require a LinkRPC socket or WebSocket endpoint');
+        if (service.endpoint === undefined) throw new Error(`service '${name}' has no endpoint`);
+        const endpoint = parseEndpointUri(service.endpoint);
+        if (endpoint.kind !== 'socket' && endpoint.kind !== 'ws' && endpoint.kind !== 'cmd-stdio') {
+            throw new Error('Managed connections require a LinkRPC socket, WebSocket, or cmd-stdio endpoint');
         }
+        this._endpoint = endpoint;
         this._service = service;
     }
 
     get service(): ManagedService { return this._service; }
     status(): ServiceStatus {
         return {
-            name: this.name, serviceId: this._service.serviceId, enabled: this._service.enabled,
-            state: this._state, since: this._since, connections: this._state === 'running' ? 1 : 0,
-            restarts: this._restarts, error: this._error,
+            name: this.name, description: this._service.description, serviceId: this._service.serviceId,
+            enabled: this._service.enabled, state: this._state, since: this._since,
+            connections: this._state === 'running' ? 1 : 0, restarts: this._restarts, error: this._error,
         };
+    }
+    logs(limit?: number): LogLine[] {
+        return this._logs.lines(limit);
     }
     async sync(): Promise<void> {
         if (!this._service.enabled) return this.dispose();
@@ -60,6 +76,12 @@ export class ConnectionSupervisor {
         this._changed();
     }
     input(): never { throw new Error('A connected endpoint has no managed process console'); }
+    async restart(): Promise<void> {
+        if (!this._service.enabled) throw new Error(`service '${this.name}' is disabled`);
+        this._logDaemon('restart requested');
+        await this.dispose();
+        await this.sync();
+    }
     async dispose(): Promise<void> {
         ++this._generation;
         clearTimeout(this._timer);
@@ -71,13 +93,13 @@ export class ConnectionSupervisor {
         this._error = undefined;
         this._setState('starting');
         try {
-            const target = await openTransport(this._endpoint);
+            const target = await this._openTarget();
             if (generation !== this._generation) { target.dispose(); return; }
             this._target = target;
             this._socket = await this._host.openSocket(this.name, this._service, () => {});
             if (generation !== this._generation) { this._cleanup(); return; }
             const env = this._socket.env;
-            const local = await openTransport(env.LINKRPC_ENDPOINT ?? env.HUBRPC_ENDPOINT!, env.LINKRPC_TOKEN ?? env.HUBRPC_TOKEN);
+            const local = await openTransport(parseEndpointUri(env.LINKRPC_ENDPOINT ?? env.HUBRPC_ENDPOINT!), env.LINKRPC_TOKEN ?? env.HUBRPC_TOKEN);
             if (generation !== this._generation) { local.dispose(); this._cleanup(); return; }
             this._local = local;
             // Claims are performed before handing the transport to the remote endpoint.
@@ -96,7 +118,7 @@ export class ConnectionSupervisor {
     private _failed(generation: number, error: unknown): void {
         this._cleanup();
         this._error = error instanceof Error ? error.message : String(error);
-        this._host.notice?.(this.name, this._error);
+        this._logDaemon(this._error);
         if (this._service.restart === 'never') {
             this._setState('failed');
         } else {
@@ -116,10 +138,52 @@ export class ConnectionSupervisor {
     private _setState(state: ServiceStatus['state']): void {
         this._state = state; this._since = Date.now(); this._changed();
     }
+    private _openTarget(): Promise<TransportHandle> {
+        if (this._endpoint.kind !== 'cmd-stdio') return openTransport(this._endpoint);
+        return openCommandTransport(this._endpoint, line => {
+            this._logs.append('stderr', line + '\n');
+            this._host.log(this.name, line);
+        });
+    }
+    private _logDaemon(text: string): void {
+        this._host.notice?.(this.name, text);
+        this._logs.append('daemon', text + '\n');
+        this._host.log(this.name, text);
+    }
 }
 
-async function openTransport(uri: string, token?: string): Promise<TransportHandle> {
-    const endpoint = parseEndpointUri(uri);
+/** Spawn the endpoint's command and speak handshake-free newline-delimited JSON-RPC over its stdio. */
+async function openCommandTransport(
+    endpoint: Extract<ConnectableEndpoint, { kind: 'cmd-stdio' }>,
+    onStderrLine: (line: string) => void,
+): Promise<TransportHandle> {
+    const child = spawnCommand(endpoint.command, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, ...endpoint.env },
+        windowsHide: true,
+        ...(endpoint.cwd !== undefined ? { cwd: endpoint.cwd } : {}),
+    });
+    const kill = () => { if (child.exitCode === null && !child.killed) child.kill(); };
+    const closed = new Promise<void>(resolve => {
+        child.once('exit', () => resolve());
+        child.once('error', () => resolve());
+    });
+    let partial = '';
+    child.stderr!.setEncoding('utf8');
+    child.stderr!.on('data', (chunk: string) => {
+        const lines = (partial + chunk).split(/\r?\n/);
+        partial = lines.pop()!;
+        for (const line of lines) if (line.length > 0) onStderrLine(line);
+    });
+    await new Promise<void>((resolve, reject) => {
+        child.once('spawn', resolve);
+        child.once('error', reject);
+    });
+    const { transport } = await connectNdjson({ input: child.stdout!, output: child.stdin!, onClose: kill });
+    return { transport, closed, dispose: () => { transport.dispose(); kill(); } };
+}
+
+async function openTransport(endpoint: ResolvedEndpoint, token?: string): Promise<TransportHandle> {
     if (endpoint.kind === 'socket') {
         const socket = net.createConnection(endpoint.path);
         socket.setTimeout(10_000, () => socket.destroy(new Error('Endpoint initialization timed out')));

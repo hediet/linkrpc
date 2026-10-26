@@ -3,11 +3,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { connectToHub } from '@hediet/linkrpc/node';
+import { connectToHub, formatEndpointUri } from '@hediet/linkrpc/node';
 import { loggingInterface } from '@hediet/linkrpc-infra/logging';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type CallRecord, connectToHubManagement, connectToLocalHub, type DaemonStatus, type ServiceStatus } from './client';
 import { HubDaemon } from './daemon';
+import { cliScript } from './packageInfo';
 import { HubHome } from './paths';
 import { AlreadyRunningError } from './singleInstance';
 import { bridgeStdioToLocalHub } from './stdioBridge';
@@ -157,6 +158,50 @@ describe('HubDaemon', () => {
         expect(await response).toEqual({ jsonrpc: '2.0', id: 'vscode-1', result: { text: 'a:hi', pid } });
         input.end();
         await bridged;
+    });
+
+    it('connects an endpoint service that serves another hub under the granted namespace, including streams', async () => {
+        const innerDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lrh-inner-'));
+        const innerHome = HubHome.at(innerDir);
+        fs.writeFileSync(innerHome.configFile, JSON.stringify({ hubServiceId: 'hub/vm', services: { a: service({ ECHO_PREFIX: 'vm:' }) } }));
+        const inner = await HubDaemon.start({ home: innerHome });
+        try {
+            await waitFor(() => inner.status().services[0]?.state === 'running', 'the inner service to run');
+            const bridge = formatEndpointUri({
+                kind: 'cmd-stdio',
+                command: { argv: [process.execPath, cliScript(), '--home', innerDir, 'bridge-stdio'] },
+            });
+            writeConfig({ services: { vm: { endpoint: bridge, serviceId: 'hub/vm', managedIdentity: false } } });
+            await running('vm');
+            const hub = await connectToLocalHub({ home });
+            try {
+                const vm = hub.connection.service('hub/vm/a').get(echoInterface);
+                const call = () => vm.echo({ text: 'hi' }).then((result: { text: string; }) => result, () => undefined);
+                expect(await waitFor(call, 'a call through the endpoint')).toMatchObject({ text: 'vm:hi' });
+                const ticks: number[] = [];
+                expect(await vm.ticks({ count: 3 }, { onMessage: ({ tick }: { tick: number; }) => ticks.push(tick) }))
+                    .toEqual({ done: true });
+                expect(ticks).toEqual([0, 1, 2]);
+
+                const connection = await connectToHubManagement(home);
+                try {
+                    await connection.management.restartService({ name: 'vm' });
+                    await running('vm');
+                    expect(await waitFor(call, 'a call after restarting the endpoint')).toMatchObject({ text: 'vm:hi' });
+                    expect((await connection.management.getServiceLogs({ name: 'vm' })).lines.map(line => line.text))
+                        .toContain('restart requested');
+                } finally {
+                    connection.close();
+                }
+            } finally {
+                hub.close();
+            }
+        } finally {
+            await daemon?.shutdown();
+            daemon = undefined;
+            await inner.shutdown();
+            fs.rmSync(innerDir, { recursive: true, force: true });
+        }
     });
 
     it('serves the management API', async () => {
