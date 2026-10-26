@@ -11,10 +11,21 @@ import type { MeshTunnel, TunnelBackend, TunnelConnection, TunnelHosting } from 
 import { fromHubChannel } from './forward';
 import { DevTunnelMesh } from './mesh';
 
+/** How a connection attempt to a tunnel fails. */
+type Stall =
+    /** `connect` resolves only long after any reasonable deadline. */
+    | 'connect'
+    /** `connect` succeeds, but no stream ever opens. */
+    | 'openStream';
+
 /** An in-memory tunnel service shared by the meshes of one test. */
 class FakeTunnelService {
     private readonly _hosts = new Map<string, { tunnelId: string; onStream: (stream: Duplex) => void; }>();
     private _nextId = 1;
+    /** Consumed by the next connection attempts, one each. */
+    public readonly stalls: Stall[] = [];
+    /** Connections of stalled attempts that were disposed. */
+    public stalledDisposed = 0;
 
     public readonly backend: TunnelBackend = {
         list: async () => [...this._hosts].map(([hubServiceId, host]): MeshTunnel => ({
@@ -33,23 +44,36 @@ class FakeTunnelService {
                 },
             };
         },
-        connect: async (tunnel): Promise<TunnelConnection> => ({
-            openStream: async () => {
-                const host = [...this._hosts.values()].find(h => h.tunnelId === tunnel.tunnelId);
-                if (!host) throw new Error(`${tunnel.tunnelId} is offline`);
-                const [local, remote] = duplexPair();
-                host.onStream(remote);
-                return local;
-            },
-            closed: new Promise(() => { /* stays open */ }),
-            dispose: () => { },
-        }),
+        connect: async (tunnel): Promise<TunnelConnection> => {
+            const stall = this.stalls.shift();
+            if (stall !== undefined) {
+                const connection: TunnelConnection = {
+                    openStream: () => new Promise(() => { /* never opens */ }),
+                    closed: new Promise(() => { /* stays open */ }),
+                    dispose: () => { this.stalledDisposed++; },
+                };
+                if (stall === 'connect') await new Promise(resolve => setTimeout(resolve, 1_000));
+                return connection;
+            }
+            return {
+                openStream: async () => {
+                    const host = [...this._hosts.values()].find(h => h.tunnelId === tunnel.tunnelId);
+                    if (!host) throw new Error(`${tunnel.tunnelId} is offline`);
+                    const [local, remote] = duplexPair();
+                    host.onStream(remote);
+                    return local;
+                },
+                closed: new Promise(() => { /* stays open */ }),
+                dispose: () => { },
+            };
+        },
     };
 }
 
 interface TestHub {
     readonly hub: RunningHub;
     readonly mesh: DevTunnelMesh;
+    readonly log: readonly string[];
     call(method: string): Promise<{ result: JsonValue; stream: JsonValue[]; }>;
 }
 
@@ -89,14 +113,16 @@ describe('DevTunnelMesh', () => {
         cleanup.push(() => echo.close());
 
         const meshSocket = await hub.openParticipantSocket({ provision: { grantedServiceId: 'me' } });
+        const log: string[] = [];
         const mesh = await DevTunnelMesh.start({
             backend: service.backend,
             openLocal: async () => fromHubChannel(await openHubChannel({ endpoint: meshSocket.path, token: meshSocket.token })),
             appEndpoint,
             host: true,
             connect: true,
-            log: () => { },
+            log: line => { log.push(line); },
             discoveryIntervalMs: 100,
+            timeoutMs: 300,
         });
         cleanup.push(() => mesh.dispose());
 
@@ -106,6 +132,7 @@ describe('DevTunnelMesh', () => {
         return {
             hub,
             mesh,
+            log,
             call: async method => {
                 const stream: JsonValue[] = [];
                 const call = client.sender.sendRequestWithStream(method, {}, { onStreamMessage: payload => { stream.push(payload); } });
@@ -144,6 +171,19 @@ describe('DevTunnelMesh', () => {
                 return /no route/.test(String(error));
             }
         }, 'the route to be released');
+    });
+
+    it('gives up on connection attempts that hang, disposes them, and retries', async () => {
+        const service = new FakeTunnelService();
+        service.stalls.push('openStream', 'connect');
+        const pc = await startHub(service, 'me/pc');
+        const devbox = await startHub(service, 'me/devbox');
+
+        await waitFor(() => pc.mesh.connectedPeers().includes('me/devbox') && devbox.mesh.connectedPeers().includes('me/pc'), 'both links', 20_000);
+        await waitFor(() => service.stalledDisposed === 2, 'the stalled connections to be disposed');
+        expect([...pc.log, ...devbox.log].filter(line => line.includes('cannot connect')).map(line => line.replace(/^\[[^\]]+\] /, '')))
+            .toEqual(['cannot connect: timed out after 0.3 s', 'cannot connect: timed out after 0.3 s']);
+        expect((await pc.call('me/devbox/echo::test::echo')).result).toMatchObject({ hub: 'me/devbox' });
     });
 });
 
