@@ -921,6 +921,50 @@ Each service and port shares one `tcpForward.multiplex` session (up to 10
 logical connections, 8 of them for pooled HTTP keep-alive), closed after five
 idle minutes.
 
+### Hub MCP aggregation
+
+`linkrpc hub mcp` is a lightweight stdio MCP server that discovers services
+exposing `vscode.mcp-forward` in the selected Hub and aggregates their tools.
+No service IDs, filters, or principal overrides are required:
+
+```json
+{
+  "servers": {
+    "hub-mcp": {
+      "type": "stdio",
+      "command": "linkrpc",
+      "args": ["hub", "mcp"]
+    }
+  }
+}
+```
+
+Endpoint/context/environment and identity selection follow the normal Hub CLI
+rules. An explicit endpoint can be supplied before `mcp`, for example
+`linkrpc hub --endpoint npipe://./pipe/my-hub mcp`. Signing and capability
+negotiation remain enabled by default; discovery does not bypass authorization.
+Inaccessible directories and failed servers are reported on stderr; stdout
+contains only MCP protocol frames.
+
+The command watches directory changes, refreshes changed tool lists (including
+paginated lists), and retries failed connections while they remain advertised.
+Tool names use a readable prefix and a stable hash of service ID plus tool name,
+remaining unique and MCP-safe even for long service paths. Descriptions identify
+the source service. Disconnecting stdio closes this client's forwarding sessions.
+This version aggregates tools, not resources, prompts, or sampling.
+
+The producer stays separate:
+
+```sh
+linkrpc hub mcp-forward --serviceId <authorized-service-id> -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
+```
+
+Manage that producer and `component-explorer serve -p <same-config>` with your
+workspace daemon. The aggregator opens lightweight MCP connections; it does not
+start workspace builds or explorer daemons. Each forwarded connection spawns
+the configured MCP child, so producers must use attach-only commands when
+heavyweight services are managed separately.
+
 ### Participant proxy
 
 `proxy` stands in for a participant on the hub: the participant is either this

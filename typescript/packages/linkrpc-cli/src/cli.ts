@@ -45,6 +45,7 @@ import { proxyCommand, tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpForwardCommand } from './commands/mcpForward';
+import { mcpCommand } from './commands/mcp';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
 import { defaultHttpExportSessionFile, httpExportCommand } from './commands/httpExport';
@@ -1227,6 +1228,18 @@ Batch options:
                     local.close();
                 }
             });
+        program
+            .command('mcp')
+            .description('Expose tools from all discoverable Hub MCP forwarders as one stdio MCP server.')
+            .action(async () => {
+                await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
+                    await mcpCommand(channel, {
+                        requestDirectoryAccess: session === undefined ? undefined : serviceId =>
+                            requestDirectoryAccess(session, serviceId, { watch: true }),
+                    });
+                }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+            });
+
         program
             .command('json-rpc-stdio <serviceId>')
             .description(
