@@ -47,7 +47,7 @@ import { openDialTransport, openTargetTransport, type DialEndpoint } from './com
 import { mcpForwardCommand } from './commands/mcpForward';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
-import { httpExportCommand } from './commands/httpExport';
+import { defaultHttpExportSessionFile, httpExportCommand } from './commands/httpExport';
 import { validateJsonRpcExport } from '@hediet/linkrpc-infra/json-rpc/node';
 import {
     createHubApprovalCommandClient,
@@ -1196,7 +1196,10 @@ Batch options:
             .option('--port <n>', 'Local port to listen on', value => parsePositiveInteger(value, '--port'), 80)
             .option('--host <address>', 'Local address to bind (repeatable; default 127.0.0.1 and ::1)', collectOption)
             .option('--base-domain <domain>', 'Base domain of exported hostnames', 'localhost')
-            .action(async (opts: { port: number; host?: readonly string[]; baseDomain: string }) => {
+            .addOption(new Option('--auth <mode>', 'browser: browsers must be approved once through the Hub consent flow (tools without browser headers are not affected); none: no approval')
+                .choices(['browser', 'none']).default('browser'))
+            .option('--session-file <path>', 'Where approved browser sessions are kept across restarts (contains browser keys)')
+            .action(async (opts: { port: number; host?: readonly string[]; baseDomain: string; auth: 'browser' | 'none'; sessionFile?: string }) => {
                 const localEp = needEndpoint(endpoint);
                 const local = await connectEndpoint(localEp, wireLog('hub'));
                 try {
@@ -1210,10 +1213,12 @@ Batch options:
                         port: opts.port,
                         hosts: opts.host ?? ['127.0.0.1', '::1'],
                         baseDomain: opts.baseDomain,
+                        auth: opts.auth,
+                        sessionFile: opts.sessionFile ?? defaultHttpExportSessionFile(opts.port),
                         onError: error => process.stderr.write(`linkrpc: ${error.message}\n`),
                     });
                     try {
-                        process.stderr.write(`linkrpc: HTTP export listening at ${server.urls.join(', ')}\n`);
+                        process.stderr.write(`linkrpc: HTTP export listening at ${server.urls.join(', ')}${opts.auth === 'browser' ? ' (browsers need approval; --auth none disables it)' : ''}\n`);
                         await _untilSignalled();
                     } finally {
                         await server.close();

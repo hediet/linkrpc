@@ -1,7 +1,9 @@
+import { homedir, hostname } from 'node:os';
+import { join } from 'node:path';
 import { LinkRpcConnection } from '@hediet/linkrpc';
-import { HubDirectoryExplorer } from '@hediet/linkrpc/hub/common';
+import { HubDirectoryExplorer, hubAccessInterface } from '@hediet/linkrpc/hub/common';
 import { computeNodePortsInterface, computeNodeTcpForwardInterface } from '@hediet/linkrpc-infra/compute-node';
-import { startHttpExport, type HttpExport, type HttpExportServiceList } from '@hediet/linkrpc-infra/http-export/node';
+import { startHttpExport, type BrowserAccessRequest, type BrowserAccessResult, type HttpExport, type HttpExportCaller, type HttpExportServiceList } from '@hediet/linkrpc-infra/http-export/node';
 import type { CliConnection } from '@hediet/linkrpc-client-internal';
 
 const SERVICE_LIST_TTL_MS = 30_000;
@@ -14,6 +16,10 @@ export async function httpExportCommand(options: {
     readonly port: number;
     readonly hosts: readonly string[];
     readonly baseDomain: string;
+    /** `browser`: browsers must be approved through the Hub's consent flow; `none`: no approval. */
+    readonly auth: 'browser' | 'none';
+    /** Where approved browser sessions are kept across restarts. */
+    readonly sessionFile?: string;
     readonly onError: (error: Error) => void;
 }): Promise<HttpExport> {
     const connection = new LinkRpcConnection(options.local.rpcChannel);
@@ -21,11 +27,41 @@ export async function httpExportCommand(options: {
     return startHttpExport({
         listen: options.hosts.map(host => ({ host, port: options.port })),
         baseDomain: options.baseDomain,
-        getTcpForward: serviceId => connection.service(serviceId).get(computeNodeTcpForwardInterface),
+        getTcpForward: (serviceId, caller) => connection.service(serviceId).get(computeNodeTcpForwardInterface, signedAs(caller)),
         listServices: () => services.get(),
-        listPorts: async serviceId => (await connection.service(serviceId).get(computeNodePortsInterface).listListening({})).ports,
+        listPorts: async (serviceId, caller) => (await connection.service(serviceId).get(computeNodePortsInterface, signedAs(caller)).listListening({})).ports,
+        ...(options.auth === 'browser' ? {
+            approval: {
+                gatewayName: hostname(),
+                ...(options.sessionFile === undefined ? {} : { stateFile: options.sessionFile }),
+                requestAccess: request => requestBrowserAccess(connection, request),
+            },
+        } : {}),
         onError: options.onError,
     });
+}
+
+/** Per-user state file for approved browser sessions of a gateway on `port`. */
+export function defaultHttpExportSessionFile(port: number): string {
+    const base = process.platform === 'win32'
+        ? process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
+        : process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state');
+    return join(base, 'linkrpc', 'http-export', `browser-sessions-${port}.json`);
+}
+
+/** Signs a browser's calls with its own key and approved capabilities instead of the gateway's identity. */
+function signedAs(caller: HttpExportCaller | undefined): { signerOverride?: HttpExportCaller['signer']; capsOverride?: HttpExportCaller['capabilities'] } {
+    return caller ? { signerOverride: caller.signer, capsOverride: caller.capabilities } : {};
+}
+
+/** Asks the Hub's approvers to grant `request.permissions` to the browser's principal; resolves once decided. */
+async function requestBrowserAccess(connection: LinkRpcConnection, request: BrowserAccessRequest): Promise<BrowserAccessResult> {
+    const result = await connection.get(hubAccessInterface).requestAccess({
+        consumer: { name: request.name, purpose: request.purpose, principal: request.principal },
+        permissions: request.permissions.map(permission => ({ ...permission, target: { ...permission.target, members: [...permission.target.members] } })),
+        duration: 'persistent',
+    });
+    return result.status === 'granted' ? { status: 'granted', capabilities: result.capabilities } : { status: result.status, ...('reason' in result && result.reason ? { reason: result.reason } : {}) };
 }
 
 /** Caches the services that implement `tcpForward`; a slow or partial walk returns what it found. */

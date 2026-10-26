@@ -16,6 +16,7 @@ import {
     resolveServiceReference,
     type ServiceReference,
 } from './hostname';
+import { BrowserApproval, type BrowserApprovalOptions, type HttpExportCaller } from './browserApproval';
 import { HubTcpHttpAgent, HubTcpMultiplexer, type TcpForwardClient } from './tcpMultiplexer';
 import {
     type ForwardTarget,
@@ -26,6 +27,7 @@ import {
     translateResponseHeaders,
 } from './originTranslation';
 
+export * from './browserApproval';
 export * from './hostname';
 export * from './originTranslation';
 export * from './tcpMultiplexer';
@@ -43,10 +45,13 @@ export interface HttpExportServiceList {
 export interface HttpExportOptions {
     readonly listen: readonly { readonly host: string; readonly port: number }[];
     readonly baseDomain?: string;
-    readonly getTcpForward: (serviceId: string) => TcpForwardClient;
+    /** `caller` is set for approved browsers; absent means the gateway's own identity. */
+    readonly getTcpForward: (serviceId: string, caller?: HttpExportCaller) => TcpForwardClient;
     readonly listServices: () => Promise<HttpExportServiceList>;
     /** Throws when the service cannot list its ports. */
-    readonly listPorts: (serviceId: string) => Promise<readonly ComputeNodeListeningPort[]>;
+    readonly listPorts: (serviceId: string, caller?: HttpExportCaller) => Promise<readonly ComputeNodeListeningPort[]>;
+    /** Require browsers to be approved through the Hub's consent flow. Absent: no approval (anyone local may browse). */
+    readonly approval?: BrowserApprovalOptions;
     /** Request failures. Must not throw. */
     readonly onError: (error: Error) => void;
 }
@@ -61,7 +66,15 @@ export async function startHttpExport(options: HttpExportOptions): Promise<HttpE
     if (options.listen.length === 0) {
         throw new Error('Specify at least one listen address.');
     }
-    const gateway = new HttpExportGateway(options);
+    const baseDomain = options.baseDomain ?? HTTP_EXPORT_BASE_DOMAIN;
+    let gateway: HttpExportGateway | undefined;
+    const approval = options.approval
+        ? await BrowserApproval.create(options.approval, baseDomain, {
+            resolve: reference => gateway!.resolveService(reference),
+            scope: async target => approvalScope(target, (await options.listServices()).serviceIds),
+        })
+        : undefined;
+    gateway = new HttpExportGateway(options, approval);
     const servers: Server[] = [];
     try {
         for (const address of options.listen) {
@@ -73,7 +86,6 @@ export async function startHttpExport(options: HttpExportOptions): Promise<HttpE
     }
     const address = servers[0].address();
     const port = address && typeof address === 'object' ? address.port : options.listen[0].port;
-    const baseDomain = options.baseDomain ?? HTTP_EXPORT_BASE_DOMAIN;
     return {
         urls: [`http://${baseDomain}${port === 80 ? '' : `:${port}`}/`],
         close: () => gateway.close(servers),
@@ -93,7 +105,7 @@ class HttpExportGateway {
     private readonly _sockets = new Set<Duplex>();
     private _closing = false;
 
-    constructor(private readonly _options: HttpExportOptions) {
+    constructor(private readonly _options: HttpExportOptions, private readonly _approval: BrowserApproval | undefined) {
         this._baseDomain = _options.baseDomain ?? HTTP_EXPORT_BASE_DOMAIN;
     }
 
@@ -142,12 +154,20 @@ class HttpExportGateway {
         if (!parsed) {
             return sendText(response, 421, `This gateway only serves ${this._baseDomain} and its subdomains.`);
         }
+        let caller: HttpExportCaller | undefined;
+        if (this._approval) {
+            const decision = await this._approval.handleRequest(request, response);
+            if (decision.kind === 'handled') {
+                return;
+            }
+            caller = decision.caller;
+        }
         if (parsed.kind === 'service' && parsed.params.port !== undefined) {
-            const serviceId = await this._resolveService(parsed.service);
+            const serviceId = await this.resolveService(parsed.service);
             if (!serviceId) {
                 return sendText(response, 404, 'Unknown service.');
             }
-            return this._proxyHttp(request, response, serviceId, parsed.params.port);
+            return this._proxyHttp(request, response, serviceId, parsed.params.port, caller);
         }
         const rejection = gatewayPageRejection(request);
         if (rejection) {
@@ -156,11 +176,11 @@ class HttpExportGateway {
         if (parsed.kind === 'index') {
             return this._renderServices(request, response);
         }
-        const serviceId = await this._resolveService(parsed.service);
+        const serviceId = await this.resolveService(parsed.service);
         if (!serviceId) {
             return sendGatewayText(response, 404, 'Unknown service.');
         }
-        return this._renderPorts(request, response, serviceId);
+        return this._renderPorts(request, response, serviceId, caller);
     }
 
     private async _handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
@@ -171,21 +191,25 @@ class HttpExportGateway {
         if (!parsed || parsed.kind !== 'service' || parsed.params.port === undefined) {
             return reject('404 Not Found');
         }
-        const serviceId = await this._resolveService(parsed.service);
+        const serviceId = await this.resolveService(parsed.service);
         if (!serviceId) {
             return reject('404 Not Found');
+        }
+        const caller = await this._approval?.authorizeUpgrade(request);
+        if (caller === 'rejected') {
+            return reject('401 Unauthorized');
         }
         const target = this._target(request, serviceId, parsed.params.port);
         const requestHead = serializeHead(
             `${request.method ?? 'GET'} ${request.url ?? '/'} HTTP/${request.httpVersion}`,
-            await translateRequestHeaders(request.rawHeaders, target, reference => this._resolveService(reference), { keepUpgradeHeaders: true }),
+            await translateRequestHeaders(request.rawHeaders, target, reference => this.resolveService(reference), { keepUpgradeHeaders: true }),
         );
-        const pool = this._acquirePool(serviceId, parsed.params.port);
+        const pool = this._acquirePool(serviceId, parsed.params.port, caller);
         let released = false;
         const release = (): void => {
             if (!released) {
                 released = true;
-                this._releasePool(serviceId, parsed.params.port!, pool);
+                this._releasePool(poolKey(serviceId, parsed.params.port!, caller), pool);
             }
         };
         socket.once('close', release);
@@ -216,10 +240,10 @@ class HttpExportGateway {
         relayUpgradeResponse(upstream, socket, target);
     }
 
-    private async _proxyHttp(request: IncomingMessage, response: ServerResponse, serviceId: string, port: number): Promise<void> {
+    private async _proxyHttp(request: IncomingMessage, response: ServerResponse, serviceId: string, port: number, caller: HttpExportCaller | undefined): Promise<void> {
         const target = this._target(request, serviceId, port);
-        const headers = await translateRequestHeaders(request.rawHeaders, target, reference => this._resolveService(reference), { keepUpgradeHeaders: false });
-        const pool = this._acquirePool(serviceId, port);
+        const headers = await translateRequestHeaders(request.rawHeaders, target, reference => this.resolveService(reference), { keepUpgradeHeaders: false });
+        const pool = this._acquirePool(serviceId, port, caller);
         try {
             await new Promise<void>((resolve, reject) => {
                 const upstreamRequest = httpRequest({
@@ -250,7 +274,7 @@ class HttpExportGateway {
                 request.pipe(upstreamRequest);
             });
         } finally {
-            this._releasePool(serviceId, port, pool);
+            this._releasePool(poolKey(serviceId, port, caller), pool);
         }
     }
 
@@ -258,11 +282,11 @@ class HttpExportGateway {
         return { serviceId, port, baseDomain: this._baseDomain, gatewayPortSuffix: gatewayPortSuffix(request.headers.host) };
     }
 
-    private _acquirePool(serviceId: string, port: number): Pool {
-        const key = `${serviceId}\n${port}`;
+    private _acquirePool(serviceId: string, port: number, caller: HttpExportCaller | undefined): Pool {
+        const key = poolKey(serviceId, port, caller);
         let pool = this._pools.get(key);
         if (!pool || pool.multiplexer.closed) {
-            const multiplexer = new HubTcpMultiplexer(this._options.getTcpForward(serviceId), port, () => {
+            const multiplexer = new HubTcpMultiplexer(this._options.getTcpForward(serviceId, caller), port, () => {
                 if (this._pools.get(key)?.multiplexer === multiplexer) {
                     this._pools.delete(key);
                 }
@@ -276,13 +300,12 @@ class HttpExportGateway {
         return pool;
     }
 
-    private _releasePool(serviceId: string, port: number, pool: Pool): void {
+    private _releasePool(key: string, pool: Pool): void {
         pool.leases--;
         if (pool.leases > 0 || this._closing) {
             return;
         }
         pool.idleTimer = setTimeout(() => {
-            const key = `${serviceId}\n${port}`;
             if (this._pools.get(key) === pool && pool.leases === 0) {
                 this._pools.delete(key);
                 pool.agent.destroy();
@@ -292,7 +315,7 @@ class HttpExportGateway {
         pool.idleTimer.unref?.();
     }
 
-    private async _resolveService(reference: ServiceReference): Promise<string | undefined> {
+    async resolveService(reference: ServiceReference): Promise<string | undefined> {
         if (reference.kind === 'readable') {
             return reference.serviceId;
         }
@@ -313,11 +336,11 @@ class HttpExportGateway {
             <p class="note">Open <code>&lt;port&gt;.&lt;service&gt;.${escapeHtml(this._baseDomain)}</code> to forward a port.</p>`);
     }
 
-    private async _renderPorts(request: IncomingMessage, response: ServerResponse, serviceId: string): Promise<void> {
+    private async _renderPorts(request: IncomingMessage, response: ServerResponse, serviceId: string, caller: HttpExportCaller | undefined): Promise<void> {
         let ports: readonly ComputeNodeListeningPort[] | undefined;
         let error: string | undefined;
         try {
-            ports = await this._options.listPorts(serviceId);
+            ports = await this._options.listPorts(serviceId, caller);
         } catch (e) {
             error = normalizeError(e).message;
         }
@@ -355,6 +378,27 @@ class HttpExportGateway {
             response.destroy();
         }
     }
+}
+
+function poolKey(serviceId: string, port: number, caller: HttpExportCaller | undefined): string {
+    return `${caller?.id ?? ''}\n${serviceId}\n${port}`;
+}
+
+/**
+ * The service ID prefix a browser asks access for: the owner namespace (first segment) of the
+ * service it opens, e.g. `hediet` for `hediet/devbox/compute`, so one approval covers all of that
+ * owner's machines regardless of which ones have been discovered yet. Without a target, the owner
+ * shared by all known services; throws while none are known.
+ */
+export function approvalScope(target: string | undefined, knownServiceIds: readonly string[]): string {
+    if (target !== undefined) {
+        return target.split('/')[0];
+    }
+    const owners = new Set(knownServiceIds.map(serviceId => serviceId.split('/')[0]));
+    if (owners.size === 0) {
+        throw new Error('No forwardable services are known yet; reload this page in a moment.');
+    }
+    return owners.size === 1 ? [...owners][0] : '';
 }
 
 function wantsJson(request: IncomingMessage): boolean {
