@@ -101,7 +101,6 @@ export function createAutoNegotiatingCapProvider(opts: {
     readonly consumer: AutoNegotiateConsumer;
 }): CapProvider {
     const { sender, principal, consumer } = opts;
-    let inAccessNegotiation = false;
 
     // `hubAccess` is served at the connection root (never forwarded, never
     // gated), so it is addressed in root form with no serviceId prefix and no
@@ -114,11 +113,6 @@ export function createAutoNegotiatingCapProvider(opts: {
         );
         const present: CapProviderResult = fresh.length > 0 ? { capabilities: fresh } : {};
 
-        // Reentrancy guard: the `hubAccess` calls this provider issues are
-        // themselves signed through the same sender, which re-enters here.
-        // Present only what is in the bag for those.
-        if (inAccessNegotiation) return present;
-
         let call: CallTarget;
         try {
             call = {
@@ -128,7 +122,10 @@ export function createAutoNegotiatingCapProvider(opts: {
         } catch {
             return present;
         }
-        // Never negotiate for the root or the hub's own consent front door.
+        // Never negotiate for the root or the hub's own consent front door. The
+        // `hubAccess` requests this provider issues re-enter here through the same
+        // sender and stop at this check, so concurrent calls can negotiate
+        // independently: one waiting for consent never blocks another.
         if (call.serviceId === '' || call.interfaceId === hubAccessInterface.info.id) {
             return present;
         }
@@ -141,7 +138,6 @@ export function createAutoNegotiatingCapProvider(opts: {
         // decides). A parent addressed to somebody else is never a held leaf.
         if (cached.ok) return present;
 
-        inAccessNegotiation = true;
         try {
             const granted = await requestAccessForCall(sender, hubAccessMethod, {
                 ...consumer,
@@ -167,8 +163,6 @@ export function createAutoNegotiatingCapProvider(opts: {
             return durable.length > 0 ? { capabilities: durable } : {};
         } catch {
             return present;
-        } finally {
-            inAccessNegotiation = false;
         }
     };
 }
