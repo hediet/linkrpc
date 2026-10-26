@@ -26,7 +26,7 @@ const { positionals, values } = parseArgs({
 
 async function main() {
     if (values.help) {
-        console.log(`linkrpc-desktop serve --source ws://127.0.0.1:6080/websockify [--dpi http://127.0.0.1:6080/api/dpi]
+        console.log(`linkrpc-desktop serve --source ws://127.0.0.1:6080/websockify|tcp://127.0.0.1:5900 [--dpi http://127.0.0.1:6080/api/dpi]
 linkrpc-desktop view --service SERVICE [--interface ID --instance NAME --params '{}' --transport webrtc|hub]
 Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims the hub-granted namespace.
 --managed-identity signs with a provisioned identity. --negotiate-caps explicitly enables interactive capability requests.`);
@@ -37,9 +37,9 @@ Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims
     process.once('SIGINT', stop);
     process.once('SIGTERM', stop);
     if (positionals[0] === 'serve') {
-        if (!values.source) throw new Error('serve requires --source (trusted WebSocket RFB endpoint)');
+        if (!values.source) throw new Error('serve requires --source (trusted ws:, wss:, or tcp: RFB endpoint)');
         const host = await hostVncDesktop({
-            title: values.title!, websocketUrl: values.source, dpiUrl: values.dpi,
+            title: values.title!, sourceUrl: values.source, dpiUrl: values.dpi,
         }, {
             endpoint: values.endpoint ? { endpoint: values.endpoint } : undefined,
             serviceId: values.service, signal: control.signal, managedIdentity: values['managed-identity'],

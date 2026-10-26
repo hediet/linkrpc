@@ -1,3 +1,5 @@
+import * as net from 'node:net';
+import type { Duplex } from 'node:stream';
 import { RTCPeerConnection, type PeerConfig, type RTCDataChannel } from 'werift';
 import WebSocket, { createWebSocketStream } from 'ws';
 import {
@@ -11,20 +13,45 @@ const CHUNK_SIZE = 16 * 1024;
 
 export interface VncSource {
     readonly title: string;
-    /** Trusted administrator configuration, never supplied by an attaching client. */
-    readonly websocketUrl: string;
+    /**
+     * Trusted administrator configuration, never supplied by an attaching client:
+     * a WebSocket RFB endpoint (`ws:`/`wss:`, e.g. websockify) or a plain RFB
+     * server (`tcp://host:port`, e.g. a VNC server listening on loopback).
+     */
+    readonly sourceUrl: string;
     readonly dpiUrl?: string;
     readonly peerConfig?: Partial<PeerConfig>;
 }
 
-/** A WebSocket RFB source (e.g. websockify) transported unchanged over WebRTC. */
+/** An RFB source (a WebSocket endpoint such as websockify, or a TCP VNC server) transported unchanged. */
 export class VncBackend implements DesktopBackend {
     readonly title: string;
+    private readonly _url: URL;
 
     constructor(private readonly _source: VncSource) {
         this.title = _source.title;
-        const url = new URL(_source.websocketUrl);
-        if (url.protocol !== 'ws:' && url.protocol !== 'wss:') throw new Error('VNC source must be ws: or wss:');
+        this._url = new URL(_source.sourceUrl);
+        if (this._url.protocol === 'tcp:') {
+            if (!this._url.hostname || !this._url.port) throw new Error('A tcp: VNC source needs a host and port');
+        } else if (this._url.protocol !== 'ws:' && this._url.protocol !== 'wss:') {
+            throw new Error('VNC source must be ws:, wss:, or tcp:');
+        }
+    }
+
+    /** One RFB byte stream to the source; it emits `error` and `close` like any socket. */
+    private _openSource(): Duplex {
+        if (this._url.protocol === 'tcp:') {
+            const socket = net.connect({ host: this._url.hostname.replace(/^\[|\]$/g, ''), port: Number(this._url.port) });
+            socket.setNoDelay(true);
+            return socket;
+        }
+        const socket = new WebSocket(this._source.sourceUrl, ['binary'], { maxPayload: MAX_BUFFER });
+        const stream = createWebSocketStream(socket);
+        socket.on('message', (_data, binary) => {
+            if (!binary) stream.destroy(new Error('VNC source sent non-binary data'));
+        });
+        stream.once('close', () => socket.terminate());
+        return stream;
     }
 
     async openHub(viewport: DesktopViewport, signal: AbortSignal, relay: DesktopRelay): Promise<DesktopSession & {
@@ -33,9 +60,8 @@ export class VncBackend implements DesktopBackend {
         signal.throwIfAborted();
         await this.setViewport(viewport, signal);
         signal.throwIfAborted();
-        const socket = new WebSocket(this._source.websocketUrl, ['binary'], { maxPayload: MAX_BUFFER });
-        const source = createWebSocketStream(socket);
-        const dispose = () => { source.destroy(); socket.terminate(); };
+        const source = this._openSource();
+        const dispose = () => { source.destroy(); };
         signal.addEventListener('abort', dispose, { once: true });
         const done = (async () => {
             try {
@@ -82,7 +108,7 @@ export class VncBackend implements DesktopBackend {
     async open(options: DesktopAttachOptions, signal: AbortSignal): Promise<DesktopSession> {
         signal.throwIfAborted();
         const peer = new RTCPeerConnection({ iceServers: [], ...this._source.peerConfig });
-        let source: WebSocket | undefined;
+        let source: Duplex | undefined;
         let channel: RTCDataChannel | undefined;
         let closed = false;
         let resolveDone!: () => void;
@@ -94,7 +120,7 @@ export class VncBackend implements DesktopBackend {
             if (closed) return;
             closed = true;
             signal.removeEventListener('abort', abort);
-            source?.terminate();
+            source?.destroy();
             channel?.close();
             void peer.close().catch(error => process.emitWarning(new Error('Desktop peer cleanup failed', { cause: error })));
             resolveDone();
@@ -129,26 +155,23 @@ export class VncBackend implements DesktopBackend {
             });
             incoming.onMessage.subscribe(data => {
                 if (closed) return;
-                if (typeof data === 'string' || !source || source.readyState !== WebSocket.OPEN) {
+                if (typeof data === 'string' || !source || source.destroyed) {
                     fail(new Error('Invalid RFB data or source not ready'));
                     return;
                 }
-                if (data.length > MAX_BUFFER || source.bufferedAmount + data.length > MAX_BUFFER) {
+                if (data.length > MAX_BUFFER || source.writableLength + data.length > MAX_BUFFER) {
                     fail(new Error('VNC input buffer limit exceeded'));
                     return;
                 }
-                source.send(data, { binary: true }, error => { if (error) fail(error); });
+                source.write(data, error => { if (error) fail(error); });
             });
             const connectSource = () => {
                 if (closed || source) return;
-                source = new WebSocket(this._source.websocketUrl, ['binary'], { maxPayload: MAX_BUFFER });
-                source.on('error', fail);
-                source.on('close', () => dispose());
-                source.on('message', (data, binary) => {
+                const opened = source = this._openSource();
+                opened.on('error', fail);
+                opened.on('close', () => dispose());
+                opened.on('data', (buffer: Buffer) => {
                     if (closed) return;
-                    if (!binary) { fail(new Error('VNC source sent non-binary data')); return; }
-                    const buffer = Array.isArray(data) ? Buffer.concat(data)
-                        : data instanceof ArrayBuffer ? Buffer.from(data) : data;
                     if (incoming.bufferedAmount + buffer.length > MAX_BUFFER) {
                         fail(new Error('VNC output buffer limit exceeded'));
                         return;
@@ -157,13 +180,13 @@ export class VncBackend implements DesktopBackend {
                         for (let offset = 0; offset < buffer.length; offset += CHUNK_SIZE) {
                             incoming.send(buffer.subarray(offset, offset + CHUNK_SIZE));
                         }
-                        if (incoming.bufferedAmount >= HIGH_WATER) source?.pause();
+                        if (incoming.bufferedAmount >= HIGH_WATER) opened.pause();
                     } catch (error) {
                         fail(error instanceof Error ? error : new Error(String(error)));
                     }
                 });
                 incoming.bufferedAmountLowThreshold = HIGH_WATER / 2;
-                incoming.bufferedAmountLow.subscribe(() => { if (!closed) source?.resume(); });
+                incoming.bufferedAmountLow.subscribe(() => { if (!closed) opened.resume(); });
             };
             incoming.stateChange.subscribe(state => { if (state === 'open') connectSource(); });
             if (incoming.readyState === 'open') connectSource();

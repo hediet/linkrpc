@@ -1,5 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import * as net from 'node:net';
+import type { AddressInfo } from 'node:net';
 import { LinkRpcConnection, isRequest, type JsonRpcMessage } from '@hediet/linkrpc';
 import { Hub } from '@hediet/linkrpc-hub/hub/server';
 import { DesktopHost, desktopHandlers, desktopInterface, desktopHubInterface, desktopHubHandlers } from '@hediet/linkrpc-infra/desktop';
@@ -18,27 +20,57 @@ beforeAll(async () => {
 });
 afterAll(async () => { await browser?.close(); });
 
-async function fixture(sourceUrl?: string, dpiUrl?: string, transport: 'webrtc' | 'hub' = 'webrtc') {
-    const hub = new Hub();
-    const source = new WebSocketServer({ host: '127.0.0.1', port: 0 });
-    await new Promise<void>(resolve => source.once('listening', resolve));
-    let sourceClosed = 0;
-    let sourceConnections = 0;
+/** An echoing RFB stand-in, reached over WebSocket (like websockify) or plain TCP (like a VNC server). */
+async function startEchoSource(kind: 'ws' | 'tcp') {
+    const peers = new Set<{ send(bytes: Buffer): void; close(): void; }>();
     const inputs: Buffer[] = [];
-    source.on('connection', socket => {
-        sourceConnections++;
-        socket.once('close', () => sourceClosed++);
-        socket.on('message', data => {
-            const bytes = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-            inputs.push(bytes);
-            socket.send(bytes, { binary: true });
+    let connections = 0;
+    let closed = 0;
+    const accept = (peer: { send(bytes: Buffer): void; close(): void; }, onClose: (listener: () => void) => void) => {
+        connections++;
+        peers.add(peer);
+        onClose(() => { closed++; peers.delete(peer); });
+        return (bytes: Buffer) => { inputs.push(bytes); peer.send(bytes); };
+    };
+    let url: string;
+    let closeServer: () => Promise<void>;
+    if (kind === 'ws') {
+        const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+        await new Promise<void>(resolve => server.once('listening', resolve));
+        server.on('connection', socket => {
+            const receive = accept(
+                { send: bytes => socket.send(bytes, { binary: true }), close: () => socket.terminate() },
+                listener => socket.once('close', listener),
+            );
+            socket.on('message', data => receive(Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)));
         });
-    });
-    const address = source.address();
-    if (!address || typeof address === 'string') throw new Error('Expected TCP fixture');
+        url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        closeServer = () => new Promise<void>(resolve => server.close(() => resolve()));
+    } else {
+        const server = net.createServer(socket => {
+            const receive = accept({ send: bytes => socket.write(bytes), close: () => socket.destroy() }, listener => socket.once('close', listener));
+            socket.on('data', receive);
+        });
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        url = `tcp://127.0.0.1:${(server.address() as AddressInfo).port}`;
+        closeServer = () => new Promise<void>(resolve => server.close(() => resolve()));
+    }
+    return {
+        url, inputs,
+        get connections() { return connections; },
+        get closed() { return closed; },
+        send: (bytes: Buffer) => { for (const peer of peers) peer.send(bytes); },
+        async close() { for (const peer of peers) peer.close(); await closeServer(); },
+    };
+}
+
+async function fixture(sourceUrl?: string, dpiUrl?: string, transport: 'webrtc' | 'hub' = 'webrtc', sourceKind: 'ws' | 'tcp' = 'ws') {
+    const hub = new Hub();
+    const source = await startEchoSource(sourceKind);
+    const inputs = source.inputs;
     const host = new DesktopHost(new VncBackend({
         title: 'E2E desktop',
-        websocketUrl: sourceUrl ?? `ws://127.0.0.1:${address.port}`,
+        sourceUrl: sourceUrl ?? source.url,
         dpiUrl,
         peerConfig: { iceAdditionalHostAddresses: ['127.0.0.1'] },
     }));
@@ -73,13 +105,13 @@ async function fixture(sourceUrl?: string, dpiUrl?: string, transport: 'webrtc' 
     });
     return {
         host, viewer, messages, inputs,
-        get closed() { return sourceClosed; },
-        get connections() { return sourceConnections; },
+        get closed() { return source.closed; },
+        get connections() { return source.connections; },
         disconnectCaller: () => { for (const close of callers) close(); for (const link of links) link.dispose(); },
         disconnectProvider: () => { providerConnection.close(); provider.dispose(); },
         blackhole: () => { blackhole = true; },
         restoreControl: () => { blackhole = false; },
-        sendSource: (bytes: Buffer) => { for (const socket of source.clients) socket.send(bytes, { binary: true }); },
+        sendSource: (bytes: Buffer) => source.send(bytes),
         async dispose() {
             blackhole = false;
             host.dispose();
@@ -87,8 +119,7 @@ async function fixture(sourceUrl?: string, dpiUrl?: string, transport: 'webrtc' 
             for (const link of links) link.dispose();
             providerConnection.close();
             provider.dispose();
-            for (const socket of source.clients) socket.terminate();
-            await new Promise<void>(resolve => source.close(() => resolve()));
+            await source.close();
         },
     };
 }
@@ -148,9 +179,10 @@ const state = (page: Page) => page.evaluate(() => ({
 }));
 
 describe('Hub-stream desktop fallback', () => {
+    for (const sourceKind of ['ws', 'tcp'] as const)
     for (const ending of ['browser cancel', 'caller hub disconnect', 'provider disconnect', 'service shutdown'] as const) {
-        it(`transfers binary RFB bytes through the hub and closes source on ${ending}`, async () => {
-            const f = await fixture(undefined, undefined, 'hub');
+        it(`transfers binary RFB bytes from a ${sourceKind} source through the hub and closes it on ${ending}`, async () => {
+            const f = await fixture(undefined, undefined, 'hub', sourceKind);
             const context = await browser.newContext();
             try {
                 const page = await openControl(context, f.viewer.url, 'hub');
@@ -177,9 +209,10 @@ describe('Hub-stream desktop fallback', () => {
 });
 
 describe('Hub-controlled native-browser WebRTC desktop', () => {
+    for (const sourceKind of ['ws', 'tcp'] as const)
     for (const ending of ['browser cancel', 'caller hub disconnect', 'provider disconnect', 'service shutdown'] as const) {
-        it(`moves binary data outside the hub and tears down on ${ending}`, async () => {
-            const f = await fixture();
+        it(`moves binary data from a ${sourceKind} source outside the hub and tears down on ${ending}`, async () => {
+            const f = await fixture(undefined, undefined, 'webrtc', sourceKind);
             const context = await browser.newContext();
             try {
                 const page = await openControl(context, f.viewer.url);
