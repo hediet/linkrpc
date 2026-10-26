@@ -91,6 +91,11 @@ export interface CliConnection {
     setRequestHandler(handler: IRequestHandler | undefined): void;
     /** Close the transport, reject pending requests, kill the child (cmd) or destroy the socket (hub). */
     close(): void;
+    /**
+     * Resolves once the connection is gone: the peer closed it (the child
+     * exited, the socket or WebSocket closed) or {@link close} was called.
+     */
+    readonly closed: Promise<void>;
 }
 
 export async function connect(
@@ -136,13 +141,14 @@ async function _connectCmdStdio(
         if (!input.destroyed && !input.writableEnded) input.end();
         if (!child.killed) child.kill();
     };
+    const peerClosed = new Promise<void>((resolve) => child.stdout!.once('close', () => resolve()));
     const { transport } = await connectNdjson({
         input: child.stdout,
         output: child.stdin,
         onClose: close,
         trace: log?.trace,
     });
-    return _makeCliConnection(transport, close, log);
+    return _makeCliConnection(transport, close, log, peerClosed);
 }
 
 /**
@@ -218,7 +224,7 @@ export async function connectViaRootOverlay(opts: {
         ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
         grantedNamespace: opts.grantedNamespace,
     });
-    return _makeCliConnection(overlay.uplink, overlay.dispose, opts.log);
+    return _makeCliConnection(overlay.uplink, overlay.dispose, opts.log, overlay.closed);
 }
 
 function _connectWs(
@@ -232,6 +238,7 @@ function _connectWs(
             } catch { /* ignore */ }
         };
         const baseTransport = new WebSocketTransport(ws, closeWs);
+        const peerClosed = new Promise<void>((resolve) => ws.addEventListener('close', () => resolve()));
         const transport = log?.trace === undefined
             ? baseTransport
             : traceMessageTransport(baseTransport, log.trace);
@@ -247,7 +254,7 @@ function _connectWs(
                 throw err;
             }
         }
-        return _makeCliConnection(transport, closeWs, log);
+        return _makeCliConnection(transport, closeWs, log, peerClosed);
     });
 }
 
@@ -271,6 +278,7 @@ async function _connectSocket(
         socket.once('error', onError);
     });
     socket.on('error', () => socket.destroy());
+    const peerClosed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
     const { transport } = await connectNdjson({
         input: socket,
         output: socket,
@@ -278,7 +286,7 @@ async function _connectSocket(
         initialize: { kind: 'client', token: token ?? '' },
         trace: log?.trace,
     });
-    return _makeCliConnection(transport, () => socket.destroy(), log);
+    return _makeCliConnection(transport, () => socket.destroy(), log, peerClosed);
 }
 
 /**
@@ -293,6 +301,7 @@ function _makeCliConnection(
     transport: IMessageTransport,
     onClose: () => void,
     log?: ConnectLogOptions,
+    peerClosed?: Promise<void>,
 ): CliConnection {
     const tapped = log?.log === undefined
         ? transport
@@ -308,6 +317,8 @@ function _makeCliConnection(
         signing,
     );
     const channel = wrapped.sender;
+    let markClosed!: () => void;
+    const closedByCaller = new Promise<void>((resolve) => { markClosed = resolve; });
     return {
         channel,
         rpcChannel: wrapped,
@@ -316,7 +327,9 @@ function _makeCliConnection(
         close: () => {
             channel.close();
             onClose();
+            markClosed();
         },
+        closed: peerClosed === undefined ? closedByCaller : Promise.race([peerClosed, closedByCaller]),
     };
 }
 

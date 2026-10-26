@@ -42,7 +42,9 @@ export function connectManagedJsonRpc(
 export async function connectRawJsonRpcTransport(
     client: JsonRpcConnectionClient,
     params?: JsonValue,
+    signal?: AbortSignal,
 ): Promise<JsonRpcTransport> {
+    signal?.throwIfAborted();
     const messageListeners = new Set<(frame: JsonValue) => void>();
     const closeListeners = new Set<(reason?: string) => void>();
     const backlog: JsonValue[] = [];
@@ -54,6 +56,7 @@ export async function connectRawJsonRpcTransport(
         if (closed) return;
         closed = true;
         closeReason = reason;
+        signal?.removeEventListener('abort', abort);
         rejectReady(new Error(`Raw JSON-RPC transport closed before ready: ${reason ?? 'closed'}`));
         for (const listener of closeListeners) listener(reason);
     };
@@ -64,6 +67,10 @@ export async function connectRawJsonRpcTransport(
         resolveReady = resolve;
         rejectReady = reject;
     });
+    const abort = (): void => {
+        finish('cancelled');
+        void call.cancel('cancelled');
+    };
     const call = client.connectRaw(
         params === undefined ? {} : { params },
         {
@@ -94,6 +101,8 @@ export async function connectRawJsonRpcTransport(
             finish(error instanceof Error ? error.message : String(error));
         },
     );
+    if (!closed) signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
     await ready;
 
     return {

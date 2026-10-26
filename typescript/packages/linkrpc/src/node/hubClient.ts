@@ -389,8 +389,7 @@ export interface PersistedIdentity {
 export async function loadOrCreateIdentity(
     opts: LoadOrCreateIdentityOptions,
 ): Promise<PersistedIdentity> {
-    const file = opts.file ??
-        path.join(opts.storeDir ?? _defaultStoreDir(), `${_slotName(opts.id)}.json`);
+    const file = identityFilePath(opts);
     await fs.mkdir(path.dirname(file), { recursive: true });
     try {
         const raw = await fs.readFile(file, 'utf8');
@@ -427,6 +426,11 @@ export async function loadOrCreateIdentity(
     const wrapKeypair = await crypto.generateX25519Keypair();
     await _writeIdentityFile(file, keypair, wrapKeypair, opts.id);
     return { keypair, wrapKeypair, principal: principalForPublicKey(keypair.publicKey), file };
+}
+
+/** The on-disk file {@link loadOrCreateIdentity} uses for `opts`, without reading or creating it. */
+export function identityFilePath(opts: LoadOrCreateIdentityOptions): string {
+    return opts.file ?? path.join(opts.storeDir ?? _defaultStoreDir(), `${_slotName(opts.id)}.json`);
 }
 
 async function _writeIdentityFile(

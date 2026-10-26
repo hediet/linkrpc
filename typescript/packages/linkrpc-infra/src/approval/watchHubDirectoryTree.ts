@@ -17,7 +17,9 @@
  * unchanged siblings are not re-listed or re-watched. Nodes that
  * serve the static {@link directoryWatchNever} handler simply never tick — the
  * watch is a harmless no-op there — while live nodes (the routing-backed root,
- * nested sub-hubs) drive discovery. Reads/watches are forwarded (form-3) calls,
+ * nested sub-hubs) drive discovery. A node whose watch is rejected (for example
+ * by a provider without `watch`) is retried with exponential backoff and
+ * re-listed on each attempt. Reads/watches are forwarded (form-3) calls,
  * so `connection` must carry a capability for `*::hubrpc.directory::*` when it is
  * gated.
  *

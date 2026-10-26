@@ -90,6 +90,7 @@ const HUB_GLOBAL_OPTIONS: readonly FlagDef[] = [
 const CAPABILITY_OPTIONS: readonly FlagDef[] = [
     { name: '--cap:allow-param', takesValue: true, valueType: 'free' },
     { name: '--cap:duration', takesValue: true, valueType: 'free' },
+    { name: '--cap:delegate', takesValue: false },
     { name: '--cap:allow-prefix', takesValue: true, valueType: 'free' },
     { name: '--cap:allow-any', takesValue: false },
     { name: '--cap:allow-enum', takesValue: true, valueType: 'free' },
@@ -530,6 +531,12 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--target-endpoint-token', takesValue: true, valueType: 'free' },
                 { name: '--granted-service-id', takesValue: true, valueType: 'serviceId' },
             ],
+        },
+    {
+            name: 'mcp',
+            description: 'Aggregate discoverable Hub MCP tools on stdio.',
+            positionals: [],
+            options: [],
         },
     {
             name: 'mcp-forward',

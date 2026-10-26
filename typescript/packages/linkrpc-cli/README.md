@@ -9,6 +9,25 @@ interfaces (`hubrpc.defaults`, `hubrpc.directory`, `hubrpc.schemas`) are
 used to discover what the endpoint exposes. Generic RPC commands work with any
 reflected interface; compiled-in views add specialized CLI and TUI renderers.
 
+## Directory discovery and consent
+
+`linkrpc hub ls` first tries directory reads using its current identity and
+capabilities. On `permissionRequired`, it asks the connected hub's approval
+service for short-lived access to `hubrpc.directory::list` on that exact
+directory service, then retries once. Watch mode also requests `watch`;
+schema/member dump modes additionally request `hubrpc.schemas::get`.
+Unsigned connections (`--no-sign`) do not request capabilities.
+
+Timeouts, missing methods, and transport errors never trigger consent. Plain
+output shows inaccessible directories and their errors. `--format json` and
+`--format jsonl` include an `inaccessible` report; legacy `--json` preserves its
+flat array and reports failures on stderr.
+
+Approval is not automatic authorization: the destination must accept the
+issued capability's root. If the connected hub cannot obtain a grant from an
+accepted issuer, discovery still reports that directory as inaccessible.
+No trust roots are added and no service is made public.
+
 ## Daemon-owned endpoints (`hub services`)
 
 `hub services` manages processes and existing connections **through the daemon
@@ -562,7 +581,7 @@ it**. Pick one of:
 | `--endpoint <uri>`               | A strict endpoint URI (see below).                                                                         |
 | `--endpoint-cmd <command>`       | Spawn a _server_, hand it a fresh socket + token via `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`, then connect to it. |
 | `--endpoint-cmd-stdio <command>` | Spawn a child and talk linkrpc over its stdio.                                                              |
-| `LINKRPC_ENDPOINT` (env)          | A URI, or a legacy bare socket path / `ws://` URL. Token from `LINKRPC_TOKEN`; enabled by default in the Hub profile. |
+| `LINKRPC_ENDPOINT` (env)          | A URI, or a legacy bare socket path / `ws://` URL. Token from `LINKRPC_TOKEN`; enabled by default in the Hub profile and with `--use-env` in the RPC profile. |
 
 Legacy `HUBRPC_ENDPOINT` and `HUBRPC_TOKEN` remain supported when the
 corresponding `LINKRPC_*` variable is absent.
@@ -774,6 +793,8 @@ initial document:
 | `connection notifications [--after n] [--wait 25s] [--follow]` | Read incoming remote notifications from the broker's bounded buffer. `--follow` emits one JSON object per line and can run alongside calls. |
 | `connection destroy`                                  | Stop the configured connection broker through its local overlay. |
 | `json-rpc-stdio <serviceId> [--params <json>]`         | In the Hub profile, expose `<serviceId>::jsonRpcConnection::connectRaw` as newline-delimited JSON-RPC on stdin/stdout. Diagnostics remain on stderr. |
+| `json-rpc-export --target-endpoint <uri> --serviceId <id> --path <path> ...` | In the Hub profile, export multiple JSON-RPC factories through one authenticated raw WebSocket listener. |
+| `http-export [--port <n>] [--host <address>]... [--base-domain <domain>] [--auth browser\|none]` | In the Hub profile, serve loopback ports of Hub compute nodes at `<port>.<service>.localhost` over HTTP and WebSocket; browsers must be approved once unless `--auth none`. |
 
 The inherited `--schema <path-or-url>` option also overlays static
 `hubrpc.defaults`, `hubrpc.directory`, and `hubrpc.schemas` reflection for
@@ -792,6 +813,157 @@ frame, and each remote frame is written as one JSON line:
 ```sh
 hub --endpoint unix:/run/hub.sock json-rpc-stdio language-server
 ```
+
+`json-rpc-export` maps multiple Hub JSON-RPC services to distinct paths on one listener:
+
+```sh
+linkrpc hub json-rpc-export \
+  --target-endpoint "listen:ws://127.0.0.1:8123" \
+  --target-token "$EXPORT_TOKEN" \
+  --target-token-query-param tkn \
+  --serviceId foo --path /foo \
+  --serviceId bar --path /bar
+```
+
+Each `--serviceId` must be followed by its `--path`; a leading slash is optional. Missing pairs, duplicate paths, and unsupported endpoints fail before connecting to the Hub. Each WebSocket client opens an independent `<serviceId>::jsonRpcConnection::connectRaw` session, including clients on the same route. Requests, responses, notifications, and server-initiated requests pass unchanged, without a `hubrpc::initialize` handshake.
+
+The nonempty export token is separate from the source Hub credentials. Clients authenticate during the WebSocket upgrade with `Authorization: Bearer <token>` or a configured query parameter. Without `--target-token-query-param`, the accepted query names are `tkn` (VS Code sends its `connectionToken` under this name) and `token`. Supplying the repeatable option replaces those defaults: for example `--target-token-query-param connectionToken --target-token-query-param api_key` accepts either custom name. Bearer headers remain accepted. Exactly one credential is required: duplicate query parameters, multiple Authorization headers, or a header combined with a recognized query parameter are rejected, even if their values match. Unrecognized parameters are not credentials.
+
+Alternatively, configure the listener token in the target URI as `listen:ws://127.0.0.1:8123?token=...`; this configuration syntax is independent of the accepted client query names. Readiness output never includes the token. Unknown routes return 404 and missing/invalid/ambiguous credentials return 401 without opening an upstream session. Anyone holding this token can access all configured routes using the export process's Hub identity; use a narrowly scoped identity and protect the token. Client credentials are consumed by the listener and never forwarded to the upstream factory.
+
+Only `listen:ws://` TCP listeners are currently supported, not named pipes or TLS listeners. Bind loopback for local use. For remote access, terminate TLS in a trusted reverse proxy rather than sending tokens over unencrypted networks. The gateway limits connections to 100, frames to 16 MiB, and pending input per client to 32 MiB / 1024 frames; slow consumers and failed upstreams close only their own connection. Factories must open within 30 seconds.
+
+The command stays in the foreground until SIGINT/SIGTERM, then closes clients and the listener. Use the existing Hub daemon/service lifecycle to supervise it; this command neither installs a service nor starts remote AHP hosts. Diagnostics and the bound address (including an assigned port when using port 0) go to stderr.
+
+### HTTP export
+
+`http-export` serves loopback TCP ports of Hub compute nodes (services offering
+`linkrpc.computeNode.tcpForward`) as `*.localhost` sites. `*.localhost` always
+resolves to this machine, so no DNS setup is needed:
+
+```sh
+linkrpc hub http-export            # listens on 127.0.0.1:80 and [::1]:80
+```
+
+| URL | Shows |
+| --- | --- |
+| `http://localhost/` | Services that can forward TCP (`?format=json` for JSON). |
+| `http://hediet--tablet--compute.localhost/` | Listening ports of `hediet/tablet/compute` with each owning process's name, command line, and working directory (needs `linkrpc.computeNode.ports`). |
+| `http://3000.hediet--tablet--compute.localhost/` | Port 3000 of that compute node, including WebSocket upgrades. |
+
+A service is always exactly one label directly below `localhost`, its
+segments joined with `--`. Browsers treat `localhost` as a public suffix, so
+each service is its own site: pages of one machine get no `SameSite` cookies
+from another machine's apps and cannot set cookies for them, as with direct
+access. The ports of one service share that site, as the ports of `localhost`
+do on its machine. A service ID whose segments are not plain lowercase DNS
+labels, or whose label would exceed 63 characters, is written as a hashed label
+instead, `<slug>--h<hash>`, which the gateway resolves against the services it
+can reach. The index pages link to the right form.
+
+There is no gateway credential and no origin check of its own. Instead, the
+gateway translates between a forwarded app's own origins
+(`http://localhost:<port>` on its machine) and their exported names, so the
+app's own Host, Origin, CORS, redirect, and cookie checks behave as they do for
+a browser on its machine:
+
+| Header | Translation |
+| --- | --- |
+| `Host` | Always `localhost:<port>`. The gateway itself only accepts `*.localhost` names, so DNS rebinding cannot reach it. |
+| `Origin`, `Referer` | Exported names of the same service map to `http://localhost:<port>`. Other services' exported names and foreign sites pass unchanged. This machine's own loopback origins have no counterpart on the target: `Origin` becomes `null` and `Referer` is dropped. |
+| `Location`, `Access-Control-Allow-Origin` | URLs naming the target machine's loopback map to their exported names. |
+| `Set-Cookie` | Host-only and `Domain=localhost` cookies get the service's domain (e.g. `Domain=hediet--tablet--compute.localhost`), which reaches that machine's exported ports, as such cookies reach all of its ports there. Cookies for other domains are dropped, as a browser there would reject them. `__Host-` cookies stay host-only, so they reach only one exported port. |
+
+WebSocket upgrades are translated the same way in both directions. No
+`X-Forwarded-*` headers are added. Absolute loopback URLs inside response
+bodies are not rewritten, so they fail rather than reach this machine. Bind
+loopback only: anyone who can reach the listener can use the export process's
+Hub identity to reach every forwarded port.
+
+**Browser approval (prototype, on by default).** Browsers must be approved once
+before they can use the gateway; `--auth none` restores the behavior above.
+
+- A browser without approval is redirected to `http://localhost/.linkrpc/login`.
+  The gateway creates a signing key for that browser and asks the Hub's
+  approvers (`hubAccess::requestAccess`) to let it call `tcpForward` and
+  `ports::listListening` on the compute nodes. The page shows a code, the first
+  eight characters of the browser key (`id:key:AbCdEfGh…` → `AbCd-EfGh`),
+  and continues by itself once approved. Approve only requests whose principal
+  starts with the code your browser shows.
+- The gateway then signs that browser's calls with the browser's key and
+  granted capabilities, so compute nodes authorize the browser, not the
+  gateway. A browser approved for some machines only reaches those.
+- `localhost` keeps the browser's session cookie. Each service site
+  (`<service>.localhost`) gets its own cookie on first visit through a
+  single-use, 30-second ticket from `localhost`, bound to that site and to a
+  state cookie set by the site. Cookies are `HttpOnly`, `Secure`
+  (Chromium treats `http://*.localhost` as secure), and never reach forwarded
+  apps; apps cannot set them either.
+- Requests without `Sec-Fetch-*` and `Origin` headers (curl, scripts, agents)
+  are not affected and keep using the gateway's identity. Browser requests
+  other than page navigations get `401` until the browser is approved.
+- Approved sessions are kept in `--session-file` (default
+  `%LOCALAPPDATA%\linkrpc\http-export\browser-sessions-<port>.json` or
+  `$XDG_STATE_HOME/linkrpc/http-export/…`); it contains the browser keys.
+
+The gateway's own pages (`localhost` and `<service>.localhost`, HTML and JSON)
+show command lines, which may contain secrets. They answer only top-level
+navigations, same-origin requests, and clients that send no `Sec-Fetch-*` or
+cross-origin `Origin` header (e.g. `curl`); other requests, including fetches,
+scripts, and iframes from forwarded apps of the same machine, get `403`. They
+send no CORS headers, forbid framing (`frame-ancestors 'none'`,
+`X-Frame-Options: DENY`), and set `nosniff`, `no-store`, `no-referrer`, and
+same-origin resource and opener policies. Command lines and working directories
+are only shown for processes the compute node may inspect, e.g. not for
+elevated or other users' processes on Windows.
+
+Each service and port shares one `tcpForward.multiplex` session (up to 10
+logical connections, 8 of them for pooled HTTP keep-alive), closed after five
+idle minutes.
+
+### Hub MCP aggregation
+
+`linkrpc hub mcp` is a lightweight stdio MCP server that discovers services
+exposing `vscode.mcp-forward` in the selected Hub and aggregates their tools.
+No service IDs, filters, or principal overrides are required:
+
+```json
+{
+  "servers": {
+    "hub-mcp": {
+      "type": "stdio",
+      "command": "linkrpc",
+      "args": ["hub", "mcp"]
+    }
+  }
+}
+```
+
+Endpoint/context/environment and identity selection follow the normal Hub CLI
+rules. An explicit endpoint can be supplied before `mcp`, for example
+`linkrpc hub --endpoint npipe://./pipe/my-hub mcp`. Signing and capability
+negotiation remain enabled by default; discovery does not bypass authorization.
+Inaccessible directories and failed servers are reported on stderr; stdout
+contains only MCP protocol frames.
+
+The command watches directory changes, refreshes changed tool lists (including
+paginated lists), and retries failed connections while they remain advertised.
+Tool names use a readable prefix and a stable hash of service ID plus tool name,
+remaining unique and MCP-safe even for long service paths. Descriptions identify
+the source service. Disconnecting stdio closes this client's forwarding sessions.
+This version aggregates tools, not resources, prompts, or sampling.
+
+The producer stays separate:
+
+```sh
+linkrpc hub mcp-forward --serviceId <authorized-service-id> -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
+```
+
+Manage that producer and `component-explorer serve -p <same-config>` with your
+workspace daemon. The aggregator opens lightweight MCP connections; it does not
+start workspace builds or explorer daemons. Each forwarded connection spawns
+the configured MCP child, so producers must use attach-only commands when
+heavyweight services are managed separately.
 
 ### Participant proxy
 
@@ -899,7 +1071,7 @@ Value-taking options support both `--option=value` and `--option value`.
 Parameter assignment itself still uses `key=value`, e.g.
 `--param path=/docs/a` or `--param=path=/docs/a`. Use the equals form for
 dash-prefixed values. Quote JSON and strings containing spaces.
-`--cap:request` and `--cap:allow-any` are switches with no value.
+`--cap:request`, `--cap:allow-any`, and `--cap:delegate` are switches with no value.
 The older `--request-cap`, `--allow-param`, and `--duration` spellings have
 been replaced by the `--cap:` options.
 
@@ -909,6 +1081,9 @@ Schema validation is mandatory for explicit requests: `--no-validate` and
 the permission; signed calls include that hash in their signed metadata.
 The default requested duration is `persistent`; `--cap:duration shortLived` and
 `--cap:duration longLived` are also supported. The Hub still decides what to grant.
+`--cap:delegate` also requests `canDelegate`, so the identity can issue narrower
+capabilities for that scope to other identities, e.g. a service it runs; a
+stored grant without delegation does not satisfy such a request.
 One-shot approval cannot satisfy a reusable scope and is rejected.
 
 Fresh durable grants for the selected principal are reused when they cover
