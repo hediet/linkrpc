@@ -164,6 +164,7 @@ export class ServiceSupervisor {
 
     private async _spawn(): Promise<void> {
         const service = this._service;
+        if (service.command === undefined) throw new Error(`service '${this.name}' has no command`);
         try {
             if (service.rpc) {
                 this._socket ??= await this._host.openSocket(this.name, service, count => this._onConnections(count));

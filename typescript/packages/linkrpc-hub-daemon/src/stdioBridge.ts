@@ -1,4 +1,5 @@
 import * as net from 'node:net';
+import { STREAM_METHOD } from '@hediet/linkrpc';
 import { connectNdjson } from '@hediet/linkrpc/node';
 import { readEndpointDiscovery } from './discovery';
 import type { HubHome } from './paths';
@@ -41,7 +42,8 @@ export async function bridgeStdioToLocalHub(options: StdioBridgeOptions): Promis
     hub.setListener(message => {
         // Nothing routes service calls to the bridge itself; requests from the hub
         // are participant probes (e.g. inspection), not traffic for the stdio side.
-        if ('method' in message) {
+        // Stream frames answer streaming calls made through the bridge and must pass.
+        if ('method' in message && message.method !== STREAM_METHOD) {
             if ('id' in message && message.id !== undefined && message.id !== null) {
                 void hub.send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Method not found' } });
             }

@@ -125,13 +125,14 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `command` | required | Executable and arguments (no shell) |
-| `env`, `cwd` | `{}`, inherited | Extra environment and working directory |
+| `command` | one of `command`/`endpoint` | Executable and arguments (no shell) |
+| `endpoint` | one of `command`/`endpoint` | LinkRPC endpoint URI to connect instead of a process (see [Connecting another hub](#connecting-another-hub)) |
+| `env`, `cwd` | `{}`, inherited | Extra environment and working directory (`command` only) |
 | `enabled` | `true` | `false` keeps the service configured but stopped |
 | `restart` | `on-failure` | `always`, `on-failure`, or `never` |
-| `rpc` | `true` | `false` runs plain stdio without an RPC socket or identity; ready on spawn |
-| `tty` | `false` | Run in a pseudoterminal; stdout and stderr merge |
-| `readiness` | `connected` | RPC processes are running once connected to the hub, or once `spawned`; ignored when `rpc: false` |
+| `rpc` | `true` | `false` runs plain stdio without an RPC socket or identity; ready on spawn (`command` only) |
+| `tty` | `false` | Run in a pseudoterminal; stdout and stderr merge (`command` only) |
+| `readiness` | `connected` | RPC processes are running once connected to the hub, or once `spawned`; ignored when `rpc: false` (`command` only) |
 | `serviceId` | `<hubServiceId>/<name>` | Namespace the service may claim on the hub (default `hub/<name>`) |
 | `managedIdentity` | `true` | Provision a persistent identity (slot `service:<name>`) |
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
@@ -158,6 +159,37 @@ To require capabilities instead, trust an identity as capability root:
 Every forwarded call must then be signed and carry a capability rooted at a
 trusted root. The CLI signing as that identity authorizes itself; other
 callers' access requests wait until it approves them (`hub approval ui`).
+
+### Connecting another hub
+
+A service with an `endpoint` instead of a `command` connects that endpoint and
+attaches it to this hub like a service process: it may serve only its
+`serviceId`, and its own calls pass this hub's forwarded-call checks. That
+makes it suitable for hubs this hub should host but not trust, such as a
+virtual machine or container. The far end needs no token and no trust root:
+this hub dials it and grants the namespace.
+
+`cmd-stdio:` endpoints spawn a command and speak LinkRPC over its stdio, so
+another machine's hub is reachable through `ssh` and its
+[`bridge-stdio`](#hosts-that-spawn-stdio-services) command:
+
+```jsonc
+"services": {
+    "vm-1": {
+        "description": "macOS VM",
+        "endpoint": "cmd-stdio:?argv=ssh&argv=my-vm&argv=linkrpc-hub-daemon&argv=bridge-stdio",
+        "serviceId": "hediet/mac/vm-1",
+        "managedIdentity": false,
+        "restart": "always"
+    }
+}
+```
+
+The hub inside the VM uses `"hubServiceId": "hediet/mac/vm-1"`, so its own
+services (for example `hediet/mac/vm-1/compute`) fall within the granted
+namespace. `unix:`, `npipe:`, and `ws:` endpoints work the same way. The
+command's stderr appears in the service log; when it exits, the restart
+policy reconnects.
 
 ### Application endpoint
 
@@ -189,7 +221,7 @@ on the discovery file (written only by the daemon) or configure a token.
 | --- | --- |
 | Formatting, comments, `$schema` | Nothing |
 | Service added / removed | That service starts / stops |
-| `command`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `tty`, `readiness` | That service restarts |
+| `command`, `endpoint`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `tty`, `readiness` | That service restarts |
 | `enabled`, `restart`, timeouts, `description` | Applied without restarting the process |
 | `callLog` | Applied without restarting the hub or any service |
 | Any hub-wide setting | The hub and all services restart |
@@ -259,7 +291,8 @@ e.g. the VS Code team-tools extension (the key is the `hubServiceId`):
 }
 ```
 
-Requests arrive fully qualified (`hub/github::…`) and are routed by this hub.
+Requests arrive fully qualified (`hub/github::…`) and are routed by this hub;
+responses and the stream frames of streaming calls go back unchanged.
 The bridge exits when either side closes, and the host respawns it on the next
 call (for example after the hub restarted).
 

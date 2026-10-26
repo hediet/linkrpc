@@ -14,6 +14,7 @@ import { packageVersion } from './packageInfo';
 import { HubHome } from './paths';
 import { SingleInstanceLock } from './singleInstance';
 import { type ServiceHost, ServiceSupervisor } from './supervisor';
+import { ConnectionSupervisor } from './connectionSupervisor';
 import * as path from 'node:path';
 import { ManagedEndpoints } from './managedEndpoints';
 import { serviceDescriptor } from './participantDescriptors';
@@ -65,7 +66,7 @@ export class HubDaemon {
     private readonly _configFile: ConfigFile;
     private _appPath: string;
     private readonly _management: LocalEndpoint & { readonly token: string; };
-    private readonly _services = new Map<string, ServiceSupervisor>();
+    private readonly _services = new Map<string, ServiceSupervisor | ConnectionSupervisor>();
     private readonly _statusListeners = new Set<() => void>();
     private readonly _serviceHost: ServiceHost;
     private _endpoints: ManagedEndpoints | undefined;
@@ -283,7 +284,9 @@ export class HubDaemon {
         } else {
             this._log.line(`[${name}] added`);
         }
-        const supervisor = new ServiceSupervisor(name, service, this._serviceHost, () => this._changed());
+        const supervisor = service.endpoint !== undefined
+            ? new ConnectionSupervisor(name, service, this._serviceHost, () => this._changed())
+            : new ServiceSupervisor(name, service, this._serviceHost, () => this._changed());
         this._services.set(name, supervisor);
         this._changed();
         await supervisor.sync();
@@ -424,7 +427,7 @@ export class HubDaemon {
         connection.enableReflection();
     }
 
-    private _service(name: string): ServiceSupervisor {
+    private _service(name: string): ServiceSupervisor | ConnectionSupervisor {
         const service = this._services.get(name);
         if (!service) throw new Error(`unknown service '${name}'`);
         return service;

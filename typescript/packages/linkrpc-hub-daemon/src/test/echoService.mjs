@@ -14,6 +14,10 @@ const host = await hostParticipant({
     setup: ({ services, connection, serviceId }) => {
         services.register(echoInterface, {
             echo: ({ text }) => ({ text: `${process.env.ECHO_PREFIX ?? ''}${text}`, pid: process.pid }),
+            ticks: async ({ count }, _context, stream) => {
+                for (let tick = 0; tick < count; tick++) await stream.send({ tick });
+                return { done: true };
+            },
         });
         if (process.env.ECHO_REFLECTION) connection.enableReflection({ serviceId });
     },

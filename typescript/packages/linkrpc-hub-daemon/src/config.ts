@@ -6,11 +6,20 @@ import type { CallLogLevel } from './callLog/callRecord';
 
 const SERVICE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** A process the daemon starts and supervises, optionally connected to the hub. */
+/** A process the daemon starts and supervises, or a LinkRPC endpoint it connects, optionally connected to the hub. */
 export const ManagedServiceSchema = z.object({
     description: z.string().optional(),
-    /** Executable and arguments (no shell). `.cmd`/`.bat` shims work on Windows. */
-    command: z.array(z.string().min(1)).min(1),
+    /** Executable and arguments (no shell). `.cmd`/`.bat` shims work on Windows. Set exactly one of `command` and `endpoint`. */
+    command: z.array(z.string().min(1)).min(1).optional(),
+    /**
+     * A LinkRPC endpoint URI to connect instead of starting a process, for
+     * example another hub reached through
+     * `cmd-stdio:?argv=ssh&argv=vm&argv=linkrpc-hub-daemon&argv=bridge-stdio`,
+     * or `unix:`/`npipe:`/`ws:`. The endpoint joins this hub like a service:
+     * it may serve only `serviceId`, and its own calls pass the hub's
+     * forwarded-call checks.
+     */
+    endpoint: z.string().min(1).optional(),
     /** Extra environment. RPC services also receive `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`. */
     env: z.record(z.string(), z.string()).default({}),
     cwd: z.string().optional(),
@@ -38,7 +47,22 @@ export const ManagedServiceSchema = z.object({
     startTimeoutMs: z.number().int().positive().default(30_000),
     /** Grace period after disconnecting (and SIGTERM on POSIX) before killing the process tree. */
     stopTimeoutMs: z.number().int().positive().default(5_000),
-}).strict();
+}).strict().superRefine((service, context) => {
+    if ((service.command === undefined) === (service.endpoint === undefined)) {
+        context.addIssue({ code: 'custom', message: 'set exactly one of "command" and "endpoint"' });
+    }
+    if (service.endpoint === undefined) return;
+    const processOnly = [
+        Object.keys(service.env).length > 0 && 'env',
+        service.cwd !== undefined && 'cwd',
+        !service.rpc && 'rpc',
+        service.tty && 'tty',
+        service.readiness !== 'connected' && 'readiness',
+    ].filter(field => field !== false);
+    if (processOnly.length > 0) {
+        context.addIssue({ code: 'custom', message: `"${processOnly.join('", "')}" only apply to "command" services` });
+    }
+});
 
 export type ManagedService = z.output<typeof ManagedServiceSchema> & { readonly serviceId: string; };
 

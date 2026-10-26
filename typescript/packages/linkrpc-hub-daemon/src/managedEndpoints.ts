@@ -229,7 +229,7 @@ export class ManagedEndpoints {
                 ...(source.kind === 'process' ? {
                     command: source.command, env: source.env, cwd: source.cwd,
                     readiness: source.readiness, rpc: source.rpc, tty: source.tty,
-                } : { command: ['connection'] }),
+                } : { endpoint: source.endpoint }),
                 enabled: desired, restart: definition.restart, serviceId,
             }),
             serviceId,
@@ -262,7 +262,7 @@ export class ManagedEndpoints {
             supervisor = processSupervisor;
             console = consoleHost;
         } else {
-            supervisor = new ConnectionSupervisor(name, source.endpoint, service, host, () => this._changed(entry));
+            supervisor = new ConnectionSupervisor(name, service, host, () => this._changed(entry));
         }
         entry = { definition, desired, owned: options.owned, supervisor, console, instanceId: randomUUID(), listeners: new Set(), removed: false };
         this._entries.set(key(definition), entry);
