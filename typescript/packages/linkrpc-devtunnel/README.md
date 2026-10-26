@@ -56,6 +56,11 @@ open on its compute node.
   `linkrpc hub tunnel`: the caller's signature travels with the call, and the
   peer hub checks it. Streams and cancellation are bridged. Lost links
   reconnect; a peer that goes offline releases its claim.
+- **Reconnecting.** A link that dies silently (the machine slept, the network
+  changed) is noticed by keep-alives: after three unanswered pings, 15 seconds
+  apart, the link closes and reconnects. Connection attempts and tunnel
+  listings give up after 60 seconds and are retried, as are hung `az` calls,
+  so the mesh recovers on its own once the network is back.
 - Peers outside the granted namespace are skipped.
 
 ## Security

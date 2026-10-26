@@ -16,9 +16,12 @@ export interface DevTunnelMeshOptions {
     readonly connect: boolean;
     readonly log: (line: string) => void;
     readonly discoveryIntervalMs?: number;
+    /** How long connecting to a peer, or listing the tunnels, may take. */
+    readonly timeoutMs?: number;
 }
 
 const DISCOVERY_INTERVAL_MS = 30_000;
+const TIMEOUT_MS = 60_000;
 const MIN_RETRY_MS = 2_000;
 const MAX_RETRY_MS = 60_000;
 /** A link that stays up this long resets the retry delay. */
@@ -129,7 +132,7 @@ export class DevTunnelMesh {
 
     private async _discover(): Promise<void> {
         try {
-            const tunnels = await this._options.backend.list();
+            const tunnels = await _untilAborted(this._options.backend.list(), _deadline(this._options.timeoutMs ?? TIMEOUT_MS));
             if (this._disposed) return;
             const online = new Map<string, MeshTunnel>();
             for (const tunnel of tunnels) {
@@ -201,26 +204,46 @@ class PeerLink {
     /** Resolves when the established link closed. */
     private async _connectOnce(): Promise<void> {
         const peer = this.tunnel.hubServiceId;
-        const cleanup: Array<() => void> = [];
+        const resources = new DisposableStore();
         const stopped = new Promise<void>(resolve => this._stop.signal.addEventListener('abort', () => resolve(), { once: true }));
+        // Any setup step can hang (e.g. on a network that died silently), so the
+        // setup as a whole has a deadline; disposing the link ends it too.
+        const setup = AbortSignal.any([this._stop.signal, _deadline(this._options.timeoutMs ?? TIMEOUT_MS)]);
+        const step = <T>(promise: Promise<T>, dispose: (value: T) => void): Promise<T> => {
+            // A result that arrives after the deadline is still disposed.
+            promise.then(value => resources.add(() => dispose(value)), () => { });
+            return _untilAborted(promise, setup);
+        };
         try {
-            const relay = await this._options.backend.connect(this.tunnel);
-            cleanup.push(() => relay.dispose());
-            const remote = await connectOverStream(await relay.openStream());
-            cleanup.push(() => remote.close());
-            const local = await this._options.openLocal();
-            cleanup.push(() => local.close());
-            if (this._stop.signal.aborted) return;
+            const relay = await step(this._options.backend.connect(this.tunnel, setup), relay => relay.dispose());
+            const remote = await step(relay.openStream().then(connectOverStream), remote => remote.close());
+            const local = await step(this._options.openLocal(), local => local.close());
             local.channel.setRequestHandler(forwardTo(remote.channel.sender));
-            await local.channel.sender.sendRequest(CLAIM, { serviceId: peer });
+            await step(local.channel.sender.sendRequest(CLAIM, { serviceId: peer }), () => { });
             this.connected = true;
             this._options.log(`[${peer}] connected`);
             await Promise.race([remote.closed, local.closed, relay.closed, stopped]);
             if (!this._stop.signal.aborted) this._options.log(`[${peer}] disconnected`);
         } finally {
             this.connected = false;
-            for (const dispose of cleanup.reverse()) dispose();
+            resources.dispose();
         }
+    }
+}
+
+/** Runs disposals in reverse order; one added after `dispose` runs at once. */
+class DisposableStore {
+    private readonly _disposals: Array<() => void> = [];
+    private _disposed = false;
+
+    public add(dispose: () => void): void {
+        if (this._disposed) dispose();
+        else this._disposals.push(dispose);
+    }
+
+    public dispose(): void {
+        this._disposed = true;
+        for (const dispose of this._disposals.splice(0).reverse()) dispose();
     }
 }
 
@@ -240,6 +263,23 @@ function _pipeToEndpoint(stream: Duplex, endpoint: string): void {
 
 function _isUnder(serviceId: string, namespace: string): boolean {
     return namespace !== '' && (serviceId === namespace || serviceId.startsWith(`${namespace}/`));
+}
+
+/** Settles like `promise`, or rejects with the signal's reason once it aborts first. */
+function _untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) return Promise.reject(signal.reason);
+    return new Promise((resolve, reject) => {
+        const onAbort = (): void => reject(signal.reason);
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+    });
+}
+
+/** A signal that aborts after `ms` with a readable error (unlike `AbortSignal.timeout`'s). */
+function _deadline(ms: number): AbortSignal {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error(`timed out after ${ms / 1000} s`)), ms).unref();
+    return controller.signal;
 }
 
 function _delay(ms: number, signal: AbortSignal): Promise<boolean> {
