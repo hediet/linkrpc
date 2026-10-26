@@ -5,7 +5,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
     console.log([
         'Usage: linkrpc-compute-node',
         '',
-        'Serve shell, file system, HTTP, and TCP access to this machine as',
+        'Serve shell, file system, HTTP, TCP, and keep-awake access to this machine as',
         'linkrpc.computeNode.* under the service ID the hub grants. Connects to',
         'LINKRPC_ENDPOINT (set by the hub daemon for its services).',
     ].join('\n'));

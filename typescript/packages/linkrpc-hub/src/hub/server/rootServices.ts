@@ -1,5 +1,6 @@
 import {
     directoryInterface,
+    defaultsInterface,
     ErrorCode,
     type Identity,
     type ManagedIdentityStorageBackend,
@@ -172,6 +173,11 @@ export function registerHubServices(
                 resolve({});
             }, { once: true });
         }),
+    });
+
+    root.register(defaultsInterface, {
+        get: () => ({}),
+        listBindings: () => ({ bindings: [] }),
     });
 
     root.register(schemasInterface, {

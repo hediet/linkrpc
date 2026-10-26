@@ -138,6 +138,8 @@ export async function startLocalHub(opts: StartLocalHubOptions): Promise<LocalHu
 export interface LocalOverlay {
     /** Transport carrying forwarded (prefixed) traffic to/from the participant. */
     readonly uplink: IMessageTransport;
+    /** Resolves once the participant is gone (it exited or closed its connection). */
+    readonly closed: Promise<void>;
     dispose(): void;
 }
 
@@ -272,7 +274,11 @@ export async function startLocalOverlay(opts: StartLocalOverlayOptions): Promise
     }
 
     overlay.connectParticipant(childTransport);
-    return { uplink: pair.b, dispose };
+    const closed = new Promise<void>((resolve) => {
+        childTransport.onDidClose(() => resolve());
+        child.once('exit', () => resolve());
+    });
+    return { uplink: pair.b, closed, dispose };
 }
 
 /**

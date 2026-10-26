@@ -17,6 +17,8 @@ const matcherSchema = z.union([
 export interface RequestCallCapabilityOptions {
     readonly allowParams?: readonly string[];
     readonly duration?: HubAccessDuration;
+    /** Also request `canDelegate`, so the holder can issue narrower capabilities to other identities. */
+    readonly delegate?: boolean;
 }
 
 export async function requestCallCapability(
@@ -39,6 +41,7 @@ export async function requestCallCapability(
             ...(ref.hash !== undefined ? { interfaceHash: ref.hash } : {}),
         },
         canInvoke: true,
+        ...(opts.delegate === true ? { canDelegate: true } : {}),
         params: matchers,
     };
     const coverageOptions = { audience: session.principal.id, freshnessMarginMs: 2000 };

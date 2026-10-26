@@ -1,6 +1,6 @@
 /**
  * Interfaces of a compute node: one machine's status, processes, files,
- * loopback HTTP, and loopback TCP. Browser-safe; the Node.js implementation
+ * loopback HTTP, loopback TCP, listening ports, and sleep prevention. Browser-safe; the Node.js implementation
  * is `@hediet/linkrpc-infra/compute-node/node`.
  *
  * SECURITY: `command`, `filesystem`, `http`, and `tcpForward` act with the
@@ -231,12 +231,67 @@ export const computeNodeTcpForwardInterface = defineInterface(
     },
 );
 
+const listeningPortSchema = z.object({
+    port,
+    /** Local addresses the port is bound to, e.g. `127.0.0.1`, `::1`, `0.0.0.0`. */
+    addresses: z.array(z.string()),
+    pid: z.number().int().nonnegative().optional(),
+    processName: z.string().optional(),
+    /** The owning process's command line, when the compute node may inspect that process. May contain secrets. */
+    commandLine: z.string().optional(),
+    /** The owning process's working directory, when the compute node may inspect that process. */
+    cwd: z.string().optional(),
+});
+
+export const computeNodePortsInterface = defineInterface(
+    {
+        id: 'linkrpc.computeNode.ports',
+        description: 'Lists the TCP ports `tcpForward` can reach: ports listening on a loopback or wildcard address.',
+    },
+    {
+        listListening: requestType(empty, z.object({ ports: z.array(listeningPortSchema) })),
+    },
+);
+
+const keepAwakeParamsSchema = z.object({
+    /** Also keep the display from turning off. Defaults to false. */
+    displayOn: z.boolean().optional(),
+    /** Why the machine is kept awake, shown by the platform where it supports it (`systemd-inhibit --list`). */
+    reason: z.string().min(1).max(200).optional(),
+    /** Release the lease after this long even if the call is still open. Defaults to no limit. */
+    maxDurationMs: z.number().int().min(1).max(7 * 24 * 60 * 60 * 1_000).optional(),
+});
+const keepAwakeEventSchema = z.object({
+    type: z.literal('active'),
+    /** The platform mechanism holding the request: `caffeinate`, `SetThreadExecutionState`, or `systemd-inhibit`. */
+    mechanism: z.string(),
+    /** The helper process holding the request, e.g. to find it in `pmset -g assertions` or `powercfg /requests`. */
+    helperPid: z.number().int().positive(),
+});
+const keepAwakeResultSchema = z.object({ reason: z.enum(['cancelled', 'expired']) });
+
+export const computeNodePowerInterface = defineInterface(
+    {
+        id: 'linkrpc.computeNode.power',
+        description: [
+            '`keepAwake` prevents the compute node from sleeping for as long as the call stays open.',
+            'Each call holds its own lease, reports `active` once sleep prevention is in effect, and releases it',
+            'when the call is cancelled, the caller disconnects, `maxDurationMs` elapses, or the node exits.',
+        ].join(' '),
+    },
+    {
+        keepAwake: requestType(keepAwakeParamsSchema, keepAwakeResultSchema).withStream({ server: keepAwakeEventSchema }),
+    },
+);
+
 export const computeNodeInterfaces = [
     computeNodeStatusInterface,
     computeNodeCommandInterface,
     computeNodeFileSystemInterface,
     computeNodeHttpInterface,
     computeNodeTcpForwardInterface,
+    computeNodePortsInterface,
+    computeNodePowerInterface,
 ] as const;
 
 export type ComputeNodeStatus = z.infer<typeof statusSchema>;
@@ -250,3 +305,7 @@ export type ComputeNodeTcpClientFrame = z.infer<typeof clientTcpFrame>;
 export type ComputeNodeTcpServerFrame = z.infer<typeof serverTcpFrame>;
 export type ComputeNodeMultiplexedTcpClientFrame = z.infer<typeof clientMultiplexedTcpFrame>;
 export type ComputeNodeMultiplexedTcpServerFrame = z.infer<typeof serverMultiplexedTcpFrame>;
+export type ComputeNodeListeningPort = z.infer<typeof listeningPortSchema>;
+export type ComputeNodeKeepAwakeParams = z.infer<typeof keepAwakeParamsSchema>;
+export type ComputeNodeKeepAwakeEvent = z.infer<typeof keepAwakeEventSchema>;
+export type ComputeNodeKeepAwakeResult = z.infer<typeof keepAwakeResultSchema>;

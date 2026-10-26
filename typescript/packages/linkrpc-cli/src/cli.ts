@@ -1,3 +1,4 @@
+import { createInterface } from 'node:readline/promises';
 import { Command, InvalidArgumentError, Option } from 'commander';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { managedEndpointsInterface } from '@hediet/linkrpc-hub-daemon/client';
@@ -46,6 +47,9 @@ import { openDialTransport, openTargetTransport, type DialEndpoint } from './com
 import { mcpForwardCommand } from './commands/mcpForward';
 import { mcpCommand } from './commands/mcp';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
+import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
+import { defaultHttpExportSessionFile, httpExportCommand } from './commands/httpExport';
+import { validateJsonRpcExport } from '@hediet/linkrpc-infra/json-rpc/node';
 import {
     createHubApprovalCommandClient,
     formatApprovalDecision,
@@ -73,7 +77,7 @@ import {
     requestReflectionAccess,
     requestTopologyAccess,
 } from '@hediet/linkrpc-client-internal';
-import { logoutCliIdentity } from '@hediet/linkrpc-client-internal';
+import { cliIdentityTarget, deleteCliIdentity, readCliIdentity } from '@hediet/linkrpc-client-internal';
 import { MethodRefWithOptHash } from './methodRef';
 import { renderMethodParamHelp } from './methodHelp';
 import { rewriteParamShortcuts } from './paramFlags';
@@ -688,9 +692,11 @@ export async function main(
             return;
         }
         if (endpoint === undefined) {
+            const ignoredEnvironmentHint = ignoredEndpointEnvironmentHint();
             process.stdout.write(
-                '\n(No endpoint configured: pass --endpoint / --endpoint-cmd or set LINKRPC_ENDPOINT\n'
-                + 'to see method-specific --p:<name> flags here.)\n',
+                `\n(No endpoint configured: pass ${endpointOptionsDescription()}.\n`
+                + (ignoredEnvironmentHint === undefined ? '' : `${ignoredEnvironmentHint}.\n`)
+                + 'To see method-specific --p:<name> flags here.)\n',
             );
             return;
         }
@@ -749,7 +755,8 @@ export async function main(
         .option('--cap:allow-enum <json>', 'allow one value from a JSON array for the preceding parameter')
         .option('--cap:allow-subset <json>', 'allow an array of items from a JSON string array for the preceding parameter')
         .addOption(new Option('--cap:duration <duration>', 'requested grant lifetime')
-            .choices(['shortLived', 'longLived', 'persistent']).default('persistent'));
+            .choices(['shortLived', 'longLived', 'persistent']).default('persistent'))
+        .option('--cap:delegate', 'also request the right to delegate this authority (canDelegate) to other identities');
 
     const configureCall = (cmd: Command, capabilityOnly: boolean): void => {
         cmd
@@ -785,6 +792,9 @@ export async function main(
             if (!capabilityOnly && cmd.getOptionValueSource('cap:duration') === 'cli' && !requestCap) {
                 throw new Error('--cap:duration requires --cap:request.');
             }
+            if (!capabilityOnly && opts['cap:delegate'] === true && !requestCap) {
+                throw new Error('--cap:delegate requires --cap:request.');
+            }
             resolveSigning(profile, g_invocation?.values ?? {}, capabilityOnly || requestCap);
             const validation = opts.validate === false ? 'off' : effectiveValidation(profile);
             if ((capabilityOnly || requestCap) && validation === 'off') {
@@ -801,6 +811,7 @@ export async function main(
                     capabilityOnly,
                     signingSession: session,
                     duration: opts['cap:duration'],
+                    delegate: opts['cap:delegate'] === true,
                 });
                 process.stdout.write(out + '\n');
             }, {
@@ -1135,6 +1146,88 @@ Batch options:
             });
         });
     if (profile === 'hub') {
+        const exportRoutes = new JsonRpcExportRoutes();
+        program
+            .command('json-rpc-export')
+            .description('Export Hub JSON-RPC services through one authenticated raw WebSocket listener.')
+            .requiredOption('--target-endpoint <uri>', 'Listener URI, e.g. listen:ws://127.0.0.1:8123')
+            .option('--target-token <token>', 'Local client authentication token (or put token in target URI)')
+            .option('--target-token-query-param <name>', 'Accepted token query parameter (repeatable; replaces defaults tkn and token)', collectOption)
+            .option('--serviceId <id>', 'Begin a route; follow each occurrence with --path', value => {
+                exportRoutes.serviceId(value);
+                return value;
+            })
+            .option('--path <path>', 'Path for the preceding service ID; repeat pairs for multiple routes', value => {
+                exportRoutes.path(value);
+                return value;
+            })
+            .action(async (opts: { targetEndpoint: string; targetToken?: string; targetTokenQueryParam?: readonly string[] }) => {
+                const options = {
+                    targetEndpoint: opts.targetEndpoint,
+                    token: opts.targetToken,
+                    tokenQueryParameters: opts.targetTokenQueryParam,
+                    routes: exportRoutes.getRoutes(),
+                };
+                validateJsonRpcExport(options);
+                const localEp = needEndpoint(endpoint);
+                const local = await connectEndpoint(localEp, wireLog('hub'));
+                try {
+                    const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
+                        negotiateHubCaps: isHubEndpoint(localEp),
+                    });
+                    reportIdentity(session);
+                    const server = await jsonRpcExportCommand({
+                        ...options,
+                        local,
+                        onError: error => process.stderr.write(`linkrpc: ${error.message}\n`),
+                    });
+                    try {
+                        process.stderr.write(`linkrpc: JSON-RPC export listening at ${server.endpoint}\n`);
+                        await _untilSignalled();
+                    } finally {
+                        await server.close();
+                    }
+                } finally {
+                    local.close();
+                }
+            });
+        program
+            .command('http-export')
+            .description('Serve loopback ports of Hub compute nodes at <port>.<service>.localhost over HTTP and WebSocket.')
+            .option('--port <n>', 'Local port to listen on', value => parsePositiveInteger(value, '--port'), 80)
+            .option('--host <address>', 'Local address to bind (repeatable; default 127.0.0.1 and ::1)', collectOption)
+            .option('--base-domain <domain>', 'Base domain of exported hostnames', 'localhost')
+            .addOption(new Option('--auth <mode>', 'browser: browsers must be approved once through the Hub consent flow (tools without browser headers are not affected); none: no approval')
+                .choices(['browser', 'none']).default('browser'))
+            .option('--session-file <path>', 'Where approved browser sessions are kept across restarts (contains browser keys)')
+            .action(async (opts: { port: number; host?: readonly string[]; baseDomain: string; auth: 'browser' | 'none'; sessionFile?: string }) => {
+                const localEp = needEndpoint(endpoint);
+                const local = await connectEndpoint(localEp, wireLog('hub'));
+                try {
+                    const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
+                        negotiateHubCaps: isHubEndpoint(localEp),
+                    });
+                    reportIdentity(session);
+                    const server = await httpExportCommand({
+                        local,
+                        requestDirectoryAccess: serviceId => requestDirectoryAccess(session, serviceId, {}),
+                        port: opts.port,
+                        hosts: opts.host ?? ['127.0.0.1', '::1'],
+                        baseDomain: opts.baseDomain,
+                        auth: opts.auth,
+                        sessionFile: opts.sessionFile ?? defaultHttpExportSessionFile(opts.port),
+                        onError: error => process.stderr.write(`linkrpc: ${error.message}\n`),
+                    });
+                    try {
+                        process.stderr.write(`linkrpc: HTTP export listening at ${server.urls.join(', ')}${opts.auth === 'browser' ? ' (browsers need approval; --auth none disables it)' : ''}\n`);
+                        await _untilSignalled();
+                    } finally {
+                        await server.close();
+                    }
+                } finally {
+                    local.close();
+                }
+            });
         program
             .command('mcp')
             .description('Expose tools from all discoverable Hub MCP forwarders as one stdio MCP server.')
@@ -1272,7 +1365,17 @@ Batch options:
                     negotiateHubCaps: isHubEndpoint(localEp),
                 });
                 reportIdentity(session);
-                await tunnelCommand({ serviceId, local, remote, bidi: cmdOpts.bidi });
+                // Stop when either side goes away, and exit non-zero so a
+                // supervisor (e.g. the hub daemon) restarts the tunnel: a
+                // claim without a live target would only time out calls.
+                const lost = Promise.race([
+                    local.closed.then(() => 'source'),
+                    remote.closed.then(() => 'target'),
+                ]).then((side) => {
+                    process.stderr.write(`linkrpc: tunnel: the ${side} connection closed\n`);
+                    process.exitCode = 1;
+                });
+                await tunnelCommand({ serviceId, local, remote, bidi: cmdOpts.bidi, stop: Promise.race([lost, _untilSignalled()]) });
             } finally {
                 remote.close();
                 local.close();
@@ -1342,7 +1445,7 @@ Batch options:
             // synchronously, before any message the participant sent is dispatched.
             const participant = targetEp === undefined
                 ? await connectStdioParticipant()
-                : { connection: await connectTargetEndpoint(targetEp, cmdOpts.claim ?? ''), closed: undefined };
+                : await connectTargetEndpoint(targetEp, cmdOpts.claim ?? '').then((connection) => ({ connection, closed: connection.closed }));
             try {
                 await proxyCommand({
                     hub,
@@ -1671,15 +1774,33 @@ Batch options:
         program
             .command('logout')
             .description(
-                'Delete the stored CLI identity and cached capabilities. Next call will mint a fresh keypair and prompt for consent again.',
+                'Delete the stored keypair and cached capabilities of the identity selected by --principal '
+                + '(default: the user:hubrpc-cli fallback). Asks for confirmation unless --yes is given. '
+                + 'The next call mints a fresh keypair, which hubs that trusted the old key do not accept.',
             )
-            .action(async () => {
-                const removed = await logoutCliIdentity();
-                if (removed.length === 0) {
-                    process.stdout.write('linkrpc: no stored identity found.\n');
+            .option('-y, --yes', 'delete without asking for confirmation')
+            .action(async (opts: { yes?: boolean }) => {
+                const target = cliIdentityTarget(getPrincipalSpec());
+                const principal = await readCliIdentity(target);
+                if (principal === undefined) {
+                    process.stdout.write(`linkrpc: no stored identity for ${target.label} (${target.file}).\n`);
                     return;
                 }
-                for (const f of removed) {
+                const description = `identity ${target.label} (${principal}) at ${target.file}`;
+                if (opts.yes !== true) {
+                    if (process.stdin.isTTY !== true || process.stderr.isTTY !== true) {
+                        throw new Error(`Refusing to delete ${description} without confirmation; pass --yes.`);
+                    }
+                    const readline = createInterface({ input: process.stdin, output: process.stderr });
+                    const answer = await readline.question(
+                        `Delete ${description} and its cached capabilities? This cannot be undone. [y/N] `,
+                    ).finally(() => readline.close());
+                    if (!/^y(es)?$/i.test(answer.trim())) {
+                        process.stderr.write('linkrpc: logout cancelled.\n');
+                        return;
+                    }
+                }
+                for (const f of await deleteCliIdentity(target)) {
                     process.stdout.write(`removed ${f}\n`);
                 }
             });
@@ -2254,8 +2375,10 @@ async function acquireConnection(
         try {
             return { ep: resolveLocalEndpoint() };
         } catch {
+            const ignoredEnvironmentHint = ignoredEndpointEnvironmentHint();
             throw new Error('No endpoint configured through flags, environment, or context, and the local Hub daemon is not running. '
-                + 'Pass --endpoint, or start the daemon (any `hub services run` starts it).');
+                + `Pass ${endpointOptionsDescription()}, or start the daemon (any \`hub services run\` starts it).`
+                + (ignoredEnvironmentHint === undefined ? '' : ` ${ignoredEnvironmentHint}.`));
         }
     }
     return { ep: needEndpoint(endpoint) };
@@ -2271,13 +2394,35 @@ function reportIdentity(session: SigningSession): void {
 
 function needEndpoint(endpoint: ResolvedEndpoint | undefined): ResolvedEndpoint {
     if (!endpoint) {
+        const ignoredEnvironmentHint = ignoredEndpointEnvironmentHint();
         process.stderr.write(
-            'linkrpc: this command requires --endpoint / --endpoint-cmd / --endpoint-cmd-stdio ' +
-            'or the LINKRPC_ENDPOINT env var to be set.\n',
+            `linkrpc: this command requires ${endpointOptionsDescription()}.\n`
+            + (ignoredEnvironmentHint === undefined ? '' : `linkrpc: ${ignoredEnvironmentHint}.\n`),
         );
         process.exit(2);
     }
     return endpoint;
+}
+
+function endpointOptionsDescription(): string {
+    const options = '--endpoint / --endpoint-cmd / --endpoint-cmd-stdio or a configured context';
+    return g_invocation?.profile === 'hub' && g_invocation.environmentApplied
+        ? `${options} or LINKRPC_ENDPOINT`
+        : options;
+}
+
+function ignoredEndpointEnvironmentHint(): string | undefined {
+    const invocation = g_invocation;
+    if (invocation === undefined || invocation.environmentApplied) return undefined;
+    const variable = process.env.LINKRPC_ENDPOINT !== undefined
+        ? 'LINKRPC_ENDPOINT'
+        : process.env.HUBRPC_ENDPOINT !== undefined
+            ? 'HUBRPC_ENDPOINT'
+            : undefined;
+    if (variable === undefined) return undefined;
+    return invocation.profile === 'rpc'
+        ? `${variable} is set but only used by hub commands: run \`linkrpc hub <command>\` (or pass --use-env)`
+        : `${variable} is set but ignored because environment overrides are disabled; pass --use-env to apply it`;
 }
 
 interface TargetEndpointCliOptions {

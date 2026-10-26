@@ -460,6 +460,13 @@ export type HubDirectoryGraphEvent =
  * through affected descendants. Unchanged siblings retain both their snapshot
  * and watch. Multi-parent targets are queried with the normalized union of all
  * incoming path scopes.
+ *
+ * While watching, every node's watch is `active` or in `backoff` after a
+ * failure (see {@link DirectoryWatch}). A failed or ended watch is retried
+ * with exponential backoff, and each retry re-lists the directory after the
+ * new watch is opened. A directory whose watch keeps failing — for example a
+ * provider that does not implement `watch`, or one the caller may list but not
+ * watch — is therefore polled at the backoff interval instead of hammered.
  */
 export class HubDirectoryExplorer {
     private readonly _maxDepth: number;
@@ -469,8 +476,6 @@ export class HubDirectoryExplorer {
     private readonly _listeners = new Set<(change: HubDirectoryChange) => void>();
     private readonly _graphListeners = new Set<(event: HubDirectoryGraphEvent) => void>();
     private readonly _pendingTicks = new Set<string>();
-    private readonly _watchRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    private readonly _watchRetryDelays = new Map<string, number>();
     private _initialized = false;
     private _disposed = false;
     private _watching = false;
@@ -797,6 +802,8 @@ export class HubDirectoryExplorer {
             loading: false,
             reloadRequested: false,
             state: 'unexplored',
+            watch: { kind: 'idle' },
+            watchFailures: 0,
         };
     }
 
@@ -814,6 +821,8 @@ export class HubDirectoryExplorer {
             loading: false,
             reloadRequested: false,
             state: 'unexplored',
+            watch: { kind: 'idle' },
+            watchFailures: 0,
         };
     }
 
@@ -1007,36 +1016,42 @@ export class HubDirectoryExplorer {
     }
 
     /**
-     * Every changed watch scope uses list/watch/list: callers reach this method
-     * only after a list under the current scope, then the replacement watch is
-     * installed before a verification list. Either the verification sees a
-     * handoff mutation or the new watch ticks for it.
+     * Opens a watch for every node that {@link _needsWatch}, each followed by
+     * a verification list (list/watch/list): callers reach this method only
+     * after a list under the current scope, then the watch is opened before the
+     * verification list, so either the list sees a handoff mutation or the
+     * watch ticks for it. Verification can reveal new nodes, so this repeats
+     * until no node needs a watch. Nodes in backoff are skipped; their timer
+     * resumes them.
      */
     private async _synchronizeWatches(): Promise<void> {
         const maxPasses = Math.max(8, this._nodes.size * 4);
         for (let pass = 0; pass < maxPasses && !this._disposed; pass++) {
             const pending = [...this._nodes.values()]
-                .filter((node) =>
-                    node.watch === undefined || node.watchScopesKey !== scopesKey(node.scopes))
+                .filter((node) => this._needsWatch(node))
                 .sort((a, b) => a.depth - b.depth || a.key.localeCompare(b.key));
             if (pending.length === 0) return;
-            let installed = false;
             for (const node of pending) {
-                if (this._nodes.get(node.key) !== node) continue;
-                installed = this._replaceWatch(node) || installed;
-                if (node.watchScopesKey === scopesKey(node.scopes)) {
-                    await this._loadNode(node);
-                    await this._reconcileScopesFromRoot();
-                    await this._pruneUnreachable();
-                }
+                if (this._nodes.get(node.key) !== node || !this._needsWatch(node)) continue;
+                if (!this._startWatch(node)) continue;
+                await this._loadNode(node);
+                await this._reconcileScopesFromRoot();
+                await this._pruneUnreachable();
             }
-            if (!installed) return;
         }
         throw new Error('Hub directory watch synchronization did not converge');
     }
 
-    private _replaceWatch(node: DirectoryNode): boolean {
+    /** Whether the node lacks a watch for its current scopes and is not backing off. */
+    private _needsWatch(node: DirectoryNode): boolean {
         if (!this._watching || this._disposed) return false;
+        const watch = node.watch;
+        return watch.kind === 'idle'
+            || (watch.kind === 'active' && watch.scopesKey !== scopesKey(node.scopes));
+    }
+
+    /** Opens a watch for the node's current scopes, replacing an active one. */
+    private _startWatch(node: DirectoryNode): boolean {
         const method = node.target === undefined
             ? 'hubrpc.directory::watch'
             : `${node.target}::hubrpc.directory::watch`;
@@ -1049,48 +1064,89 @@ export class HubDirectoryExplorer {
                 onStreamMessage: () => this._queueTick(node.key),
             });
         } catch (error) {
-            this._options.log?.(
-                `hub directory watch(${node.target ?? '<root>'}) failed: ${errorMessage(error)}`,
-            );
-            this._scheduleWatchRetry(node);
+            this._watchFailed(node, `failed: ${errorMessage(error)}`);
             return false;
         }
         const previous = this._nodeReport(node);
-        const oldWatch = node.watch;
-        node.watch = call;
-        node.watchScopesKey = scopesKey(node.scopes);
+        const replaced = node.watch;
+        node.watch = { kind: 'active', call, scopesKey: scopesKey(node.scopes) };
         this._emitNodeUpdated(node, previous, 'watch-started');
-        if (oldWatch !== undefined) {
-            try {
-                oldWatch.cancel('directory explorer watch scope replaced');
-            } catch {
-                // Best-effort replacement.
-            }
+        if (replaced.kind === 'active') {
+            cancelWatch(replaced.call, 'directory explorer watch scope replaced');
         }
-        void call.result.then(() => {
-            if (this._disposed || node.watch !== call) return;
-            const previous = this._nodeReport(node);
-            node.watch = undefined;
-            node.watchScopesKey = undefined;
-            this._emitNodeUpdated(node, previous, 'watch-ended');
-            this._scheduleWatchRetry(node);
-        }, (error) => {
-            if (this._disposed || node.watch !== call) return;
-            const previous = this._nodeReport(node);
-            node.watch = undefined;
-            node.watchScopesKey = undefined;
-            this._options.log?.(
-                `hub directory watch(${node.target ?? '<root>'}) ended: ${errorMessage(error)}`,
-            );
-            this._emitNodeUpdated(node, previous, 'watch-ended');
-            this._scheduleWatchRetry(node);
-        });
+        void call.result.then(
+            () => this._onWatchEnded(node, call, 'ended'),
+            (error) => this._onWatchEnded(node, call, `ended: ${errorMessage(error)}`),
+        );
         return true;
     }
 
+    private _onWatchEnded(node: DirectoryNode, call: RawStreamingCall, outcome: string): void {
+        if (
+            this._disposed
+            || this._nodes.get(node.key) !== node
+            || node.watch.kind !== 'active'
+            || node.watch.call !== call
+        ) {
+            return;
+        }
+        this._watchFailed(node, outcome);
+    }
+
+    /**
+     * Puts the node into backoff. Its current watch, if any, is cancelled: a
+     * replacement for new scopes failed, so the old one is stale.
+     */
+    private _watchFailed(node: DirectoryNode, outcome: string): void {
+        this._options.log?.(`hub directory watch(${node.target ?? '<root>'}) ${outcome}`);
+        if (!this._watching || this._disposed || this._nodes.get(node.key) !== node) return;
+        const previous = this._nodeReport(node);
+        const watch = node.watch;
+        if (watch.kind === 'active') cancelWatch(watch.call, 'directory explorer watch failed');
+        if (watch.kind === 'backoff') clearTimeout(watch.timer);
+        node.watchFailures++;
+        const timer = setTimeout(
+            () => this._retryWatch(node),
+            watchRetryDelayMs(node.watchFailures),
+        );
+        node.watch = { kind: 'backoff', timer };
+        if (watch.kind === 'active') this._emitNodeUpdated(node, previous, 'watch-ended');
+    }
+
+    private _retryWatch(node: DirectoryNode): void {
+        if (
+            this._disposed
+            || this._nodes.get(node.key) !== node
+            || node.watch.kind !== 'backoff'
+        ) {
+            return;
+        }
+        node.watch = { kind: 'idle' };
+        if (!this._watching) return;
+        this._startReconciliation();
+        this._work = this._work.then(async () => {
+            await this._synchronizeWatches();
+            this._settle();
+        }).catch((error) => this._reconciliationFailed('watch retry', error));
+    }
+
+    /**
+     * A failed reconciliation may leave nodes without a watch. Backing them
+     * off keeps the invariant that, while watching, every node is either
+     * watched or scheduled to retry.
+     */
+    private _reconciliationFailed(context: string, error: unknown): void {
+        this._options.log?.(`hub directory ${context} failed: ${errorMessage(error)}`);
+        for (const node of [...this._nodes.values()]) {
+            if (this._needsWatch(node)) this._watchFailed(node, 'not resynchronized');
+        }
+        this._settle();
+    }
+
     private _queueTick(key: string): void {
-        if (this._disposed || !this._nodes.has(key)) return;
-        this._watchRetryDelays.delete(key);
+        const ticked = this._nodes.get(key);
+        if (this._disposed || ticked === undefined) return;
+        ticked.watchFailures = 0;
         this._pendingTicks.add(key);
         this._startReconciliation();
         this._work = this._work.then(async () => {
@@ -1115,73 +1171,22 @@ export class HubDirectoryExplorer {
                 }
             }
             this._settle();
-        }).catch((error) => {
-            this._options.log?.(`hub directory reconciliation failed: ${errorMessage(error)}`);
-            this._settle();
-        });
+        }).catch((error) => this._reconciliationFailed('reconciliation', error));
     }
 
     private _stopWatch(node: DirectoryNode, emit = true): void {
-        this._clearWatchRetry(node.key);
         const watch = node.watch;
-        if (watch === undefined) return;
-        const previous = emit ? this._nodeReport(node) : undefined;
-        node.watch = undefined;
-        node.watchScopesKey = undefined;
-        try {
-            watch.cancel('directory explorer watch stopped');
-        } catch {
-            // Best-effort teardown.
-        }
+        if (watch.kind === 'backoff') clearTimeout(watch.timer);
+        const previous = emit && watch.kind === 'active' ? this._nodeReport(node) : undefined;
+        node.watch = { kind: 'idle' };
+        node.watchFailures = 0;
+        if (watch.kind !== 'active') return;
+        cancelWatch(watch.call, 'directory explorer watch stopped');
         if (previous !== undefined) this._emitNodeUpdated(node, previous, 'watch-stopped');
     }
 
     private _stopAllWatches(emit = true): void {
         for (const node of this._nodes.values()) this._stopWatch(node, emit);
-        for (const key of [...this._watchRetryTimers.keys()]) this._clearWatchRetry(key);
-    }
-
-    private _scheduleWatchRetry(node: DirectoryNode): void {
-        if (
-            !this._watching
-            || this._disposed
-            || this._nodes.get(node.key) !== node
-            || this._watchRetryTimers.has(node.key)
-        ) {
-            return;
-        }
-        const delay = this._watchRetryDelays.get(node.key) ?? 200;
-        this._watchRetryDelays.set(node.key, Math.min(5_000, delay * 2));
-        const timer = setTimeout(() => {
-            this._watchRetryTimers.delete(node.key);
-            if (
-                !this._watching
-                || this._disposed
-                || this._nodes.get(node.key) !== node
-                || node.watch !== undefined
-            ) {
-                return;
-            }
-            this._startReconciliation();
-            this._work = this._work.then(async () => {
-                await this._synchronizeWatches();
-                this._settle();
-            }).catch((error) => {
-                this._options.log?.(
-                    `hub directory watch retry failed: ${errorMessage(error)}`,
-                );
-                this._settle();
-                this._scheduleWatchRetry(node);
-            });
-        }, delay);
-        this._watchRetryTimers.set(node.key, timer);
-    }
-
-    private _clearWatchRetry(key: string): void {
-        const timer = this._watchRetryTimers.get(key);
-        if (timer !== undefined) clearTimeout(timer);
-        this._watchRetryTimers.delete(key);
-        this._watchRetryDelays.delete(key);
     }
 
     private _clearNodes(): void {
@@ -1243,7 +1248,7 @@ export class HubDirectoryExplorer {
             ...(node.inaccessibleReason === undefined
                 ? {}
                 : { inaccessibleReason: node.inaccessibleReason }),
-            watching: node.watch !== undefined,
+            watching: node.watch.kind === 'active',
         };
     }
 
@@ -1361,8 +1366,40 @@ interface DirectoryNode {
     reloadRequested: boolean;
     state: HubDirectoryNodeState;
     inaccessibleReason?: string;
-    watch?: RawStreamingCall;
-    watchScopesKey?: string;
+    watch: DirectoryWatch;
+    /** Consecutive watch failures since the last tick; selects the retry delay. */
+    watchFailures: number;
+}
+
+/**
+ * Lifecycle of one node's `hubrpc.directory::watch`. This is the single source
+ * of truth for whether a node needs a watch: a node in `backoff` is unwatched
+ * on purpose and must not be re-watched (and re-listed) before its timer fires.
+ */
+type DirectoryWatch =
+    /** No watch open or scheduled; the next synchronization opens one. */
+    | { readonly kind: 'idle' }
+    /** A watch is open for the scopes identified by `scopesKey`. */
+    | { readonly kind: 'active'; readonly call: RawStreamingCall; readonly scopesKey: string }
+    /** The last watch failed or ended; `timer` returns the node to `idle`. */
+    | { readonly kind: 'backoff'; readonly timer: ReturnType<typeof setTimeout> };
+
+const WATCH_RETRY_INITIAL_DELAY_MS = 200;
+const WATCH_RETRY_MAX_DELAY_MS = 30_000;
+
+function watchRetryDelayMs(consecutiveFailures: number): number {
+    return Math.min(
+        WATCH_RETRY_MAX_DELAY_MS,
+        WATCH_RETRY_INITIAL_DELAY_MS * 2 ** Math.max(0, consecutiveFailures - 1),
+    );
+}
+
+function cancelWatch(call: RawStreamingCall, reason: string): void {
+    try {
+        call.cancel(reason);
+    } catch {
+        // Best-effort teardown.
+    }
 }
 
 interface DerivedNodeState {
