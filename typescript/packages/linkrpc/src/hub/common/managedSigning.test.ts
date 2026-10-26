@@ -57,6 +57,35 @@ describe("createAutoNegotiatingCapProvider", () => {
         expect(result.capabilities).toContain(capability);
     });
 
+    it("negotiates concurrent calls independently while one waits for consent", async () => {
+        const principal = await createMemoryPrincipal();
+        const pendingConsent = new Promise<JsonValue>(() => { });
+        const sendRequest = vi.fn(async (_method: string, params: unknown): Promise<JsonValue> => {
+            const member = (params as { permissions: { target: { members: { exact: string }[] } }[] })
+                .permissions[0].target.members[0].exact;
+            return member === "list" ? pendingConsent : { status: "denied" };
+        });
+        const provider = createAutoNegotiatingCapProvider({
+            principal, consumer: { name: "test" },
+            sender: {
+                sendRequest, sendNotification: async () => {},
+                sendRequestWithStream: () => { throw new Error("not used"); }, close: () => {},
+            },
+        });
+        const call = (method: string, nonce: string) => provider({
+            method, params: {}, signer: principal.id, nonce, signedAtMs: Date.now(),
+        });
+
+        void call("hub::hubrpc.directory::list", "waiting");
+        await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledTimes(1));
+        await call("viewer/dbgjs::dev.dbgjs.screencast::screencast", "concurrent");
+
+        expect(sendRequest).toHaveBeenCalledTimes(2);
+        expect(sendRequest.mock.calls.map(([method]) => method)).toEqual([
+            "hubAccess::requestAccess", "hubAccess::requestAccess",
+        ]);
+    });
+
     it.each(["complete", "missing-parent", "wrong-audience", "delegate-only", "expired-parent"] as const)(
         "handles %s delegated cached authority", async kind => {
             const principal = await createMemoryPrincipal();
