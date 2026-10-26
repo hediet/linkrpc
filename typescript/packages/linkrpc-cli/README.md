@@ -1134,6 +1134,8 @@ only when the selected identity is a configured trusted root.
 Discovery diagnostics are written to stderr, including every manifest source
 and its pending-request count; `--json` stdout remains machine-readable.
 
+An unavailable child directory or manifest does not block requests and decisions from healthy sources. The listing reports partial results, and JSON output includes a `warnings` array when sources are unavailable. Directory warnings identify the failed service and the directories advertising it. Failed manifests contribute no cached requests; a failure of root discovery or the aggregate snapshot still fails the command rather than reporting a healthy empty inbox.
+
 Hub calls (`call`, `ls`, …) additionally present a self-issued capability for
 every call. A Hub accepts it only where the identity is a configured trusted
 root, so a root needs no approval for its own calls; elsewhere it is ignored

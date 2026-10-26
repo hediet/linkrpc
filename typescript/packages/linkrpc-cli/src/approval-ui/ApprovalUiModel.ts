@@ -280,6 +280,11 @@ export class ApprovalUiModel {
         }
         if (snapshot.state === 'stale' && snapshot.error !== undefined) {
             this._message.set({ kind: 'error', text: snapshot.error }, undefined);
+        } else if (snapshot.warnings?.length) {
+            this._message.set({
+                kind: 'error',
+                text: `Partial results: ${snapshot.warnings.join('\n')}`,
+            }, undefined);
         }
     }
 }

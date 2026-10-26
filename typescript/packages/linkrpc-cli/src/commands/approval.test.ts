@@ -367,6 +367,22 @@ describe('approval commands', () => {
         await waitFor(() => manifest.activeWatchCount === 0);
     });
 
+    it('labels incomplete empty results and includes warnings in JSON', () => {
+        const warnings = ["directory 'broken' is unavailable"];
+        expect({
+            json: JSON.parse(formatApprovalRequests([], 'id:key:self', true, warnings)),
+            text: formatApprovalRequests([], 'id:key:self', false, warnings),
+        }).toEqual({
+            json: { version: 1, principal: 'id:key:self', requests: [], warnings },
+            text: [
+                'Partial results: some approval sources are unavailable.',
+                ...warnings,
+                '',
+                'No pending approval requests found in available sources for id:key:self.',
+            ].join('\n'),
+        });
+    });
+
     it('provides stable JSON and readable text output', () => {
         const principal = 'id:key:self';
         const id = encodeApprovalRequestId('source\u0000request');

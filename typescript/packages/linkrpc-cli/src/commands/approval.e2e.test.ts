@@ -156,7 +156,7 @@ describe('approval commands across a capability-gated Hub', () => {
         ).rejects.toThrow();
     });
 
-    it('discovers a nested manifest through nonempty global and cloud Hub service IDs', async () => {
+    it.each(['healthy', 'unavailable directory', 'unavailable manifest'] as const)('discovers and decides a nested request with %s', async (scenario) => {
         const root = await createSeededMemoryPrincipal({ seed: 130 });
         const authHost = new HubAccessManifestHost({
             acceptableRootIds: [root.id],
@@ -175,7 +175,27 @@ describe('approval commands across a capability-gated Hub', () => {
             acceptedRootIssuers: () => [{ principal: root.id, isPublic: true }],
         }));
         registerReferralDirectory(publicServer, '', 'de.hediet');
-        registerReferralDirectory(publicServer, 'de.hediet', 'de.hediet/cloud');
+        publicServer.register(directoryInterface, {
+            list: () => ({
+                items: [
+                    {
+                        serviceId: 'de.hediet/cloud',
+                        interfaceId: directoryInterface.info.id,
+                        interfaceHash: directoryInterface.schemaHash,
+                    },
+                    ...(scenario === 'healthy' ? [] : [{
+                        serviceId: 'de.hediet/unavailable',
+                        interfaceId: scenario === 'unavailable directory'
+                            ? directoryInterface.info.id
+                            : hubAccessManifestInterface.info.id,
+                        interfaceHash: scenario === 'unavailable directory'
+                            ? directoryInterface.schemaHash
+                            : hubAccessManifestInterface.schemaHash,
+                    }]),
+                ],
+            }),
+            watch: directoryWatchNever,
+        }, { serviceId: 'de.hediet' });
         registerReferralDirectory(
             publicServer,
             'de.hediet/cloud',
@@ -232,11 +252,24 @@ describe('approval commands across a capability-gated Hub', () => {
             },
         });
         expect(logs).toContain(
-            'approval: discovered 1 manifest source: de.hediet/cloud/ext/auth',
+            scenario === 'unavailable manifest'
+                ? 'approval: discovered 2 manifest sources: de.hediet/cloud/ext/auth, de.hediet/unavailable'
+                : 'approval: discovered 1 manifest source: de.hediet/cloud/ext/auth',
         );
         expect(logs).toContain(
             "approval: source 'de.hediet/cloud/ext/auth' has 1 pending request",
         );
+        expect({
+            state: client.snapshot.get().state,
+            warnings: client.snapshot.get().warnings,
+        }).toEqual({
+            state: 'live',
+            warnings: scenario === 'healthy' ? undefined : [
+                expect.stringContaining(scenario === 'unavailable directory'
+                    ? "directory 'de.hediet/unavailable' (advertised by de.hediet)"
+                    : 'getDesired(de.hediet/unavailable) failed'),
+            ],
+        });
 
         await client.deny(request.id, 'federation discovery test');
         await expect(access).resolves.toEqual({

@@ -74,6 +74,30 @@ describe('ApprovalUiModel', () => {
                 kind: 'error',
                 text: 'manifest rejected the decision',
             });
+
+        } finally {
+            model.dispose();
+        }
+    });
+
+    it('surfaces partial results without blocking a healthy request', async () => {
+        const client = new FakeApprovalUiClient();
+        const model = new ApprovalUiModel(client);
+        try {
+            client.emit({
+                ...snapshot([pending('a', 'Alpha')]),
+                warnings: ["directory 'broken' is unavailable"],
+            });
+            expect({
+                state: model.connectionState.get(),
+                message: model.message.get(),
+            }).toEqual({
+                state: 'live',
+                message: { kind: 'error', text: "Partial results: directory 'broken' is unavailable" },
+            });
+            await model.beginApprove();
+            expect(model.mode.get()).toBe('approve');
+            expect(client.approvePrepared).not.toHaveBeenCalled();
         } finally {
             model.dispose();
         }

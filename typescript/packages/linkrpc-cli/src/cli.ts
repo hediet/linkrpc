@@ -1695,6 +1695,7 @@ Batch options:
                         await client.requests(),
                         client.principalId,
                         opts.json === true,
+                        client.snapshot.get().warnings,
                     );
                     process.stdout.write(out + '\n');
                 });

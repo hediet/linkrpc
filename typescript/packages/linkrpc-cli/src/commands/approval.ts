@@ -48,18 +48,25 @@ export function formatApprovalRequests(
     requests: readonly PendingApprovalRequest[],
     principalId: string,
     json = false,
+    warnings: readonly string[] = [],
 ): string {
     if (json) {
         return formatJson({
             version: 1,
             principal: principalId,
             requests: requests.map(({ id, request }) => ({ id, request })),
+            ...(warnings.length > 0 ? { warnings } : {}),
         });
     }
+    const lines: string[] = warnings.length > 0
+        ? ['Partial results: some approval sources are unavailable.', ...warnings, '']
+        : [];
     if (requests.length === 0) {
-        return `No pending approval requests for ${principalId}.`;
+        lines.push(warnings.length > 0
+            ? `No pending approval requests found in available sources for ${principalId}.`
+            : `No pending approval requests for ${principalId}.`);
+        return lines.join('\n');
     }
-    const lines: string[] = [];
     for (const request of requests) {
         const presentation = createApprovalPresentation(request);
         lines.push(presentation.heading);

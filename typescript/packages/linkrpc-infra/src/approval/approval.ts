@@ -146,6 +146,8 @@ export interface ApprovalSnapshot {
     readonly state: 'connecting' | 'live' | 'stale';
     readonly requests: readonly PendingApprovalRequest[];
     readonly error?: string;
+    /** Unavailable sources omitted from an otherwise current snapshot. */
+    readonly warnings?: readonly string[];
 }
 
 export interface ApprovalClientOptions {
@@ -157,6 +159,7 @@ export interface ApprovalClientOptions {
     readonly dispose?: () => void;
     readonly timeoutMs?: number;
     readonly sourceErrors?: IObservable<readonly string[]>;
+    readonly sourceWarnings?: IObservable<readonly string[]>;
     readonly refreshAuthority?: () => Promise<unknown>;
 }
 
@@ -226,12 +229,14 @@ export class ApprovalClient {
             const state = this._client.state.read(reader);
             const error = this._lastClientError.read(reader);
             const sourceErrors = options.sourceErrors?.read(reader) ?? [];
+            const warnings = options.sourceWarnings?.read(reader) ?? [];
             return {
                 state: sourceErrors.length > 0 ? 'stale' : state,
                 requests: this._toPendingRequests(this._client.requests.read(reader)),
                 ...(sourceErrors.length > 0
                     ? { error: sourceErrors.join('\n') }
                     : state === 'stale' && error !== undefined ? { error } : {}),
+                ...(warnings.length > 0 ? { warnings } : {}),
             };
         });
     }
@@ -560,15 +565,30 @@ export function createHubApprovalClient(
     const errorsBySource = new Map<string, string>();
     const sourceErrors = observableValue<readonly string[]>('approvalSourceErrors', []);
     const directoryErrors = observableValue<readonly string[]>('approvalDirectoryErrors', []);
-    const discoveryErrors = derived((reader) => [
-        ...directoryErrors.read(reader), ...sourceErrors.read(reader),
+    const directoryWarnings = observableValue<readonly string[]>('approvalDirectoryWarnings', []);
+    const discoveryWarnings = derived((reader) => [
+        ...directoryWarnings.read(reader), ...sourceErrors.read(reader),
     ]);
     const updateDirectoryHealth = () => {
         const graph = explorer.graphSnapshot;
-        directoryErrors.set([graph.root, ...graph.directories].flatMap((node) =>
-            node.inaccessibleReason === undefined ? [] : [
-                `approval: directory discovery failed: ${node.inaccessibleReason}`,
-            ]), undefined);
+        directoryErrors.set(graph.root.inaccessibleReason === undefined ? [] : [
+            `approval: root directory discovery failed: ${graph.root.inaccessibleReason}`,
+        ], undefined);
+        const warnings = graph.directories.flatMap((node) => {
+            if (node.inaccessibleReason === undefined) return [];
+            const serviceId = node.target.kind === 'root' ? '<root>' : node.target.serviceId;
+            const parents = node.parents.map((parent) =>
+                parent.target.kind === 'root' ? '<root>' : parent.target.serviceId);
+            return [
+                `approval: directory '${serviceId}' (advertised by ${parents.join(', ')}) `
+                + `is unavailable; results may be incomplete: ${node.inaccessibleReason}`,
+            ];
+        });
+        const previous = new Set(directoryWarnings.get());
+        for (const warning of warnings) {
+            if (!previous.has(warning)) log?.(warning);
+        }
+        directoryWarnings.set(warnings, undefined);
     };
     let directoryChanged: (() => void) | undefined;
     const watchStarted = explorer.watch(() => {
@@ -647,7 +667,8 @@ export function createHubApprovalClient(
         identity,
         getCapabilities,
         refreshAuthority,
-        sourceErrors: discoveryErrors,
+        sourceErrors: directoryErrors,
+        sourceWarnings: discoveryWarnings,
         fetchDirectory,
         log,
         dispose: () => {
