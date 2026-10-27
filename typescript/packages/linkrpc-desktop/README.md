@@ -33,6 +33,12 @@ Without it, the service uses the endpoint's ordinary admission policy. `--servic
 can select a descendant of the granted namespace. It cannot claim an arbitrary
 namespace. Neither command changes hub configuration or restarts the daemon.
 
+`--source` also accepts a plain RFB server such as `tcp://127.0.0.1:5900`. For a
+server that requires VNC authentication (for example macOS Screen Sharing with
+"VNC viewers may control screen with password"), pass `--source-password-file FILE`.
+The service authenticates itself and offers viewers only security type None, so the
+password stays with the service. Prefer a loopback-only source.
+
 For example, register the process with an existing daemon (substitute absolute
 paths for `NODE` and `CLI`):
 

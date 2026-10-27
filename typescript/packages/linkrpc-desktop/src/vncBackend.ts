@@ -6,6 +6,7 @@ import {
     DESKTOP_DATA_CHANNEL, type DesktopAttachOptions, type DesktopBackend,
     type DesktopSession, type DesktopViewport, type DesktopRelay, DESKTOP_RELAY_CHUNK,
 } from '@hediet/linkrpc-infra/desktop';
+import { PreauthenticatedRfbStream } from './rfbAuth';
 
 const HIGH_WATER = 256 * 1024;
 const MAX_BUFFER = 4 * 1024 * 1024;
@@ -19,6 +20,12 @@ export interface VncSource {
      * server (`tcp://host:port`, e.g. a VNC server listening on loopback).
      */
     readonly sourceUrl: string;
+    /**
+     * Trusted VNC password for sources that require "VNC Authentication" (e.g. macOS
+     * Screen Sharing). The backend authenticates itself; viewers see an RFB server without
+     * authentication and never learn the password.
+     */
+    readonly sourcePassword?: string;
     readonly dpiUrl?: string;
     readonly peerConfig?: Partial<PeerConfig>;
 }
@@ -40,6 +47,13 @@ export class VncBackend implements DesktopBackend {
 
     /** One RFB byte stream to the source; it emits `error` and `close` like any socket. */
     private _openSource(): Duplex {
+        const connection = this._connectSource();
+        return this._source.sourcePassword === undefined
+            ? connection
+            : new PreauthenticatedRfbStream(connection, this._source.sourcePassword);
+    }
+
+    private _connectSource(): Duplex {
         if (this._url.protocol === 'tcp:') {
             const socket = net.connect({ host: this._url.hostname.replace(/^\[|\]$/g, ''), port: Number(this._url.port) });
             socket.setNoDelay(true);

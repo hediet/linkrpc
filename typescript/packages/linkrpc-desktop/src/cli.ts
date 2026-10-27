@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { LinkRpcConnection } from '@hediet/linkrpc';
 import { createManagedSigningChannel } from '@hediet/linkrpc/hub/common';
@@ -12,6 +13,7 @@ const { positionals, values } = parseArgs({
         endpoint: { type: 'string' },
         service: { type: 'string' },
         source: { type: 'string' },
+        'source-password-file': { type: 'string' },
         dpi: { type: 'string' },
         title: { type: 'string', default: 'Desktop' },
         interface: { type: 'string' },
@@ -26,9 +28,10 @@ const { positionals, values } = parseArgs({
 
 async function main() {
     if (values.help) {
-        console.log(`linkrpc-desktop serve --source ws://127.0.0.1:6080/websockify|tcp://127.0.0.1:5900 [--dpi http://127.0.0.1:6080/api/dpi]
+        console.log(`linkrpc-desktop serve --source ws://127.0.0.1:6080/websockify|tcp://127.0.0.1:5900 [--source-password-file FILE] [--dpi http://127.0.0.1:6080/api/dpi]
 linkrpc-desktop view --service SERVICE [--interface ID --instance NAME --params '{}' --transport webrtc|hub]
 Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims the hub-granted namespace.
+--source-password-file holds the source's VNC password; serve authenticates and viewers never see it.
 --managed-identity signs with a provisioned identity. --negotiate-caps explicitly enables interactive capability requests.`);
         return;
     }
@@ -38,8 +41,10 @@ Both commands use --endpoint or LINKRPC_ENDPOINT and LINKRPC_TOKEN. Serve claims
     process.once('SIGTERM', stop);
     if (positionals[0] === 'serve') {
         if (!values.source) throw new Error('serve requires --source (trusted ws:, wss:, or tcp: RFB endpoint)');
+        const sourcePasswordFile = values['source-password-file'];
         const host = await hostVncDesktop({
             title: values.title!, sourceUrl: values.source, dpiUrl: values.dpi,
+            sourcePassword: sourcePasswordFile === undefined ? undefined : readFileSync(sourcePasswordFile, 'utf8').replace(/\r?\n$/, ''),
         }, {
             endpoint: values.endpoint ? { endpoint: values.endpoint } : undefined,
             serviceId: values.service, signal: control.signal, managedIdentity: values['managed-identity'],
