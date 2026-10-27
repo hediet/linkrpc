@@ -1,10 +1,15 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { generateTsContract, generateTsInterface, type GenerateContractOptions } from '@hediet/linkrpc';
-import { loadStaticHubSchema } from '../staticHubSchema';
+import { loadStaticHubSchema, type StaticHubSchema } from '../staticHubSchema';
+
+export type CodegenSource =
+    | { readonly kind: 'input'; readonly path: string }
+    /** Reflects a live service; `load` is only invoked after all offline option validation passed. */
+    | { readonly kind: 'service'; readonly serviceId: string; readonly load: () => Promise<StaticHubSchema> };
 
 export interface CodegenCommandOptions {
-    readonly input: string;
+    readonly source: CodegenSource;
     readonly interfaceId?: string;
     readonly name?: string;
     readonly output: string;
@@ -14,17 +19,27 @@ export interface CodegenCommandOptions {
 }
 
 export async function codegenCommand(options: CodegenCommandOptions): Promise<void> {
-    if (/^https?:\/\//i.test(options.input)) {
+    const { source } = options;
+    if (source.kind === 'input' && /^https?:\/\//i.test(source.path)) {
         throw new Error('codegen --input must be a local offline bundle');
     }
     if (options.name !== undefined && !/^[$A-Z_a-z][$\w]*$/.test(options.name)) {
         throw new Error(`codegen --name must be a valid TypeScript identifier, got '${options.name}'`);
     }
+    if (options.interfaceId === undefined && options.name !== undefined) {
+        throw new Error('codegen --name requires --interface');
+    }
+    if (options.interfaceId !== undefined && options.name === undefined) {
+        throw new Error('codegen --interface requires --name');
+    }
+    if (options.interfaceId !== undefined && options.names !== undefined) {
+        throw new Error('codegen --names is only supported for whole contracts');
+    }
 
-    const bundle = await loadStaticHubSchema(options.input);
+    const bundle = source.kind === 'input' ? await loadStaticHubSchema(source.path) : await source.load();
+    const sourceLabel = source.kind === 'input' ? `bundle '${source.path}'` : `service '${source.serviceId}'`;
     let generated: string;
     if (options.interfaceId === undefined) {
-        if (options.name !== undefined) throw new Error('codegen --name requires --interface');
         let naming: GenerateContractOptions = {};
         if (options.names !== undefined) {
             const raw = JSON.parse(await readFile(options.names, 'utf8'));
@@ -42,17 +57,15 @@ export async function codegenCommand(options: CodegenCommandOptions): Promise<vo
         }
         generated = generateTsContract(bundle, naming);
     } else {
-        if (options.name === undefined) throw new Error('codegen --interface requires --name');
-        if (options.names !== undefined) throw new Error('codegen --names is only supported for whole contracts');
         const matches = bundle.interfaceSchemas.filter((schema) => schema.id === options.interfaceId);
         if (matches.length === 0) {
             throw new Error(
-                `Interface '${options.interfaceId}' was not found in bundle '${options.input}'`,
+                `Interface '${options.interfaceId}' was not found in ${sourceLabel}`,
             );
         }
         if (matches.length > 1) {
             throw new Error(
-                `Interface '${options.interfaceId}' is ambiguous in bundle '${options.input}' `
+                `Interface '${options.interfaceId}' is ambiguous in ${sourceLabel} `
                 + `(${matches.length} schema versions)`,
             );
         }
