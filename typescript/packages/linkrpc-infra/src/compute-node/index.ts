@@ -1,11 +1,11 @@
 /**
  * Interfaces of a compute node: one machine's status, processes, files,
- * loopback HTTP, loopback TCP, listening ports, and sleep prevention. Browser-safe; the Node.js implementation
- * is `@hediet/linkrpc-infra/compute-node/node`.
+ * loopback HTTP, loopback TCP, listening ports, power (sleep prevention, sleep, restart, shutdown), and
+ * session locking. Browser-safe; the Node.js implementation is `@hediet/linkrpc-infra/compute-node/node`.
  *
  * SECURITY: `command`, `filesystem`, `http`, and `tcpForward` act with the
- * full rights of the OS user running the node. Grant them only to trusted
- * principals.
+ * full rights of the OS user running the node, and `power` and `session` can
+ * interrupt that user. Grant them only to trusted principals.
  */
 import { defineInterface, requestType } from '@hediet/linkrpc';
 import { z } from 'zod';
@@ -269,6 +269,10 @@ const keepAwakeEventSchema = z.object({
     helperPid: z.number().int().positive(),
 });
 const keepAwakeResultSchema = z.object({ reason: z.enum(['cancelled', 'expired']) });
+const systemActionResultSchema = z.object({
+    /** The platform mechanism that performed the action, e.g. `LockWorkStation` or `systemctl suspend`. */
+    mechanism: z.string(),
+});
 
 export const computeNodePowerInterface = defineInterface(
     {
@@ -277,10 +281,25 @@ export const computeNodePowerInterface = defineInterface(
             '`keepAwake` prevents the compute node from sleeping for as long as the call stays open.',
             'Each call holds its own lease, reports `active` once sleep prevention is in effect, and releases it',
             'when the call is cancelled, the caller disconnects, `maxDurationMs` elapses, or the node exits.',
+            '`sleep`, `restart`, and `shutdown` act immediately, as the OS user running the node; the machine can go down',
+            'before the reply arrives. `restart` and `shutdown` let applications close normally, so unsaved work can block them.',
         ].join(' '),
     },
     {
         keepAwake: requestType(keepAwakeParamsSchema, keepAwakeResultSchema).withStream({ server: keepAwakeEventSchema }),
+        sleep: requestType(empty, systemActionResultSchema),
+        restart: requestType(empty, systemActionResultSchema),
+        shutdown: requestType(empty, systemActionResultSchema),
+    },
+);
+
+export const computeNodeSessionInterface = defineInterface(
+    {
+        id: 'linkrpc.computeNode.session',
+        description: '`lock` locks the interactive desktop session of the OS user running the compute node.',
+    },
+    {
+        lock: requestType(empty, systemActionResultSchema),
     },
 );
 
@@ -292,6 +311,7 @@ export const computeNodeInterfaces = [
     computeNodeTcpForwardInterface,
     computeNodePortsInterface,
     computeNodePowerInterface,
+    computeNodeSessionInterface,
 ] as const;
 
 export type ComputeNodeStatus = z.infer<typeof statusSchema>;
