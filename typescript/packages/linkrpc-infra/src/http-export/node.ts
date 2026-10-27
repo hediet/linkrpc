@@ -71,7 +71,6 @@ export async function startHttpExport(options: HttpExportOptions): Promise<HttpE
     const approval = options.approval
         ? await BrowserApproval.create(options.approval, baseDomain, {
             resolve: reference => gateway!.resolveService(reference),
-            scope: async target => approvalScope(target, (await options.listServices()).serviceIds),
         })
         : undefined;
     gateway = new HttpExportGateway(options, approval);
@@ -344,24 +343,27 @@ class HttpExportGateway {
         } catch (e) {
             error = normalizeError(e).message;
         }
-        const entries = (ports ?? []).map(port => ({
+        const range = caller?.portRange;
+        // Compute nodes that predate port ranges list every port.
+        const entries = (ports ?? []).filter(port => range === undefined || (port.port >= range.min && port.port <= range.max)).map(port => ({
             ...port,
             url: this._url(request, formatHttpExportHost({ serviceId, params: { port: port.port } }, this._baseDomain)),
         }));
         if (wantsJson(request)) {
-            return sendJson(response, { serviceId, ports: entries, ...(error === undefined ? {} : { error }) });
+            return sendJson(response, { serviceId, ports: entries, ...(range === undefined ? {} : { portRange: range }), ...(error === undefined ? {} : { error }) });
         }
         const rows = entries.map(port => `<tr><td><a href="${escapeHtml(port.url)}">${port.port}</a></td>`
             + `<td>${escapeHtml(port.processName ?? '')}${port.pid === undefined ? '' : ` <span class="note">(${port.pid})</span>`}`
             + `${port.commandLine === undefined ? '' : `<div>${renderCommandLine(port.commandLine)}</div>`}`
             + `${port.cwd === undefined ? '' : `<div class="note">in <code>${escapeHtml(port.cwd)}</code></div>`}</td>`
             + `<td class="note">${escapeHtml(port.addresses.join(', '))}</td></tr>`).join('');
+        const openable = range === undefined ? 'Any loopback port' : `This browser may open ports ${range.min}–${range.max}. Each`;
         sendHtml(response, serviceId, `
             <p><a href="${escapeHtml(this._url(request, this._baseDomain))}">All services</a></p>
             <h1>${escapeHtml(serviceId)}</h1>
             ${error === undefined ? '' : `<p class="note">Listening ports are unavailable: ${escapeHtml(error)}</p>`}
             ${entries.length ? `<table><tr><th>Port</th><th>Process</th><th>Bound to</th></tr>${rows}</table>` : ''}
-            <p class="note">Any loopback port can be opened as <code>&lt;port&gt;.${escapeHtml(formatHttpExportHost({ serviceId, params: {} }, this._baseDomain))}</code>.</p>`);
+            <p class="note">${openable} can be opened as <code>&lt;port&gt;.${escapeHtml(formatHttpExportHost({ serviceId, params: {} }, this._baseDomain))}</code>.</p>`);
     }
 
     private _url(request: IncomingMessage, hostname: string): string {
@@ -382,23 +384,6 @@ class HttpExportGateway {
 
 function poolKey(serviceId: string, port: number, caller: HttpExportCaller | undefined): string {
     return `${caller?.id ?? ''}\n${serviceId}\n${port}`;
-}
-
-/**
- * The service ID prefix a browser asks access for: the owner namespace (first segment) of the
- * service it opens, e.g. `hediet` for `hediet/devbox/compute`, so one approval covers all of that
- * owner's machines regardless of which ones have been discovered yet. Without a target, the owner
- * shared by all known services; throws while none are known.
- */
-export function approvalScope(target: string | undefined, knownServiceIds: readonly string[]): string {
-    if (target !== undefined) {
-        return target.split('/')[0];
-    }
-    const owners = new Set(knownServiceIds.map(serviceId => serviceId.split('/')[0]));
-    if (owners.size === 0) {
-        throw new Error('No forwardable services are known yet; reload this page in a moment.');
-    }
-    return owners.size === 1 ? [...owners][0] : '';
 }
 
 function wantsJson(request: IncomingMessage): boolean {

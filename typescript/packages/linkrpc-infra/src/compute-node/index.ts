@@ -231,6 +231,9 @@ export const computeNodeTcpForwardInterface = defineInterface(
     },
 );
 
+/** Inclusive bounds of a set of ports. */
+const portRangeSchema = z.object({ min: port, max: port }).refine(range => range.min <= range.max, 'min must not exceed max');
+
 const listeningPortSchema = z.object({
     port,
     /** Local addresses the port is bound to, e.g. `127.0.0.1`, `::1`, `0.0.0.0`. */
@@ -249,7 +252,13 @@ export const computeNodePortsInterface = defineInterface(
         description: 'Lists the TCP ports `tcpForward` can reach: ports listening on a loopback or wildcard address.',
     },
     {
-        listListening: requestType(empty, z.object({ ports: z.array(listeningPortSchema) })),
+        listListening: requestType(
+            z.object({
+                /** Lists only ports within these bounds, so a capability can limit listing to a port range. */
+                portRange: portRangeSchema.optional(),
+            }),
+            z.object({ ports: z.array(listeningPortSchema) }),
+        ),
     },
 );
 
@@ -306,6 +315,7 @@ export type ComputeNodeTcpServerFrame = z.infer<typeof serverTcpFrame>;
 export type ComputeNodeMultiplexedTcpClientFrame = z.infer<typeof clientMultiplexedTcpFrame>;
 export type ComputeNodeMultiplexedTcpServerFrame = z.infer<typeof serverMultiplexedTcpFrame>;
 export type ComputeNodeListeningPort = z.infer<typeof listeningPortSchema>;
+export type ComputeNodePortRange = z.infer<typeof portRangeSchema>;
 export type ComputeNodeKeepAwakeParams = z.infer<typeof keepAwakeParamsSchema>;
 export type ComputeNodeKeepAwakeEvent = z.infer<typeof keepAwakeEventSchema>;
 export type ComputeNodeKeepAwakeResult = z.infer<typeof keepAwakeResultSchema>;

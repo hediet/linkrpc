@@ -451,6 +451,27 @@ describe("permits", () => {
         );
         expect(r.ok).toBe(false);
     });
+
+    it("permits only argument values inside a range", async () => {
+        const s = await setup();
+        const leaf = await signCapability({
+            issuer: s.adminId, audience: s.holderId, nonce: "range-n",
+            permissions: [{ ...fullAccess, params: { port: { range: { min: 3000, max: 3999 } } } }],
+        }, s.admin);
+        const permitted = async (port: unknown) => (await permits(
+            { ...makeCall(target, s.holderId), params: { port } },
+            [leaf],
+            () => [{ principal: s.adminId, isPublic: true }],
+            0,
+        )).ok;
+        expect({
+            lowerBound: await permitted(3000),
+            upperBound: await permitted(3999),
+            below: await permitted(2999),
+            above: await permitted(4000),
+            string: await permitted("3000"),
+        }).toEqual({ lowerBound: true, upperBound: true, below: false, above: false, string: false });
+    });
 });
 
 // ---- capabilityFreshAt / capBagFreshAt (pure freshness) -----------------

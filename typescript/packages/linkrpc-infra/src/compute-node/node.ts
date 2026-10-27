@@ -439,7 +439,7 @@ export function registerComputeNode(registrar: InterfaceRegistrar, node: Compute
             multiplex: (params, _ctx, stream) => node.forwardTcpMultiplexed(params.port, params.host ?? 'localhost', stream),
         }),
         registrar.register(computeNodePortsInterface, {
-            listListening: async () => ({ ports: await readListeningPorts() }),
+            listListening: async ({ portRange }) => ({ ports: await readListeningPorts({ portRange }) }),
         }),
         registrar.register(computeNodePowerInterface, {
             keepAwake: (params, _ctx, stream) => node.keepAwake(params, stream.signal, event => {

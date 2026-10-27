@@ -794,7 +794,7 @@ initial document:
 | `connection destroy`                                  | Stop the configured connection broker through its local overlay. |
 | `json-rpc-stdio <serviceId> [--params <json>]`         | In the Hub profile, expose `<serviceId>::jsonRpcConnection::connectRaw` as newline-delimited JSON-RPC on stdin/stdout. Diagnostics remain on stderr. |
 | `json-rpc-export --target-endpoint <uri> --serviceId <id> --path <path> ...` | In the Hub profile, export multiple JSON-RPC factories through one authenticated raw WebSocket listener. |
-| `http-export [--port <n>] [--host <address>]... [--base-domain <domain>] [--auth browser\|none]` | In the Hub profile, serve loopback ports of Hub compute nodes at `<port>.<service>.localhost` over HTTP and WebSocket; browsers must be approved once unless `--auth none`. |
+| `http-export [--port <n>] [--host <address>]... [--base-domain <domain>] [--auth browser\|none]` | In the Hub profile, serve loopback ports of Hub compute nodes at `<port>.<service>.localhost` over HTTP and WebSocket; browsers must be approved per service and port range unless `--auth none`. |
 
 The inherited `--schema <path-or-url>` option also overlays static
 `hubrpc.defaults`, `hubrpc.directory`, and `hubrpc.schemas` reflection for
@@ -880,31 +880,42 @@ bodies are not rewritten, so they fail rather than reach this machine. Bind
 loopback only: anyone who can reach the listener can use the export process's
 Hub identity to reach every forwarded port.
 
-**Browser approval (prototype, on by default).** Browsers must be approved once
-before they can use the gateway; `--auth none` restores the behavior above.
+**Browser approval (prototype, on by default).** A browser must be approved for
+each service it opens, for a port range it chooses; `--auth none` restores the
+behavior above.
 
-- A browser without approval is redirected to `http://localhost/.linkrpc/login`.
-  The gateway creates a signing key for that browser and asks the Hub's
-  approvers (`hubAccess::requestAccess`) to let it call `tcpForward` and
-  `ports::listListening` on the compute nodes. The page shows a code, the first
-  eight characters of the browser key (`id:key:AbCdEfGh…` → `AbCd-EfGh`),
-  and continues by itself once approved. Approve only requests whose principal
-  starts with the code your browser shows.
+- A browser without approval for the service and port it opens is redirected
+  to `http://localhost/.linkrpc/login`. That page asks which ports of the
+  service the browser may use, prefilled with the opened port. The gateway
+  holds a signing key for the browser and asks the Hub's approvers
+  (`hubAccess::requestAccess`) to let it call `tcpForward::multiplex` for those
+  ports and `ports::listListening` for that range, both on exactly that
+  service. The page shows a code, the first eight characters of the browser
+  key (`id:key:AbCdEfGh…` → `AbCd-EfGh`), and continues by itself once
+  approved. Approve only requests whose principal starts with the code your
+  browser shows.
 - The gateway then signs that browser's calls with the browser's key and
-  granted capabilities, so compute nodes authorize the browser, not the
-  gateway. A browser approved for some machines only reaches those.
+  granted capabilities, so compute nodes enforce the service and port range,
+  not just the gateway. The ports page lists only ports in the range.
+- A browser keeps one approval per service. Opening a port outside it shows
+  the form again, prefilled with a range that also covers the new port;
+  approving it replaces the previous range of that service.
 - `localhost` keeps the browser's session cookie. Each service site
   (`<service>.localhost`) gets its own cookie on first visit through a
   single-use, 30-second ticket from `localhost`, bound to that site and to a
   state cookie set by the site. Cookies are `HttpOnly`, `Secure`
   (Chromium treats `http://*.localhost` as secure), and never reach forwarded
-  apps; apps cannot set them either.
+  apps; apps cannot set them either. Only the form on the approval page can
+  ask approvers for access (`Sec-Fetch-Site: same-origin`).
 - Requests without `Sec-Fetch-*` and `Origin` headers (curl, scripts, agents)
-  are not affected and keep using the gateway's identity. Browser requests
-  other than page navigations get `401` until the browser is approved.
+  are not affected and keep using the gateway's identity, as does the list of
+  services at `localhost`. Browser requests other than page navigations get
+  `401` until the browser is approved for their port.
 - Approved sessions are kept in `--session-file` (default
   `%LOCALAPPDATA%\linkrpc\http-export\browser-sessions-<port>.json` or
   `$XDG_STATE_HOME/linkrpc/http-export/…`); it contains the browser keys.
+  Sessions from gateways before port ranges are not loaded: those browsers ask
+  again.
 
 The gateway's own pages (`localhost` and `<service>.localhost`, HTML and JSON)
 show command lines, which may contain secrets. They answer only top-level
@@ -1035,6 +1046,7 @@ linkrpc --endpoint "$ENDPOINT" call files::fs::read --cap:request \
 
 Matchers are `{"exact":value}`, `{"enum":[value,...]}`,
 `{"prefix":"string-prefix"}`, `{"subsetOf":["allowed","array","items"]}`,
+`{"range":{"min":3000,"max":3999}}` (an integer within both bounds, inclusive),
 or `{"any":true}`. Constraints must be compatible with the reflected,
 Zod-derived method schema, and the concrete example arguments must satisfy
 both that schema and every constraint. Required and unknown keys are checked.
