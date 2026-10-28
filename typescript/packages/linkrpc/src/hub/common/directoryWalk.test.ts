@@ -161,10 +161,7 @@ describe('HubDirectoryExplorer', () => {
         const stop = await explorer.watch(() => undefined);
 
         expect(explorer.graphSnapshot.directories).toEqual([]);
-        expect(endpoint.listCalls.map((call) => call.target)).toEqual([
-            undefined,
-            undefined,
-        ]);
+        expect(endpoint.listCalls.map((call) => call.target)).toEqual([undefined]);
         expect(endpoint.watchCount(undefined)).toBe(1);
         expect(endpoint.watchCount('')).toBe(0);
         stop();
@@ -254,9 +251,9 @@ describe('HubDirectoryExplorer', () => {
         endpoint.emit('branch/a');
         await explorer.whenIdle();
 
-        expect(endpoint.listCount(undefined)).toBe(2);
-        expect(endpoint.listCount('branch/a')).toBe(3);
-        expect(endpoint.listCount('branch/b')).toBe(2);
+        expect(endpoint.listCount(undefined)).toBe(1);
+        expect(endpoint.listCount('branch/a')).toBe(2);
+        expect(endpoint.listCount('branch/b')).toBe(1);
         expect(endpoint.watchCount('branch/b')).toBe(1);
         expect(changes).toEqual(['branch/a']);
 
@@ -267,30 +264,58 @@ describe('HubDirectoryExplorer', () => {
         endpoint.emit(undefined);
         await explorer.whenIdle();
 
-        expect(endpoint.listCount(undefined)).toBe(3);
-        expect(endpoint.listCount('branch/a')).toBe(5);
-        expect(endpoint.listCount('branch/b')).toBe(2);
+        expect(endpoint.listCount(undefined)).toBe(2);
+        expect(endpoint.listCount('branch/a')).toBe(3);
+        expect(endpoint.listCount('branch/b')).toBe(1);
         expect(endpoint.watchCount('branch/a')).toBe(2);
         expect(endpoint.watchCount('branch/b')).toBe(1);
         stop();
         explorer.dispose();
     });
 
-    it('closes the initial list-to-watch handoff with a verification list', async () => {
+    it('opens the watch before the first list, so a change right after that list arrives as a tick', async () => {
         const endpoint = new FakeDirectoryEndpoint();
         endpoint.set(undefined, [listing('svc/old', 'old')]);
+        let watchesDuringFirstList: number | undefined;
         endpoint.afterNextList(undefined, () => {
+            watchesDuringFirstList = endpoint.watchCount(undefined);
             endpoint.set(undefined, [listing('svc/new', 'new')]);
+            endpoint.emit(undefined);
         });
         const explorer = new HubDirectoryExplorer(endpoint);
 
         const stop = await explorer.watch(() => undefined);
+        await explorer.whenIdle();
 
-        expect(endpoint.listCount(undefined)).toBe(2);
-        expect(explorer.result.listings.some((item) => item.interfaceId === 'new')).toBe(true);
-        expect(explorer.result.listings.some((item) => item.interfaceId === 'old')).toBe(false);
+        expect({
+            watchesDuringFirstList,
+            lists: endpoint.listCount(undefined),
+            old: explorer.result.listings.some((item) => item.interfaceId === 'old'),
+            new: explorer.result.listings.some((item) => item.interfaceId === 'new'),
+        }).toEqual({ watchesDuringFirstList: 1, lists: 2, old: false, new: true });
         stop();
         explorer.dispose();
+    });
+
+    it('lists sibling directories concurrently', async () => {
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('machine/a'), referral('machine/b'), referral('machine/c')]);
+        for (const machine of ['a', 'b', 'c']) endpoint.set(`machine/${machine}`, [listing(`machine/${machine}`, machine)]);
+        endpoint.hang('machine/a');
+        endpoint.hang('machine/b');
+        endpoint.hang('machine/c');
+        const explorer = new HubDirectoryExplorer(endpoint, { timeoutMs: 300 });
+
+        const explored = explorer.explore();
+        const loading = () => explorer.graphSnapshot.directories
+            .filter((node) => node.state === 'loading')
+            .map((node) => node.target.kind === 'addressed' ? node.target.serviceId : '');
+        // One after another, only the first sibling would be loading before its 300 ms timeout.
+        await until(() => loading().length === 3, 250);
+
+        expect(loading()).toEqual(['machine/a', 'machine/b', 'machine/c']);
+        await explored;
+        expect(endpoint.cancelledLists.sort()).toEqual(['machine/a', 'machine/b', 'machine/c']);
     });
 
     it('shrinks scopes through a referral cycle to the root-derived least fixed point', async () => {
@@ -357,12 +382,10 @@ describe('HubDirectoryExplorer', () => {
             'node-updated:loaded:root',
             'node-added:referral:branch/c',
             'node-updated:loading:branch/c',
+            'node-updated:watch-started:branch/c',
             'node-updated:loaded:branch/c',
             'node-removed:unreachable:branch/a/child',
             'node-removed:unreachable:branch/a',
-            'node-updated:watch-started:branch/c',
-            'node-updated:loading:branch/c',
-            'node-updated:loaded:branch/c',
             'settled',
         ]);
         expect(explorer.graphSnapshot.complete).toBe(true);
@@ -371,7 +394,7 @@ describe('HubDirectoryExplorer', () => {
             'branch/b',
             'branch/c',
         ]);
-        expect(endpoint.listCount('branch/b')).toBe(2);
+        expect(endpoint.listCount('branch/b')).toBe(1);
         stop();
         explorer.dispose();
     });
@@ -448,7 +471,7 @@ describe('HubDirectoryExplorer failed watches', () => {
               "hubrpc.directory",
               "demo",
             ],
-            "lists": 7,
+            "lists": 6,
             "rootWatches": 1,
             "staticWatching": false,
             "watchAttemptsAt": [
