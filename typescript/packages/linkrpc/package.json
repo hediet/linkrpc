@@ -42,6 +42,10 @@
             "@hediet/source": "./src/node.ts",
             "default": "./dist/node.js"
         },
+        "./signing": {
+            "@hediet/source": "./src/signing.ts",
+            "default": "./dist/signing.js"
+        },
         "./web": {
             "@hediet/source": "./src/web.ts",
             "default": "./dist/web.js"
@@ -92,6 +96,7 @@
             "./hub/common": "./dist/hub/common/index.js",
             "./inspection": "./dist/inspection/index.js",
             "./node": "./dist/node.js",
+            "./signing": "./dist/signing.js",
             "./web": "./dist/web.js",
             "./package.json": "./package.json"
         }

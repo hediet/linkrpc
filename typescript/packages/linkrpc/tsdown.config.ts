@@ -57,6 +57,7 @@ export default defineConfig({
         'http/client': 'src/http/client.ts',
         'http/server': 'src/http/server.ts',
         'inspection/index': 'src/inspection/index.ts',
+        'signing': 'src/signing.ts',
         'hub/common/index': 'src/hub/common/index.ts',
         'hub/client/index': 'src/hub/client/index.ts',
     },
