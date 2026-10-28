@@ -155,6 +155,8 @@ export interface ApprovalSnapshot {
     readonly error?: string;
     /** Unavailable sources omitted from an otherwise current snapshot. */
     readonly warnings?: readonly string[];
+    /** Sources (and discovery) not read yet; their requests appear once they answer. */
+    readonly loading?: readonly string[];
 }
 
 export interface ApprovalClientOptions {
@@ -168,6 +170,10 @@ export interface ApprovalClientOptions {
     readonly sourceErrors?: IObservable<readonly string[]>;
     readonly sourceWarnings?: IObservable<readonly string[]>;
     readonly refreshAuthority?: () => Promise<unknown>;
+    /** Sources still loading in a progressive snapshot, see {@link ApprovalSnapshot.loading}. */
+    readonly loading?: IObservable<readonly string[]>;
+    /** Resolves once a progressive manifest has read every source; awaited before decisions and listings. */
+    readonly whenSettled?: () => Promise<void>;
 }
 
 export interface CreateApprovalClientOptions {
@@ -206,6 +212,7 @@ export class ApprovalClient {
         readonly fingerprint: string;
     }>();
     private readonly _fetchDirectory: ApprovalClientOptions['fetchDirectory'];
+    private readonly _whenSettled: ApprovalClientOptions['whenSettled'];
     private readonly _log: (line: string) => void;
     private readonly _disposeExtra: (() => void) | undefined;
     private readonly _lastClientError = observableValue<string | undefined>(this, undefined);
@@ -220,6 +227,7 @@ export class ApprovalClient {
         this._getCapabilities = options.getCapabilities ?? (() => []);
         this._refreshAuthority = options.refreshAuthority;
         this._fetchDirectory = options.fetchDirectory;
+        this._whenSettled = options.whenSettled;
         this._log = options.log ?? (() => { /* quiet */ });
         this._disposeExtra = options.dispose;
         this._client = new ApproveClient({
@@ -237,6 +245,7 @@ export class ApprovalClient {
             const error = this._lastClientError.read(reader);
             const sourceErrors = options.sourceErrors?.read(reader) ?? [];
             const warnings = options.sourceWarnings?.read(reader) ?? [];
+            const loading = options.loading?.read(reader) ?? [];
             return {
                 state: sourceErrors.length > 0 ? 'stale' : state,
                 requests: this._toPendingRequests(this._client.requests.read(reader)),
@@ -244,6 +253,7 @@ export class ApprovalClient {
                     ? { error: sourceErrors.join('\n') }
                     : state === 'stale' && error !== undefined ? { error } : {}),
                 ...(warnings.length > 0 ? { warnings } : {}),
+                ...(loading.length > 0 ? { loading } : {}),
             };
         });
     }
@@ -421,6 +431,7 @@ export class ApprovalClient {
 
     private async _currentRequests() {
         await this._refreshAuthority?.();
+        await this._whenSettled?.();
         await this._client.refresh();
         const snapshot = this.snapshot.get();
         if (snapshot.state === 'stale') {
@@ -598,14 +609,31 @@ export function createHubApprovalClient(
         directoryWarnings.set(warnings, undefined);
     };
     let directoryChanged: (() => void) | undefined;
-    const watchStarted = explorer.watch(() => {
-        updateDirectoryHealth();
-        directoryChanged?.();
+    let directoryNotifyQueued = false;
+    const notifyDirectoryChanged = () => {
+        if (directoryNotifyQueued) return;
+        directoryNotifyQueued = true;
+        queueMicrotask(() => {
+            directoryNotifyQueued = false;
+            updateDirectoryHealth();
+            directoryChanged?.();
+        });
+    };
+    // Follow discovery as it progresses, so each manifest is read as soon as its
+    // directory is listed instead of after the whole walk.
+    const stopProgress = explorer.subscribe((event) => {
+        if (
+            event.type === 'node-removed'
+            || (event.type === 'node-updated' && (event.reason === 'loaded' || event.reason === 'inaccessible'))
+        ) {
+            notifyDirectoryChanged();
+        }
     });
-    const fetchDirectory = async (): Promise<readonly DirectoryEntry[]> => {
-        await watchStarted;
-        updateDirectoryHealth();
-        return explorer.result.listings.map((entry) => ({
+    const discovering = observableValue<boolean>('approvalDiscovering', true);
+    const watchStarted = explorer.watch(notifyDirectoryChanged);
+    void watchStarted.finally(() => discovering.set(false, undefined)).catch(() => undefined);
+    const currentDirectory = (): readonly DirectoryEntry[] =>
+        explorer.result.listings.map((entry) => ({
             serviceId: entry.serviceId,
             interfaceId: entry.interfaceId,
             hash: entry.hash,
@@ -616,19 +644,28 @@ export function createHubApprovalClient(
                 ? {}
                 : { rootPrincipalSets: entry.rootPrincipalSets }),
         }));
+    /** The complete directory, for resolving what an approval grants. */
+    const fetchDirectory = async (): Promise<readonly DirectoryEntry[]> => {
+        await watchStarted;
+        updateDirectoryHealth();
+        return currentDirectory();
     };
-    const resolveSources = async () => {
-        const directory = await fetchDirectory();
+    let loggedSources: string | undefined;
+    const resolveSources = () => {
+        updateDirectoryHealth();
         const serviceIds = [...new Set(
-            directory
+            currentDirectory()
                 .filter((entry) => entry.interfaceId === MANIFEST_INTERFACE_ID)
                 .map((entry) => entry.serviceId),
         )].sort();
-        log?.(
-            `approval: discovered ${serviceIds.length} manifest source`
-            + `${serviceIds.length === 1 ? '' : 's'}`
-            + `${serviceIds.length > 0 ? `: ${serviceIds.join(', ')}` : ''}`,
-        );
+        if (serviceIds.join('\n') !== loggedSources) {
+            loggedSources = serviceIds.join('\n');
+            log?.(
+                `approval: discovered ${serviceIds.length} manifest source`
+                + `${serviceIds.length === 1 ? '' : 's'}`
+                + `${serviceIds.length > 0 ? `: ${serviceIds.join(', ')}` : ''}`,
+            );
+        }
         const active = new Set(serviceIds);
         for (const serviceId of sourceCache.keys()) {
             if (!active.has(serviceId)) sourceCache.delete(serviceId);
@@ -663,7 +700,16 @@ export function createHubApprovalClient(
             else errorsBySource.set(tag, error);
             sourceErrors.set([...errorsBySource.values()], undefined);
         },
+        progressive: true,
     });
+    const pendingSources = observableValue<readonly string[]>('approvalPendingSources', []);
+    const stopPending = aggregate.onDidChange(() => {
+        pendingSources.set(aggregate.pendingSources(), undefined);
+    });
+    const loading = derived((reader) => [
+        ...(discovering.read(reader) ? ['directory discovery'] : []),
+        ...pendingSources.read(reader).map((tag) => tag || '<root>'),
+    ]);
     const pair = new TransportPair();
     const aggregateServer = LinkRpcConnection.fromTransport(pair.a);
     const aggregateClient = LinkRpcConnection.fromTransport(pair.b);
@@ -677,9 +723,16 @@ export function createHubApprovalClient(
         timeoutMs: AGGREGATE_READ_TIMEOUT_MS,
         sourceErrors: directoryErrors,
         sourceWarnings: discoveryWarnings,
+        loading,
+        whenSettled: async () => {
+            await watchStarted;
+            await aggregate.whenSettled();
+        },
         fetchDirectory,
         log,
         dispose: () => {
+            stopPending();
+            stopProgress();
             aggregate.dispose();
             void watchStarted.then((stop) => stop(), () => undefined);
             explorer.dispose();

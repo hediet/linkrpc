@@ -90,6 +90,16 @@ export interface AggregatingManifestOptions {
     readonly onSourceError?: (sourceTag: string, error: string | undefined) => void;
     /** Hard deadline for each source request. Defaults to 5 seconds. */
     readonly timeoutMs?: number;
+    /**
+     * Serve each source's last read instead of re-reading every source on each
+     * {@link AggregatingHubAccessManifest.getDesired}. A source is read when it
+     * appears, when its watch ticks, and after a decision is written to it;
+     * each completed read emits a change. One slow source then delays only its
+     * own entries. Use {@link AggregatingHubAccessManifest.whenSettled} where a
+     * complete snapshot is required. Defaults to false: every `getDesired`
+     * waits for a fresh read of every source.
+     */
+    readonly progressive?: boolean;
 }
 
 /** Delimiter between a source `tag` and the source-local entryId. Absent from serviceIds/UUIDs. */
@@ -144,32 +154,41 @@ export class AggregatingHubAccessManifest {
     private async _doRefresh(): Promise<readonly AggregatorSource[]> {
         const sources = await this._options.resolveSources();
         const next = new Map(sources.map((s) => [s.tag, s] as const));
+        let removedEntries = false;
         for (const [tag, watch] of this._watches) {
             const nextSource = next.get(tag);
             if (!nextSource || nextSource.manifest !== watch.source.manifest) {
+                removedEntries ||= Object.keys(watch.requested ?? {}).length > 0;
                 this._closeWatch(watch);
                 this._watches.delete(tag);
                 this._options.onSourceError?.(tag, undefined);
             }
         }
         this._byTag = next;
+        let added = false;
         for (const s of sources) {
-            if (!this._watches.has(s.tag)) this._openWatch(s);
+            if (!this._watches.has(s.tag)) {
+                this._openWatch(s);
+                added = true;
+            }
         }
+        // Listeners learn about new (still unread) and removed sources right away.
+        if ((added || removedEntries) && this._options.progressive) this._emit();
         return sources;
     }
 
     private _openWatch(s: AggregatorSource): void {
-        const watch: SourceWatch = { source: s };
+        const watch: SourceWatch = { source: s, settled: false, rereadRequested: false };
         this._watches.set(s.tag, watch);
         this._startWatch(watch);
+        if (this._options.progressive) void this._readInto(watch);
     }
 
     private _startWatch(watch: SourceWatch): void {
         if (this._disposed || this._watches.get(watch.source.tag) !== watch) return;
         try {
             const call = watch.source.manifest.watchDesired({}, {
-                onMessage: () => { if (!this._disposed) this._emit(); },
+                onMessage: () => this._sourceChanged(watch),
             });
             watch.call = call;
             call.then(
@@ -182,6 +201,13 @@ export class AggregatingHubAccessManifest {
         }
     }
 
+    /** In progressive mode re-read just this source; otherwise let consumers re-read everything. */
+    private _sourceChanged(watch: SourceWatch): void {
+        if (this._disposed) return;
+        if (this._options.progressive) void this._readInto(watch);
+        else this._emit();
+    }
+
     private _watchEnded(watch: SourceWatch): void {
         if (this._disposed || this._watches.get(watch.source.tag) !== watch) return;
         watch.call = undefined;
@@ -190,7 +216,7 @@ export class AggregatingHubAccessManifest {
             watch.retryTimer = undefined;
             if (this._disposed || this._watches.get(watch.source.tag) !== watch) return;
             this._startWatch(watch);
-            this._emit();
+            this._sourceChanged(watch);
         }, 250);
     }
 
@@ -204,19 +230,71 @@ export class AggregatingHubAccessManifest {
         }
     }
 
+    /**
+     * Read one source into its cache. A read requested while one is running is
+     * folded into one more read afterwards, so the cache always ends up at
+     * least as fresh as the latest request. Progressive mode emits when the
+     * source's entries, or whether it has been read at all, change.
+     */
+    private _readInto(watch: SourceWatch): Promise<void> {
+        if (watch.read !== undefined) {
+            watch.rereadRequested = true;
+            return watch.read;
+        }
+        const run = async () => {
+            do {
+                watch.rereadRequested = false;
+                const doc = await this._readSource(watch.source);
+                if (this._disposed || this._watches.get(watch.source.tag) !== watch) return;
+                const changed = !watch.settled
+                    || JSON.stringify(doc?.requested) !== JSON.stringify(watch.requested);
+                // A failed read drops the source's entries rather than serving stale ones.
+                watch.requested = doc?.requested;
+                watch.settled = true;
+                if (changed && this._options.progressive) this._emit();
+            } while (watch.rereadRequested && !this._disposed);
+        };
+        const read = run().finally(() => {
+            if (watch.read === read) watch.read = undefined;
+        });
+        watch.read = read;
+        return read;
+    }
+
     /** Merge every source's desired document into one, namespacing ids by source tag. */
     public async getDesired(): Promise<GetDesiredResult> {
         const sources = await this._refresh();
-        // Sources are independent (often other machines); read them concurrently so the
-        // whole read takes as long as the slowest source, not the sum of all of them.
-        const docs = await Promise.all(sources.map((s) => this._readSource(s)));
+        const watches = sources.flatMap((s) => this._watches.get(s.tag) ?? []);
+        if (!this._options.progressive) {
+            // Sources are independent (often other machines); read them concurrently so the
+            // whole read takes as long as the slowest source, not the sum of all of them.
+            await Promise.all(watches.map((watch) => this._readInto(watch)));
+        }
         const requested: Record<string, ManifestEntry> = {};
-        sources.forEach((s, i) => {
-            for (const [id, entry] of Object.entries(docs[i]?.requested ?? {})) {
+        for (const watch of watches) {
+            const s = watch.source;
+            for (const [id, entry] of Object.entries(watch.requested ?? {})) {
                 requested[encodeKey(s.tag, id)] = s.preserveOrigin ? entry : stripOrigin(entry);
             }
-        });
+        }
         return { requested, revision: ++this._revision };
+    }
+
+    /** Sources that have not been read yet, e.g. to show what a progressive snapshot still lacks. */
+    public pendingSources(): readonly string[] {
+        return [...this._byTag.keys()].filter((tag) => this._watches.get(tag)?.settled !== true);
+    }
+
+    /** Resolve once every current source has been read and no read is running. */
+    public async whenSettled(): Promise<void> {
+        const sources = await this._refresh();
+        for (;;) {
+            const unsettled = sources
+                .flatMap((s) => this._watches.get(s.tag) ?? [])
+                .filter((watch) => !watch.settled || watch.read !== undefined);
+            if (unsettled.length === 0 || this._disposed) return;
+            await Promise.all(unsettled.map((watch) => watch.read ?? this._readInto(watch)));
+        }
     }
 
     /** One source's validated desired document, or `undefined` (logged and reported) if it fails. */
@@ -276,6 +354,9 @@ export class AggregatingHubAccessManifest {
                 `hubAccessManifest service '${tag || '<root>'}'`,
                 this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
             );
+            // The caller's next getDesired must reflect the decision it just wrote.
+            const watch = this._watches.get(tag);
+            if (this._options.progressive && watch?.source.manifest === src.manifest) await this._readInto(watch);
         }));
     }
 
@@ -288,10 +369,17 @@ export class AggregatingHubAccessManifest {
 
 }
 
+/** One source incarnation: its resilient watch and, once read, its last desired entries. */
 interface SourceWatch {
     readonly source: AggregatorSource;
     call?: ReturnType<IHubAccessManifest['watchDesired']>;
     retryTimer?: ReturnType<typeof setTimeout>;
+    /** Whether a read has completed (successfully or not). */
+    settled: boolean;
+    /** Entries of the last successful read; undefined before one and after a failed read. */
+    requested?: GetDesiredResult['requested'];
+    read?: Promise<void>;
+    rereadRequested: boolean;
 }
 
 /**

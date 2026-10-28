@@ -103,6 +103,23 @@ describe('ApprovalUiModel', () => {
         }
     });
 
+    it('lists loaded requests while slow sources are still loading, then clears the notice', () => {
+        const client = new FakeApprovalUiClient();
+        const model = new ApprovalUiModel(client);
+        try {
+            client.emit({ ...snapshot([pending('a', 'Alpha')]), loading: ['hediet/mac'] });
+            const whileLoading = { requests: model.requests.get().length, message: model.message.get() };
+            client.emit(snapshot([pending('a', 'Alpha'), pending('b', 'Beta')]));
+            expect({ whileLoading, after: { requests: model.requests.get().length, message: model.message.get() } })
+                .toEqual({
+                    whileLoading: { requests: 1, message: { kind: 'info', text: 'Still loading: hediet/mac' } },
+                    after: { requests: 2, message: undefined },
+                });
+        } finally {
+            model.dispose();
+        }
+    });
+
     it('cancels confirmation if another approver removes the selected request', async () => {
         const client = new FakeApprovalUiClient();
         const model = new ApprovalUiModel(client);
