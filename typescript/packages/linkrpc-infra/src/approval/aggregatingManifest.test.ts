@@ -95,6 +95,33 @@ describe('AggregatingHubAccessManifest — result validation at the boundary', (
         agg.dispose();
     });
 
+    it('reads slow sources concurrently, so their delays do not add up to a timeout', async () => {
+        const entry = (name: string) => ({
+            kind: 'direct', consumer: { name, principal: `id:key:${name}` }, permissions: [PERMISSION],
+        });
+        const slow = (name: string): IHubAccessManifest => ({
+            ...fakeManifest({ requested: {}, revision: 0 }),
+            getDesired: () => streaming(new Promise((resolve) => setTimeout(
+                () => resolve({ requested: { [name]: entry(name) }, revision: 1 } as never), 100,
+            ))),
+        });
+        const logs: string[] = [];
+        const agg = new AggregatingHubAccessManifest({
+            resolveSources: () => ['a', 'b', 'c', 'd'].map((tag) => ({ tag, manifest: slow(tag) })),
+            timeoutMs: 150,
+            log: (line) => logs.push(line),
+        });
+
+        const started = Date.now();
+        const doc = await agg.getDesired();
+        const elapsedMs = Date.now() - started;
+
+        // Read one after another, the four sources would take at least 400 ms.
+        expect({ requested: Object.keys(doc.requested).length, logs, withinOneTimeout: elapsedMs < 300 })
+            .toEqual({ requested: 4, logs: [], withinOneTimeout: true });
+        agg.dispose();
+    });
+
     it('skips a source whose getDesired document violates the schema, and logs it', async () => {
         const good = fakeManifest({
             requested: { e1: { kind: 'direct', consumer: { name: 'good', principal: 'id:key:good' }, permissions: [PERMISSION] } },

@@ -3,6 +3,7 @@ import {
     base64UrlToBytes,
     bytesToBase64Url,
     CapabilityIssuanceError,
+    DEFAULT_RPC_TIMEOUT_MS,
     issueCapability,
     getDelegationRootIds,
     jcsCanonicalize,
@@ -118,6 +119,12 @@ export async function bootstrapApprovalCapability(
 
 const MANIFEST_INTERFACE_ID = hubAccessManifestInterface.info.id;
 const AGGREGATE_SERVICE_ID = 'linkrpc-cli.approvals';
+/**
+ * A read of the aggregate waits for directory discovery and then for the slowest
+ * source, which is bounded separately by the per-source timeout. This only guards
+ * against the aggregate itself hanging, so it must exceed discovery plus that bound.
+ */
+const AGGREGATE_READ_TIMEOUT_MS = 3 * DEFAULT_RPC_TIMEOUT_MS;
 const EXTERNAL_ID_PREFIX = 'ar1_';
 
 export interface PendingApprovalRequest {
@@ -667,6 +674,7 @@ export function createHubApprovalClient(
         identity,
         getCapabilities,
         refreshAuthority,
+        timeoutMs: AGGREGATE_READ_TIMEOUT_MS,
         sourceErrors: directoryErrors,
         sourceWarnings: discoveryWarnings,
         fetchDirectory,
