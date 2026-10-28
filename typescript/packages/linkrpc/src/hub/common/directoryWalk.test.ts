@@ -283,8 +283,11 @@ describe('HubDirectoryExplorer', () => {
             endpoint.emit(undefined);
         });
         const explorer = new HubDirectoryExplorer(endpoint);
+        const notified: string[][] = [];
 
-        const stop = await explorer.watch(() => undefined);
+        const stop = await explorer.watch((change) => notified.push(
+            change.result.listings.map((item) => item.interfaceId).filter((id) => id === 'old' || id === 'new'),
+        ));
         await explorer.whenIdle();
 
         expect({
@@ -292,7 +295,8 @@ describe('HubDirectoryExplorer', () => {
             lists: endpoint.listCount(undefined),
             old: explorer.result.listings.some((item) => item.interfaceId === 'old'),
             new: explorer.result.listings.some((item) => item.interfaceId === 'new'),
-        }).toEqual({ watchesDuringFirstList: 1, lists: 2, old: false, new: true });
+            lastNotified: notified.at(-1),
+        }).toEqual({ watchesDuringFirstList: 1, lists: 2, old: false, new: true, lastNotified: ['new'] });
         stop();
         explorer.dispose();
     });

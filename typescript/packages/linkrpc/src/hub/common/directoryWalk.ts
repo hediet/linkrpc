@@ -637,11 +637,25 @@ export class HubDirectoryExplorer {
         this._clearNodes();
     }
 
-    private async _loadNode(node: DirectoryNode, reconcileOutgoing = true): Promise<void> {
+    /**
+     * List `node` and reconcile its referrals. A call while the node is already
+     * loading only requests another pass of that load and returns immediately
+     * (awaiting it could deadlock through referral cycles); await
+     * {@link DirectoryNode.loadRun} where the finished state is required.
+     */
+    private _loadNode(node: DirectoryNode, reconcileOutgoing = true): Promise<void> {
         if (node.loading) {
             node.reloadRequested = true;
-            return;
+            return Promise.resolve();
         }
+        const run: Promise<void> = this._runLoad(node, reconcileOutgoing).finally(() => {
+            if (node.loadRun === run) node.loadRun = undefined;
+        });
+        node.loadRun = run;
+        return run;
+    }
+
+    private async _runLoad(node: DirectoryNode, reconcileOutgoing: boolean): Promise<void> {
         node.loading = true;
         this._updateNode(node, 'loading', () => {
             node.state = 'loading';
@@ -1169,6 +1183,9 @@ export class HubDirectoryExplorer {
                 const node = this._nodes.get(nextKey);
                 if (node === undefined) continue;
                 await this._loadNode(node);
+                // A tick can arrive while the node is still being listed (its watch opens
+                // before the list); report the change only once that load has finished.
+                await node.loadRun;
                 await this._reconcileScopesFromRoot();
                 await this._pruneUnreachable();
                 await this._synchronizeWatches();
@@ -1376,6 +1393,8 @@ interface DirectoryNode {
     outgoing: Map<string, ParentContribution>;
     loaded: boolean;
     loading: boolean;
+    /** The running load, including passes requested while it runs. */
+    loadRun?: Promise<void>;
     reloadRequested: boolean;
     state: HubDirectoryNodeState;
     inaccessibleReason?: string;
