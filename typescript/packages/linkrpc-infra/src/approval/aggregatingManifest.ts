@@ -207,45 +207,53 @@ export class AggregatingHubAccessManifest {
     /** Merge every source's desired document into one, namespacing ids by source tag. */
     public async getDesired(): Promise<GetDesiredResult> {
         const sources = await this._refresh();
+        // Sources are independent (often other machines); read them concurrently so the
+        // whole read takes as long as the slowest source, not the sum of all of them.
+        const docs = await Promise.all(sources.map((s) => this._readSource(s)));
         const requested: Record<string, ManifestEntry> = {};
-        for (const s of sources) {
-            let doc: GetDesiredResult;
-            try {
-                doc = await withRpcTimeout(
-                    s.manifest.getDesired({}),
-                    `hubAccessManifest service '${s.tag || '<root>'}'`,
-                    this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
-                );
-            } catch (e) {
-                const message = `aggregator: getDesired(${s.tag}) failed: ${e instanceof Error ? e.message : String(e)}`;
-                this._options.log?.(message);
-                this._options.onSourceError?.(s.tag, message);
-                continue;
-            }
-            // Result validation at the consumption boundary: `hubAccessManifest`
-            // result schemas are compile-time only (the RPC layer validates
-            // inbound params + streams, but returns results verbatim), so a
-            // source that serves a malformed desired document (e.g. entries
-            // missing their required `consumer`) would otherwise blow up deep in
-            // the approver with an opaque `undefined` read. Fail loudly here:
-            // name the bad source + the first issue, and skip it.
-            const parsed = safeParse(GET_DESIRED_RESULT_SCHEMA, doc);
-            if (!parsed.success) {
-                const issue = parsed.error.issues[0];
-                const where = issue?.path?.join('.') ?? '';
-                const message =
-                    `aggregator: source '${s.tag}' returned an invalid hubAccessManifest::getDesired document; skipping. `
-                    + `${issue?.message ?? 'schema mismatch'}${where ? ` (at ${where})` : ''}`;
-                this._options.log?.(message);
-                this._options.onSourceError?.(s.tag, message);
-                continue;
-            }
-            this._options.onSourceError?.(s.tag, undefined);
-            for (const [id, entry] of Object.entries(parsed.data.requested)) {
+        sources.forEach((s, i) => {
+            for (const [id, entry] of Object.entries(docs[i]?.requested ?? {})) {
                 requested[encodeKey(s.tag, id)] = s.preserveOrigin ? entry : stripOrigin(entry);
             }
-        }
+        });
         return { requested, revision: ++this._revision };
+    }
+
+    /** One source's validated desired document, or `undefined` (logged and reported) if it fails. */
+    private async _readSource(s: AggregatorSource): Promise<GetDesiredResult | undefined> {
+        let doc: GetDesiredResult;
+        try {
+            doc = await withRpcTimeout(
+                s.manifest.getDesired({}),
+                `hubAccessManifest service '${s.tag || '<root>'}'`,
+                this._options.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
+            );
+        } catch (e) {
+            const message = `aggregator: getDesired(${s.tag}) failed: ${e instanceof Error ? e.message : String(e)}`;
+            this._options.log?.(message);
+            this._options.onSourceError?.(s.tag, message);
+            return undefined;
+        }
+        // Result validation at the consumption boundary: `hubAccessManifest`
+        // result schemas are compile-time only (the RPC layer validates
+        // inbound params + streams, but returns results verbatim), so a
+        // source that serves a malformed desired document (e.g. entries
+        // missing their required `consumer`) would otherwise blow up deep in
+        // the approver with an opaque `undefined` read. Fail loudly here:
+        // name the bad source + the first issue, and skip it.
+        const parsed = safeParse(GET_DESIRED_RESULT_SCHEMA, doc);
+        if (!parsed.success) {
+            const issue = parsed.error.issues[0];
+            const where = issue?.path?.join('.') ?? '';
+            const message =
+                `aggregator: source '${s.tag}' returned an invalid hubAccessManifest::getDesired document; skipping. `
+                + `${issue?.message ?? 'schema mismatch'}${where ? ` (at ${where})` : ''}`;
+            this._options.log?.(message);
+            this._options.onSourceError?.(s.tag, message);
+            return undefined;
+        }
+        this._options.onSourceError?.(s.tag, undefined);
+        return parsed.data;
     }
 
     /** Route each decision patch back to the source that parked the entry. */
