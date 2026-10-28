@@ -285,6 +285,12 @@ export class ApprovalUiModel {
                 kind: 'error',
                 text: `Partial results: ${snapshot.warnings.join('\n')}`,
             }, undefined);
+        } else if (snapshot.loading?.length) {
+            this._message.set({ kind: 'info', text: `${LOADING_PREFIX}${snapshot.loading.join(', ')}` }, undefined);
+        } else if (this._message.get()?.text.startsWith(LOADING_PREFIX)) {
+            this._message.set(undefined, undefined);
         }
     }
 }
+
+const LOADING_PREFIX = 'Still loading: ';

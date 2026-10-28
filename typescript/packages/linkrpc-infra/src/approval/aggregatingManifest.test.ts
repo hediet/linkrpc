@@ -166,3 +166,117 @@ describe('AggregatingHubAccessManifest — result validation at the boundary', (
         agg.dispose();
     });
 });
+
+describe('AggregatingHubAccessManifest — progressive mode', () => {
+    /** A source whose reads resolve when the test says so, and whose watch ticks on demand. */
+    function controllable() {
+        const entries: Record<string, unknown> = {};
+        let release: (() => void) | undefined;
+        let holdReads = false;
+        let tick: (() => void) | undefined;
+        const decisions: unknown[] = [];
+        let reads = 0;
+        const manifest: IHubAccessManifest = {
+            ...fakeManifest({ requested: {}, revision: 0 }),
+            getDesired: () => streaming((async () => {
+                reads++;
+                if (holdReads) await new Promise<void>((resolve) => { release = resolve; });
+                return { requested: { ...entries }, revision: reads } as never;
+            })()),
+            watchDesired: ((_params: unknown, opts?: { onMessage?: () => void }) => {
+                tick = () => opts?.onMessage?.();
+                return streaming(new Promise<never>(() => {}));
+            }) as never,
+            setCurrent: ((params: { patches: { path: string }[] }) => {
+                for (const patch of params.patches) {
+                    decisions.push(patch.path);
+                    delete entries[patch.path.slice('/current/'.length)];
+                }
+                return streaming(Promise.resolve({ revision: 0 }));
+            }) as never,
+        };
+        return {
+            manifest,
+            entries,
+            decisions,
+            reads: () => reads,
+            hold: () => { holdReads = true; },
+            release: () => { holdReads = false; release?.(); },
+            tick: () => tick?.(),
+        };
+    }
+    const entry = (name: string) => ({ kind: 'direct', consumer: { name, principal: `id:key:${name}` }, permissions: [PERMISSION] });
+    const ids = async (agg: AggregatingHubAccessManifest) =>
+        Object.keys((await agg.getDesired()).requested).map((key) => key.replace('\u0000', ':')).sort();
+    async function until(condition: () => boolean): Promise<void> {
+        for (let i = 0; i < 200 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(condition()).toBe(true);
+    }
+
+    it('serves fast sources while a slow one is still reading, and emits once it answers', async () => {
+        const fast = controllable();
+        fast.entries.f = entry('fast');
+        const slow = controllable();
+        slow.entries.s = entry('slow');
+        slow.hold();
+        const agg = new AggregatingHubAccessManifest({
+            resolveSources: () => [{ tag: 'fast', manifest: fast.manifest }, { tag: 'slow', manifest: slow.manifest }],
+            progressive: true,
+        });
+        let changes = 0;
+        const off = agg.onDidChange(() => changes++);
+        try {
+            await until(() => fast.reads() === 1 && agg.pendingSources().length === 1);
+            expect({ ids: await ids(agg), pending: agg.pendingSources() })
+                .toEqual({ ids: ['fast:f'], pending: ['slow'] });
+
+            const settled = agg.whenSettled();
+            const changesBefore = changes;
+            slow.release();
+            await settled;
+            expect({ ids: await ids(agg), pending: agg.pendingSources(), emitted: changes > changesBefore })
+                .toEqual({ ids: ['fast:f', 'slow:s'], pending: [], emitted: true });
+        } finally {
+            off();
+            agg.dispose();
+        }
+    });
+
+    it('re-reads only the source whose watch ticked', async () => {
+        const a = controllable();
+        const b = controllable();
+        const agg = new AggregatingHubAccessManifest({
+            resolveSources: () => [{ tag: 'a', manifest: a.manifest }, { tag: 'b', manifest: b.manifest }],
+            progressive: true,
+        });
+        try {
+            await agg.whenSettled();
+            await ids(agg);
+            a.entries.new = entry('new');
+            a.tick();
+            await until(() => a.reads() === 2);
+            await agg.whenSettled();
+            expect({ ids: await ids(agg), readsA: a.reads(), readsB: b.reads() })
+                .toEqual({ ids: ['a:new'], readsA: 2, readsB: 1 });
+        } finally {
+            agg.dispose();
+        }
+    });
+
+    it('reflects a decision in the next snapshot', async () => {
+        const source = controllable();
+        source.entries.r = entry('request');
+        const agg = new AggregatingHubAccessManifest({
+            resolveSources: () => [{ tag: 'src', manifest: source.manifest }],
+            progressive: true,
+        });
+        try {
+            await agg.whenSettled();
+            expect(await ids(agg)).toEqual(['src:r']);
+            await agg.setCurrent([{ op: 'set', path: '/current/src\u0000r', value: { status: 'denied' } } as never]);
+            expect({ ids: await ids(agg), decisions: source.decisions }).toEqual({ ids: [], decisions: ['/current/r'] });
+        } finally {
+            agg.dispose();
+        }
+    });
+});
