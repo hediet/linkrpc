@@ -1001,6 +1001,7 @@ exports so browser bundles never pull in Node built-ins:
 | `@hediet/linkrpc/node` | NDJSON sockets, WebSocket, stdio, `connectToHub`, endpoint-URI parsing |
 | `@hediet/linkrpc/web` | `WindowMessageTransport` (iframe / web worker) |
 | `@hediet/linkrpc/hub/common`, `/hub/client` | hub-facing interfaces and client helpers |
+| `@hediet/linkrpc/signing` | sign any JSON object with an identity (`signObject`) and verify it against a principal (`verifyObjectByPrincipal`) |
 
 On Node, a single call resolves an endpoint from the environment and dials it:
 

@@ -70,6 +70,42 @@ describe('sign-time delegated capability cache', () => {
     });
 });
 
+describe('concurrent access negotiation', () => {
+    it('a call signed while another negotiates waits and still presents capabilities', async () => {
+        const consumer = await createSeededMemoryPrincipal({ seed: 840 });
+        const resolve = vi.spyOn(principalResolution, 'resolvePrincipal').mockResolvedValue({
+            principal: consumer,
+            source: { kind: 'user', id: 'test' },
+        });
+        onTestFinished(() => resolve.mockRestore());
+        let answer!: () => void;
+        const sendRequest = vi.fn<IRequestSender<SigningCallCtx>['sendRequest']>()
+            .mockImplementationOnce(() => new Promise(r => { answer = () => r({ status: 'denied' }); }))
+            .mockResolvedValue({ status: 'denied' });
+        const channel: IRequestSender<SigningCallCtx> = {
+            sendRequest,
+            sendNotification: async () => {},
+            sendRequestWithStream: () => { throw new Error('unexpected stream'); },
+            close: () => {},
+        };
+        const signing: CliSigning = {};
+        await setupSigning(channel, signing, { kind: 'user', id: 'test' }, { negotiateHubCaps: true });
+        const sign = (method: string, nonce: string) => signing.capProvider!({ method, signer: consumer.id, params: {}, nonce, signedAtMs: Date.now() });
+
+        const first = sign('pc::requests::getPending', 'first');
+        await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledTimes(1));
+        let secondDone = false;
+        const second = sign('devbox::requests::decide', 'second').finally(() => { secondDone = true; });
+        await new Promise(r => setTimeout(r, 10));
+        expect(secondDone).toBe(false);
+
+        answer();
+        const results = await Promise.all([first, second]);
+        expect(results.map(r => r.capabilities?.length)).toEqual([1, 1]);
+        expect(sendRequest).toHaveBeenCalledTimes(2);
+    });
+});
+
 describe('self-root capability', () => {
     it('authorizes calls only where the principal is an accepted root, even beside a covering foreign grant', async () => {
         const foreignRoot = await createSeededMemoryPrincipal({ seed: 830 });

@@ -116,26 +116,37 @@ export async function setupSigning(
         // is inert elsewhere. It stays out of the bag, so coverage checks and
         // access negotiation still consider only delegated grants.
         const selfRoot = _issueSelfRootCapability(principal);
-        let inAccessNegotiation = false;
+        // Negotiations run one at a time. Their own `hubAccess::requestAccess` call is signed while
+        // one runs, so only that call may skip waiting; any other call waits and then uses (or
+        // negotiates on top of) what the running negotiation granted.
+        let negotiating: Promise<void> | undefined;
         const provider: CapProvider = async ({ method, params, nonce, signedAtMs, interfaceHash }) => {
             const self = await selfRoot;
-            let presentCaps = principal.capBag.capabilities;
             // Drop any cached cap that is expired (or expiring within the
             // safety margin) at this call's sign time. Without this, a stale
             // persisted cap from a previous session would be presented and the
             // gate would reject the call with `expired`. Filtering per-cap (not
             // whole-bag) keeps still-valid caps such as the `hubAccess` grant.
-            presentCaps = presentCaps.filter((c) =>
+            const freshCaps = () => principal.capBag.capabilities.filter((c) =>
                 capabilityFreshAt(c, signedAtMs, CAP_FRESHNESS_MARGIN_MS),
             );
-            const present: HubCapProviderResult = { capabilities: [...presentCaps, self] };
-            if (inAccessNegotiation) return {} satisfies HubCapProviderResult;
 
             const call = _wireMethodToCall(method);
-            if (!call) return present;
-            if (call.serviceId === '' || call.interfaceId === hubAccessInterface.info.id) return present;
+            if (!call || call.serviceId === '' || call.interfaceId === hubAccessInterface.info.id) {
+                return negotiating ? {} satisfies HubCapProviderResult : { capabilities: [...freshCaps(), self] };
+            }
             const request: AccessCallRequest = { call, method, params, nonce, signedAtMs, interfaceHash };
-            if (await _capBagCovers(presentCaps, consumerPrincipalId, request)) return present;
+            let presentCaps: SignedCapability[];
+            for (;;) {
+                while (negotiating) await negotiating;
+                presentCaps = freshCaps();
+                if (await _capBagCovers(presentCaps, consumerPrincipalId, request)) {
+                    return { capabilities: [...presentCaps, self] };
+                }
+                // Another call may have started negotiating while coverage was checked.
+                if (!negotiating) break;
+            }
+            const present: HubCapProviderResult = { capabilities: [...presentCaps, self] };
 
             // Per-call auto-negotiation is opt-out. When disabled, never trigger
             // a `requestAccess` round-trip behind a call — just present whatever
@@ -144,7 +155,8 @@ export async function setupSigning(
             // `SigningSession.requestAccess` ahead of time.
             if (opts.autoNegotiatePerCall === false) return present;
 
-            inAccessNegotiation = true;
+            let done!: () => void;
+            negotiating = new Promise<void>((resolve) => { done = resolve; });
             try {
                 const granted = await _requestAccessForCall(channel, hubAccessMethod, consumerPrincipalId, request);
 
@@ -166,7 +178,8 @@ export async function setupSigning(
                 );
                 return present;
             } finally {
-                inAccessNegotiation = false;
+                negotiating = undefined;
+                done();
             }
         };
         signing.capProvider = provider;
