@@ -35,6 +35,7 @@ import {
     computeNodeHttpInterface,
     computeNodePortsInterface,
     computeNodePowerInterface,
+    computeNodeSessionInterface,
     computeNodeStatusInterface,
     computeNodeTcpForwardInterface,
     type ComputeNodeTcpClientFrame,
@@ -42,8 +43,10 @@ import {
 } from './index';
 import { holdSleepInhibitor, type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
 import { readListeningPorts } from './listeningPorts';
+import { runSystemActionCommand, type SystemAction, type SystemActionCommand, systemActionCommand } from './systemActions';
 
 export { type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
+export { type SystemAction, type SystemActionCommand, systemActionCommand } from './systemActions';
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
 const COMMAND_TERMINATION_GRACE_MS = 2_000;
@@ -62,6 +65,8 @@ type LoopbackHost = 'localhost' | '127.0.0.1' | '::1';
 export interface ComputeNodeOptions {
     /** Chooses the helper that keeps the machine awake. Defaults to the current platform's {@link sleepInhibitorCommand}. */
     readonly sleepInhibitor?: (options: SleepInhibitorOptions) => SleepInhibitorCommand;
+    /** Chooses the command that performs a lock or power action. Defaults to the current platform's {@link systemActionCommand}. */
+    readonly systemAction?: (action: SystemAction) => SystemActionCommand;
 }
 
 export class ComputeNode {
@@ -408,6 +413,13 @@ export class ComputeNode {
         });
         return holdSleepInhibitor(inhibitor, params.maxDurationMs, signal, onActive);
     }
+
+    /** Locks the session or sleeps, restarts, or shuts down the machine with the platform's command. */
+    async performSystemAction(action: SystemAction): Promise<{ mechanism: string; }> {
+        const command = (this._options.systemAction ?? systemActionCommand)(action);
+        await runSystemActionCommand(command);
+        return { mechanism: command.mechanism };
+    }
 }
 
 /** Anything that registers interface handlers, e.g. a connection or `ParticipantServices`. */
@@ -445,7 +457,11 @@ export function registerComputeNode(registrar: InterfaceRegistrar, node: Compute
             keepAwake: (params, _ctx, stream) => node.keepAwake(params, stream.signal, event => {
                 stream.send(event).catch(() => { /* the caller went away */ });
             }),
+            sleep: () => node.performSystemAction('sleep'),
+            restart: () => node.performSystemAction('restart'),
+            shutdown: () => node.performSystemAction('shutdown'),
         }),
+        registrar.register(computeNodeSessionInterface, { lock: () => node.performSystemAction('lock') }),
     ];
     return { dispose: () => { for (const registration of registrations) registration.dispose(); } };
 }

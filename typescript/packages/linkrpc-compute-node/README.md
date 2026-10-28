@@ -4,7 +4,8 @@ A LinkRPC service that gives remote access to this machine through the
 [`linkrpc.computeNode.*` interfaces](../linkrpc-infra/README.md#compute-nodes):
 shell commands (with streamed output and stdin), the file system, HTTP requests
 to local ports, and TCP forwarding. It can also
-[keep the machine awake](#keeping-the-machine-awake) while a caller needs it.
+[keep the machine awake](#keeping-the-machine-awake) while a caller needs it, and
+[lock, sleep, restart, or shut down](#locking-sleeping-restarting-and-shutting-down) the machine.
 
 Run it as a [hub daemon](../linkrpc-hub-daemon/README.md) service:
 
@@ -70,6 +71,33 @@ This prevents *idle* sleep only. A Mac on battery still sleeps when its lid is
 closed, and anything that explicitly puts the machine to sleep still does. A
 sleeping machine cannot be woken through the hub or tunnel, so start
 `keepAwake` before you leave the machine.
+
+## Locking, sleeping, restarting, and shutting down
+
+`linkrpc.computeNode.session::lock` locks the desktop session of the user
+running the compute node. `linkrpc.computeNode.power::sleep`, `::restart`, and
+`::shutdown` act on the whole machine. All take no parameters and return the
+`mechanism` used:
+
+```sh
+linkrpc hub call '<hubServiceId>/compute::linkrpc.computeNode.session::lock'
+```
+
+| Action | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| `lock` | `SACLockScreenImmediate` (the menu bar's Lock Screen) via JXA | `LockWorkStation` | `loginctl lock-session` |
+| `sleep` | `pmset sleepnow` | `SetSuspendState` (suspend, not hibernate) | `systemctl suspend` |
+| `restart` | asks `loginwindow`, like the Apple menu | `shutdown /r /t 0` | `systemctl reboot` |
+| `shutdown` | asks `loginwindow`, like the Apple menu | `shutdown /s /t 0` | `systemctl poweroff` |
+
+The commands run without elevation, as the node's user, so the node must run
+inside that user's desktop session (it does as a hub daemon service started at
+login). Restart and shutdown are not forced: applications with unsaved work
+can still ask or cancel. The call returns once the command succeeds, or when it
+is still running after 2 seconds; it fails with the command's error otherwise.
+The machine can go down before the reply arrives, so a dropped connection after
+`sleep`, `restart`, or `shutdown` is expected. Use `keepAwake` leases to prevent
+*idle* sleep; they do not prevent an explicit `sleep`.
 
 ## In-process
 `hostComputeNode()` (the package entry) starts the same service in-process.
