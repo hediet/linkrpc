@@ -2,6 +2,8 @@ import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineInterface, requestType } from '@hediet/linkrpc';
+import { createHubServiceInterfaces, Hub, hubRegisterServiceId } from '@hediet/linkrpc-hub/hub/server';
+import { SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
 import { z } from 'zod';
 import { afterEach, describe, expect, it } from 'vitest';
 import { main } from '../cli';
@@ -98,5 +100,67 @@ describe('linkrpc codegen', () => {
         await writeFile(outputPath, `${generated}// stale\n`);
         await expect(main([...args, '--check'])).rejects.toThrow(/output is stale/);
         expect(await readFile(outputPath, 'utf8')).toBe(`${generated}// stale\n`);
+    });
+
+    it('generates directly from a live hub service, matching contract export + codegen --input', async () => {
+        await mkdir(testDir, { recursive: true });
+        const echo = defineInterface({ id: 'test.echo' }, {
+            echo: requestType(z.object({ text: z.string(), meta: z.record(z.string(), z.unknown()) }), z.string()),
+        });
+        const hub = new Hub();
+        createHubServiceInterfaces(hub);
+        const service = hubRegisterServiceId(hub, 'svc/echo');
+        service.connection.register(echo, { echo: ({ text }) => text }, { serviceId: 'svc/echo' });
+        service.connection.enableReflection({ serviceId: 'svc/echo' });
+        const socket = await SocketServer.start();
+        socket.setConnectionHandler((transport) => hub.attach(transport));
+        const common = [
+            '--context', ':empty',
+            '--endpoint', `unix:${socket.endpoint}`,
+            '--principal', `file:${resolve(testDir, 'identity.json')}`,
+        ];
+        const single = ['--interface', 'test.echo', '--name', 'echoInterface'];
+        try {
+            const bundle = resolve(testDir, 'contract.json');
+            const twoStep = resolve(testDir, 'two-step.ts');
+            const direct = resolve(testDir, 'direct.ts');
+            await main([...common, 'contract', 'export', '--service', 'svc/echo', '--output', bundle], 'hub');
+            await main(['codegen', '--input', bundle, ...single, '--output', twoStep], 'hub');
+
+            const args = [...common, 'codegen', '--service', 'svc/echo', ...single, '--output', direct];
+            await expect(main([...args, '--check'], 'hub')).rejects.toThrow(/output is missing/);
+            await main(args, 'hub');
+            const generated = await readFile(direct, 'utf8');
+            expect(generated).toContain('export const echoInterface');
+            expect(generated).toBe(await readFile(twoStep, 'utf8'));
+            await expect(main([...args, '--check'], 'hub')).resolves.toBeUndefined();
+            await expect(main([...args, '--max-depth', '1', '--check'], 'hub')).resolves.toBeUndefined();
+            await writeFile(direct, `${generated}// stale\n`);
+            await expect(main([...args, '--check'], 'hub')).rejects.toThrow(/output is stale/);
+
+            const whole = resolve(testDir, 'whole.ts');
+            await main([...common, 'codegen', '--service', 'svc/echo', '--output', whole], 'hub');
+            expect(await readFile(whole, 'utf8')).toContain('svcEchoTestEchoService');
+
+            await expect(main([...common, 'codegen', '--service', 'svc/echo', '--interface', 'test.missing',
+                '--name', 'missing', '--output', resolve(testDir, 'missing.ts')], 'hub'))
+                .rejects.toThrow("Interface 'test.missing' was not found in service 'svc/echo'");
+        } finally {
+            socket.dispose();
+        }
+    }, 30_000);
+
+    it('requires exactly one of --input and --service, and --max-depth only with --service', async () => {
+        const output = resolve(testDir, 'never.ts');
+        await expect(main(['codegen', '--output', output]))
+            .rejects.toThrow('exactly one of --input <bundle> or --service <id>');
+        await expect(main(['codegen', '--input', 'a.json', '--service', 'svc', '--output', output]))
+            .rejects.toThrow('exactly one of --input <bundle> or --service <id>');
+        await expect(main(['codegen', '--input', 'a.json', '--max-depth', '1', '--output', output]))
+            .rejects.toThrow('--max-depth requires --service');
+        // Offline option validation runs before connecting to the (unreachable) endpoint.
+        await expect(main(['--context', ':empty', '--endpoint', 'ws://127.0.0.1:1',
+            'codegen', '--service', 'svc', '--name', 'x', '--output', output]))
+            .rejects.toThrow('--name requires --interface');
     });
 });

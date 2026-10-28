@@ -116,20 +116,20 @@ export async function setupSigning(
         // is inert elsewhere. It stays out of the bag, so coverage checks and
         // access negotiation still consider only delegated grants.
         const selfRoot = _issueSelfRootCapability(principal);
-        let inAccessNegotiation = false;
+        // Calls negotiate independently: a pending consent prompt must not hold up other calls.
+        // The `hubAccess::requestAccess` calls a negotiation issues are signed through this
+        // provider too; they return at the root/hubAccess check below, so they never recurse.
         const provider: CapProvider = async ({ method, params, nonce, signedAtMs, interfaceHash }) => {
             const self = await selfRoot;
-            let presentCaps = principal.capBag.capabilities;
             // Drop any cached cap that is expired (or expiring within the
             // safety margin) at this call's sign time. Without this, a stale
             // persisted cap from a previous session would be presented and the
             // gate would reject the call with `expired`. Filtering per-cap (not
             // whole-bag) keeps still-valid caps such as the `hubAccess` grant.
-            presentCaps = presentCaps.filter((c) =>
+            const presentCaps = principal.capBag.capabilities.filter((c) =>
                 capabilityFreshAt(c, signedAtMs, CAP_FRESHNESS_MARGIN_MS),
             );
             const present: HubCapProviderResult = { capabilities: [...presentCaps, self] };
-            if (inAccessNegotiation) return {} satisfies HubCapProviderResult;
 
             const call = _wireMethodToCall(method);
             if (!call) return present;
@@ -144,7 +144,6 @@ export async function setupSigning(
             // `SigningSession.requestAccess` ahead of time.
             if (opts.autoNegotiatePerCall === false) return present;
 
-            inAccessNegotiation = true;
             try {
                 const granted = await _requestAccessForCall(channel, hubAccessMethod, consumerPrincipalId, request);
 
@@ -165,8 +164,6 @@ export async function setupSigning(
                     `linkrpc: capability negotiation skipped (${(err as Error).message})\n`,
                 );
                 return present;
-            } finally {
-                inAccessNegotiation = false;
             }
         };
         signing.capProvider = provider;

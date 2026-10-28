@@ -669,11 +669,20 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 | `schema check-compat <interfaceId> <local.json>` | Compare a live interface schema with a local schema.                                  |
 | `codegen --input <bundle> --interface <id> --name <name> --output <file> [--preserve-wire-schema] [--check]` | Generate a TypeScript interface definition from a validated offline static bundle. |
 | `codegen --input <contract> --output <file> [--names <json>] [--check]` | Generate all reusable interface definitions and typed root/service/default/bare bindings. |
+| `codegen --service <id> [--max-depth <n>] ... --output <file> [--check]` | Same as above, but reflect the live service (like `contract export --service`) instead of reading a bundle. |
 
 `codegen` uses the same `{ interfaceSchemas, services?, defaultInterface?, bareInterfaces? }`
 bundle parser and interface-hash verification as static reflection. `--check`
 compares the generated source with the output file and exits unsuccessfully if
 the file is missing or stale; it never overwrites in check mode.
+
+`--input` and `--service` are mutually exclusive. `--service <id>` runs the same
+reflection as `contract export --service <id>` in memory (with the same failure
+rules, see below) and feeds the result to codegen, so no intermediate bundle file is
+needed. `--max-depth` is only valid with `--service` and defaults to unlimited;
+because discovery fails rather than truncating, a single service rarely needs it.
+`--check` works with `--service` too, to detect when a checked-in file drifted from
+the live service.
 
 ```sh
 linkrpc --endpoint-cmd-stdio "node server.js" contract export --output contract.json
@@ -682,6 +691,9 @@ linkrpc codegen --input contract.json --output generated.ts --check
 # Existing per-interface generation remains available:
 linkrpc codegen --input contract.json --interface demo.echo --name echoInterface \
   --output echo.ts --preserve-wire-schema
+# One step against a live hub service, without an intermediate bundle:
+linkrpc hub codegen --service hediet/pc2/stream-deck --interface hediet.streamDeck \
+  --name streamDeckInterface --output streamDeck.ts
 ```
 
 Omit both `--interface` and `--name` for whole-contract generation. Every interface

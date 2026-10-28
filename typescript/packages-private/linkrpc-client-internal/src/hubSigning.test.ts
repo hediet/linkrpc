@@ -70,6 +70,40 @@ describe('sign-time delegated capability cache', () => {
     });
 });
 
+describe('concurrent access negotiation', () => {
+    it('a pending negotiation neither blocks nor strips the capabilities of another call', async () => {
+        const consumer = await createSeededMemoryPrincipal({ seed: 840 });
+        const resolve = vi.spyOn(principalResolution, 'resolvePrincipal').mockResolvedValue({
+            principal: consumer,
+            source: { kind: 'user', id: 'test' },
+        });
+        onTestFinished(() => resolve.mockRestore());
+        let answer!: () => void;
+        const sendRequest = vi.fn<IRequestSender<SigningCallCtx>['sendRequest']>()
+            .mockImplementationOnce(() => new Promise(r => { answer = () => r({ status: 'denied' }); }))
+            .mockResolvedValue({ status: 'denied' });
+        const channel: IRequestSender<SigningCallCtx> = {
+            sendRequest,
+            sendNotification: async () => {},
+            sendRequestWithStream: () => { throw new Error('unexpected stream'); },
+            close: () => {},
+        };
+        const signing: CliSigning = {};
+        await setupSigning(channel, signing, { kind: 'user', id: 'test' }, { negotiateHubCaps: true });
+        const sign = (method: string, nonce: string) => signing.capProvider!({ method, signer: consumer.id, params: {}, nonce, signedAtMs: Date.now() });
+
+        const first = sign('pc::requests::getPending', 'first');
+        await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledTimes(1));
+        // The first call's consent is still pending; the second negotiates on its own and finishes.
+        const second = await sign('devbox::requests::decide', 'second');
+        expect(second.capabilities?.length).toBe(1);
+        expect(sendRequest).toHaveBeenCalledTimes(2);
+
+        answer();
+        expect((await first).capabilities?.length).toBe(1);
+    });
+});
+
 describe('self-root capability', () => {
     it('authorizes calls only where the principal is an accepted root, even beside a covering foreign grant', async () => {
         const foreignRoot = await createSeededMemoryPrincipal({ seed: 830 });

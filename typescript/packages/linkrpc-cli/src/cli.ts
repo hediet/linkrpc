@@ -26,8 +26,9 @@ import {
 } from './commands/connectionBrokerProcess';
 import { parseDuration, parseConnectionLimit, parseConnectionLimitMilliseconds, type ConnectionLimit } from './duration';
 import { checkCompatCommand, formatVerdict } from './commands/checkCompat';
-import { codegenCommand } from './commands/codegen';
-import { exportContractCommand } from './commands/contract';
+import { codegenCommand, type CodegenSource } from './commands/codegen';
+import { exportContract, exportContractCommand } from './commands/contract';
+import type { StaticHubSchema } from './staticHubSchema';
 import { completionsCommand } from './commands/completions';
 import { defaultsCommand } from './commands/defaults';
 import { hashCommand } from './commands/hash';
@@ -319,7 +320,7 @@ export async function main(
             pendingNewContext = undefined;
         }
 
-        endpoint = commandUsesEndpoint(commandPath) || hasEndpointOverrides(cliOverrides)
+        endpoint = commandUsesEndpoint(commandPath, actionCommand.opts()) || hasEndpointOverrides(cliOverrides)
             ? resolveInvocationEndpoint(g_invocation, actionCommand.name() === 'tunnel')
             : undefined;
         g_hubConfigPath = g_invocation.values.config;
@@ -588,8 +589,13 @@ export async function main(
 
     program
         .command('codegen')
-        .description('Generate reusable TypeScript interfaces and bindings from an offline contract.')
-        .requiredOption('--input <bundle>', 'local static hub schema bundle')
+        .description(
+            'Generate reusable TypeScript interfaces and bindings from an offline contract bundle '
+            + '(--input) or directly from a live service (--service).',
+        )
+        .option('--input <bundle>', 'local static hub schema bundle (exclusive with --service)')
+        .option('--service <id>', 'reflect this live service like `contract export --service` (exclusive with --input)')
+        .option('--max-depth <depth>', 'with --service: maximum directory referral depth (default: unlimited)', parseMaxDepth)
         .option('--interface <id>', 'generate only this interface (requires --name)')
         .option('--name <name>', 'single-interface exported TypeScript const name')
         .option('--names <file>', 'whole-contract JSON interfaceNames/bindingNames overrides')
@@ -600,8 +606,28 @@ export async function main(
         )
         .option('--check', 'fail if the output is missing or stale without overwriting it')
         .action(async (opts) => {
+            if ((opts.input === undefined) === (opts.service === undefined)) {
+                throw new InvalidArgumentError('codegen requires exactly one of --input <bundle> or --service <id>');
+            }
+            if (opts.maxDepth !== undefined && opts.service === undefined) {
+                throw new InvalidArgumentError('codegen --max-depth requires --service');
+            }
+            const serviceId: string | undefined = opts.service;
+            const source: CodegenSource = serviceId === undefined
+                ? { kind: 'input', path: opts.input }
+                : {
+                    kind: 'service',
+                    serviceId,
+                    load: async () => {
+                        let document: StaticHubSchema | undefined;
+                        await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                            document = await exportContract(channel, { serviceId, maxDepth: opts.maxDepth });
+                        }, { requestReflectionAccess: true });
+                        return document!;
+                    },
+                };
             await codegenCommand({
-                input: opts.input,
+                source,
                 interfaceId: opts.interface,
                 name: opts.name,
                 output: opts.output,
@@ -616,10 +642,7 @@ export async function main(
         .command('export')
         .requiredOption('--output <file>', 'contract JSON destination, or - for stdout')
         .option('--service <id>', 'reflection scope (defaults to the endpoint root)')
-        .option('--max-depth <depth>', 'maximum directory referral depth', (value) => {
-            if (!/^\d+$/.test(value)) throw new InvalidArgumentError('depth must be a non-negative integer');
-            return Number(value);
-        })
+        .option('--max-depth <depth>', 'maximum directory referral depth', parseMaxDepth)
         .action(async (opts) => {
             await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
                 await exportContractCommand(channel, {
@@ -2132,11 +2155,16 @@ function getCommandPath(command: Command): string {
     return names.join(' ');
 }
 
-function commandUsesEndpoint(commandPath: string): boolean {
+function parseMaxDepth(value: string): number {
+    if (!/^\d+$/.test(value)) throw new InvalidArgumentError('depth must be a non-negative integer');
+    return Number(value);
+}
+
+function commandUsesEndpoint(commandPath: string, options: Record<string, unknown>): boolean {
+    if (commandPath === 'codegen') return options.service !== undefined;
     return !(
         commandPath === 'context'
         || commandPath.startsWith('context ')
-        || commandPath === 'codegen'
         || commandPath === 'schema hash'
         || commandPath === 'completions'
         || commandPath === '_complete'
