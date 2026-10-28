@@ -71,7 +71,7 @@ describe('sign-time delegated capability cache', () => {
 });
 
 describe('concurrent access negotiation', () => {
-    it('a call signed while another negotiates waits and still presents capabilities', async () => {
+    it('a pending negotiation neither blocks nor strips the capabilities of another call', async () => {
         const consumer = await createSeededMemoryPrincipal({ seed: 840 });
         const resolve = vi.spyOn(principalResolution, 'resolvePrincipal').mockResolvedValue({
             principal: consumer,
@@ -94,15 +94,13 @@ describe('concurrent access negotiation', () => {
 
         const first = sign('pc::requests::getPending', 'first');
         await vi.waitFor(() => expect(sendRequest).toHaveBeenCalledTimes(1));
-        let secondDone = false;
-        const second = sign('devbox::requests::decide', 'second').finally(() => { secondDone = true; });
-        await new Promise(r => setTimeout(r, 10));
-        expect(secondDone).toBe(false);
+        // The first call's consent is still pending; the second negotiates on its own and finishes.
+        const second = await sign('devbox::requests::decide', 'second');
+        expect(second.capabilities?.length).toBe(1);
+        expect(sendRequest).toHaveBeenCalledTimes(2);
 
         answer();
-        const results = await Promise.all([first, second]);
-        expect(results.map(r => r.capabilities?.length)).toEqual([1, 1]);
-        expect(sendRequest).toHaveBeenCalledTimes(2);
+        expect((await first).capabilities?.length).toBe(1);
     });
 });
 
