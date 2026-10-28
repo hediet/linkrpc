@@ -637,11 +637,25 @@ export class HubDirectoryExplorer {
         this._clearNodes();
     }
 
-    private async _loadNode(node: DirectoryNode, reconcileOutgoing = true): Promise<void> {
+    /**
+     * List `node` and reconcile its referrals. A call while the node is already
+     * loading only requests another pass of that load and returns immediately
+     * (awaiting it could deadlock through referral cycles); await
+     * {@link DirectoryNode.loadRun} where the finished state is required.
+     */
+    private _loadNode(node: DirectoryNode, reconcileOutgoing = true): Promise<void> {
         if (node.loading) {
             node.reloadRequested = true;
-            return;
+            return Promise.resolve();
         }
+        const run: Promise<void> = this._runLoad(node, reconcileOutgoing).finally(() => {
+            if (node.loadRun === run) node.loadRun = undefined;
+        });
+        node.loadRun = run;
+        return run;
+    }
+
+    private async _runLoad(node: DirectoryNode, reconcileOutgoing: boolean): Promise<void> {
         node.loading = true;
         this._updateNode(node, 'loading', () => {
             node.state = 'loading';
@@ -650,6 +664,10 @@ export class HubDirectoryExplorer {
             do {
                 node.reloadRequested = false;
                 const scopesAtRequest = node.scopes;
+                // Watch before listing: the list then sees every earlier change and
+                // the watch ticks for every later one, so this list also serves as
+                // the watch's verification list and need not be repeated.
+                if (this._nodes.get(node.key) === node && this._needsWatch(node)) this._startWatch(node);
                 let listings: ServiceListing[];
                 try {
                     listings = await fetchDirectory(this._channel, {
@@ -725,8 +743,12 @@ export class HubDirectoryExplorer {
 
         const affected = new Set<string>([...node.outgoing.keys(), ...next.keys()]);
         node.outgoing = next;
+        // Graph bookkeeping happens synchronously in order; the listings it
+        // triggers run concurrently, so sibling directories (often other
+        // machines) do not wait for each other.
+        const loads: Promise<void>[] = [];
         for (const childKey of affected) {
-            if (this._disposed) return;
+            if (this._disposed) break;
             const contribution = next.get(childKey);
             let child = this._nodes.get(childKey);
             let previous: HubDirectoryNodeReport | undefined;
@@ -741,14 +763,15 @@ export class HubDirectoryExplorer {
                     this._deriveNodeFromParents(child);
                     this._nodes.set(childKey, child);
                     this._emitNodeAdded(child);
-                    await this._loadNode(child);
+                    loads.push(this._loadNode(child));
                     continue;
                 }
                 previous = this._nodeReport(child);
                 child.parents.set(node.key, contribution);
             }
-            await this._updateNodeFromParents(child, previous);
+            loads.push(this._updateNodeFromParents(child, previous));
         }
+        await settleAll(loads);
     }
 
     private _outgoingFor(
@@ -877,9 +900,11 @@ export class HubDirectoryExplorer {
         );
         for (let round = 0; round < maxRounds; round++) {
             const computed = this._computeScopeFixedPoint();
-            let relisted = false;
             const ordered = [...computed.states.entries()]
                 .sort(([, left], [, right]) => left.depth - right.depth);
+            // Every node's target state is computed up front, so the relists of
+            // one round are independent and run concurrently.
+            const relists: Promise<void>[] = [];
 
             for (const [key, state] of ordered) {
                 if (key === ROOT_NODE_KEY) {
@@ -897,8 +922,7 @@ export class HubDirectoryExplorer {
                     node.outgoing = computed.outgoing.get(key) ?? new Map();
                     this._nodes.set(key, node);
                     this._emitNodeAdded(node);
-                    await this._loadNode(node, false);
-                    relisted = true;
+                    relists.push(this._loadNode(node, false));
                     continue;
                 }
 
@@ -918,11 +942,9 @@ export class HubDirectoryExplorer {
                 node.depth = state.depth;
                 node.outgoing = computed.outgoing.get(key) ?? new Map();
                 if (previous !== undefined) this._emitNodeUpdated(node, previous, 'referral');
-                if (scopesChanged) {
-                    await this._loadNode(node, false);
-                    relisted = true;
-                }
+                if (scopesChanged) relists.push(this._loadNode(node, false));
             }
+            await settleAll(relists);
 
             const unreachable = [...this._nodes.values()]
                 .filter((node) => !computed.states.has(node.key))
@@ -934,7 +956,7 @@ export class HubDirectoryExplorer {
                 this._emitNodeRemoved(previous);
             }
 
-            if (!relisted) return;
+            if (relists.length === 0) return;
         }
         throw new Error('Hub directory scope reconciliation did not converge');
     }
@@ -1031,13 +1053,18 @@ export class HubDirectoryExplorer {
                 .filter((node) => this._needsWatch(node))
                 .sort((a, b) => a.depth - b.depth || a.key.localeCompare(b.key));
             if (pending.length === 0) return;
+            // Each node's watch opens before its own verification list, so the
+            // per-node list/watch/list guarantee holds while the lists of all
+            // pending nodes run concurrently.
+            const verifications: Promise<void>[] = [];
             for (const node of pending) {
                 if (this._nodes.get(node.key) !== node || !this._needsWatch(node)) continue;
                 if (!this._startWatch(node)) continue;
-                await this._loadNode(node);
-                await this._reconcileScopesFromRoot();
-                await this._pruneUnreachable();
+                verifications.push(this._loadNode(node));
             }
+            await settleAll(verifications);
+            await this._reconcileScopesFromRoot();
+            await this._pruneUnreachable();
         }
         throw new Error('Hub directory watch synchronization did not converge');
     }
@@ -1156,6 +1183,9 @@ export class HubDirectoryExplorer {
                 const node = this._nodes.get(nextKey);
                 if (node === undefined) continue;
                 await this._loadNode(node);
+                // A tick can arrive while the node is still being listed (its watch opens
+                // before the list); report the change only once that load has finished.
+                await node.loadRun;
                 await this._reconcileScopesFromRoot();
                 await this._pruneUnreachable();
                 await this._synchronizeWatches();
@@ -1363,6 +1393,8 @@ interface DirectoryNode {
     outgoing: Map<string, ParentContribution>;
     loaded: boolean;
     loading: boolean;
+    /** The running load, including passes requested while it runs. */
+    loadRun?: Promise<void>;
     reloadRequested: boolean;
     state: HubDirectoryNodeState;
     inaccessibleReason?: string;
@@ -1500,6 +1532,13 @@ function cloneListing(item: ServiceListing): ServiceListing {
 
 function errorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+/** Wait for every operation, then rethrow the first failure, so none keeps running unobserved. */
+async function settleAll(operations: readonly Promise<void>[]): Promise<void> {
+    const results = await Promise.allSettled(operations);
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure !== undefined) throw failure.reason;
 }
 
 /**
