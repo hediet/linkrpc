@@ -8,6 +8,12 @@ import type { JsonRpcTransport } from './transport';
 
 const maxFrameBytes = 100 * 1024 * 1024;
 
+/**
+ * WebSocket close codes. Clients get the reason instead of a bare 1006 when a
+ * route cannot be opened or its upstream fails.
+ */
+const closeCodes = { normal: 1000, goingAway: 1001, internalError: 1011 } as const;
+
 export interface JsonRpcExportRoute {
     readonly serviceId: string;
     readonly path: string;
@@ -173,20 +179,21 @@ function attach(
     let pending = Promise.resolve();
     const controller = new AbortController();
     const subscriptions: { dispose(): void }[] = [];
-    const close = (): void => {
+    const close = (code: number, reason: string): void => {
         if (closed) return;
         closed = true;
         controller.abort();
         clearTimeout(openTimeout);
         for (const subscription of subscriptions) subscription.dispose();
         remote?.close('WebSocket export connection closed');
-        socket.terminate();
+        if (socket.readyState === WebSocket.OPEN) socket.close(code, _closeReason(reason));
+        else socket.terminate();
         onClose();
     };
     const fail = (error: unknown): void => {
         if (closed) return;
         options.onError(new Error(`JSON-RPC export route '${serviceId}' failed`, { cause: error }));
-        close();
+        close(closeCodes.internalError, `route '${serviceId}' failed: ${error instanceof Error ? error.message : String(error)}`);
     };
     const openTimeout = setTimeout(() => fail(new Error('Transport factory timed out')), 30_000);
     const opened = Promise.resolve().then(() => options.openTransport(serviceId, controller.signal));
@@ -203,7 +210,8 @@ function attach(
         }
         register(transport.onClose(reason => {
             if (reason && !closed) options.onError(new Error(`JSON-RPC export route '${serviceId}' closed upstream`));
-            close();
+            if (reason) close(closeCodes.internalError, `route '${serviceId}' closed upstream: ${reason}`);
+            else close(closeCodes.normal, '');
         }));
         register(transport.onMessage(frame => {
             if (closed) return;
@@ -216,7 +224,7 @@ function attach(
         }));
     }).catch(fail);
     socket.on('error', fail);
-    socket.on('close', close);
+    socket.on('close', () => close(closeCodes.normal, ''));
     socket.on('message', data => {
         if (closed) return;
         const text = data.toString();
@@ -242,5 +250,12 @@ function attach(
             queuedFrames--;
         });
     });
-    return close;
+    return () => close(closeCodes.goingAway, 'JSON-RPC export closing');
+}
+
+/** Reasons are limited to 123 bytes by the WebSocket protocol. */
+function _closeReason(reason: string): string {
+    let result = reason;
+    while (Buffer.byteLength(result) > 123) result = result.slice(0, -1);
+    return result;
 }
