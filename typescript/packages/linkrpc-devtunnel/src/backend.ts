@@ -2,7 +2,7 @@ import type { Duplex } from 'node:stream';
 import crossSpawn from 'cross-spawn';
 import { ConnectionStatus, TunnelRelayTunnelClient, TunnelRelayTunnelHost } from '@microsoft/dev-tunnels-connections';
 import type { Tunnel } from '@microsoft/dev-tunnels-contracts';
-import { ManagementApiVersions, TunnelManagementHttpClient } from '@microsoft/dev-tunnels-management';
+import { ManagementApiVersions, TunnelManagementHttpClient, type TunnelManagementClient } from '@microsoft/dev-tunnels-management';
 
 /** A hub's tunnel on the account. */
 export interface MeshTunnel {
@@ -86,6 +86,7 @@ export class DevTunnelsSdkBackend implements TunnelBackend {
         const tunnel = await this._ensureTunnel(hubServiceId);
         const host = new TunnelRelayTunnelHost(this._management);
         host.forwardConnectionsToLocalPorts = false;
+        keepPortsOnTunnelRefresh(host, this._management);
         host.forwardedPortConnecting(e => {
             if (e.port === HUB_PORT) onStream(e.stream);
             else e.stream.destroy();
@@ -197,6 +198,19 @@ function _isHosted(tunnel: Tunnel): boolean {
     if ((tunnel.endpoints?.length ?? 0) > 0) return true;
     const count = tunnel.status?.hostConnectionCount;
     return (typeof count === 'number' ? count : count?.current ?? 0) > 0;
+}
+
+/**
+ * A host forwards only the ports of its tunnel object to clients. When the relay
+ * rejects an expired access token (e.g. `connect` retried until the machine woke
+ * up), the SDK re-fetches the tunnel without ports, so clients would never get
+ * the hub port. This makes such refreshes include the ports.
+ */
+export function keepPortsOnTunnelRefresh(host: TunnelRelayTunnelHost, management: TunnelManagementClient): void {
+    host.refreshingTunnel(e => {
+        if (!e.tunnel) return;
+        e.tunnelPromise = management.getTunnel(e.tunnel, { tokenScopes: [e.tunnelAccessScope], includePorts: true }, e.cancellation);
+    });
 }
 
 /** The SDK only reports missed keep-alives; this ends the session after a few. */
