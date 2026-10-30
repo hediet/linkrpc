@@ -192,8 +192,15 @@ describe('JSON-RPC WebSocket export', () => {
             pair.b.onMessage(frame => { void pair.b.send(frame); });
             return pair.a;
         }, errors);
-        const bad = await connect(server);
-        await expect.poll(() => bad.readyState).toBe(WebSocket.CLOSED);
+        const bad = new WebSocket(`${server.endpoint}foo?tkn=${token}`);
+        clients.push(bad);
+        const [code, reason] = await once(bad, 'close');
+        expect({ code, reason: String(reason) }).toMatchInlineSnapshot(`
+          {
+            "code": 1011,
+            "reason": "route 'foo' failed: Unavailable",
+          }
+        `);
         const good = await connect(server, '/bar');
         const response = message(good);
         good.send('{"jsonrpc":"2.0","method":"ok"}');
