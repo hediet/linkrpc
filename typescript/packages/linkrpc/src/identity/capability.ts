@@ -569,6 +569,7 @@ export type ParamMatcherFor<T> =
     | { enum: T[] }
     | { any: true }
     | (T extends string ? { prefix: string } : never)
+    | (T extends number ? { range: { min: number; max: number } } : never)
     | (T extends readonly string[] ? { subsetOf: string[] } : never);
 
 /** Type-safe top-level parameter matchers for one interface member. */

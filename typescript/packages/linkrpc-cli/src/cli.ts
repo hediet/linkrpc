@@ -772,7 +772,7 @@ export async function main(
         .description('Request and store a capability without invoking the method.');
 
     const addCapabilityOptions = (cmd: Command): Command => cmd
-        .option('--cap:allow-param <kv...>', 'top-level key=matcher JSON (exact, enum, prefix, subsetOf, any)')
+        .option('--cap:allow-param <kv...>', 'top-level key=matcher JSON (exact, enum, prefix, subsetOf, range, any)')
         .option('--cap:allow-prefix <prefix>', 'allow a string prefix for the immediately preceding parameter')
         .option('--cap:allow-any', 'allow any JSON value for the immediately preceding parameter')
         .option('--cap:allow-enum <json>', 'allow one value from a JSON array for the preceding parameter')
