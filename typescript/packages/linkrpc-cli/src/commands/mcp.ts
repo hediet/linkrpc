@@ -26,7 +26,7 @@ export interface McpOptions {
 const clientInfo = { name: 'linkrpc-hub-mcp', version: '1.0.0' };
 
 /**
- * Serve the tools of every MCP server published on the hub (typed bridges and
+ * Serve the tools of every MCP server published on the hub (MCP services and
  * forwarded servers) as one stdio MCP server, optionally with the script tools.
  */
 export async function mcpCommand(channel: CliChannel, options: McpOptions = {}): Promise<void> {

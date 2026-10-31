@@ -936,7 +936,7 @@ idle minutes.
 ### Hub MCP aggregation
 
 `linkrpc hub mcp` is a lightweight stdio MCP server that discovers every MCP
-server published in the selected Hub and aggregates their tools: typed bridges
+server published in the selected Hub and aggregates their tools: MCP services
 (`mcp.tools`) and forwarded servers (`mcp.forward`, or the legacy
 `vscode.mcp-forward`). No service IDs, filters, or principal overrides are
 required:
@@ -957,7 +957,7 @@ Endpoint/context/environment and identity selection follow the normal Hub CLI
 rules. An explicit endpoint can be supplied before `mcp`, for example
 `linkrpc hub --endpoint npipe://./pipe/my-hub mcp`. Signing and capability
 negotiation remain enabled by default; discovery does not bypass authorization.
-Typed tools are called through their generated methods, so capabilities and
+Service tools are called through their generated methods, so capabilities and
 consent apply per tool; a forwarded server needs one capability for all its
 tools. Inaccessible directories and failed servers are reported on stderr;
 stdout contains only MCP protocol frames.
@@ -977,24 +977,36 @@ This version aggregates tools, not resources, prompts, or sampling.
 ### Publishing MCP servers
 
 Producers stay separate. `mcp-publish` publishes one MCP server, given as a
-command after `--` or as a Streamable HTTP `--url` (with repeatable `--header`):
+command after `--`, as a Streamable HTTP `--url` (with repeatable `--header`),
+or (forward only) as `--stdio`:
 
 ```sh
-linkrpc hub mcp-publish --typed --forward --serviceId <authorized-service-id> -- npx -y @modelcontextprotocol/server-everything
+linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> -- npx -y @modelcontextprotocol/server-everything
 ```
 
-- `--typed` exposes every MCP tool as a method of a generated
-  `mcp.tools.<name>` interface (`--name`, derived from the service ID by
-  default). All callers share one MCP session; a caller can open an exclusive
-  one with `mcp.server::openSession`.
+- `--service` publishes the MCP server as a LinkRPC service: every MCP tool is
+  a method of a generated `mcp.tools.<name>` interface (`--name`, derived from
+  the service ID by default), and `mcp.tools::listTools`/`callTool` list and
+  call tools by name. All callers share one MCP session; a caller can open an
+  exclusive one with `mcp.server::openSession`. Repeatable
+  `--group <group>=<keyword,...>` moves tools whose name contains a keyword into
+  `mcp.tools.<name>.<group>`, so capabilities can cover a whole group, e.g.
+  `--group admin=delete,merge`.
 - `--forward` relays MCP verbatim over `mcp.forward`. Each connection gets its
   own MCP session: a fresh child process, or a new HTTP session.
+- `--stdio` forwards an MCP server that is already running and attached to this
+  process's stdin/stdout, one connection at a time. Later connections reach the
+  same server; the command exits when stdin ends.
 
 `mcp-forward` is shorthand for `mcp-publish --forward`:
 
 ```sh
 linkrpc hub mcp-forward --serviceId <authorized-service-id> -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
 ```
+
+To forward a server that must not be restarted per connection, start it
+yourself and connect its stdio, e.g. with a named pipe pair or a supervisor:
+`linkrpc hub mcp-forward --stdio --serviceId <id>`.
 
 Manage that producer and `component-explorer serve -p <same-config>` with your
 workspace daemon. The aggregator opens lightweight MCP connections; it does not

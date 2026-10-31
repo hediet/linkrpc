@@ -4,15 +4,28 @@ import { z } from "zod";
 import { type McpClientInfo, upstreamSessionFactory } from "./clientSession";
 import type { McpAuthenticationState } from "./contracts";
 import { serveMcpForward } from "./forward/producer";
-import { type McpToolBridgeRegistration, registerMcpToolBridge } from "./typed/bridge";
+import { type McpToolBridgeRegistration, registerMcpToolBridge } from "./service/bridge";
 import { mcpUpstreamConfigSchema, upstreamFromConfig } from "./upstream";
 
 /** How a hosted MCP server is published. At least one mode must be enabled. */
+export const mcpToolGroupConfigSchema = z.object({
+    name: z.string().regex(/^[a-z0-9][a-z0-9-]*$/),
+    tools: z.array(z.string().min(1)).optional(),
+    prefixes: z.array(z.string().min(1)).optional(),
+    keywords: z.array(z.string().min(1)).optional(),
+});
+
 export const mcpExposeConfigSchema = z.object({
-    /** One shared MCP session for all callers; one LinkRPC method per tool. */
-    typed: z.object({
-        /** Generated interface id; defaults to `mcp.tools.<server id>`. */
+    /**
+     * Publish the MCP server as a LinkRPC service: one method per tool, generic
+     * `mcp.tools::listTools`/`callTool`, and `mcp.server`. One shared MCP session
+     * for all callers, plus exclusive sessions on request.
+     */
+    service: z.object({
+        /** Base generated interface id; defaults to `mcp.tools.<server id>`. */
         interfaceId: z.string().regex(/^mcp\.tools\.[a-z0-9][a-z0-9.-]*$/).optional(),
+        /** Tools matching a group go to `<interfaceId>.<group name>` (first match wins). */
+        groups: z.array(mcpToolGroupConfigSchema).optional(),
         session: z.object({
             idleTimeoutMs: z.number().int().positive().optional(),
             maxLifetimeMs: z.number().int().positive().optional(),
@@ -23,15 +36,15 @@ export const mcpExposeConfigSchema = z.object({
     forward: z.object({
         sharing: z.literal("exclusive").default("exclusive"),
     }).optional(),
-}).refine((expose) => expose.typed !== undefined || expose.forward !== undefined, {
-    message: "Expose the MCP server typed, forwarded, or both",
+}).refine((expose) => expose.service !== undefined || expose.forward !== undefined, {
+    message: "Expose the MCP server as a service, forwarded, or both",
 });
 
 export const mcpServerConfigSchema = z.object({
     id: z.string().regex(/^[a-z0-9][a-z0-9.-]*$/, "must contain only lowercase letters, digits, dots, and hyphens"),
     description: z.string().optional(),
     transport: mcpUpstreamConfigSchema,
-    expose: mcpExposeConfigSchema.default({ typed: {} }),
+    expose: mcpExposeConfigSchema.default({ service: {} }),
 });
 
 export type McpServerConfig = z.infer<typeof mcpServerConfigSchema>;
@@ -50,8 +63,8 @@ export interface HostMcpServerOptions {
 }
 
 export interface HostedMcpServer {
-    /** The typed bridge, if the server is exposed typed. */
-    readonly typed: McpToolBridgeRegistration | undefined;
+    /** The MCP service bridge, if the server is exposed as a service. */
+    readonly service: McpToolBridgeRegistration | undefined;
     dispose(): Promise<void>;
 }
 
@@ -61,7 +74,7 @@ export async function hostMcpServer(options: HostMcpServerOptions): Promise<Host
     const upstream = upstreamFromConfig(server.transport, { fetch: options.fetch });
     const reflection = options.connection.enableReflection({ serviceId: options.serviceId });
     let forward: InterfaceRegistration | undefined;
-    let typed: McpToolBridgeRegistration | undefined;
+    let service: McpToolBridgeRegistration | undefined;
     try {
         if (server.expose.forward !== undefined) {
             forward = serveMcpForward({
@@ -72,17 +85,19 @@ export async function hostMcpServer(options: HostMcpServerOptions): Promise<Host
                 log: options.log,
             });
         }
-        if (server.expose.typed !== undefined) {
-            typed = await registerMcpToolBridge({
+        if (server.expose.service !== undefined) {
+            service = await registerMcpToolBridge({
                 connection: options.connection,
                 serviceId: options.serviceId,
-                interfaceId: server.expose.typed.interfaceId ?? `mcp.tools.${server.id}`,
+                interfaceId: server.expose.service.interfaceId ?? `mcp.tools.${server.id}`,
+                groups: server.expose.service.groups,
                 serviceDescription: server.description,
                 factory: upstreamSessionFactory(upstream, { clientInfo: options.clientInfo }),
                 enableReflection: false,
-                ...server.expose.typed.session,
+                ...server.expose.service.session,
                 initialAuthenticationState: options.initialAuthenticationState,
                 onRefreshError: options.onRefreshError,
+                log: options.log,
             });
         }
     } catch (error) {
@@ -91,9 +106,9 @@ export async function hostMcpServer(options: HostMcpServerOptions): Promise<Host
         throw error;
     }
     return {
-        typed,
+        service,
         dispose: async () => {
-            await typed?.dispose();
+            await service?.dispose();
             forward?.dispose();
             reflection.dispose();
         },

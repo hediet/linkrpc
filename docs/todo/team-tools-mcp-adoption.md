@@ -9,7 +9,7 @@ runs its own copies of the HubRPC packages under
 | Team Tools copy | Status | Replacement |
 | --- | --- | --- |
 | `hubrpc-mcp` | Fork of the script server (`runLinkRpcScript`, `McpSocketHost`) | `@hediet/linkrpc-mcp`, `@hediet/linkrpc-mcp/node` |
-| `hubrpc-mcp-bridge` | The original typed bridge; not used by the extension | `@hediet/linkrpc-mcp/hub` (`registerMcpToolBridge`, `hostMcpServer`) |
+| `hubrpc-mcp-bridge` | The original typed bridge (now the service mode); not used by the extension | `@hediet/linkrpc-mcp/hub` (`registerMcpToolBridge`, `hostMcpServer`) |
 | `hubrpc-cli` `mcpForward*` | `hub mcp-forward` producer and the `vscode.mcp-forward` contract | `@hediet/linkrpc-mcp/hub` (`serveMcpForward`, `mcpForwardInterface`), `linkrpc hub mcp-forward`/`mcp-publish` |
 
 This plan covers the MCP part only. Replacing the rest of the HubRPC copies
@@ -37,7 +37,7 @@ This plan covers the MCP part only. Replacing the rest of the HubRPC copies
 | --- | --- | --- |
 | Script server per MCP session, in-process default connection, managed identity | Yes: `McpSocketHost` + `LinkRpcMcpServer({ defaultConnection })` | Unchanged API. Gains MCP cancellation. |
 | Loopback HTTP / socket hosting with bearer token | Yes: `McpSocketHost` | |
-| Aggregating forwarded servers | Yes: `HubMcpAggregator` over any signed channel | Also aggregates typed bridges; accepts `mcp.forward` and `vscode.mcp-forward`. |
+| Aggregating forwarded servers | Yes: `HubMcpAggregator` over any signed channel | Also aggregates MCP services; accepts `mcp.forward` and `vscode.mcp-forward`. |
 | Hosting an aggregator-only MCP server over HTTP | **Gap**: `McpSocketHost.createSession` can only create a `LinkRpcMcpServer` | See decision 1. |
 | Trusted (ungated) aggregation | Possible: the aggregator uses whatever channel it gets | See decision 2. |
 | Tool names `<serviceId>__<toolName>` | **Changes**: hashed names (`<prefix>__<sha256>`), unique and ≤ 64 characters | Saved tool references to forwarded tools break once. |
@@ -54,7 +54,7 @@ This plan covers the MCP part only. Replacing the rest of the HubRPC copies
    entry stays separate.
 2. **Identity of the aggregator.** Keep the trusted ungated participant (no
    consent for forwarded tools, today's behavior), or aggregate as the
-   workspace's managed identity so forwarded servers need a capability and typed
+   workspace's managed identity so forwarded servers need a capability and service
    tools get per-tool consent.
 
 ## Steps
@@ -62,7 +62,7 @@ This plan covers the MCP part only. Replacing the rest of the HubRPC copies
 Each step is releasable on its own.
 
 1. **Producers** (no Team Tools code change): run `linkrpc hub mcp-forward`
-   (or `mcp-publish --typed --forward`) from `@hediet/linkrpc-cli`.
+   (or `mcp-publish --service --forward`) from `@hediet/linkrpc-cli`.
    Acceptance: the existing Team Tools aggregator lists the new producers' tools.
 2. **Script server**: replace `@vscode/hubrpc-mcp` with `@hediet/linkrpc-mcp`
    in `HubRpcMcpFeature.ts`; update `build.js` to walk the QuickJS packages from
@@ -73,8 +73,8 @@ Each step is releasable on its own.
    script.
 3. **Aggregator**: replace `HubRpcMcpAggregator/` with `HubMcpAggregator` +
    `McpToolHost` (or with step 2's server, per decision 1), using the identity
-   chosen in decision 2. Acceptance: forwarded and typed servers appear, a
-   denied typed tool returns a permission error, and dynamic add/remove updates
+   chosen in decision 2. Acceptance: forwarded servers and MCP services appear, a
+   denied service tool returns a permission error, and dynamic add/remove updates
    the tool list.
 4. **Cleanup**: delete `packages/hubrpc/hubrpc-mcp`,
    `packages/hubrpc/hubrpc-mcp-bridge`, and the `mcpForward*` files of

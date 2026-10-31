@@ -6,12 +6,13 @@
  * Cast:
  * - the hub admin, who issues capabilities;
  * - a host, which publishes the stateful stdio MCP server
- *   `testFixtures/notesServer.mjs` under service id `notes`, both typed and
- *   forwarded;
- * - Alice and Bob, hub clients calling the typed tools as LinkRPC methods;
+ *   `testFixtures/notesServer.mjs` under service id `notes`, both as a service
+ *   and forwarded;
+ * - Alice and Bob, hub clients calling the tools as LinkRPC methods;
  * - an agent, an MCP client that sees the hub through `HubMcpAggregator` (what
  *   `linkrpc hub mcp` runs), through `mcp.forward`, and through the script tools.
  */
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -38,6 +39,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { LinkRpcMcpServer } from "../server";
 import { HubMcpAggregator } from "./aggregate/aggregator";
 import { McpForwardClientTransport } from "./forward/clientTransport";
+import { serveMcpForwardInstance, streamInstanceTransport } from "./forward/instance";
 import { type HostedMcpServer, hostMcpServer, mcpServerConfigSchema } from "./host";
 import { singleConnectionPool } from "./identity";
 import { McpToolHost } from "./toolHost";
@@ -52,8 +54,8 @@ beforeAll(async () => {
     world = await createWorld();
 
     // The host publishes one MCP server in both modes. In production this is
-    // `linkrpc hub mcp-publish --typed --forward -- node notesServer.mjs` or an
-    // entry in personal-bot's mcp-participant config.
+    // `linkrpc hub mcp-publish --service --forward --group danger=clear -- node notesServer.mjs`
+    // or an entry in personal-bot's mcp-participant config.
     hosted = await hostMcpServer({
         connection: world.hostConnection,
         serviceId: "notes",
@@ -61,7 +63,9 @@ beforeAll(async () => {
             id: "notes",
             description: "A notes MCP server",
             transport: { kind: "stdio", command: process.execPath, args: [notesServer] },
-            expose: { typed: {}, forward: {} },
+            // Tools whose name contains "clear" get their own interface, so a
+            // capability can cover `mcp.tools.notes` without them.
+            expose: { service: { groups: [{ name: "danger", keywords: ["clear"] }] }, forward: {} },
         }),
         log: () => {},
     });
@@ -73,7 +77,7 @@ afterAll(async () => {
 });
 
 describe("MCP servers on a LinkRPC hub", () => {
-    it("1. the host publishes a typed and a forwarded interface under one service id", async () => {
+    it("1. the host publishes the MCP server as a service and forwarded under one service id", async () => {
         const admin = await world.client("admin", [allOf("notes")]);
 
         const directory = await admin.call("notes::hubrpc.directory::list", {}) as {
@@ -89,27 +93,29 @@ describe("MCP servers on a LinkRPC hub", () => {
             "mcp.tools",
             "mcp.server",
             "mcp.tools.notes",
+            "mcp.tools.notes.danger",
           ]
         `);
 
-        // `mcp.tools.notes` has one method per MCP tool. Its schema is the tool's
-        // input schema plus `sessionId`; MCP hints become LinkRPC annotations.
+        // The generated interfaces have one method per MCP tool. A method's schema
+        // is the tool's input schema plus `sessionId`; MCP hints become LinkRPC
+        // annotations.
         const catalog = await admin.call("notes::mcp.tools::listTools", {}) as {
-            interfaceId: string;
-            interfaceHash: string;
-            tools: { name: string; method: string }[];
+            interfaces: { interfaceId: string; interfaceHash: string; toolCount: number }[];
+            tools: { name: string; interfaceId: string; method: string }[];
         };
-        expect(catalog.tools.map((tool) => `${tool.name} -> ${catalog.interfaceId}::${tool.method}`))
+        expect(catalog.tools.map((tool) => `${tool.name} -> ${tool.interfaceId}::${tool.method}`))
             .toMatchInlineSnapshot(`
               [
                 "add_note -> mcp.tools.notes::add_note",
                 "list_notes -> mcp.tools.notes::list_notes",
-                "clear_notes -> mcp.tools.notes::clear_notes",
+                "clear_notes -> mcp.tools.notes.danger::clear_notes",
               ]
             `);
+        const notesInterface = catalog.interfaces.find((entry) => entry.interfaceId === "mcp.tools.notes")!;
         const schema = await admin.call("notes::hubrpc.schemas::get", {
-            interfaceId: catalog.interfaceId,
-            hash: catalog.interfaceHash,
+            interfaceId: notesInterface.interfaceId,
+            hash: notesInterface.interfaceHash,
         }) as { schema: { methods: Record<string, { params: unknown; annotations?: unknown }> } };
         expect(schema.schema.methods.add_note).toMatchInlineSnapshot(`
           {
@@ -153,9 +159,6 @@ describe("MCP servers on a LinkRPC hub", () => {
             .map(([name, method]) => [name, method.annotations ?? {}]))).toMatchInlineSnapshot(`
               {
                 "add_note": {},
-                "clear_notes": {
-                  "dangerous": true,
-                },
                 "list_notes": {
                   "readOnly": true,
                 },
@@ -163,10 +166,10 @@ describe("MCP servers on a LinkRPC hub", () => {
             `);
     });
 
-    it("2. typed: every hub client calls tools as LinkRPC methods on one shared MCP session", async () => {
-        const typedTools = [allMembers("notes", "mcp.tools.notes")];
-        const alice = await world.client("alice", typedTools);
-        const bob = await world.client("bob", typedTools);
+    it("2. service: every hub client calls tools as LinkRPC methods on one shared MCP session", async () => {
+        const noteTools = [allMembers("notes", "mcp.tools.notes")];
+        const alice = await world.client("alice", noteTools);
+        const bob = await world.client("bob", noteTools);
 
         await alice.call("notes::mcp.tools.notes::add_note", { text: "from Alice" });
         // The result is the complete MCP CallToolResult.
@@ -181,9 +184,49 @@ describe("MCP servers on a LinkRPC hub", () => {
                 ],
               }
             `);
+
+        // The grouped tool is not covered by a capability for `mcp.tools.notes`.
+        expect(await errorOf(alice.call("notes::mcp.tools.notes.danger::clear_notes", {})))
+            .toMatchInlineSnapshot(`
+              {
+                "code": -32401,
+                "message": "permission does not address this call: interfaceId "mcp.tools.notes.danger" does not match exact "mcp.tools.notes"",
+              }
+            `);
     });
 
-    it("3. typed: an exclusive session is a separate MCP session (here: a separate process)", async () => {
+    it("3. service: generic `mcp.tools::callTool` calls any tool by name", async () => {
+        // For clients that do not generate code from interfaces. One capability
+        // for `callTool` covers every tool of the server, whatever its group.
+        const generic = await world.client("generic", [members("notes", "mcp.tools", ["listTools", "callTool"])]);
+        expect(text(await generic.call("notes::mcp.tools::callTool", { name: "list_notes" })))
+            .toMatchInlineSnapshot(`"["from Alice","from Bob"]"`);
+        expect(await errorOf(generic.call("notes::mcp.tools::callTool", { name: "no_such_tool" })))
+            .toMatchInlineSnapshot(`
+              {
+                "code": -32602,
+                "message": "Unknown MCP tool: no_such_tool",
+              }
+            `);
+
+        // A parameter matcher narrows `callTool` to named tools. Matchers list
+        // every parameter, so the call must pass `arguments`.
+        const reader = await world.client("reader", [{
+            ...members("notes", "mcp.tools", ["callTool"]),
+            params: { name: { exact: "list_notes" }, arguments: { any: true } },
+        }]);
+        expect(text(await reader.call("notes::mcp.tools::callTool", { name: "list_notes", arguments: {} })))
+            .toMatchInlineSnapshot(`"["from Alice","from Bob"]"`);
+        expect(await errorOf(reader.call("notes::mcp.tools::callTool", { name: "clear_notes", arguments: {} })))
+            .toMatchInlineSnapshot(`
+              {
+                "code": -32401,
+                "message": "params: param "name" does not match",
+              }
+            `);
+    });
+
+    it("4. service: an exclusive session is a separate MCP session (here: a separate process)", async () => {
         const alice = await world.client("alice", [
             allMembers("notes", "mcp.tools.notes"),
             allMembers("notes", "mcp.server"),
@@ -213,7 +256,7 @@ describe("MCP servers on a LinkRPC hub", () => {
         await alice.call("notes::mcp.server::closeSession", { sessionId });
     });
 
-    it("4. typed: capabilities apply per tool", async () => {
+    it("5. service: capabilities apply per tool", async () => {
         // The agent may discover services and read notes, but not add or clear
         // them. (On a real hub, `linkrpc hub mcp` requests directory access
         // through consent instead of holding it up front.)
@@ -270,7 +313,7 @@ describe("MCP servers on a LinkRPC hub", () => {
           {
             "content": [
               {
-                "text": "permission does not address this call: member "clear_notes" does not match allowed patterns [exact "list_notes"]",
+                "text": "permission does not address this call: interfaceId "mcp.tools.notes.danger" does not match exact "mcp.tools.notes"",
                 "type": "text",
               },
             ],
@@ -279,7 +322,7 @@ describe("MCP servers on a LinkRPC hub", () => {
         `);
     });
 
-    it("5. forward: verbatim MCP, one capability per server, own MCP session per connection", async () => {
+    it("6. forward: verbatim MCP, one capability per server, own MCP session per connection", async () => {
         // Without `mcp.forward::connect`, the hub rejects the connection. An MCP SDK
         // client only reports the closed connection; the permission error goes to
         // the transport's `onerror`, which `linkrpc hub mcp` logs to stderr.
@@ -292,7 +335,7 @@ describe("MCP servers on a LinkRPC hub", () => {
         `);
 
         // With it, the agent gets the whole MCP server: every tool, and features
-        // the typed mode does not carry, such as resources.
+        // the service mode does not carry, such as resources.
         const agent = await world.client("forwarding-agent", [members("notes", "mcp.forward", ["connect"])]);
         const mcp = await connectForwarded(agent.sender);
         expect((await mcp.listTools()).tools.map((tool) => tool.name)).toMatchInlineSnapshot(`
@@ -316,12 +359,41 @@ describe("MCP servers on a LinkRPC hub", () => {
         `);
 
         // That connection has its own process (closed with the connection): the
-        // shared typed session is unaffected.
+        // shared service session is unaffected.
         const alice = await world.client("alice", [allMembers("notes", "mcp.tools.notes")]);
         expect(text(await alice.call("notes::mcp.tools.notes::list_notes", {}))).toMatchInlineSnapshot(`"["from Alice","from Bob"]"`);
     });
 
-    it("6. scripts: one MCP server with the script tools and the hub's MCP tools", async () => {
+    it("7. forward a running MCP server: one connection at a time, same process", async () => {
+        // `linkrpc hub mcp-forward --stdio` attached to an MCP server that is
+        // already running (here: a child process whose stdio we hold).
+        const running = spawn(process.execPath, [notesServer], { stdio: ["pipe", "pipe", "inherit"] });
+        const instance = serveMcpForwardInstance({
+            connection: world.runningConnection,
+            serviceId: "running",
+            transport: streamInstanceTransport(running.stdout, running.stdin),
+        });
+        cleanup.push(() => { instance.dispose(); running.kill(); });
+        const agent = await world.client("instance-agent", [members("running", "mcp.forward", ["connect"])]);
+
+        const first = await connectForwarded(agent.sender, "running");
+        await first.callTool({ name: "add_note", arguments: { text: "kept by the running server" } });
+        // While one connection is open, the next is turned away ("in use"; the MCP
+        // SDK client only reports the closed connection).
+        expect(await errorOf(connectForwarded(agent.sender, "running"))).toMatchInlineSnapshot(`
+          {
+            "code": -32000,
+            "message": "MCP error -32000: Connection closed",
+          }
+        `);
+        await first.close();
+
+        // A later connection reaches the same process, so the state is still there.
+        const second = await connectForwarded(agent.sender, "running");
+        expect(text(await second.callTool({ name: "list_notes" }))).toMatchInlineSnapshot(`"["kept by the running server"]"`);
+    });
+
+    it("8. scripts: one MCP server with the script tools and the hub's MCP tools", async () => {
         // `linkrpc hub mcp --scripts`: the three script tools, then the aggregated
         // MCP tools. Scripts can call any hub service the principal may call,
         // including the generated MCP tool methods.
@@ -376,11 +448,13 @@ async function createWorld() {
     const hub = new Hub();
     createHubServiceInterfaces(hub);
     const host = hubRegisterServiceId(hub, "notes");
-    cleanup.push(() => host.dispose());
+    const runningHost = hubRegisterServiceId(hub, "running");
+    cleanup.push(() => host.dispose(), () => runningHost.dispose());
     let seed = 10;
 
     return {
         hostConnection: host.connection,
+        runningConnection: runningHost.connection,
 
         /** A hub client signing as a fresh principal holding `permissions`. */
         async client(_name: string, permissions: Permission[]) {
@@ -452,9 +526,9 @@ async function connectMcp(server: Pick<Server, "connect">, dispose: () => unknow
     return client;
 }
 
-async function connectForwarded(sender: HubSigningSender): Promise<Client> {
+async function connectForwarded(sender: HubSigningSender, serviceId = "notes"): Promise<Client> {
     const client = new Client({ name: "demo-agent", version: "1" });
-    await client.connect(new McpForwardClientTransport(sender, "notes"));
+    await client.connect(new McpForwardClientTransport(sender, serviceId));
     cleanup.push(() => client.close());
     return client;
 }

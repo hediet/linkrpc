@@ -7,10 +7,11 @@ import { z } from "zod";
  *
  * - `mcp.forward`: transparent forwarding. One streaming `connect` request
  *   carries one complete MCP session as opaque JSON-RPC frames.
- * - `mcp.tools`: catalog of a typed bridge. Each MCP tool is also a method of
- *   the bridge's generated `mcp.tools.<name>` interface.
- * - `mcp.server`: lifecycle, authentication, and bridge-session state of a
- *   typed bridge.
+ * - `mcp.tools`: generic access to an MCP service: the tool catalog and
+ *   `callTool`. Each tool is also a method of a generated `mcp.tools.<name>`
+ *   interface (or `mcp.tools.<name>.<group>` for grouped tools).
+ * - `mcp.server`: lifecycle, authentication, and bridge-session state of an
+ *   MCP service.
  */
 
 const forwardMembers = {
@@ -75,6 +76,16 @@ const sessionParamsSchema = z.object({
         ),
 });
 
+/** Complete MCP `CallToolResult`, as returned by every generated tool method. */
+export const callToolResultSchema = z
+    .object({
+        content: z.array(z.unknown()),
+        structuredContent: z.unknown().optional(),
+        isError: z.boolean().optional(),
+        _meta: z.unknown().optional(),
+    })
+    .passthrough();
+
 const toolAnnotationsSchema = z
     .object({
         title: z.string().optional(),
@@ -85,10 +96,12 @@ const toolAnnotationsSchema = z
     })
     .passthrough();
 
-/** One MCP tool of a typed bridge and the generated method that invokes it. */
+/** One MCP tool of an MCP service and the generated method that invokes it. */
 export const mcpCatalogToolSchema = z.object({
     name: z.string(),
-    /** Member of the bridge's generated interface that invokes this tool. */
+    /** Generated interface (`mcp.tools.<name>[.<group>]`) containing the tool's method. */
+    interfaceId: z.string(),
+    /** Member of `interfaceId` that invokes this tool. */
     method: z.string(),
     title: z.string().optional(),
     description: z.string().optional(),
@@ -99,40 +112,51 @@ export const mcpCatalogToolSchema = z.object({
 
 export type McpCatalogTool = z.infer<typeof mcpCatalogToolSchema>;
 
-export const mcpToolCatalogSchema = z.object({
-    /** Generated interface (`mcp.tools.<name>`) whose methods invoke the tools. */
+export const mcpToolInterfaceSchema = z.object({
     interfaceId: z.string(),
     interfaceHash: z.string(),
+    toolCount: z.number().int().nonnegative(),
+});
+
+export const mcpToolCatalogSchema = z.object({
+    /** The non-empty generated interfaces. */
+    interfaces: z.array(mcpToolInterfaceSchema),
     tools: z.array(mcpCatalogToolSchema),
 });
 
 export type McpToolCatalog = z.infer<typeof mcpToolCatalogSchema>;
 
-/** Catalog of a typed bridge. Tools are invoked through the generated interface only. */
+/**
+ * Generic access to an MCP service. Each tool can also be called through its
+ * generated method, which lets capabilities and consent name single tools.
+ */
 export const mcpToolsInterface = defineInterface(
     {
         id: "mcp.tools",
         description:
-            "Catalog of the MCP tools of a typed bridge. Each tool is invoked through its "
-            + "method on the generated `mcp.tools.<name>` interface, so capabilities apply per tool.",
+            "Generic access to the MCP tools of an MCP service. Each tool is also a method "
+            + "of a generated `mcp.tools.<name>` interface, so capabilities can apply per tool.",
     },
     {
         listTools: requestType(z.object({}), mcpToolCatalogSchema),
+        callTool: requestType(
+            sessionParamsSchema.extend({
+                name: z.string(),
+                arguments: z.record(z.string(), z.unknown()).optional(),
+            }),
+            callToolResultSchema,
+            {
+                description:
+                    "Call a tool by name. Grant it with a `name` parameter matcher to allow only "
+                    + "specific tools.",
+            },
+        ),
     },
 );
 
 /** Prefix of generated per-server tool interfaces. */
 export const generatedMcpToolsInterfacePrefix = "mcp.tools.";
 
-/** Complete MCP `CallToolResult`, as returned by every generated tool method. */
-export const callToolResultSchema = z
-    .object({
-        content: z.array(z.unknown()),
-        structuredContent: z.unknown().optional(),
-        isError: z.boolean().optional(),
-        _meta: z.unknown().optional(),
-    })
-    .passthrough();
 
 export const mcpAuthenticationStateSchema = z.discriminatedUnion("status", [
     z.object({ status: z.literal("not-required") }),
@@ -175,8 +199,7 @@ export const mcpServerStateSchema = z.object({
     authentication: mcpAuthenticationStateSchema,
     tools: z.object({
         status: z.enum(["unknown", "loading", "ready", "error"]),
-        interfaceId: z.string().optional(),
-        interfaceHash: z.string().optional(),
+        interfaces: z.array(mcpToolInterfaceSchema).optional(),
         count: z.number().int().nonnegative().optional(),
         error: z.string().optional(),
     }),
@@ -189,7 +212,7 @@ export const mcpServerStateSchema = z.object({
 
 export type McpServerState = z.infer<typeof mcpServerStateSchema>;
 
-/** Lifecycle, authentication, tool-catalog, and session state of a typed bridge. */
+/** Lifecycle, authentication, tool-catalog, and session state of an MCP service. */
 export const mcpServerInterface = defineInterface(
     {
         id: "mcp.server",
