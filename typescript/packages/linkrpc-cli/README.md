@@ -935,9 +935,11 @@ idle minutes.
 
 ### Hub MCP aggregation
 
-`linkrpc hub mcp` is a lightweight stdio MCP server that discovers services
-exposing `vscode.mcp-forward` in the selected Hub and aggregates their tools.
-No service IDs, filters, or principal overrides are required:
+`linkrpc hub mcp` is a lightweight stdio MCP server that discovers every MCP
+server published in the selected Hub and aggregates their tools: typed bridges
+(`mcp.tools`) and forwarded servers (`mcp.forward`, or the legacy
+`vscode.mcp-forward`). No service IDs, filters, or principal overrides are
+required:
 
 ```json
 {
@@ -955,8 +957,15 @@ Endpoint/context/environment and identity selection follow the normal Hub CLI
 rules. An explicit endpoint can be supplied before `mcp`, for example
 `linkrpc hub --endpoint npipe://./pipe/my-hub mcp`. Signing and capability
 negotiation remain enabled by default; discovery does not bypass authorization.
-Inaccessible directories and failed servers are reported on stderr; stdout
-contains only MCP protocol frames.
+Typed tools are called through their generated methods, so capabilities and
+consent apply per tool; a forwarded server needs one capability for all its
+tools. Inaccessible directories and failed servers are reported on stderr;
+stdout contains only MCP protocol frames.
+
+`--scripts` additionally serves the LinkRPC script tools (`runLinkRpcScript`,
+`awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp` on the same
+connection, so one MCP entry gives both the hub's MCP tools and scripted access
+to every hub service.
 
 The command watches directory changes, refreshes changed tool lists (including
 paginated lists), and retries failed connections while they remain advertised.
@@ -965,7 +974,23 @@ remaining unique and MCP-safe even for long service paths. Descriptions identify
 the source service. Disconnecting stdio closes this client's forwarding sessions.
 This version aggregates tools, not resources, prompts, or sampling.
 
-The producer stays separate:
+### Publishing MCP servers
+
+Producers stay separate. `mcp-publish` publishes one MCP server, given as a
+command after `--` or as a Streamable HTTP `--url` (with repeatable `--header`):
+
+```sh
+linkrpc hub mcp-publish --typed --forward --serviceId <authorized-service-id> -- npx -y @modelcontextprotocol/server-everything
+```
+
+- `--typed` exposes every MCP tool as a method of a generated
+  `mcp.tools.<name>` interface (`--name`, derived from the service ID by
+  default). All callers share one MCP session; a caller can open an exclusive
+  one with `mcp.server::openSession`.
+- `--forward` relays MCP verbatim over `mcp.forward`. Each connection gets its
+  own MCP session: a fresh child process, or a new HTTP session.
+
+`mcp-forward` is shorthand for `mcp-publish --forward`:
 
 ```sh
 linkrpc hub mcp-forward --serviceId <authorized-service-id> -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
@@ -975,7 +1000,8 @@ Manage that producer and `component-explorer serve -p <same-config>` with your
 workspace daemon. The aggregator opens lightweight MCP connections; it does not
 start workspace builds or explorer daemons. Each forwarded connection spawns
 the configured MCP child, so producers must use attach-only commands when
-heavyweight services are managed separately.
+heavyweight services are managed separately. Children inherit the producer's
+environment plus `--env` values.
 
 ### Participant proxy
 

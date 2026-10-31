@@ -44,6 +44,7 @@ linkrpc is layered. Each chapter builds on the chapters before it. The **optiona
 | 07 | [Capabilities](07-capabilities.md) | optional | `SignedCapability`, `$hubrpcUnsigned.capabilities`, the authorization gate |
 | 08 | [Hub interfaces](08-hub-interfaces.md) | optional | `hubAccess`, `hubGrantedServiceId`, `hubServiceIdRegistry` wire contracts |
 | 09 | [Directory](09-hub-directory.md) | required | `hubrpc.directory`, root/addressed views, referrals, walking and graph watches |
+| 10 | [MCP interfaces](10-mcp-interfaces.md) | optional | `mcp.forward`, generated `mcp.tools.<name>`, `mcp.tools`, `mcp.server` |
 
 > **Note.** Streaming (03) is optional to *implement* but is placed before interfaces (04) because an interface schema declares its members' stream payload types — the `$stream` mechanism must be defined before the schema fields that type it.
 
