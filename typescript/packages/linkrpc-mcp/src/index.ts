@@ -4,3 +4,4 @@ export * from "./senderProvider";
 export * from "./explore";
 export * from "./sandbox";
 export { CONNECTION_DTS } from "./connectionDts";
+export * from "./hub";

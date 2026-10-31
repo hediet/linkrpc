@@ -1,12 +1,14 @@
 /// <reference path="./md.d.ts" />
-import { McpServer as SdkMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, RpcError } from "@hediet/linkrpc";
 import type { ResolvedEndpoint } from "@hediet/linkrpc/node";
 import { z } from "zod";
 import { ConnectionPool, type DefaultTransport, type HubAccess, type IConnectionPool, type PooledConnection } from "./connectionPool";
-import { type HubSenderProvider, ProviderPool } from "./senderProvider";
+import { type HubSenderProvider, type McpSessionInfo, ProviderPool } from "./senderProvider";
+import { HubMcpAggregator, type HubMcpAggregatorOptions } from "./hub/aggregate/aggregator";
+import { type HostedTool, McpToolHost, type McpToolSource, zodTool } from "./hub/toolHost";
 import { summarizeGrants } from "./grants";
 import { startSandbox, type SandboxHostApi } from "./sandbox";
 import { TaskRegistry } from "./taskRegistry";
@@ -55,6 +57,18 @@ export interface LinkRpcMcpServerOptions {
      * exclusive with `pool` / `provider`.
      */
     readonly defaultConnection?: () => DefaultTransport;
+    /** MCP session passed to {@link provider}. */
+    readonly providerSession?: McpSessionInfo;
+    /**
+     * Rejects hub results whose JSON exceeds this many bytes before they enter
+     * the sandbox. Unlimited by default.
+     */
+    readonly maxHubResultBytes?: number;
+    /**
+     * Also list the tools of MCP servers published on the default connection's
+     * hub (typed bridges and forwarded servers), next to the script tools.
+     */
+    readonly hubTools?: boolean | Omit<HubMcpAggregatorOptions, "clientInfo">;
     /** Observes completed MCP tool calls exactly as their result is returned to the client. */
     readonly onToolCall?: (call: McpToolCall) => void;
     /** Observes every sandbox `con.explore` call, including calls that fail. */
@@ -98,41 +112,57 @@ export class LinkRpcMcpServer {
         return server;
     }
 
-    private readonly _mcp: SdkMcpServer;
+    private readonly _mcp: Server;
     private readonly _pool: IConnectionPool;
+    private readonly _maxHubResultBytes: number | undefined;
+    private readonly _hubTools: Promise<HubMcpAggregator> | undefined;
     private readonly _tasks = new TaskRegistry();
     private readonly _onToolCall: ((call: McpToolCall) => void) | undefined;
     private readonly _onExploreCall: ((call: McpExploreCall) => void) | undefined;
 
     public constructor(options: LinkRpcMcpServerOptions = {}) {
-        this._mcp = new SdkMcpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+        this._mcp = new Server(
+            { name: SERVER_NAME, version: SERVER_VERSION },
+            { capabilities: { tools: { listChanged: true } } },
+        );
+        this._maxHubResultBytes = options.maxHubResultBytes;
         this._onToolCall = options.onToolCall;
         this._onExploreCall = options.onExploreCall;
         this._pool = options.pool
             ?? (options.provider
-                ? new ProviderPool(options.provider)
+                ? new ProviderPool(options.provider, options.providerSession)
                 : new ConnectionPool({
                     defaultEndpoint: options.defaultEndpoint,
                     ...(options.defaultConnection
                         ? { defaultTransport: options.defaultConnection }
                         : {}),
                 }));
-        this._registerTools();
+        const host = new McpToolHost(this._mcp);
+        host.addTools(this._createTools());
+        if (options.hubTools !== undefined && options.hubTools !== false) {
+            const aggregatorOptions = options.hubTools === true ? {} : options.hubTools;
+            this._hubTools = this._pool.resolve(undefined).then((pooled) =>
+                new HubMcpAggregator(pooled.channel, { clientInfo: { name: SERVER_NAME, version: SERVER_VERSION }, ...aggregatorOptions }));
+            host.addSource(_lazySource(this._hubTools));
+        }
     }
 
     public async connect(transport: Transport): Promise<void> {
         await this._mcp.connect(transport);
     }
 
+    /** Cancels parked tasks, closes hub connections owned by the pool, and closes the MCP connection. */
     public dispose(): void {
+        void this._hubTools?.then((aggregator) => aggregator.dispose(), () => { /* never started */ });
         this._tasks.dispose();
         this._pool.dispose();
+        void this._mcp.close().catch(() => { /* already closed */ });
     }
 
-    private _registerTools(): void {
-        this._mcp.registerTool(
-            "runLinkRpcScript",
+    private _createTools(): HostedTool[] {
+        return [zodTool(
             {
+                name: "runLinkRpcScript",
                 title: "Run JS against a linkrpc hub",
                 description:
                     "Evaluate a JS function inside a QuickJS sandbox with `con` (the live hub " +
@@ -210,7 +240,7 @@ export class LinkRpcMcpServer {
                     readOnlyHint: true,
                 },
             },
-            async (args) => this._observeToolCall("runLinkRpcScript", args, async () => {
+            async (args, extra) => this._observeToolCall("runLinkRpcScript", args, async () => {
                 let pooled: PooledConnection;
                 try {
                     pooled = await this._pool.resolve(args.connection);
@@ -273,13 +303,13 @@ export class LinkRpcMcpServer {
                         // with guidance toward `con.requestAccess(...)`.
                         try {
                             const result = await send();
-                            return JSON.stringify(result ?? null);
+                            return this._encodeHubResult(result);
                         } catch (e) {
                             if (requestPermission && _isPermissionError(e)) {
                                 const granted = await _autoRequestAccess(pooled.session, method);
                                 if (granted) {
                                     const result = await send();
-                                    return JSON.stringify(result ?? null);
+                                    return this._encodeHubResult(result);
                                 }
                             }
                             throw _enrichPermissionError(e, method);
@@ -331,6 +361,7 @@ export class LinkRpcMcpServer {
                         foregroundMs: args.foregroundMs,
                         maxLifetimeMs: args.maxLifetimeMs,
                         label: args.label,
+                        signal: extra.signal,
                     });
 
                     if (outcome.status === "completed") {
@@ -380,11 +411,9 @@ export class LinkRpcMcpServer {
                     disposeTrace();
                 }
             }),
-        );
-
-        this._mcp.registerTool(
-            "awaitLinkRpcTask",
+        ), zodTool(
             {
+                name: "awaitLinkRpcTask",
                 title: "Wait for a parked linkrpc task",
                 description:
                     "Wait up to `timeoutMs` for a background task started by `runLinkRpcScript` " +
@@ -400,18 +429,16 @@ export class LinkRpcMcpServer {
                 },
                 annotations: { readOnlyHint: true },
             },
-            async (args) => this._observeToolCall("awaitLinkRpcTask", args, async () => {
-                const res = await this._tasks.awaitTask(args.taskId, args.timeoutMs ?? 30_000);
+            async (args, extra) => this._observeToolCall("awaitLinkRpcTask", args, async () => {
+                const res = await this._tasks.awaitTask(args.taskId, args.timeoutMs ?? 30_000, extra.signal);
                 if (res.status === "unknown") {
                     return _errorResult(`No task with id ${args.taskId}`);
                 }
                 return _presentTaskResult(res, args.presentation);
             }),
-        );
-
-        this._mcp.registerTool(
-            "cancelLinkRpcTask",
+        ), zodTool(
             {
+                name: "cancelLinkRpcTask",
                 title: "Cancel a parked linkrpc task",
                 description:
                     "Soft-abort a background task started by `runLinkRpcScript` and return its " +
@@ -430,8 +457,16 @@ export class LinkRpcMcpServer {
                 }
                 return _presentTaskResult(res, args.presentation);
             }),
-        );
+        )];
+    }
 
+    private _encodeHubResult(result: unknown): string {
+        const json = JSON.stringify(result ?? null);
+        if (this._maxHubResultBytes !== undefined
+            && new TextEncoder().encode(json).byteLength > this._maxHubResultBytes) {
+            throw new Error(`Hub result exceeds the ${this._maxHubResultBytes}-byte sandbox input limit`);
+        }
+        return json;
     }
 
     private async _observeToolCall<Args, Result>(
@@ -455,6 +490,28 @@ export class LinkRpcMcpServer {
             // Observability must not change exploration behavior.
         }
     }
+}
+
+/** A tool source that becomes available once `pending` resolves; failures are logged, not fatal. */
+function _lazySource(pending: Promise<McpToolSource>): McpToolSource {
+    let current: McpToolSource | undefined;
+    const listeners = new Set<() => void>();
+    const ready = pending.then(async (source) => {
+        current = source;
+        source.onDidChange(() => { for (const listener of listeners) listener(); });
+        for (const listener of listeners) listener();
+        await source.ready;
+    }).catch((error: unknown) => {
+        process.stderr.write(`linkrpc-mcp: hub MCP tools unavailable: ${_describeError(error)}\n`);
+    });
+    return {
+        tools: () => current?.tools() ?? [],
+        onDidChange: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+        },
+        ready,
+    };
 }
 
 function _presentTaskResult(

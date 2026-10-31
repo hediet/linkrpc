@@ -1,11 +1,13 @@
+import RELEASE_SYNC from "@jitl/quickjs-wasmfile-release-sync";
 import {
-    getQuickJS,
+    newQuickJSWASMModuleFromVariant,
     QuickJSHandle,
     Scope,
     type QuickJSContext,
     type QuickJSDeferredPromise,
     type QuickJSRuntime,
-} from "quickjs-emscripten";
+    type QuickJSWASMModule,
+} from "quickjs-emscripten-core";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -94,6 +96,11 @@ export interface StartSandboxOptions {
      * first line of `code`.
      */
     readonly label?: string;
+    /**
+     * Cancels the run while it is in the foreground, e.g. when the MCP request
+     * is cancelled. Once parked, the task is controlled through {@link ParkedTask}.
+     */
+    readonly signal?: AbortSignal;
 }
 
 /** Legacy result shape for {@link runSandboxed}. */
@@ -144,9 +151,11 @@ const DEFAULT_MEMORY_LIMIT_BYTES = 32 * 1024 * 1024;
  */
 const SOFT_CANCEL_GRACE_MS = 200;
 
-let _quickjsPromise: ReturnType<typeof getQuickJS> | undefined;
+// Only the release-sync WASM variant is shipped (the default of
+// `quickjs-emscripten`'s `getQuickJS`), avoiding its debug and asyncify builds.
+let _quickjsPromise: Promise<QuickJSWASMModule> | undefined;
 function _qjs() {
-    if (!_quickjsPromise) _quickjsPromise = getQuickJS();
+    if (!_quickjsPromise) _quickjsPromise = newQuickJSWASMModuleFromVariant(RELEASE_SYNC);
     return _quickjsPromise;
 }
 
@@ -220,7 +229,7 @@ export async function startSandbox(
         memoryLimitBytes: options.memoryLimitBytes,
         label: options.label,
     });
-    return exec.runForeground();
+    return exec.runForeground(options.signal);
 }
 
 interface ResolvedExecOptions {
@@ -293,7 +302,7 @@ class SandboxExecution {
         return this._options.maxLifetimeMs > this._options.foregroundMs;
     }
 
-    private _init(QuickJS: Awaited<ReturnType<typeof getQuickJS>>): void {
+    private _init(QuickJS: QuickJSWASMModule): void {
         const runtime = this._scope.manage(QuickJS.newRuntime());
         runtime.setMemoryLimit(this._options.memoryLimitBytes ?? DEFAULT_MEMORY_LIMIT_BYTES);
         // Per-burst CPU guard: any single synchronous chunk that runs past
@@ -309,7 +318,7 @@ class SandboxExecution {
         _evalPrelude(this._vm, this._lastResultVal);
     }
 
-    public async runForeground(): Promise<SandboxOutcome> {
+    public async runForeground(signal?: AbortSignal): Promise<SandboxOutcome> {
         // Compile + start the user IIFE. Syntax errors surface here.
         this._cpuDeadline = Date.now() + this._cpuBurstMs;
         const evalRes = this._vm.evalCode(_wrapUserCode(this._userCode));
@@ -322,7 +331,7 @@ class SandboxExecution {
         this._promiseH = evalRes.value;
         this._pump();
 
-        const phase = await this._loopUntil(Date.now() + this._options.foregroundMs);
+        const phase = await this._loopUntil(Date.now() + this._options.foregroundMs, signal);
         if (phase === "settled") return this._terminalOutcome();
 
         // Still pending at the foreground deadline.
@@ -368,10 +377,22 @@ class SandboxExecution {
         return this._settled as TaskOutcome;
     }
 
-    /** Pump + poll the user promise until it settles or `deadline` passes. */
-    private async _loopUntil(deadline: number): Promise<"settled" | "pending"> {
+    /**
+     * Pump + poll the user promise until it settles or `deadline` passes. An
+     * aborted `signal` soft-aborts the guest and settles it as cancelled after
+     * the grace window.
+     */
+    private async _loopUntil(deadline: number, signal?: AbortSignal): Promise<"settled" | "pending"> {
         while (true) {
             if (this._settled || this._checkPromise()) return "settled";
+            if (signal?.aborted && this._cancelGraceDeadline === undefined) {
+                this._triggerSoftAbort("cancelled");
+                this._cancelGraceDeadline = Date.now() + SOFT_CANCEL_GRACE_MS;
+            }
+            if (this._cancelGraceDeadline !== undefined && Date.now() > this._cancelGraceDeadline) {
+                this._forceSettle({ status: "cancelled", logs: this._logs.slice() });
+                return "settled";
+            }
             if (Date.now() > deadline) return "pending";
             await _delay();
             this._pump();

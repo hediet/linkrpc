@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { LinkRpcConnection, TransportPair } from '@hediet/linkrpc';
-import { mcpForwardInterface } from './mcpForward.interface';
+import { mcpForwardInterface } from '@hediet/linkrpc-mcp/hub';
 
 /**
  * Verifies the raw streaming round-trip the MCP aggregator depends on: a client

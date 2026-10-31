@@ -99,12 +99,18 @@ export class TaskRegistry {
      * Wait up to `timeoutMs` for `taskId` to settle. Returns `running` (with a
      * progress snapshot) if it is still going, otherwise its terminal result.
      */
-    public async awaitTask(taskId: string, timeoutMs: number): Promise<AwaitResult> {
+    public async awaitTask(taskId: string, timeoutMs: number, signal?: AbortSignal): Promise<AwaitResult> {
         const entry = this._byId.get(taskId);
         if (!entry) return { status: "unknown", taskId };
         if (!entry.outcome) {
+            // An aborted wait ends early with a snapshot; it never cancels the task.
             const timeout = new Promise<"timeout">((r) => {
-                setTimeout(() => r("timeout"), timeoutMs).unref?.();
+                const timer = setTimeout(() => r("timeout"), timeoutMs);
+                timer.unref?.();
+                signal?.addEventListener("abort", () => {
+                    clearTimeout(timer);
+                    r("timeout");
+                }, { once: true });
             });
             const res = await Promise.race([entry.task.done, timeout]);
             if (res === "timeout") {

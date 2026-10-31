@@ -23,6 +23,7 @@
         "@hediet/linkrpc": "workspace:*",
         "@hediet/linkrpc-hub": "workspace:*",
         "@hediet/linkrpc-infra": "workspace:*",
+        "@hediet/linkrpc-mcp": "workspace:*",
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@lydell/node-pty": "1.2.0-beta.15",
         "@xterm/addon-serialize": "0.14.0",

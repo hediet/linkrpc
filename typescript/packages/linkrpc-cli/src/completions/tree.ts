@@ -536,7 +536,9 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             name: 'mcp',
             description: 'Aggregate discoverable Hub MCP tools on stdio.',
             positionals: [],
-            options: [],
+            options: [
+                { name: '--scripts', takesValue: false },
+            ],
         },
     {
             name: 'mcp-forward',
@@ -545,6 +547,23 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             variadic: 'free',
             options: [
                 { name: '--serviceId', takesValue: true, valueType: 'serviceId' },
+                { name: '--url', takesValue: true, valueType: 'free' },
+                { name: '--header', takesValue: true, valueType: 'free' },
+                { name: '--env', takesValue: true, valueType: 'free' },
+            ],
+        },
+    {
+            name: 'mcp-publish',
+            description: 'Publish an MCP server through the hub, typed and/or forwarded.',
+            positionals: [],
+            variadic: 'free',
+            options: [
+                { name: '--serviceId', takesValue: true, valueType: 'serviceId' },
+                { name: '--typed', takesValue: false },
+                { name: '--forward', takesValue: false },
+                { name: '--name', takesValue: true, valueType: 'free' },
+                { name: '--url', takesValue: true, valueType: 'free' },
+                { name: '--header', takesValue: true, valueType: 'free' },
                 { name: '--env', takesValue: true, valueType: 'free' },
             ],
         },
