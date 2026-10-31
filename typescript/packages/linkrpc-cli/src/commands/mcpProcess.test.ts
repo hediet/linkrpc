@@ -56,7 +56,12 @@ it.each([
         let diagnostics = '';
         transport.stderr?.on('data', chunk => { diagnostics += String(chunk); });
         await client.connect(transport);
-        const tools = await client.listTools();
+        // A cold first producer can miss the aggregator's connect timeout; it retries while advertised.
+        let tools = await client.listTools();
+        await vi.waitFor(async () => {
+            tools = await client.listTools();
+            expect(tools.tools).toHaveLength(scriptTools.length + 1);
+        }, { timeout: 30_000, interval: 500 });
         expect(tools.tools.slice(0, scriptTools.length).map(tool => tool.name)).toEqual(scriptTools);
         const hubTools = tools.tools.slice(scriptTools.length);
         expect(hubTools.map(tool => tool.description)).toEqual(['[test/explorer] echo']);
@@ -72,4 +77,4 @@ it.each([
         hub.dispose();
         await rm(directory, { recursive: true, force: true });
     }
-}, 30_000);
+}, 60_000);
