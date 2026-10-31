@@ -8,12 +8,12 @@ import { registerHubServices } from './rootServices';
 import { type AttachedLink, Hub } from './routing/routingHub';
 
 /**
- * Mirror of `vscode.mcp-forward`: one long-lived streaming `connect` request
+ * Mirror of `mcp.forward` (spec chapter 10): one long-lived streaming `connect` request
  * whose duplex stream carries opaque frames. We keep a local copy so this hub
- * test has no dependency on the CLI package.
+ * test has no dependency on `@hediet/linkrpc-mcp`, which depends on this package.
  */
 const forwardInterface = defineInterface(
-    { id: 'vscode.mcp-forward', description: 'Transparent MCP tunnel.' },
+    { id: 'mcp.forward', description: 'Transparent MCP tunnel.' },
     {
         connect: requestType(
             z.object({ clientInfo: z.object({ name: z.string(), version: z.string() }).optional() }),

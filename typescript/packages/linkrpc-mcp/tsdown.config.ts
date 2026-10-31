@@ -47,8 +47,9 @@ const emitGuestAsScript = (): Plugin => ({
     },
 });
 
-// Three entries: the library `index` / `node` surfaces and the `linkrpc-mcp`
-// CLI (bin). Runtime `dependencies` (@modelcontextprotocol/sdk, quickjs,
+// Four entries: the library `index` / `node` surfaces, the sandbox-free `hub`
+// surface (typed bridges, forwarding, aggregation, delegated identity), and the
+// `linkrpc-mcp` CLI (bin). Runtime `dependencies` (@modelcontextprotocol/sdk, quickjs,
 // @hediet/linkrpc*, zod) stay external and resolve from node_modules. The
 // source-only `@hediet/linkrpc-client-internal` dev dep is bundled in.
 //
@@ -61,6 +62,7 @@ export default defineConfig({
     entry: {
         index: 'src/index.ts',
         node: 'src/node.ts',
+        hub: 'src/hub/index.ts',
         cli: 'src/cli.ts',
     },
     format: 'esm',

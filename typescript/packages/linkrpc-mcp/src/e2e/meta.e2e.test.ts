@@ -22,7 +22,6 @@ describe("LinkRpcMcpServer e2e (MCP tool catalog + documentation)", () => {
           {
             "tools": [
               {
-                "_meta": undefined,
                 "annotations": {
                   "readOnlyHint": true,
                 },
@@ -96,7 +95,6 @@ describe("LinkRpcMcpServer e2e (MCP tool catalog + documentation)", () => {
                 "title": "Run JS against a linkrpc hub",
               },
               {
-                "_meta": undefined,
                 "annotations": {
                   "readOnlyHint": true,
                 },
@@ -135,7 +133,6 @@ describe("LinkRpcMcpServer e2e (MCP tool catalog + documentation)", () => {
                 "title": "Wait for a parked linkrpc task",
               },
               {
-                "_meta": undefined,
                 "annotations": {
                   "readOnlyHint": true,
                 },

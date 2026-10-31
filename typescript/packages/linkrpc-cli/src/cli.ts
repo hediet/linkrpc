@@ -45,7 +45,7 @@ import { loadHubConfig, printHubConfigSchema, serveCommand } from './commands/se
 import { proxyCommand, tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
-import { mcpForwardCommand } from './commands/mcpForward';
+import { mcpPublishCommand } from './commands/mcpPublish';
 import { mcpCommand } from './commands/mcp';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
@@ -1253,12 +1253,20 @@ Batch options:
             });
         program
             .command('mcp')
-            .description('Expose tools from all discoverable Hub MCP forwarders as one stdio MCP server.')
-            .action(async () => {
+            .description(
+                'Expose the tools of all MCP servers published on the Hub (typed bridges and ' +
+                'forwarded servers) as one stdio MCP server.',
+            )
+            .option(
+                '--scripts',
+                'also serve the LinkRPC script tools (runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask)',
+            )
+            .action(async (cmdOpts: { scripts?: boolean; }) => {
                 await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
                     await mcpCommand(channel, {
                         requestDirectoryAccess: session === undefined ? undefined : serviceId =>
                             requestDirectoryAccess(session, serviceId, { watch: true }),
+                        ...(cmdOpts.scripts ? { scripts: true, ...(session !== undefined ? { access: session } : {}) } : {}),
                     });
                 }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
             });
@@ -1611,61 +1619,104 @@ Batch options:
             }
         });
 
-    program
+    const mcpUpstreamOptions = (command: Command): Command => command
+        .option(
+            '--serviceId <serviceId>',
+            'serviceId prefix to claim (default: the connection\'s granted serviceId namespace)',
+        )
+        .option('--url <url>', 'publish a Streamable HTTP MCP server instead of a command after `--`')
+        .option('--header <key=value>', 'HTTP header sent to the --url server (repeatable)', collectKeyValue)
+        .option('--env <key=value>', 'env var for the spawned MCP server child (repeatable)', collectKeyValue);
+    type McpUpstreamCliOptions = {
+        serviceId?: string;
+        url?: string;
+        header?: Record<string, string>;
+        env?: Record<string, string>;
+    };
+    const runMcpPublish = async (
+        commandName: string,
+        mcpCommand: string[] | undefined,
+        cmdOpts: McpUpstreamCliOptions,
+        expose: Parameters<typeof mcpPublishCommand>[0]['expose'],
+        name: string | undefined,
+    ): Promise<void> => {
+        const localEp = needEndpoint(endpoint);
+        const hasCommand = mcpCommand !== undefined && mcpCommand.length > 0;
+        if (hasCommand === (cmdOpts.url !== undefined)) {
+            process.stderr.write(
+                `linkrpc: ${commandName} requires either an MCP server command after \`--\` or --url, e.g. ` +
+                `\`${commandName} -- npx -y @modelcontextprotocol/server-everything\`.\n`,
+            );
+            process.exit(2);
+        }
+        const transport = cmdOpts.url !== undefined
+            ? { kind: 'streamable-http' as const, url: cmdOpts.url, ...(cmdOpts.header ? { headers: cmdOpts.header } : {}) }
+            : {
+                kind: 'stdio' as const,
+                command: mcpCommand![0],
+                args: mcpCommand!.slice(1),
+                // Children inherit this process's environment, like any spawned command.
+                env: { ...definedEnv(process.env), ...cmdOpts.env },
+            };
+        const local = await connectEndpoint(localEp, wireLog('hub'));
+        try {
+            const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
+                negotiateHubCaps: isHubEndpoint(localEp),
+            });
+            reportIdentity(session);
+            await mcpPublishCommand({
+                ...(cmdOpts.serviceId !== undefined ? { serviceId: cmdOpts.serviceId } : {}),
+                ...(name !== undefined ? { name } : {}),
+                local,
+                transport,
+                expose,
+            });
+        } finally {
+            local.close();
+        }
+    };
+
+    mcpUpstreamOptions(program
         .command('mcp-forward [mcpCommand...]')
         .description(
             'Expose an MCP server through the hub (--endpoint*) as a transparent forwarder. ' +
             'By default it claims this connection\'s granted serviceId namespace; pass ' +
             '--serviceId to claim a specific prefix. The MCP server command follows `--`, e.g. ' +
             '`linkrpc mcp-forward -- npx -y @modelcontextprotocol/server-everything` or ' +
-            '`linkrpc mcp-forward --serviceId my-mcp -- npx -y @modelcontextprotocol/server-everything`. ' +
-            'Each consumer that opens `<serviceId>::vscode.mcp-forward::connect` spawns a fresh child ' +
-            'and gets its MCP stdio bridged raw over the stream. Runs until Ctrl-C.',
-        )
-        .option(
-            '--serviceId <serviceId>',
-            'serviceId prefix to claim (default: the connection\'s granted serviceId namespace)',
-        )
-        .option(
-            '--env <key=value>',
-            'env var for the spawned MCP server child (repeatable)',
-            (val: string, acc: Record<string, string> | undefined) => {
-                const eq = val.indexOf('=');
-                if (eq === -1) {
-                    throw new InvalidArgumentError(`expected key=value, got '${val}'`);
-                }
-                const next = acc ?? {};
-                next[val.slice(0, eq)] = val.slice(eq + 1);
-                return next;
-            },
-        )
-        .action(async (mcpCommand: string[] | undefined, cmdOpts: {
-            serviceId?: string;
-            env?: Record<string, string>;
+            '`linkrpc mcp-forward --serviceId my-mcp -- npx -y @modelcontextprotocol/server-everything`; ' +
+            'use --url for a Streamable HTTP server. Each consumer that opens ' +
+            '`<serviceId>::mcp.forward::connect` (or the legacy `vscode.mcp-forward`) gets its own ' +
+            'MCP session (a fresh child, or a new HTTP session) relayed verbatim. Runs until Ctrl-C.',
+        ))
+        .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions) => {
+            await runMcpPublish('mcp-forward', mcpCommand, cmdOpts, { forward: { sharing: 'exclusive' } }, undefined);
+        });
+
+    mcpUpstreamOptions(program
+        .command('mcp-publish [mcpCommand...]')
+        .description(
+            'Publish an MCP server through the hub (--endpoint*). --typed exposes each MCP tool as a ' +
+            'method of a generated `mcp.tools.<name>` interface (one shared MCP session; capabilities ' +
+            'per tool); --forward relays verbatim MCP over `mcp.forward` (one MCP session per ' +
+            'connection; one capability per server). Pass one or both. The MCP server command ' +
+            'follows `--`, or use --url for a Streamable HTTP server. Runs until Ctrl-C.',
+        ))
+        .option('--typed', 'expose the tools as typed LinkRPC methods')
+        .option('--forward', 'expose verbatim MCP forwarding')
+        .option('--name <name>', 'generated interface name, `mcp.tools.<name>` (default: derived from the serviceId)')
+        .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions & {
+            typed?: boolean;
+            forward?: boolean;
+            name?: string;
         }) => {
-            const localEp = needEndpoint(endpoint);
-            if (!mcpCommand || mcpCommand.length === 0) {
-                process.stderr.write(
-                    'linkrpc: mcp-forward requires an MCP server command after `--`, e.g. ' +
-                    '`mcp-forward -- npx -y @modelcontextprotocol/server-everything`.\n',
-                );
+            if (!cmdOpts.typed && !cmdOpts.forward) {
+                process.stderr.write('linkrpc: mcp-publish requires --typed, --forward, or both.\n');
                 process.exit(2);
             }
-            const local = await connectEndpoint(localEp, wireLog('hub'));
-            try {
-                const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
-                    negotiateHubCaps: isHubEndpoint(localEp),
-                });
-                reportIdentity(session);
-                await mcpForwardCommand({
-                    ...(cmdOpts.serviceId !== undefined ? { serviceId: cmdOpts.serviceId } : {}),
-                    local,
-                    command: { argv: mcpCommand },
-                    ...(cmdOpts.env !== undefined ? { env: cmdOpts.env } : {}),
-                });
-            } finally {
-                local.close();
-            }
+            await runMcpPublish('mcp-publish', mcpCommand, cmdOpts, {
+                ...(cmdOpts.typed ? { typed: {} } : {}),
+                ...(cmdOpts.forward ? { forward: { sharing: 'exclusive' as const } } : {}),
+            }, cmdOpts.name);
         });
 
     program
@@ -2687,4 +2738,19 @@ function safeJson(value: unknown): string {
     } catch {
         return String(value);
     }
+}
+
+/** Commander collector for repeatable `key=value` options. */
+function collectKeyValue(val: string, acc: Record<string, string> | undefined): Record<string, string> {
+    const eq = val.indexOf('=');
+    if (eq === -1) {
+        throw new InvalidArgumentError(`expected key=value, got '${val}'`);
+    }
+    return { ...acc, [val.slice(0, eq)]: val.slice(eq + 1) };
+}
+
+function definedEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+    return Object.fromEntries(
+        Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    );
 }

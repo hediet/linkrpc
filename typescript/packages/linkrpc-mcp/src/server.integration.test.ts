@@ -1,8 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { LinkRpcConnection, TransportPair, type JsonValue } from "@hediet/linkrpc";
+import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import type { IConnectionPool, PooledConnection } from "./connectionPool";
-import { LinkRpcMcpServer } from "./server";
+import { registerMcpToolBridge } from "./hub/typed/bridge";
+import { LinkRpcMcpServer, type LinkRpcMcpServerOptions } from "./server";
 
 /**
  * Records every outbound request and lets the test resolve it on demand, so
@@ -59,7 +62,7 @@ interface Harness {
     dispose(): Promise<void>;
 }
 
-async function makeHarness(): Promise<Harness> {
+async function makeHarness(options: Omit<LinkRpcMcpServerOptions, "pool"> = {}): Promise<Harness> {
     const channel = new FakeChannel();
     const pooled = {
         channel: channel as unknown as PooledConnection["channel"],
@@ -77,7 +80,7 @@ async function makeHarness(): Promise<Harness> {
         dispose: () => { /* no-op */ },
     };
 
-    const server = new LinkRpcMcpServer({ pool });
+    const server = new LinkRpcMcpServer({ pool, ...options });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await server.connect(serverTransport);
 
@@ -400,4 +403,99 @@ describe("LinkRpcMcpServer task names (integration)", () => {
         expect(firstState.status).toBe("cancelled");
     });
 
+});
+
+describe("LinkRpcMcpServer MCP integration", () => {
+    it("lists the script tools with schemas derived from their arguments", async () => {
+        const h = (active = await makeHarness());
+        const { tools } = await h.client.listTools();
+        expect(tools.map((tool) => ({
+            name: tool.name,
+            required: tool.inputSchema.required,
+            readOnly: tool.annotations?.readOnlyHint,
+        }))).toEqual([
+            { name: "runLinkRpcScript", required: ["code"], readOnly: true },
+            { name: "awaitLinkRpcTask", required: ["taskId"], readOnly: true },
+            { name: "cancelLinkRpcTask", required: ["taskId"], readOnly: true },
+        ]);
+        expect(await h.client.callTool({ name: "awaitLinkRpcTask", arguments: {} })).toMatchObject({ isError: true });
+    });
+
+    it("cancels the hub call of a foreground script when the MCP request is cancelled", async () => {
+        const h = (active = await makeHarness());
+        const abort = new AbortController();
+        const pending = h.client.callTool({
+            name: "runLinkRpcScript",
+            arguments: { code: `({ con }) => con.call("svc", "iface", "slow", {})`, foregroundMs: 10_000 },
+        }, undefined, { signal: abort.signal });
+        await waitFor(() => h.channel.requests.length === 1);
+        abort.abort("user stopped");
+        await expect(pending).rejects.toThrow();
+        await waitFor(() => h.channel.requests[0].cancelled);
+        expect(h.channel.requests[0].cancelled).toBe(true);
+    });
+
+    it("rejects hub results above maxHubResultBytes before they reach the sandbox", async () => {
+        const h = (active = await makeHarness({ maxHubResultBytes: 16 }));
+        const pending = h.client.callTool({
+            name: "runLinkRpcScript",
+            arguments: { code: `({ con }) => con.call("svc", "iface", "big", {})` },
+        });
+        await waitFor(() => h.channel.requests.length === 1);
+        h.channel.requests[0].resolve("x".repeat(100));
+        const result = await pending as { isError?: boolean; content: { text: string }[] };
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toContain("exceeds the 16-byte sandbox input limit");
+    });
+
+    it("also lists and calls MCP tools published on the hub when hubTools is set", async () => {
+        const pair = new TransportPair();
+        const hub = LinkRpcConnection.fromTransport(pair.a);
+        hub.enableReflection();
+        const bridge = await registerMcpToolBridge({
+            connection: hub,
+            serviceId: "typed",
+            interfaceId: "mcp.tools.typed",
+            factory: {
+                open: async () => ({
+                    listTools: async () => [{ name: "echo", inputSchema: { type: "object", properties: { text: { type: "string" } } } }],
+                    callTool: async (_name, args) => ({ content: [{ type: "text", text: String(args?.text) }] }) as JsonValue,
+                    close: async () => {},
+                }),
+            },
+        });
+        const local = connectViaTransport(pair.b);
+        const pooled = {
+            channel: local.channel,
+            endpoint: "inproc:test",
+            key: "inproc:test",
+            session: { listGrants: () => [], requestAccess: async () => ({ status: "denied" }) },
+            lastResultVal: undefined,
+            addTraceListener: () => () => {},
+            trace: () => {},
+            dispose: () => {},
+        } as unknown as PooledConnection;
+        const server = new LinkRpcMcpServer({
+            pool: { resolve: async () => pooled, dispose: () => {} },
+            hubTools: { log: () => {} },
+        });
+        const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+        await server.connect(serverTransport);
+        const client = new Client({ name: "test-client", version: "0.0.0" });
+        await client.connect(clientTransport);
+        try {
+            const { tools } = await client.listTools();
+            const echo = tools.find((tool) => tool.description === "[typed] echo");
+            expect(tools.map((tool) => tool.name).slice(0, 3))
+                .toEqual(["runLinkRpcScript", "awaitLinkRpcTask", "cancelLinkRpcTask"]);
+            expect(await client.callTool({ name: echo!.name, arguments: { text: "hi" } }))
+                .toEqual({ content: [{ type: "text", text: "hi" }] });
+        } finally {
+            await client.close();
+            server.dispose();
+            await bridge.dispose();
+            local.close();
+            hub.close();
+        }
+    });
 });

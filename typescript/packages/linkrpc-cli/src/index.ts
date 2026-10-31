@@ -2,7 +2,8 @@
 // `@hediet/linkrpc-client-internal` and are an internal utility — they are deliberately
 // NOT re-exported here (consumers that need them import from
 // `@hediet/linkrpc` / `@hediet/linkrpc-client-internal` directly).
-export * from "./mcpForward.interface";
+/** @deprecated Import from `@hediet/linkrpc-mcp/hub`. */
+export { legacyMcpForwardInterface, mcpForwardInterface } from "@hediet/linkrpc-mcp/hub";
 export * from "./methodRef";
 export * from "./paramParsing";
 export * from "./validation";

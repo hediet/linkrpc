@@ -61,11 +61,23 @@ Explicit content needs little ceremony:
 The `mcp.*` values are presentation markers intended to be returned from the
 script. Keep using the original value for intermediate hub calls.
 
-## Resources
+#### Cancellation
 
-### `linkrpc-mcp://docs/connection.d.ts`
+Cancelling a `runLinkRpcScript` request while it runs in the foreground soft-aborts
+the script and cancels its in-flight hub calls. Cancelling `awaitLinkRpcTask` only
+stops waiting; use `cancelLinkRpcTask` to stop a parked task.
 
-TypeScript declarations for the in-sandbox API (`con`, `console`, `lastResultVal`). Read this once before authoring `runLinkRpcScript` calls.
+### Embedding options
+
+`LinkRpcMcpServer` also accepts:
+
+- `hubTools`: additionally list the tools of MCP servers published on the default
+  connection's hub (see below), next to the script tools.
+- `maxHubResultBytes`: reject hub results above this size before they enter the
+  sandbox.
+- `pool`, `provider`, `defaultConnection`: choose how sessions reach the hub. Use
+  `singleConnectionPool` with a `DelegatedHubSender` to bind a server instance to
+  one delegated principal.
 
 ## Running locally
 
@@ -80,3 +92,54 @@ TypeScript declarations for the in-sandbox API (`con`, `console`, `lastResultVal
     }
 }
 ```
+
+## MCP servers on a hub (`@hediet/linkrpc-mcp/hub`)
+
+This entry point does not load the sandbox. It implements
+[spec chapter 10](../../../spec/10-mcp-interfaces.md).
+
+An **upstream** is one MCP server transport plus its authentication:
+`stdioUpstream({ command, args })` or `httpUpstream({ url, headers, fetch })`. A
+custom `fetch` attaches and refreshes access tokens.
+
+Publish an upstream with `hostMcpServer` in one or both modes:
+
+| Mode | MCP sessions | On the hub | Capabilities | MCP features |
+| --- | --- | --- | --- | --- |
+| typed | one shared session; exclusive sessions on request | one method per tool on `mcp.tools.<name>`, plus `mcp.tools` and `mcp.server` | per tool | tools |
+| forward | one upstream session per `connect` | `mcp.forward` (and the legacy `vscode.mcp-forward`) | per server | all, relayed verbatim |
+
+```ts
+const hosted = await hostMcpServer({
+    connection,
+    serviceId: "me/github",
+    server: mcpServerConfigSchema.parse({
+        id: "github",
+        transport: { kind: "streamable-http", url: "https://api.example.com/mcp" },
+        expose: { typed: {}, forward: {} },
+    }),
+    fetch: fetchWithAccessToken,
+});
+```
+
+The building blocks are also exported individually: `registerMcpToolBridge`
+(typed), `serveMcpForward` (forward), and `McpForwardClientTransport`, an MCP SDK
+client transport that opens one forwarded leg.
+
+Typed callers share one upstream session. A caller that needs its own (for a
+stateful server) calls `mcp.server::openSession` and passes the returned
+unguessable `sessionId` to tool methods.
+
+`HubMcpAggregator` discovers every typed and forwarded server visible through a
+signed channel and is an `McpToolSource`; `McpToolHost` serves tool sources on an
+MCP SDK `Server`. Typed tools are called through their generated methods, so the
+hub's per-tool capabilities and consent apply. `linkrpc hub mcp` and the
+`hubTools` option are built from these.
+
+`DelegatedHubSender` signs calls as a delegated principal over a channel it does
+not own, for services that act for many users, chats, or OAuth grants over one
+hub connection. Granted capabilities are persisted through `onGranted`.
+
+Not yet supported: aggregation of resources and prompts, server-to-client
+requests (sampling, elicitation, roots) through the aggregator, and shared
+forwarding.

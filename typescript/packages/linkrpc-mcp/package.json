@@ -13,6 +13,10 @@
             "types": "./dist/node.d.ts",
             "default": "./dist/node.js"
         },
+        "./hub": {
+            "types": "./dist/hub.d.ts",
+            "default": "./dist/hub.js"
+        },
         "./package.json": "./package.json"
     },
     "bin": {
@@ -33,7 +37,8 @@
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@hediet/linkrpc": "workspace:*",
         "@hediet/linkrpc-hub": "workspace:*",
-        "quickjs-emscripten": "^0.31.0",
+        "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
+        "quickjs-emscripten-core": "0.31.0",
         "zod": "^4.4.3"
     },
     "devDependencies": {
