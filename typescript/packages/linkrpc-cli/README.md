@@ -1131,6 +1131,12 @@ Schema validation is mandatory for explicit requests: `--no-validate` and
 the permission; signed calls include that hash in their signed metadata.
 The default requested duration is `persistent`; `--cap:duration shortLived` and
 `--cap:duration longLived` are also supported. The Hub still decides what to grant.
+`call --cap:request --cap:duration once` instead requests a grant bound to the
+single call it executes (its exact params, nonce, and timestamp), so the approval
+authorizes that call only and is never stored. It cannot be combined with
+`caps request`, `--cap:allow-param`, or `--cap:delegate`, and needs a fully
+qualified `service::interface::method` reference. A durable grant that already
+covers the call is used without a new request.
 `--cap:delegate` also requests `canDelegate`, so the identity can issue narrower
 capabilities for that scope to other identities, e.g. a service it runs; a
 stored grant without delegation does not satisfy such a request.

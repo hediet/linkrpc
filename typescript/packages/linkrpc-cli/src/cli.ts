@@ -777,8 +777,8 @@ export async function main(
         .option('--cap:allow-any', 'allow any JSON value for the immediately preceding parameter')
         .option('--cap:allow-enum <json>', 'allow one value from a JSON array for the preceding parameter')
         .option('--cap:allow-subset <json>', 'allow an array of items from a JSON string array for the preceding parameter')
-        .addOption(new Option('--cap:duration <duration>', 'requested grant lifetime')
-            .choices(['shortLived', 'longLived', 'persistent']).default('persistent'))
+        .addOption(new Option('--cap:duration <duration>', 'requested grant lifetime; once (call --cap:request only) binds the grant to this single call')
+            .choices(['once', 'shortLived', 'longLived', 'persistent']).default('persistent'))
         .option('--cap:delegate', 'also request the right to delegate this authority (canDelegate) to other identities');
 
     const configureCall = (cmd: Command, capabilityOnly: boolean): void => {

@@ -27,6 +27,7 @@ async function fixture(values: ContextValues = {}) {
         hubAccessMethod: 'hubAccess::requestAccess',
         listGrants: () => principal.capBag.capabilities,
         requestAccess: vi.fn(async () => ({ status: 'denied', reason: 'test denied' })),
+        requestOnceForNextCall: vi.fn(),
     });
     const reflection = vi.spyOn(client, 'requestReflectionAccess').mockResolvedValue('granted');
     vi.spyOn(ContextStore.prototype, 'select').mockResolvedValue({
