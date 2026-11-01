@@ -46,6 +46,7 @@ import { proxyCommand, tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpPublishCommand, readMcpPublishConfig } from './commands/mcpPublish';
+import { resolveServiceIdToClaim } from './commands/serviceIdClaim';
 import { mcpCommand } from './commands/mcp';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
@@ -1168,6 +1169,115 @@ Batch options:
                 process.stdout.write(out + '\n');
             });
         });
+    /** Options that select the MCP server: a command after `--`, --url, or --mcp-config. */
+    const mcpSourceOptions = (command: Command): Command => command
+        .option('--url <url>', 'a Streamable HTTP MCP server instead of a command after `--`')
+        .option('--header <key=value>', 'HTTP header sent to the --url server (repeatable)', collectKeyValue)
+        .option(
+            '--header-env <key=ENV_VAR>',
+            'HTTP header read from an environment variable when a session opens, e.g. ' +
+            '`Authorization=SLACK_AUTHORIZATION` (repeatable)',
+            collectKeyValue,
+        )
+        .option(
+            '--mcp-config <file>',
+            'JSON file with the MCP server: `transport`, optional `identities` (accounts), `description`, and `expose`',
+        )
+        .option('--env <key=value>', 'env var for the spawned MCP server child (repeatable)', collectKeyValue);
+    const mcpExposeOptions = (command: Command): Command => command
+        .option('--service', 'publish the MCP server as a LinkRPC service')
+        .option('--forward', 'relay MCP verbatim over mcp.forward')
+        .option('--name <name>', 'generated interface name, `mcp.tools.<name>` (default: derived from the serviceId)')
+        .option(
+            '--group <name=keywords>',
+            'move tools whose name contains one of the comma-separated keywords into ' +
+            '`mcp.tools.<name>.<group>` (repeatable; first match wins)',
+            collectKeyValue,
+        );
+    type McpUpstreamCliOptions = {
+        serviceId?: string;
+        url?: string;
+        header?: Record<string, string>;
+        headerEnv?: Record<string, string>;
+        env?: Record<string, string>;
+        stdio?: boolean;
+        mcpConfig?: string;
+    };
+    type McpExposeCliOptions = {
+        service?: boolean;
+        forward?: boolean;
+        name?: string;
+        group?: Record<string, string>;
+    };
+    type McpExpose = Parameters<typeof mcpPublishCommand>[0]['expose'];
+    const exposeFromFlags = (commandName: string, cmdOpts: McpUpstreamCliOptions & McpExposeCliOptions): McpExpose | undefined => {
+        if (!cmdOpts.service && !cmdOpts.forward && cmdOpts.mcpConfig === undefined) {
+            process.stderr.write(`linkrpc: ${commandName} requires --service, --forward, or both.\n`);
+            process.exit(2);
+        }
+        if (cmdOpts.group && !cmdOpts.service) {
+            process.stderr.write(`linkrpc: ${commandName} --group requires --service.\n`);
+            process.exit(2);
+        }
+        if (!cmdOpts.service && !cmdOpts.forward) return undefined;
+        const groups = Object.entries(cmdOpts.group ?? {})
+            .map(([groupName, keywords]) => ({ name: groupName, keywords: keywords.split(',').filter(Boolean) }));
+        return {
+            ...(cmdOpts.service ? { service: groups.length > 0 ? { groups } : {} } : {}),
+            ...(cmdOpts.forward ? { forward: { sharing: 'exclusive' as const } } : {}),
+        };
+    };
+    /** Validate the MCP server source flags; exits with usage errors. */
+    const resolveMcpSource = async (
+        commandName: string,
+        mcpCommand: string[] | undefined,
+        cmdOpts: McpUpstreamCliOptions,
+        expose: McpExpose | undefined,
+    ) => {
+        const hasCommand = mcpCommand !== undefined && mcpCommand.length > 0;
+        const sources = [hasCommand, cmdOpts.url !== undefined, cmdOpts.stdio === true, cmdOpts.mcpConfig !== undefined]
+            .filter(Boolean).length;
+        if (sources !== 1) {
+            process.stderr.write(
+                `linkrpc: ${commandName} requires exactly one of an MCP server command after \`--\`, --url, ` +
+                `--stdio, or --mcp-config, e.g. ` +
+                `\`${commandName} -- npx -y @modelcontextprotocol/server-everything\`.\n`,
+            );
+            process.exit(2);
+        }
+        if (cmdOpts.stdio && expose?.service !== undefined) {
+            process.stderr.write(`linkrpc: ${commandName} --stdio supports only --forward.\n`);
+            process.exit(2);
+        }
+        if (cmdOpts.headerEnv !== undefined && cmdOpts.url === undefined) {
+            process.stderr.write(`linkrpc: ${commandName} --header-env requires --url.\n`);
+            process.exit(2);
+        }
+        const file = cmdOpts.mcpConfig === undefined ? undefined : await readMcpPublishConfig(cmdOpts.mcpConfig);
+        const resolvedExpose = expose ?? file?.expose;
+        if (resolvedExpose === undefined) {
+            process.stderr.write(`linkrpc: ${commandName} requires --service, --forward, or \`expose\` in --mcp-config.\n`);
+            process.exit(2);
+        }
+        const headers = {
+            ...cmdOpts.header,
+            ...Object.fromEntries(Object.entries(cmdOpts.headerEnv ?? {}).map(([key, variable]) => [key, { fromEnv: variable }])),
+        };
+        const transport = file !== undefined
+            ? file.transport
+            : cmdOpts.stdio
+            ? { kind: 'own-stdio' as const }
+            : cmdOpts.url !== undefined
+            ? { kind: 'streamable-http' as const, url: cmdOpts.url, ...(Object.keys(headers).length > 0 ? { headers } : {}) }
+            : {
+                kind: 'stdio' as const,
+                command: mcpCommand![0],
+                args: mcpCommand!.slice(1),
+                // Children inherit this process's environment, like any spawned command.
+                env: { ...definedEnv(process.env), ...cmdOpts.env },
+            };
+        return { transport, expose: resolvedExpose, file };
+    };
     if (profile === 'hub') {
         const exportRoutes = new JsonRpcExportRoutes();
         program
@@ -1255,12 +1365,10 @@ Batch options:
             .command('mcp')
             .description(
                 'Expose the tools of all MCP servers published on the Hub (MCP services and ' +
-                'forwarded servers) as one stdio MCP server.',
+                'forwarded servers) as one stdio MCP server, together with the LinkRPC script tools ' +
+                '(runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask).',
             )
-            .option(
-                '--scripts',
-                'also serve the LinkRPC script tools (runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask)',
-            )
+            .option('--no-scripts', 'serve only the aggregated MCP tools, without loading the script sandbox')
             .option(
                 '--mcp-identity <serviceId=identity>',
                 'use this MCP identity (account) of a published MCP server instead of its default (repeatable)',
@@ -1272,7 +1380,9 @@ Batch options:
                         ...(cmdOpts.mcpIdentity !== undefined ? { mcpIdentities: cmdOpts.mcpIdentity } : {}),
                         requestDirectoryAccess: session === undefined ? undefined : serviceId =>
                             requestDirectoryAccess(session, serviceId, { watch: true }),
-                        ...(cmdOpts.scripts ? { scripts: true, ...(session !== undefined ? { access: session } : {}) } : {}),
+                        ...(cmdOpts.scripts !== false
+                            ? { scripts: true, ...(session !== undefined ? { access: session } : {}) }
+                            : {}),
                     });
                 }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
             });
@@ -1339,7 +1449,7 @@ Batch options:
     addTargetEndpointOptions(program
         .command('tunnel <serviceId>')
         .description(
-            'Claim <serviceId> on the source hub (--endpoint*) and forward every request it ' +
+            'Claim <serviceId> (`./<name>`: relative to the granted namespace) on the source hub (--endpoint*) and forward every request it ' +
             'routes here to a target endpoint over a second connection. The target endpoint ' +
             'is set via --target-endpoint / --target-endpoint-cmd / --target-endpoint-cmd-stdio; ' +
             'when it is --target-endpoint-cmd, the spawned child sees ' +
@@ -1363,6 +1473,9 @@ Batch options:
             // config itself provides the target that serves the service id, so
             // the manual two-connection forward path is not used.
             if (g_hubConfigPath !== undefined) {
+                if (serviceId.startsWith('./')) {
+                    throw new InvalidArgumentError('relative service ids (./<name>) are not supported with --config');
+                }
                 const baseConfig = loadHubConfig(g_hubConfigPath);
                 const claimEndpoint = resolvedEndpointToConfig(localEp, {
                     claimServiceIds: [serviceId],
@@ -1393,6 +1506,7 @@ Batch options:
             const globalOpts = program.opts();
             const targetEp = resolveTargetEndpointOrExit(cmdOpts, globalOpts, 'tunnel');
             const local = await connectEndpoint(localEp, wireLog('source'));
+            serviceId = (await resolveServiceIdToClaim(local, serviceId)).serviceId;
             const remote = await connectTargetEndpoint(targetEp, serviceId);
             try {
                 // Sign the claim where the source hub requires it (managed
@@ -1625,101 +1739,40 @@ Batch options:
             }
         });
 
-    const mcpUpstreamOptions = (command: Command): Command => command
+    const mcpUpstreamOptions = (command: Command): Command => mcpSourceOptions(command)
         .option(
             '--serviceId <serviceId>',
-            'serviceId prefix to claim (default: the connection\'s granted serviceId namespace)',
+            'serviceId to claim; `./<name>` is relative to the connection\'s granted namespace (or a ' +
+            'namespace for this user and host, requested from the hub). Default: the granted namespace',
         )
-        .option('--url <url>', 'publish a Streamable HTTP MCP server instead of a command after `--`')
-        .option('--header <key=value>', 'HTTP header sent to the --url server (repeatable)', collectKeyValue)
-        .option(
-            '--header-env <key=ENV_VAR>',
-            'HTTP header read from an environment variable when a session opens, e.g. ' +
-            '`Authorization=SLACK_AUTHORIZATION` (repeatable)',
-            collectKeyValue,
-        )
-        .option(
-            '--mcp-config <file>',
-            'JSON file with the MCP server: `transport`, optional `identities` (accounts), `description`, and `expose`',
-        )
-        .option('--env <key=value>', 'env var for the spawned MCP server child (repeatable)', collectKeyValue)
         .option(
             '--stdio',
             'forward the running MCP server attached to this process\'s stdin/stdout, one connection at a time',
         );
-    type McpUpstreamCliOptions = {
-        serviceId?: string;
-        url?: string;
-        header?: Record<string, string>;
-        headerEnv?: Record<string, string>;
-        env?: Record<string, string>;
-        stdio?: boolean;
-        mcpConfig?: string;
-    };
     const runMcpPublish = async (
         commandName: string,
         mcpCommand: string[] | undefined,
         cmdOpts: McpUpstreamCliOptions,
-        expose: Parameters<typeof mcpPublishCommand>[0]['expose'] | undefined,
+        expose: McpExpose | undefined,
         name: string | undefined,
     ): Promise<void> => {
         const localEp = needEndpoint(endpoint);
-        const hasCommand = mcpCommand !== undefined && mcpCommand.length > 0;
-        const sources = [hasCommand, cmdOpts.url !== undefined, cmdOpts.stdio === true, cmdOpts.mcpConfig !== undefined]
-            .filter(Boolean).length;
-        if (sources !== 1) {
-            process.stderr.write(
-                `linkrpc: ${commandName} requires exactly one of an MCP server command after \`--\`, --url, ` +
-                `--stdio, or --mcp-config, e.g. \`${commandName} -- npx -y @modelcontextprotocol/server-everything\`.\n`,
-            );
-            process.exit(2);
-        }
-        if (cmdOpts.stdio && expose?.service !== undefined) {
-            process.stderr.write(`linkrpc: ${commandName} --stdio supports only --forward.\n`);
-            process.exit(2);
-        }
-        if (cmdOpts.headerEnv !== undefined && cmdOpts.url === undefined) {
-            process.stderr.write(`linkrpc: ${commandName} --header-env requires --url.\n`);
-            process.exit(2);
-        }
-        const file = cmdOpts.mcpConfig === undefined ? undefined : await readMcpPublishConfig(cmdOpts.mcpConfig);
-        const resolvedExpose = expose ?? file?.expose;
-        if (resolvedExpose === undefined) {
-            process.stderr.write(`linkrpc: ${commandName} requires --service, --forward, or \`expose\` in --mcp-config.\n`);
-            process.exit(2);
-        }
-        const headers = {
-            ...cmdOpts.header,
-            ...Object.fromEntries(Object.entries(cmdOpts.headerEnv ?? {}).map(([key, variable]) => [key, { fromEnv: variable }])),
-        };
-        const transport = file !== undefined
-            ? file.transport
-            : cmdOpts.stdio
-            ? { kind: 'own-stdio' as const }
-            : cmdOpts.url !== undefined
-            ? { kind: 'streamable-http' as const, url: cmdOpts.url, ...(Object.keys(headers).length > 0 ? { headers } : {}) }
-            : {
-                kind: 'stdio' as const,
-                command: mcpCommand![0],
-                args: mcpCommand!.slice(1),
-                // Children inherit this process's environment, like any spawned command.
-                env: { ...definedEnv(process.env), ...cmdOpts.env },
-            };
+        const source = await resolveMcpSource(commandName, mcpCommand, cmdOpts, expose);
         const local = await connectEndpoint(localEp, wireLog('hub'));
         try {
             const session = await setupSigning(local.channel, local.signing, getPrincipalSpec(), {
                 negotiateHubCaps: isHubEndpoint(localEp),
             });
             reportIdentity(session);
-            const id = name ?? file?.id;
+            const id = name ?? source.file?.id;
             await mcpPublishCommand({
                 ...(cmdOpts.serviceId !== undefined ? { serviceId: cmdOpts.serviceId } : {}),
                 ...(id !== undefined ? { name: id } : {}),
-                ...(file?.identities !== undefined ? { identities: file.identities } : {}),
-                ...(file?.description !== undefined ? { description: file.description } : {}),
+                ...(source.file?.identities !== undefined ? { identities: source.file.identities } : {}),
+                ...(source.file?.description !== undefined ? { description: source.file.description } : {}),
                 local,
-                transport,
-                expose: resolvedExpose,
+                transport: source.transport,
+                expose: source.expose,
             });
         } finally {
             local.close();
@@ -1739,7 +1792,7 @@ Batch options:
             await runMcpPublish('mcp-forward', mcpCommand, cmdOpts, { forward: { sharing: 'exclusive' } }, undefined);
         });
 
-    mcpUpstreamOptions(program
+    mcpExposeOptions(mcpUpstreamOptions(program
         .command('mcp-publish [mcpCommand...]')
         .description(
             'Publish an MCP server through the hub (--endpoint*). --service publishes it as a LinkRPC ' +
@@ -1747,38 +1800,9 @@ Batch options:
             '--group), generic `mcp.tools::listTools`/`callTool`, and `mcp.server`; callers share ' +
             'one MCP session. --forward relays verbatim MCP over `mcp.forward`. Pass one or both. ' +
             'The MCP server is a command after `--`, --url, or (forward only) --stdio. Runs until Ctrl-C.',
-        ))
-        .option('--service', 'publish the MCP server as a LinkRPC service')
-        .option('--forward', 'relay MCP verbatim over mcp.forward')
-        .option('--name <name>', 'generated interface name, `mcp.tools.<name>` (default: derived from the serviceId)')
-        .option(
-            '--group <name=keywords>',
-            'move tools whose name contains one of the comma-separated keywords into ' +
-            '`mcp.tools.<name>.<group>` (repeatable; first match wins)',
-            collectKeyValue,
-        )
-        .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions & {
-            service?: boolean;
-            forward?: boolean;
-            name?: string;
-            group?: Record<string, string>;
-        }) => {
-            if (!cmdOpts.service && !cmdOpts.forward && cmdOpts.mcpConfig === undefined) {
-                process.stderr.write('linkrpc: mcp-publish requires --service, --forward, or both.\n');
-                process.exit(2);
-            }
-            if (cmdOpts.group && !cmdOpts.service) {
-                process.stderr.write('linkrpc: mcp-publish --group requires --service.\n');
-                process.exit(2);
-            }
-            const groups = Object.entries(cmdOpts.group ?? {})
-                .map(([groupName, keywords]) => ({ name: groupName, keywords: keywords.split(',').filter(Boolean) }));
-            await runMcpPublish('mcp-publish', mcpCommand, cmdOpts, cmdOpts.service || cmdOpts.forward
-                ? {
-                    ...(cmdOpts.service ? { service: groups.length > 0 ? { groups } : {} } : {}),
-                    ...(cmdOpts.forward ? { forward: { sharing: 'exclusive' as const } } : {}),
-                }
-                : undefined, cmdOpts.name);
+        )))
+        .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions & McpExposeCliOptions) => {
+            await runMcpPublish('mcp-publish', mcpCommand, cmdOpts, exposeFromFlags('mcp-publish', cmdOpts), cmdOpts.name);
         });
 
     program
@@ -2315,7 +2339,11 @@ async function withChannel(
     // When `--config` runs an in-process hub, that hub already logs its routed
     // traffic (richer than the client leg) — so only tap the wire for a direct
     // remote connection, to avoid double-logging the control socket.
-    const conn = await connectEndpoint(acquired.ep, acquired.running === undefined ? wireLog('hub') : undefined);
+    const conn = await connectEndpoint(
+        acquired.ep,
+        acquired.running === undefined ? wireLog('hub') : undefined,
+        { cmdEnvLocalHub: g_invocation?.profile === 'hub' },
+    );
     try {
         const schemaSource = g_invocation?.values.schema;
         const channel = schemaSource === undefined

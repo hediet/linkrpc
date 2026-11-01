@@ -6,21 +6,8 @@ import {
     RpcError,
     type SigningCallCtx,
 } from '@hediet/linkrpc';
-import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
-import { hubServiceIdRegistryInterface } from '@hediet/linkrpc/hub/common';
 import type { CliConnection } from '@hediet/linkrpc-client-internal';
-
-/**
- * The wire method for the provenance claim front door. Mirrors
- * `Hub.registerServiceIdNamespace`, which calls
- * `connection.get(hubGrantedServiceIdInterface).register({ serviceId })`
- * with no serviceId prefix — i.e. interface-form
- * `hubGrantedServiceId::register`. The claimed serviceId must be
- * within the connection's granted namespace.
- */
-const CLAIM_METHOD = `${hubGrantedServiceIdInterface.info.id}::register`;
-const GET_CLAIM_NAMESPACE_METHOD = `${hubGrantedServiceIdInterface.info.id}::get`;
-const GET_HUB_SERVICE_ID_METHOD = `${hubGrantedServiceIdInterface.info.id}::getHubServiceId`;
+import { claimServiceId } from './serviceIdClaim';
 
 /**
  * How calls the participant emits reach the hub:
@@ -72,7 +59,7 @@ export async function proxyCommand(opts: ProxyOptions): Promise<void> {
     }
 
     if (opts.claimServiceId !== undefined) {
-        await _claimServiceId(opts.hub, opts.claimServiceId);
+        await claimServiceId(opts.hub, opts.claimServiceId);
         log(`proxy: claimed '${opts.claimServiceId}' — forwarding its requests to the participant unchanged`);
     }
     log({
@@ -138,42 +125,6 @@ export function createForwardingHandler(
         handleRequest: (call) => _forwardRequest(to, call, ctx),
         handleNotification: (call) => _forwardNotification(to, call, ctx),
     };
-}
-
-async function _claimServiceId(local: CliConnection, serviceId: string): Promise<void> {
-    const namespaceRes = await local.channel.sendRequest(GET_CLAIM_NAMESPACE_METHOD, {});
-    const grantedNamespace =
-        typeof namespaceRes === 'object'
-        && namespaceRes !== null
-        && 'grantedServiceIdNamespace' in namespaceRes
-        && typeof (namespaceRes as { grantedServiceIdNamespace?: unknown; }).grantedServiceIdNamespace === 'string'
-            ? (namespaceRes as { grantedServiceIdNamespace: string; }).grantedServiceIdNamespace
-            : '';
-
-    if (_isServiceIdUnder(serviceId, grantedNamespace)) {
-        await local.channel.sendRequest(CLAIM_METHOD, { serviceId });
-        return;
-    }
-
-    const hubIdRes = await local.channel.sendRequest(GET_HUB_SERVICE_ID_METHOD, {});
-    const hubServiceId =
-        typeof hubIdRes === 'object'
-        && hubIdRes !== null
-        && 'hubServiceId' in hubIdRes
-        && typeof (hubIdRes as { hubServiceId?: unknown; }).hubServiceId === 'string'
-            ? (hubIdRes as { hubServiceId: string; }).hubServiceId
-            : undefined;
-    if (!hubServiceId) {
-        throw new Error('tunnel: failed to resolve hub service id for out-of-namespace claim');
-    }
-
-    const registerMethod = `${hubServiceId}::${hubServiceIdRegistryInterface.info.id}::registerServiceId`;
-    await local.channel.sendRequest(registerMethod, { requestedPrefix: serviceId });
-}
-
-function _isServiceIdUnder(serviceId: string, namespace: string): boolean {
-    if (namespace === '') return false;
-    return serviceId === namespace || serviceId.startsWith(`${namespace}/`);
 }
 
 /** Resolve on the next `SIGINT` / `SIGTERM`. */

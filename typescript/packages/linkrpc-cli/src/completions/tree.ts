@@ -537,7 +537,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             description: 'Aggregate discoverable Hub MCP tools on stdio.',
             positionals: [],
             options: [
-                { name: '--scripts', takesValue: false },
+                { name: '--no-scripts', takesValue: false },
                 { name: '--mcp-identity', takesValue: true, valueType: 'free' },
             ],
         },

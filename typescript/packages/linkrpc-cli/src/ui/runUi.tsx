@@ -38,7 +38,7 @@ export async function runUi(opts: RunUiOptions): Promise<void> {
 
 /** Non-Hub endpoints: a single connection, no redial. */
 async function _runUiOnce(endpoint: ResolvedEndpoint, principalSpec: PrincipalSpec, schema?: StaticHubSchema, profile?: "rpc" | "hub"): Promise<void> {
-    const conn = await connect(endpoint);
+    const conn = await connect(endpoint, undefined, { cmdEnvLocalHub: profile === "hub" });
     const identity = _isRawEndpoint(endpoint) || profile === "rpc"
         ? "unsigned (raw endpoint)"
         : _formatIdentity(

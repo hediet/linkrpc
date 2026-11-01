@@ -98,14 +98,34 @@ export interface CliConnection {
     readonly closed: Promise<void>;
 }
 
+export interface ConnectOptions {
+    /**
+     * Run a `cmd-env` child as a participant of an in-process local hub (it
+     * must claim its granted namespace) instead of behind a root overlay. The
+     * hub profile uses this, so hub clients see the child's services as on any
+     * hub.
+     */
+    readonly cmdEnvLocalHub?: boolean;
+}
+
 export async function connect(
     endpoint: ResolvedEndpoint,
     log?: ConnectLogOptions,
+    options: ConnectOptions = {},
 ): Promise<CliConnection> {
     switch (endpoint.kind) {
         case 'cmd-stdio':
             return _connectCmdStdio(endpoint.command, endpoint.env, endpoint.cwd, log);
         case 'cmd-env':
+            if (options.cmdEnvLocalHub) {
+                return connectViaLocalHub({
+                    command: endpoint.command,
+                    provisionSlot: endpoint.provisionSlot,
+                    ...(endpoint.env !== undefined ? { env: endpoint.env } : {}),
+                    ...(endpoint.cwd !== undefined ? { cwd: endpoint.cwd } : {}),
+                    ...(log !== undefined ? { log } : {}),
+                });
+            }
             return _connectCmdEnv(endpoint.command, endpoint.provisionSlot, endpoint.env, endpoint.cwd, log);
         case 'ws':
             return _connectWs(endpoint, log);

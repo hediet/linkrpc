@@ -20,16 +20,15 @@ type Case = {
     expectedText?: string;
 };
 
+const scriptTools = ['runLinkRpcScript', 'awaitLinkRpcTask', 'cancelLinkRpcTask'];
+
 it.each<Case>([
-    { command: ['mcp-forward'], consumer: ['mcp'], scriptTools: [] },
+    { command: ['mcp-forward'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
     // The MCP server runs on its own; the producer forwards it over its own stdin/stdout.
-    { command: ['mcp-forward', '--stdio'], consumer: ['mcp'], scriptTools: [] },
-    { command: ['mcp-publish', '--service'], consumer: ['mcp'], scriptTools: [] },
-    {
-        command: ['mcp-publish', '--service', '--forward'],
-        consumer: ['mcp', '--scripts'],
-        scriptTools: ['runLinkRpcScript', 'awaitLinkRpcTask', 'cancelLinkRpcTask'],
-    },
+    { command: ['mcp-forward', '--stdio'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
+    { command: ['mcp-publish', '--service'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
+    // The script tools are on by default.
+    { command: ['mcp-publish', '--service', '--forward'], consumer: ['mcp'], scriptTools },
     // Two accounts in a config file; the consumer selects the non-default one.
     {
         command: ['mcp-publish'],
@@ -41,13 +40,13 @@ it.each<Case>([
             ],
             expose: { service: {} },
         }),
-        consumer: ['mcp', '--mcp-identity', 'test/explorer=work'],
+        consumer: ['mcp', '--no-scripts', '--mcp-identity', 'test/explorer=work'],
         scriptTools: [],
         expectedText: '{"message":"from the agent","account":"work"}',
     },
 ])('runs $command -> isolated Hub -> linkrpc hub $consumer -> stdio MCP client', async ({
     command, consumer, scriptTools, config, expectedText,
-}) => {
+}: Case) => {
     const directory = await mkdtemp(join(tmpdir(), 'linkrpc-mcp-'));
     const socket = process.platform === 'win32' ? `\\\\.\\pipe\\linkrpc-mcp-${randomUUID()}` : join(directory, 'hub.sock');
     const endpoint = process.platform === 'win32'
@@ -70,7 +69,8 @@ it.each<Case>([
     const ownStdio = command.includes('--stdio');
     const configFile = join(directory, 'mcp.json');
     if (config) await writeFile(configFile, JSON.stringify(config(serverScript)));
-    const producer = spawn(process.execPath, [...args, ...command, '--serviceId', 'test/explorer',
+    // `./explorer` is relative to the connection's granted namespace `test`.
+    const producer = spawn(process.execPath, [...args, ...command, '--serviceId', './explorer',
         ...(config ? ['--mcp-config', configFile] : ownStdio ? [] : ['--', process.execPath, serverScript])],
     { cwd, stdio: [ownStdio ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     const server = ownStdio ? spawn(process.execPath, [serverScript], { stdio: ['pipe', 'pipe', 'inherit'] }) : undefined;
@@ -88,7 +88,7 @@ it.each<Case>([
     try {
         await vi.waitFor(() => {
             if (producer.exitCode !== null) throw new Error(`Producer exited: ${producerLog}`);
-            expect(producerLog).toContain("mcp-publish: claimed");
+            expect(producerLog).toContain("mcp-publish: claimed 'test/explorer'");
         }, { timeout: 15_000 });
         let diagnostics = '';
         transport.stderr?.on('data', chunk => { diagnostics += String(chunk); });
@@ -114,5 +114,36 @@ it.each<Case>([
         await exited;
         hub.dispose();
         await rm(directory, { recursive: true, force: true });
+    }
+}, 60_000);
+
+it('publishes an MCP server to an in-process hub with hub --endpoint-cmd', async () => {
+    const cwd = fileURLToPath(new URL('../../', import.meta.url));
+    const cliPath = fileURLToPath(new URL('../linkrpc.ts', import.meta.url));
+    const server = `"${process.execPath}" "${fileURLToPath(new URL('../fixtures/mcp-server.mjs', import.meta.url))}"`;
+    const publisher = `"${process.execPath}" --import tsx "${cliPath}" hub mcp-publish --service --name demo -- ${server}`;
+    const home = await mkdtemp(join(tmpdir(), 'linkrpc-mcp-local-hub-'));
+    const run = (...commandArgs: string[]) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
+        const child = spawn(process.execPath, [
+            '--import', 'tsx', cliPath, 'hub', '--context', ':empty', '--no-use-env',
+            '--principal', `file:${join(home, 'identity.json')}`, ...commandArgs, '--endpoint-cmd', publisher,
+        ], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', chunk => { stdout += String(chunk); });
+        child.stderr.on('data', chunk => { stderr += String(chunk); });
+        child.once('exit', code => resolve({ code, stdout, stderr }));
+    });
+    try {
+        // The publisher claims the local hub's granted namespace, `local`, before the client connects.
+        const listing = await run('ls');
+        expect(listing.stdout).toContain('mcp.tools.demo');
+        const call = await run('call', 'local::mcp.tools.demo::echo', '--p:message=hello');
+        expect(call.code, call.stderr).toBe(0);
+        expect(JSON.parse(call.stdout)).toEqual({ content: [{ type: 'text', text: '{"message":"hello"}' }] });
+        // The publisher stops with its hub.
+        expect(call.stderr).toContain('mcp-publish: the hub connection closed');
+    } finally {
+        await rm(home, { recursive: true, force: true });
     }
 }, 60_000);
