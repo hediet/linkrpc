@@ -164,6 +164,7 @@ async function fixture() {
         hubAccessMethod: 'hubAccess::requestAccess',
         listGrants: () => principal.capBag.capabilities,
         requestAccess,
+        requestOnceForNextCall: vi.fn(),
     };
     return {
         channel: connection.channel, read, session, requestAccess,
@@ -274,6 +275,37 @@ describe('caps request and call --cap:request', () => {
                 }],
             });
             expect(f.read).not.toHaveBeenCalled();
+        } finally { f.dispose(); }
+    });
+
+    it('arms a once grant for exactly the executed call instead of requesting a durable scope', async () => {
+        const f = await fixture();
+        try {
+            expect(JSON.parse(await callCommand(f.channel, {
+                methodRef: 'files::test.files::read', paramsArg: JSON.stringify(params),
+                requestCap: true, duration: 'once', signingSession: f.session,
+            }))).toEqual({ content: 'hello' });
+            expect({
+                armed: vi.mocked(f.session.requestOnceForNextCall).mock.calls,
+                durableRequests: f.requestAccess.mock.calls.length,
+                reads: f.read.mock.calls.length,
+            }).toEqual({ armed: [['files::test.files::read']], durableRequests: 0, reads: 1 });
+        } finally { f.dispose(); }
+    });
+
+    it.each([
+        { option: 'caps request', extra: { capabilityOnly: true }, error: 'bound to one call' },
+        { option: '--cap:allow-param', extra: { allowParams }, error: 'cannot be combined' },
+        { option: '--cap:delegate', extra: { delegate: true }, error: 'cannot be combined' },
+    ])('rejects a once grant with $option', async ({ extra, error }) => {
+        const f = await fixture();
+        try {
+            await expect(callCommand(f.channel, {
+                methodRef: 'files::test.files::read', paramsArg: JSON.stringify(params),
+                requestCap: true, duration: 'once', signingSession: f.session, ...extra,
+            })).rejects.toThrow(error);
+            expect({ armed: vi.mocked(f.session.requestOnceForNextCall).mock.calls.length, reads: f.read.mock.calls.length })
+                .toEqual({ armed: 0, reads: 0 });
         } finally { f.dispose(); }
     });
 
