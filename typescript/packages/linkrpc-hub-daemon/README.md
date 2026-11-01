@@ -135,6 +135,7 @@ The config (`linkrpc-hub-daemon config path`) is JSON with comments. A
 | `readiness` | `connected` | RPC processes are running once connected to the hub, or once `spawned`; ignored when `rpc: false` (`command` only) |
 | `serviceId` | `<hubServiceId>/<name>` | Namespace the service may claim on the hub (default `hub/<name>`) |
 | `managedIdentity` | `true` | Provision a persistent identity (slot `service:<name>`) |
+| `claimServiceIds` | `[]` | Service IDs to register on the far end of an `endpoint` so it routes them back (see [Serving this hub to the far end](#serving-this-hub-to-the-far-end)) |
 | `startTimeoutMs` | `30000` | A `connected` service that does not connect in time is restarted |
 | `stopTimeoutMs` | `5000` | Grace period before the process tree is killed |
 
@@ -191,6 +192,36 @@ namespace. `unix:`, `npipe:`, and `ws:` endpoints work the same way. The
 command's stderr appears in the service log; when it exits, the restart
 policy reconnects.
 
+### Serving this hub to the far end
+
+An `endpoint` service routes its `serviceId` out to the far end. To let the
+far end also call into this hub, list the service IDs this hub serves in
+`claimServiceIds`; they are registered on the far end on every connect:
+
+- A string, such as `"de.hediet/home"`, is claimed within the namespace the
+  far end grants the connection's token. If the far end rejects it, the
+  connection fails and is retried.
+- `{ "serviceId": "…", "as": "…" }` is claimed outside that namespace through
+  the far hub's admin-gated `hubServiceIdRegistry::registerServiceId`, signed
+  as `as`. `as` uses the CLI's `--principal` syntax, `user:<id>` or
+  `file:<path>`. The far hub accepts the claim if it trusts that identity as a
+  root (`rootPrincipalIds`) or has granted it access. A rejected claim is
+  logged and retried on the next connect; the outbound route stays up.
+
+`jsonc
+"services": {
+    "cloud": {
+        "endpoint": "wss://hub.example.com?token=…",
+        "serviceId": "de.hediet",
+        "claimServiceIds": [{ "serviceId": "hediet/tablet", "as": "user:hubrpc-cli" }],
+        "restart": "always"
+    }
+}
+`
+
+Calls the far end routes back pass this hub's forwarded-call checks like any
+other inbound call.
+
 ### Application endpoint
 
 Applications connect to a fixed, per-user endpoint (shown by `status`):
@@ -221,7 +252,7 @@ on the discovery file (written only by the daemon) or configure a token.
 | --- | --- |
 | Formatting, comments, `$schema` | Nothing |
 | Service added / removed | That service starts / stops |
-| `command`, `endpoint`, `env`, `cwd`, `serviceId`, `managedIdentity`, `rpc`, `tty`, `readiness` | That service restarts |
+| `command`, `endpoint`, `env`, `cwd`, `serviceId`, `managedIdentity`, `claimServiceIds`, `rpc`, `tty`, `readiness` | That service restarts |
 | `enabled`, `restart`, timeouts, `description` | Applied without restarting the process |
 | `callLog` | Applied without restarting the hub or any service |
 | Any hub-wide setting | The hub and all services restart |

@@ -1,4 +1,5 @@
 import { type HubConfig, hubConfigJsonSchema, parseHubConfig } from '@hediet/linkrpc-hub';
+import { ClaimServiceIdSchema } from '@hediet/linkrpc-hub/config';
 import * as jsonc from 'jsonc-parser';
 import { z } from 'zod';
 import { type CallLogConfig, CallLogConfigSchema } from './callLog/callLogConfig';
@@ -43,6 +44,13 @@ export const ManagedServiceSchema = z.object({
     serviceId: z.string().min(1).optional(),
     /** Provision a persistent managed identity (slot `service:<name>`). */
     managedIdentity: z.boolean().default(true),
+    /**
+     * Service ids this hub serves through an `endpoint` service: registered on
+     * the far end on every connect, so the far end routes them back here. Same
+     * entries as a hub endpoint's `claimServiceIds`, e.g.
+     * `{ "serviceId": "hediet/tablet", "as": "user:hubrpc-cli" }`.
+     */
+    claimServiceIds: z.array(ClaimServiceIdSchema).default([]),
     /** A `connected` service that does not connect in time is restarted. */
     startTimeoutMs: z.number().int().positive().default(30_000),
     /** Grace period after disconnecting (and SIGTERM on POSIX) before killing the process tree. */
@@ -51,7 +59,12 @@ export const ManagedServiceSchema = z.object({
     if ((service.command === undefined) === (service.endpoint === undefined)) {
         context.addIssue({ code: 'custom', message: 'set exactly one of "command" and "endpoint"' });
     }
-    if (service.endpoint === undefined) return;
+    if (service.endpoint === undefined) {
+        if (service.claimServiceIds.length > 0) {
+            context.addIssue({ code: 'custom', message: '"claimServiceIds" only applies to "endpoint" services' });
+        }
+        return;
+    }
     const processOnly = [
         Object.keys(service.env).length > 0 && 'env',
         service.cwd !== undefined && 'cwd',
