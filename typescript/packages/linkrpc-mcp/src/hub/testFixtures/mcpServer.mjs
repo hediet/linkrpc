@@ -32,7 +32,13 @@ export function createTestMcpServer(transport) {
         return { tools: [tools[index]], ...(index + 1 < tools.length ? { nextCursor: String(index + 1) } : {}) };
     });
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
-        const structuredContent = { value: String(request.params.arguments?.value ?? ""), pid: process.pid, transport };
+        const structuredContent = {
+            value: String(request.params.arguments?.value ?? ""),
+            pid: process.pid,
+            transport,
+            // The account a stdio process was started for (see the identity tests).
+            ...(process.env.MCP_TEST_ACCOUNT !== undefined ? { account: process.env.MCP_TEST_ACCOUNT } : {}),
+        };
         return { content: [{ type: "text", text: JSON.stringify(structuredContent) }], structuredContent };
     });
     return server;

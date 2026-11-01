@@ -9,7 +9,8 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 // @ts-expect-error untyped test fixture
 import { createTestMcpServer } from "./testFixtures/mcpServer.mjs";
-import { mcpServerInterface, mcpToolsInterface } from "./contracts";
+import { mcpIdentitiesInterface, mcpServerInterface, mcpToolsInterface } from "./contracts";
+import { type McpAccessToken, oauthMcpIdentities } from "./oauthIdentities";
 import { spawn } from "node:child_process";
 import { McpForwardClientTransport } from "./forward/clientTransport";
 import { serveMcpForwardInstance, streamInstanceTransport } from "./forward/instance";
@@ -145,6 +146,118 @@ describe("hosted MCP servers", () => {
     }, 20_000);
 });
 
+describe("MCP identities", () => {
+    it("starts one stdio process per identity with its environment", async () => {
+        const { server, client } = pair();
+        const hosted = await hostMcpServer({
+            connection: server,
+            serviceId: "mcp/accounts",
+            server: mcpServerConfigSchema.parse({
+                id: "accounts",
+                transport: stdioTransport,
+                identities: [
+                    { id: "work", env: { MCP_TEST_ACCOUNT: "work" } },
+                    { id: "home", default: true, env: { MCP_TEST_ACCOUNT: { fromEnv: "LINKRPC_MCP_TEST_HOME" } } },
+                ],
+                expose: { service: {}, forward: {} },
+            }),
+        });
+        process.env.LINKRPC_MCP_TEST_HOME = "home-from-env";
+        try {
+            const call = (params: Record<string, string>) => client.channel.sendRequest(
+                "mcp/accounts::mcp.tools.accounts::inspect",
+                { value: "x", mode: "full", ...params },
+            );
+            expect(accountOf(await call({}))).toBe("home-from-env");
+            expect(accountOf(await call({ mcpIdentity: "work" }))).toBe("work");
+            expect(pidOf(await call({ mcpIdentity: "work" }))).not.toBe(pidOf(await call({})));
+
+            const forwarded = await forwardedClient(client, "mcp/accounts", "work");
+            expect(accountOf(await forwarded.callTool({ name: "inspect", arguments: { value: "f", mode: "full" } })))
+                .toBe("work");
+            await forwarded.close();
+
+            expect(await client.service("mcp/accounts").get(mcpIdentitiesInterface).list({})).toEqual({
+                identities: [
+                    { id: "work", default: false, authentication: { status: "not-required" } },
+                    { id: "home", default: true, authentication: { status: "not-required" } },
+                ],
+            });
+        } finally {
+            delete process.env.LINKRPC_MCP_TEST_HOME;
+            await hosted.dispose();
+        }
+    }, 20_000);
+
+    it("sends each identity's OAuth token and retries once after a 401", async () => {
+        const http = await startHttpMcpServer({ acceptedTokens: new Set(["alice-2", "bob-1"]) });
+        const issued = new Map([["alice", 1], ["bob", 1]]);
+        const tokens = {
+            list: () => [{ id: "alice", label: "Alice" }, { id: "bob" }, { id: "carol" }],
+            getAccessToken: async (identityId: string): Promise<McpAccessToken> => identityId === "carol"
+                ? { status: "authorization-required", authorizationUri: "https://auth.example/carol" }
+                : { status: "ready", accessToken: `${identityId}-${issued.get(identityId)}` },
+            invalidate: async (identityId: string) => { issued.set(identityId, issued.get(identityId)! + 1); },
+        };
+        const { server, client } = pair();
+        const hosted = await hostMcpServer({
+            connection: server,
+            serviceId: "mcp/oauth",
+            server: mcpServerConfigSchema.parse({
+                id: "oauth",
+                transport: { kind: "streamable-http", url: http.url },
+                expose: { service: {}, forward: {} },
+            }),
+            identities: oauthMcpIdentities({ url: http.url, tokens }),
+            log: () => {},
+        });
+        try {
+            const inspect = (params: Record<string, string>) => client.channel.sendRequest(
+                "mcp/oauth::mcp.tools.oauth::inspect",
+                { value: "x", mode: "full", ...params },
+            );
+            // Listing the tools at startup made alice's first token fail once.
+            expect(http.authorizations().filter((value) => value.includes("alice")).slice(0, 2))
+                .toEqual(["Bearer alice-1", "Bearer alice-2"]);
+            await inspect({});
+            await inspect({ mcpIdentity: "bob" });
+            expect(new Set(http.authorizations())).toEqual(new Set(["Bearer alice-1", "Bearer alice-2", "Bearer bob-1"]));
+            await expect(inspect({ mcpIdentity: "carol" })).rejects.toThrow(
+                "MCP identity 'carol' requires authorization at https://auth.example/carol",
+            );
+
+            // Forwarding is refused up front for an identity that needs sign-in.
+            await expect(client.channel.sendRequest("mcp/oauth::mcp.forward::connect", { mcpIdentity: "carol" }))
+                .rejects.toThrow("MCP identity 'carol' requires authorization at https://auth.example/carol");
+
+            const before = http.authorizations().length;
+            const forwarded = await forwardedClient(client, "mcp/oauth", "bob");
+            await forwarded.callTool({ name: "inspect", arguments: { value: "f", mode: "full" } });
+            await forwarded.close();
+            // Other requests in between belong to the open shared sessions (e.g. their SSE streams).
+            expect(http.authorizations().slice(before).filter((value) => value === "Bearer bob-1").length)
+                .toBeGreaterThanOrEqual(3);
+
+            expect(await client.service("mcp/oauth").get(mcpIdentitiesInterface).list({})).toEqual({
+                identities: [
+                    {
+                        id: "alice", label: "Alice", default: true,
+                        authentication: { status: "ready", identityId: "alice", identityLabel: "Alice" },
+                    },
+                    { id: "bob", default: false, authentication: { status: "ready", identityId: "bob" } },
+                    {
+                        id: "carol", default: false,
+                        authentication: { status: "authorization-required", authorizationUri: "https://auth.example/carol" },
+                    },
+                ],
+            });
+        } finally {
+            await hosted.dispose();
+            await http.dispose();
+        }
+    }, 20_000);
+});
+
 function pair() {
     const transports = new TransportPair();
     return {
@@ -153,23 +266,39 @@ function pair() {
     };
 }
 
-async function forwardedClient(connection: LinkRpcConnection, serviceId: string): Promise<Client> {
+async function forwardedClient(connection: LinkRpcConnection, serviceId: string, mcpIdentity?: string): Promise<Client> {
     const client = new Client({ name: "forward-test", version: "1" });
-    await client.connect(new McpForwardClientTransport(connection.channel, serviceId));
+    await client.connect(new McpForwardClientTransport(connection.channel, serviceId, {
+        ...(mcpIdentity !== undefined ? { mcpIdentity } : {}),
+    }));
     return client;
+}
+
+function accountOf(result: unknown): string | undefined {
+    return (result as { structuredContent: { account?: string } }).structuredContent.account;
 }
 
 function pidOf(result: unknown): number {
     return (result as { structuredContent: { pid: number } }).structuredContent.pid;
 }
 
-async function startHttpMcpServer() {
+async function startHttpMcpServer(options: { readonly acceptedTokens?: ReadonlySet<string> } = {}) {
     const transports = new Map<string, StreamableHTTPServerTransport>();
     const servers = new Set<Server>();
     const versions: string[] = [];
     const headers = new Set<string>();
+    const authorizations: string[] = [];
     let deleted = 0;
     const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
+        if (options.acceptedTokens !== undefined) {
+            const authorization = req.headers.authorization ?? "";
+            authorizations.push(authorization);
+            if (!options.acceptedTokens.has(authorization.replace(/^Bearer /, ""))) {
+                res.statusCode = 401;
+                res.end();
+                return;
+            }
+        }
         const version = req.headers["mcp-protocol-version"];
         if (typeof version === "string") versions.push(version);
         if (typeof req.headers["x-test"] === "string") headers.add(req.headers["x-test"]);
@@ -211,6 +340,7 @@ async function startHttpMcpServer() {
         url: `http://127.0.0.1:${address.port}/mcp`,
         protocolVersions: () => versions,
         headerValues: () => [...headers],
+        authorizations: () => authorizations,
         deletedSessions: () => deleted,
         dispose: async () => {
             await Promise.allSettled([...servers].map((server) => server.close()));

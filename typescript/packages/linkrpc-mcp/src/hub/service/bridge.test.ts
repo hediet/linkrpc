@@ -12,7 +12,8 @@ import type {
     McpToolDefinition,
     OpenMcpSessionContext,
 } from "../clientSession";
-import { mcpServerInterface, mcpToolsInterface } from "../contracts";
+import { type McpAuthenticationState, mcpServerInterface, mcpToolsInterface } from "../contracts";
+import type { McpIdentities, McpIdentityInfo } from "../mcpIdentities";
 import { registerMcpToolBridge } from "./bridge";
 
 class FakeFactory implements McpSessionFactory {
@@ -30,18 +31,22 @@ class FakeFactory implements McpSessionFactory {
     ];
     public readonly calls: Array<{
         sessionId: string;
+        identityId: string;
         name: string;
         args: Readonly<Record<string, unknown>> | undefined;
     }> = [];
+    public toolsFor: (identityId: string) => McpToolDefinition[] = () => this.tools;
+    public failFor = new Set<string>();
     public readonly closed: string[] = [];
     private readonly _contexts: OpenMcpSessionContext[] = [];
 
     public async open(context: OpenMcpSessionContext): Promise<McpClientSession> {
+        if (this.failFor.has(context.identityId)) throw new Error(`cannot connect as ${context.identityId}`);
         this._contexts.push(context);
         return {
-            listTools: async () => this.tools,
+            listTools: async () => this.toolsFor(context.identityId),
             callTool: async (name, args) => {
-                this.calls.push({ sessionId: context.sessionId, name, args });
+                this.calls.push({ sessionId: context.sessionId, identityId: context.identityId, name, args });
                 return {
                     content: [{ type: "text", text: String(args?.text ?? "") }],
                     structuredContent: { echoed: args?.text },
@@ -53,6 +58,32 @@ class FakeFactory implements McpSessionFactory {
 
     public notifyToolsChanged(): void {
         for (const context of this._contexts) context.onToolsChanged();
+    }
+}
+
+class FakeIdentities implements McpIdentities {
+    private readonly _listeners = new Set<() => void>();
+    private readonly _authentication = new Map<string, McpAuthenticationState>();
+
+    constructor(private _list: McpIdentityInfo[]) {}
+
+    list(): readonly McpIdentityInfo[] { return this._list; }
+    onDidChange(listener: () => void) {
+        this._listeners.add(listener);
+        return { dispose: () => this._listeners.delete(listener) };
+    }
+    upstream(): never { throw new Error("FakeFactory opens sessions"); }
+    authentication(identityId: string): McpAuthenticationState {
+        return this._authentication.get(identityId) ?? { status: "not-required" };
+    }
+
+    set(list: McpIdentityInfo[]): void {
+        this._list = list;
+        for (const listener of this._listeners) listener();
+    }
+    setAuthentication(identityId: string, state: McpAuthenticationState): void {
+        this._authentication.set(identityId, state);
+        for (const listener of this._listeners) listener();
     }
 }
 
@@ -118,8 +149,8 @@ describe("registerMcpToolBridge", () => {
             { sessionId: "guessed", text: "x" },
         )).rejects.toThrow("Unknown or closed MCP bridge session");
         expect(factory.calls).toEqual([
-            { sessionId: "", name: "echo", args: { text: "shared" } },
-            { sessionId, name: "echo", args: { text: "own" } },
+            { sessionId: "", identityId: "default", name: "echo", args: { text: "shared" } },
+            { sessionId, identityId: "default", name: "echo", args: { text: "own" } },
         ]);
 
         expect(await lifecycle.closeSession({ sessionId })).toEqual({ closed: true });
@@ -185,7 +216,7 @@ describe("registerMcpToolBridge", () => {
             factory,
             onRefreshError: (error) => errors.push(error),
         });
-        const defaultSession = await bridge.sessionManager.get("");
+        const defaultSession = await bridge.sessionManager.get("", "default");
         const originalListTools = defaultSession.listTools;
         let fail = true;
         defaultSession.listTools = async (signal) => {
@@ -209,19 +240,21 @@ describe("registerMcpToolBridge", () => {
 
     it("serves observable lifecycle and authentication state", async () => {
         const { server, client } = setup();
+        const identities = new FakeIdentities([{ id: "work" }]);
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory: new FakeFactory(),
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory: new FakeFactory(), identities,
         });
         const lifecycle = client.service("mcp/demo").get(mcpServerInterface);
         const states: Array<ReturnType<typeof bridge.getState>> = [];
         const watch = lifecycle.watchState({}, { onMessage: (state) => states.push(state) });
-        bridge.updateAuthenticationState({
+        identities.setAuthentication("work", {
             status: "authorization-required",
             authorizationUri: "https://auth.example.com/authorize/request",
             expiresAt: "2030-01-01T00:00:00.000Z",
         });
         await until(() => states.some((state) => state.authentication.status === "authorization-required"));
         expect(await lifecycle.getState({})).toMatchObject({
+            identity: { id: "work" },
             authentication: {
                 status: "authorization-required",
                 authorizationUri: "https://auth.example.com/authorize/request",
@@ -230,6 +263,111 @@ describe("registerMcpToolBridge", () => {
             tools: { status: "ready", interfaces: [{ interfaceId: "mcp.tools.demo", toolCount: 1 }], count: 1 },
         });
         watch.cancel("done");
+        await bridge.dispose();
+    });
+
+    it("routes calls to the selected identity and binds exclusive sessions to it", async () => {
+        const { server, client } = setup();
+        const factory = new FakeFactory();
+        const identities = new FakeIdentities([{ id: "work" }, { id: "home", default: true }]);
+        const bridge = await registerMcpToolBridge({
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities,
+        });
+        const service = client.service("mcp/demo");
+        const echo = (params: Record<string, string>) =>
+            client.channel.sendRequest("mcp/demo::mcp.tools.demo::echo", { text: "x", ...params });
+
+        await echo({});
+        await echo({ mcpIdentity: "work" });
+        await service.get(mcpToolsInterface).callTool({ name: "echo", mcpIdentity: "work", arguments: { text: "y" } });
+        expect(factory.calls.map((call) => call.identityId)).toEqual(["home", "work", "work"]);
+
+        await expect(echo({ mcpIdentity: "nobody" })).rejects.toMatchObject({
+            code: -32602, message: "Unknown MCP identity: nobody",
+        });
+        const lifecycle = service.get(mcpServerInterface);
+        const { sessionId } = await lifecycle.openSession({ mcpIdentity: "work" });
+        await echo({ sessionId, mcpIdentity: "work" });
+        expect(factory.calls.at(-1)).toMatchObject({ identityId: "work", sessionId });
+        // A session id does not switch identities: the default is "home".
+        await expect(echo({ sessionId })).rejects.toMatchObject({ code: -32602 });
+        await expect(echo({ sessionId, mcpIdentity: "home" })).rejects.toMatchObject({ code: -32602 });
+        expect(await lifecycle.getState({ sessionId, mcpIdentity: "work" })).toMatchObject({
+            identity: { id: "work" }, session: { sessionId, status: "ready" },
+        });
+
+        // Removing an identity closes its sessions and invalidates its session ids.
+        identities.set([{ id: "home", default: true }]);
+        await until(() => factory.closed.includes(sessionId));
+        await expect(echo({ mcpIdentity: "work" })).rejects.toMatchObject({ code: -32602 });
+        await bridge.dispose();
+    });
+
+    it("publishes the union of the identities' tools", async () => {
+        const { server, client } = setup();
+        const factory = new FakeFactory();
+        factory.toolsFor = (identityId) => identityId === "admin"
+            ? [...factory.tools, { name: "delete_all", inputSchema: { type: "object" } }]
+            : factory.tools;
+        const identities = new FakeIdentities([{ id: "reader" }]);
+        const bridge = await registerMcpToolBridge({
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities,
+        });
+        const tools = client.service("mcp/demo").get(mcpToolsInterface);
+        expect((await tools.listTools({})).tools.map((tool) => [tool.name, tool.identities])).toEqual([
+            ["echo", ["reader"]],
+        ]);
+
+        // A new identity with more tools re-registers the generated interface.
+        identities.set([{ id: "reader" }, { id: "admin" }]);
+        await until(() => bridge.currentInterfaces.get("mcp.tools.demo")?.toSchema().methods.delete_all !== undefined);
+        const catalog = await tools.listTools({});
+        expect(catalog.defaultIdentity).toBe("reader");
+        expect(catalog.tools.map((tool) => [tool.name, tool.identities])).toEqual([
+            ["echo", ["reader", "admin"]],
+            ["delete_all", ["admin"]],
+        ]);
+        await bridge.dispose();
+    });
+
+    it("lists the tools of an identity once it signs in", async () => {
+        const { server, client } = setup();
+        const factory = new FakeFactory();
+        factory.toolsFor = (identityId) => identityId === "late"
+            ? [{ name: "late_tool", inputSchema: { type: "object" } }]
+            : factory.tools;
+        factory.failFor = new Set(["late"]);
+        const identities = new FakeIdentities([{ id: "early" }, { id: "late" }]);
+        identities.setAuthentication("late", { status: "authorization-required", authorizationUri: "https://sign.in" });
+        const bridge = await registerMcpToolBridge({
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities, log: () => {},
+        });
+        const tools = client.service("mcp/demo").get(mcpToolsInterface);
+        expect((await tools.listTools({})).tools.map((tool) => tool.name)).toEqual(["echo"]);
+
+        factory.failFor.clear();
+        identities.setAuthentication("late", { status: "ready" });
+        await until(() => bridge.currentInterfaces.get("mcp.tools.demo")?.toSchema().methods.late_tool !== undefined);
+        expect((await tools.listTools({})).tools.map((tool) => [tool.name, tool.identities])).toEqual([
+            ["echo", ["early"]],
+            ["late_tool", ["late"]],
+        ]);
+        await bridge.dispose();
+    });
+
+    it("lists tools without identities that cannot be used yet", async () => {
+        const { server, client } = setup();
+        const factory = new FakeFactory();
+        const identities = new FakeIdentities([{ id: "work" }, { id: "home" }]);
+        factory.failFor = new Set(["home"]);
+        const lines: string[] = [];
+        const bridge = await registerMcpToolBridge({
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities,
+            log: (line) => lines.push(line),
+        });
+        expect((await client.service("mcp/demo").get(mcpToolsInterface).listTools({})).tools
+            .map((tool) => tool.identities)).toEqual([["work"]]);
+        expect(lines).toEqual(["Cannot list the tools of MCP identity 'home': cannot connect as home"]);
         await bridge.dispose();
     });
 

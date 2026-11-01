@@ -10,7 +10,9 @@
  *   and forwarded;
  * - Alice and Bob, hub clients calling the tools as LinkRPC methods;
  * - an agent, an MCP client that sees the hub through `HubMcpAggregator` (what
- *   `linkrpc hub mcp` runs), through `mcp.forward`, and through the script tools.
+ *   `linkrpc hub mcp` runs), through `mcp.forward`, and through the script tools;
+ * - a second host publishing the same server under `journal` with two accounts
+ *   (MCP identities), `work` and `home`.
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -88,6 +90,7 @@ describe("MCP servers on a LinkRPC hub", () => {
             "hubrpc.defaults",
             "hubrpc.directory",
             "hubrpc.schemas",
+            "mcp.identities",
             "mcp.forward",
             "vscode.mcp-forward",
             "mcp.tools",
@@ -123,6 +126,10 @@ describe("MCP servers on a LinkRPC hub", () => {
             "params": {
               "additionalProperties": true,
               "properties": {
+                "mcpIdentity": {
+                  "description": "MCP identity (account) from mcp.identities::list. Omitted means the default identity.",
+                  "type": "string",
+                },
                 "sessionId": {
                   "description": "Exclusive bridge session from mcp.server::openSession. Omitted means the shared session.",
                   "type": "string",
@@ -393,7 +400,105 @@ describe("MCP servers on a LinkRPC hub", () => {
         expect(text(await second.callTool({ name: "list_notes" }))).toMatchInlineSnapshot(`"["kept by the running server"]"`);
     });
 
-    it("8. scripts: one MCP server with the script tools and the hub's MCP tools", async () => {
+    it("8. identities: one server, several accounts; a capability can pin the account", async () => {
+        // An MCP identity is one account: here an env var per stdio process, for
+        // HTTP servers a token per account (`oauthMcpIdentities`). In production:
+        // `linkrpc hub mcp-publish --config journal.json`.
+        const journal = await hostMcpServer({
+            connection: world.journalConnection,
+            serviceId: "journal",
+            server: mcpServerConfigSchema.parse({
+                id: "journal",
+                transport: { kind: "stdio", command: process.execPath, args: [notesServer] },
+                identities: [
+                    { id: "work", env: { NOTES_OWNER: "work" } },
+                    { id: "home", default: true, env: { NOTES_OWNER: "home" } },
+                ],
+                expose: { service: {}, forward: {} },
+            }),
+            log: () => {},
+        });
+        cleanup.push(() => journal.dispose());
+
+        const admin = await world.client("journal-admin", [allOf("journal")]);
+        expect(await admin.call("journal::mcp.identities::list", {})).toMatchInlineSnapshot(`
+          {
+            "identities": [
+              {
+                "authentication": {
+                  "status": "not-required",
+                },
+                "default": false,
+                "id": "work",
+              },
+              {
+                "authentication": {
+                  "status": "not-required",
+                },
+                "default": true,
+                "id": "home",
+              },
+            ],
+          }
+        `);
+        // Calls select the account with `mcpIdentity`; omitted means the default.
+        expect({
+            work: text(await admin.call("journal::mcp.tools.journal::add_note", { text: "standup", mcpIdentity: "work" })),
+            home: text(await admin.call("journal::mcp.tools.journal::add_note", { text: "groceries" })),
+        }).toMatchInlineSnapshot(`
+          {
+            "home": "home: ["groceries"]",
+            "work": "work: ["standup"]",
+          }
+        `);
+
+        // A capability pins the account with a parameter matcher. Matchers list
+        // every parameter of the call, the tool's own with `any`.
+        const assistant = await world.client("work-assistant", [{
+            ...members("journal", "mcp.tools.journal", ["add_note"]),
+            params: { mcpIdentity: { exact: "work" }, text: { any: true } },
+        }]);
+        expect(text(await assistant.call("journal::mcp.tools.journal::add_note", { mcpIdentity: "work", text: "review" })))
+            .toMatchInlineSnapshot(`"work: ["standup","review"]"`);
+        expect({
+            otherAccount: await errorOf(assistant.call("journal::mcp.tools.journal::add_note", { mcpIdentity: "home", text: "x" })),
+            defaultAccount: await errorOf(assistant.call("journal::mcp.tools.journal::add_note", { text: "x" })),
+        }).toMatchInlineSnapshot(`
+          {
+            "defaultAccount": {
+              "code": -32401,
+              "message": "params: param keys mismatch (declared=mcpIdentity,text, actual=text)",
+            },
+            "otherAccount": {
+              "code": -32401,
+              "message": "params: param "mcpIdentity" does not match",
+            },
+          }
+        `);
+
+        // `linkrpc hub mcp --mcp-identity journal=work` aggregates with that account.
+        const agent = await world.client("journal-agent", [
+            reflection("hub"),
+            reflection("journal"),
+            members("journal", "mcp.tools", ["listTools"]),
+            {
+                ...members("journal", "mcp.tools.journal", ["list_notes"]),
+                params: { mcpIdentity: { exact: "work" } },
+            },
+        ]);
+        const aggregator = new HubMcpAggregator(agent.sender, {
+            log: () => {},
+            mcpIdentityFor: (serviceId) => serviceId === "journal" ? "work" : undefined,
+        });
+        const server = new Server({ name: "hub-mcp", version: "1" }, { capabilities: { tools: { listChanged: true } } });
+        new McpToolHost(server).addSource(aggregator);
+        const mcp = await connectMcp(server, () => aggregator.dispose());
+        await until(async () => (await mcp.listTools()).tools.length > 0);
+        const listNotes = (await mcp.listTools()).tools.find((tool) => tool.description === "[journal] List all notes.")!;
+        expect(text(await mcp.callTool({ name: listNotes.name }))).toMatchInlineSnapshot(`"work: ["standup","review"]"`);
+    });
+
+    it("9. scripts: one MCP server with the script tools and the hub's MCP tools", async () => {
         // `linkrpc hub mcp --scripts`: the three script tools, then the aggregated
         // MCP tools. Scripts can call any hub service the principal may call,
         // including the generated MCP tool methods.
@@ -449,12 +554,14 @@ async function createWorld() {
     createHubServiceInterfaces(hub);
     const host = hubRegisterServiceId(hub, "notes");
     const runningHost = hubRegisterServiceId(hub, "running");
-    cleanup.push(() => host.dispose(), () => runningHost.dispose());
+    const journalHost = hubRegisterServiceId(hub, "journal");
+    cleanup.push(() => host.dispose(), () => runningHost.dispose(), () => journalHost.dispose());
     let seed = 10;
 
     return {
         hostConnection: host.connection,
         runningConnection: runningHost.connection,
+        journalConnection: journalHost.connection,
 
         /** A hub client signing as a fresh principal holding `permissions`. */
         async client(_name: string, permissions: Permission[]) {
@@ -544,5 +651,13 @@ async function errorOf(promise: Promise<unknown>): Promise<unknown> {
     } catch (error) {
         const { code, message } = error as { code?: number; message: string };
         return code === undefined ? message : { code, message };
+    }
+}
+
+async function until(condition: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+    const started = Date.now();
+    while (!(await condition())) {
+        if (Date.now() - started > timeoutMs) throw new Error("Timed out waiting for condition");
+        await new Promise((resolve) => setTimeout(resolve, 50));
     }
 }

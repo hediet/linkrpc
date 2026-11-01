@@ -67,33 +67,81 @@ export function httpUpstream(options: HttpUpstreamOptions): McpUpstream {
     };
 }
 
-/** JSON configuration of an upstream transport. Credentials belong in `fetch`, not here. */
+/**
+ * A configured string: a literal, or `{ fromEnv }` to read it from an
+ * environment variable when a session opens, so secrets stay out of config files.
+ */
+export const mcpConfigValueSchema = z.union([
+    z.string(),
+    z.object({ fromEnv: z.string().min(1) }).strict(),
+]);
+
+export type McpConfigValue = z.infer<typeof mcpConfigValueSchema>;
+
+const configValuesSchema = z.record(z.string(), mcpConfigValueSchema);
+
+/** JSON configuration of an upstream transport. */
 export const mcpUpstreamConfigSchema = z.discriminatedUnion("kind", [
     z.object({
         kind: z.literal("stdio"),
         command: z.string().min(1),
         args: z.array(z.string()).optional(),
         cwd: z.string().min(1).optional(),
-        env: z.record(z.string(), z.string()).optional(),
+        env: configValuesSchema.optional(),
     }),
     z.object({
         kind: z.literal("streamable-http"),
         url: z.string().url(),
-        headers: z.record(z.string(), z.string()).optional(),
+        headers: configValuesSchema.optional(),
     }),
 ]);
 
 export type McpUpstreamConfig = z.infer<typeof mcpUpstreamConfigSchema>;
 
+export interface UpstreamFromConfigOptions {
+    /** Replaces `fetch` of a streamable-http transport. */
+    readonly fetch?: FetchLike;
+    /** Environment for `{ fromEnv }` values; defaults to `process.env`. */
+    readonly env?: Readonly<Record<string, string | undefined>>;
+}
+
 export function upstreamFromConfig(
     config: McpUpstreamConfig,
-    options: { readonly fetch?: FetchLike } = {},
+    options: UpstreamFromConfigOptions = {},
 ): McpUpstream {
+    const env = options.env ?? process.env;
     if (config.kind === "stdio") {
         if (options.fetch !== undefined) throw new Error("A fetch override requires a streamable-http transport");
-        return stdioUpstream(config);
+        const label = [config.command, ...(config.args ?? [])].join(" ");
+        return {
+            label,
+            createTransport: () => stdioUpstream({
+                ...config,
+                env: config.env === undefined ? undefined : resolveConfigValues(config.env, env),
+            }).createTransport(),
+        };
     }
-    return httpUpstream({ url: config.url, headers: config.headers, fetch: options.fetch });
+    const label = httpUpstream({ url: config.url }).label;
+    return {
+        label,
+        createTransport: () => httpUpstream({
+            url: config.url,
+            headers: config.headers === undefined ? undefined : resolveConfigValues(config.headers, env),
+            fetch: options.fetch,
+        }).createTransport(),
+    };
+}
+
+export function resolveConfigValues(
+    values: Readonly<Record<string, McpConfigValue>>,
+    env: Readonly<Record<string, string | undefined>>,
+): Record<string, string> {
+    return Object.fromEntries(Object.entries(values).map(([key, value]) => {
+        if (typeof value === "string") return [key, value];
+        const resolved = env[value.fromEnv];
+        if (resolved === undefined) throw new Error(`Environment variable ${value.fromEnv} is not set (for ${key})`);
+        return [key, resolved];
+    }));
 }
 
 function definedEntries(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
