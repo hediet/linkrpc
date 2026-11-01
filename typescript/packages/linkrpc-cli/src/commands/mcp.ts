@@ -17,6 +17,8 @@ export interface McpOptions {
      * channel. Loads the QuickJS sandbox; `access` grows their grants.
      */
     readonly scripts?: boolean;
+    /** MCP identity (account) per service id; other services use their default identity. */
+    readonly mcpIdentities?: Readonly<Record<string, string>>;
     readonly access?: {
         listGrants(): readonly SignedCapability[];
         requestAccess(request: HubAccessRequest): Promise<HubAccessResult>;
@@ -35,6 +37,9 @@ export async function mcpCommand(channel: CliChannel, options: McpOptions = {}):
         requestDirectoryAccess: options.requestDirectoryAccess,
         log,
         clientInfo,
+        ...(options.mcpIdentities !== undefined
+            ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
+            : {}),
     };
     const transport = new StdioServerTransport(options.input ?? process.stdin, options.output ?? process.stdout);
     const input = options.input ?? process.stdin;

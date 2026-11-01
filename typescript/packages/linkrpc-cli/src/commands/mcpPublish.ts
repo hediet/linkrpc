@@ -1,8 +1,10 @@
 import { LinkRpcConnection } from '@hediet/linkrpc';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import type { CliConnection } from '@hediet/linkrpc-client-internal';
+import { readFile } from 'node:fs/promises';
 import {
     hostMcpServer,
+    mcpExposeConfigSchema,
     mcpServerConfigSchema,
     type McpServerConfig,
     type McpUpstreamConfig,
@@ -37,6 +39,9 @@ export interface McpPublishOptions {
      */
     readonly transport: McpUpstreamConfig | { readonly kind: 'own-stdio' };
     readonly expose: McpServerConfig['expose'];
+    /** Accounts (MCP identities), each adding env vars or headers to `transport`. */
+    readonly identities?: McpServerConfig['identities'];
+    readonly description?: string;
     /** Resolves to stop publishing. Defaults to the first SIGINT/SIGTERM. */
     readonly stop?: Promise<void>;
     /** Sink for human-readable status lines (defaults to stderr). */
@@ -79,7 +84,9 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
         serviceId,
         server: mcpServerConfigSchema.parse({
             id: opts.name ?? interfaceNameFor(serviceId),
+            ...(opts.description !== undefined ? { description: opts.description } : {}),
             transport,
+            ...(opts.identities !== undefined ? { identities: opts.identities } : {}),
             expose: opts.expose,
         }),
         log,
@@ -94,6 +101,24 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
     } finally {
         await hosted.dispose();
     }
+}
+
+/** `mcp-publish --mcp-config` file: a server config whose `id` and `expose` may come from flags. */
+export const mcpPublishConfigSchema = mcpServerConfigSchema.extend({
+    id: mcpServerConfigSchema.shape.id.optional(),
+    expose: mcpExposeConfigSchema.optional(),
+});
+
+export async function readMcpPublishConfig(path: string) {
+    let json: unknown;
+    try {
+        json = JSON.parse(await readFile(path, 'utf8'));
+    } catch (error) {
+        throw new Error(`mcp-publish: cannot read ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const parsed = mcpPublishConfigSchema.safeParse(json);
+    if (!parsed.success) throw new Error(`mcp-publish: invalid ${path}: ${parsed.error.message}`);
+    return parsed.data;
 }
 
 /** A valid `mcp.tools.<name>` suffix for `serviceId`, e.g. `my/MCP_server` → `my.mcp-server`. */

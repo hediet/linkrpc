@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +11,16 @@ import { runHub } from '@hediet/linkrpc-hub/engine/runHub';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
-it.each([
+type Case = {
+    command: string[];
+    consumer: string[];
+    scriptTools: string[];
+    /** Publish with `--mcp-config <file>` instead of a command. */
+    config?: (serverScript: string) => unknown;
+    expectedText?: string;
+};
+
+it.each<Case>([
     { command: ['mcp-forward'], consumer: ['mcp'], scriptTools: [] },
     // The MCP server runs on its own; the producer forwards it over its own stdin/stdout.
     { command: ['mcp-forward', '--stdio'], consumer: ['mcp'], scriptTools: [] },
@@ -21,7 +30,24 @@ it.each([
         consumer: ['mcp', '--scripts'],
         scriptTools: ['runLinkRpcScript', 'awaitLinkRpcTask', 'cancelLinkRpcTask'],
     },
-])('runs $command -> isolated Hub -> linkrpc hub $consumer -> stdio MCP client', async ({ command, consumer, scriptTools }) => {
+    // Two accounts in a config file; the consumer selects the non-default one.
+    {
+        command: ['mcp-publish'],
+        config: (serverScript) => ({
+            transport: { kind: 'stdio', command: process.execPath, args: [serverScript] },
+            identities: [
+                { id: 'work', env: { MCP_TEST_ACCOUNT: 'work' } },
+                { id: 'home', default: true, env: { MCP_TEST_ACCOUNT: 'home' } },
+            ],
+            expose: { service: {} },
+        }),
+        consumer: ['mcp', '--mcp-identity', 'test/explorer=work'],
+        scriptTools: [],
+        expectedText: '{"message":"from the agent","account":"work"}',
+    },
+])('runs $command -> isolated Hub -> linkrpc hub $consumer -> stdio MCP client', async ({
+    command, consumer, scriptTools, config, expectedText,
+}) => {
     const directory = await mkdtemp(join(tmpdir(), 'linkrpc-mcp-'));
     const socket = process.platform === 'win32' ? `\\\\.\\pipe\\linkrpc-mcp-${randomUUID()}` : join(directory, 'hub.sock');
     const endpoint = process.platform === 'win32'
@@ -42,8 +68,10 @@ it.each([
     const args = ['--import', 'tsx', cli, 'hub', '--endpoint', endpoint, '--no-sign'];
     const serverScript = fileURLToPath(new URL('../fixtures/mcp-server.mjs', import.meta.url));
     const ownStdio = command.includes('--stdio');
+    const configFile = join(directory, 'mcp.json');
+    if (config) await writeFile(configFile, JSON.stringify(config(serverScript)));
     const producer = spawn(process.execPath, [...args, ...command, '--serviceId', 'test/explorer',
-        ...(ownStdio ? [] : ['--', process.execPath, serverScript])],
+        ...(config ? ['--mcp-config', configFile] : ownStdio ? [] : ['--', process.execPath, serverScript])],
     { cwd, stdio: [ownStdio ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     const server = ownStdio ? spawn(process.execPath, [serverScript], { stdio: ['pipe', 'pipe', 'inherit'] }) : undefined;
     if (server) {
@@ -51,7 +79,7 @@ it.each([
         producer.stdout!.pipe(server.stdin!);
     }
     let producerLog = '';
-    producer.stderr.on('data', chunk => { producerLog += String(chunk); });
+    producer.stderr!.on('data', chunk => { producerLog += String(chunk); });
     const exited = once(producer, 'exit');
     const transport = new StdioClientTransport({
         command: process.execPath, args: [...args, ...consumer], cwd, stderr: 'pipe',
@@ -75,7 +103,7 @@ it.each([
         const hubTools = tools.tools.slice(scriptTools.length);
         expect(hubTools.map(tool => tool.description)).toEqual(['[test/explorer] echo']);
         expect(await client.callTool({ name: hubTools[0].name, arguments: { message: 'from the agent' } }))
-            .toEqual({ content: [{ type: 'text', text: '{"message":"from the agent"}' }] });
+            .toEqual({ content: [{ type: 'text', text: expectedText ?? '{"message":"from the agent"}' }] });
         await client.close();
         expect(producer.exitCode).toBeNull();
         expect(diagnostics).toContain('Connected to test/explorer');

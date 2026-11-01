@@ -9,7 +9,10 @@ export interface McpSessionManagerOptions {
 }
 
 interface SessionEntry {
+    /** Key in the session map: identity and session id. */
     readonly id: string;
+    readonly sessionId: string;
+    readonly identityId: string;
     readonly abort: AbortController;
     readonly opening: Promise<McpClientSession>;
     lastUsedAt: number;
@@ -20,7 +23,7 @@ interface SessionEntry {
 
 export class McpSessionManager {
     private readonly _entries = new Map<string, SessionEntry>();
-    private readonly _listeners = new Set<(sessionId: string) => void>();
+    private readonly _listeners = new Set<(sessionId: string, identityId: string) => void>();
     private readonly _now: () => number;
     private _creationChain = Promise.resolve();
     private _disposed = false;
@@ -41,21 +44,29 @@ export class McpSessionManager {
         return this._entries.size;
     }
 
-    has(sessionId: string | undefined): boolean {
-        return this._entries.has(sessionId ?? "");
+    /**
+     * Sessions are keyed by session id and MCP identity; `identityId` defaults
+     * to `""` for factories that do not distinguish identities.
+     */
+    has(sessionId: string | undefined, identityId = ""): boolean {
+        return this._entries.has(entryKey(sessionId, identityId));
     }
 
-    onToolsChanged(listener: (sessionId: string) => void): { dispose(): void } {
+    onToolsChanged(listener: (sessionId: string, identityId: string) => void): { dispose(): void } {
         this._listeners.add(listener);
         return { dispose: () => this._listeners.delete(listener) };
     }
 
-    async get(sessionId: string | undefined): Promise<McpClientSession> {
-        return (await this._getEntry(sessionId)).opening;
+    async get(sessionId: string | undefined, identityId = ""): Promise<McpClientSession> {
+        return (await this._getEntry(sessionId, identityId)).opening;
     }
 
-    async use<T>(sessionId: string | undefined, operation: (session: McpClientSession) => Promise<T>): Promise<T> {
-        const entry = await this._getEntry(sessionId);
+    async use<T>(
+        sessionId: string | undefined,
+        operation: (session: McpClientSession) => Promise<T>,
+        identityId = "",
+    ): Promise<T> {
+        const entry = await this._getEntry(sessionId, identityId);
         this._beginOperation(entry);
         try {
             return await operation(await entry.opening);
@@ -64,9 +75,9 @@ export class McpSessionManager {
         }
     }
 
-    private async _getEntry(sessionId: string | undefined): Promise<SessionEntry> {
+    private async _getEntry(sessionId: string | undefined, identityId: string): Promise<SessionEntry> {
         this._throwIfDisposed();
-        const id = sessionId ?? "";
+        const id = entryKey(sessionId, identityId);
         let entry = this._entries.get(id);
         if (entry === undefined) {
             entry = await this._serializeCreation(async () => {
@@ -74,15 +85,24 @@ export class McpSessionManager {
                 if (existing !== undefined) return existing;
                 await this._evictForCapacity();
                 this._throwIfDisposed();
-                return this._create(id);
+                return this._create(sessionId ?? "", identityId);
             });
         }
         this._touch(entry);
         return entry;
     }
 
-    async close(sessionId: string | undefined): Promise<boolean> {
-        const id = sessionId ?? "";
+    async close(sessionId: string | undefined, identityId = ""): Promise<boolean> {
+        return this._closeEntry(entryKey(sessionId, identityId));
+    }
+
+    /** Close every session of `identityId`. */
+    async closeIdentity(identityId: string): Promise<void> {
+        const ids = [...this._entries.values()].filter((entry) => entry.identityId === identityId).map((entry) => entry.id);
+        await Promise.all(ids.map((id) => this._closeEntry(id)));
+    }
+
+    private async _closeEntry(id: string): Promise<boolean> {
         const entry = this._entries.get(id);
         if (entry === undefined) return false;
         this._entries.delete(id);
@@ -100,21 +120,25 @@ export class McpSessionManager {
         if (this._disposed) return;
         this._disposed = true;
         this._listeners.clear();
-        await Promise.all([...this._entries.keys()].map((id) => this.close(id)));
+        await Promise.all([...this._entries.keys()].map((id) => this._closeEntry(id)));
     }
 
-    private _create(id: string): SessionEntry {
+    private _create(sessionId: string, identityId: string): SessionEntry {
+        const id = entryKey(sessionId, identityId);
         const openedAt = this._now();
         const abort = new AbortController();
         const opening = this._options.factory.open({
-            sessionId: id,
+            sessionId,
+            identityId,
             signal: abort.signal,
             onToolsChanged: () => {
-                for (const listener of this._listeners) listener(id);
+                for (const listener of this._listeners) listener(sessionId, identityId);
             },
         });
         const entry: SessionEntry = {
             id,
+            sessionId,
+            identityId,
             abort,
             lastUsedAt: openedAt,
             activeOperations: 0,
@@ -134,7 +158,7 @@ export class McpSessionManager {
         entry.lastUsedAt = this._now();
         if (this._options.idleTimeoutMs === undefined || entry.activeOperations > 0) return;
         if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
-        entry.idleTimer = setTimeout(() => void this.close(entry.id), this._options.idleTimeoutMs);
+        entry.idleTimer = setTimeout(() => void this._closeEntry(entry.id), this._options.idleTimeoutMs);
         entry.idleTimer.unref?.();
     }
 
@@ -154,7 +178,7 @@ export class McpSessionManager {
     private _resetTimers(entry: SessionEntry): void {
         this._touch(entry);
         if (this._options.maxLifetimeMs === undefined) return;
-        entry.lifetimeTimer = setTimeout(() => void this.close(entry.id), this._options.maxLifetimeMs);
+        entry.lifetimeTimer = setTimeout(() => void this._closeEntry(entry.id), this._options.maxLifetimeMs);
         entry.lifetimeTimer.unref?.();
     }
 
@@ -162,7 +186,7 @@ export class McpSessionManager {
         const max = this._options.maxSessions;
         if (max === undefined || this._entries.size < max) return;
         const oldest = [...this._entries.values()].reduce((a, b) => (a.lastUsedAt <= b.lastUsedAt ? a : b));
-        await this.close(oldest.id);
+        await this._closeEntry(oldest.id);
     }
 
     private _serializeCreation<T>(operation: () => Promise<T>): Promise<T> {
@@ -188,4 +212,8 @@ function validateDuration(name: string, value: number | undefined): void {
 function clearEntryTimers(entry: SessionEntry): void {
     if (entry.idleTimer !== undefined) clearTimeout(entry.idleTimer);
     if (entry.lifetimeTimer !== undefined) clearTimeout(entry.lifetimeTimer);
+}
+
+function entryKey(sessionId: string | undefined, identityId: string): string {
+    return `${identityId}\u0000${sessionId ?? ""}`;
 }

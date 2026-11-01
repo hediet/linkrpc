@@ -41,6 +41,7 @@ This plan covers the MCP part only. Replacing the rest of the HubRPC copies
 | Hosting an aggregator-only MCP server over HTTP | **Gap**: `McpSocketHost.createSession` can only create a `LinkRpcMcpServer` | See decision 1. |
 | Trusted (ungated) aggregation | Possible: the aggregator uses whatever channel it gets | See decision 2. |
 | Tool names `<serviceId>__<toolName>` | **Changes**: hashed names (`<prefix>__<sha256>`), unique and ≤ 64 characters | Saved tool references to forwarded tools break once. |
+| Several accounts per MCP server | Yes: MCP identities (`mcpIdentity`, `mcp.identities`); `HubMcpAggregator` option `mcpIdentityFor` | Not needed today; Team Tools uses the default identity. |
 | Mixed versions during rollout | Yes | New producers serve both interface ids; the old Team Tools aggregator keeps finding them. |
 | QuickJS packaging | Changed | Only `quickjs-emscripten-core`, `@jitl/quickjs-ffi-types`, and `@jitl/quickjs-wasmfile-release-sync` remain; the build walk must start from `@hediet/linkrpc-mcp`. |
 | `claimHubServiceId` for configured participants (microsoft/vscode-packages#397) | **Missing in `linkrpc-hub`** | Hub migration prerequisite, not MCP. The other fixes from microsoft/vscode-packages#393 are in LinkRPC (#26, #37, #42). |

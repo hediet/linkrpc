@@ -99,10 +99,11 @@ This entry point does not load the sandbox. It implements
 [spec chapter 10](../../../spec/10-mcp-interfaces.md).
 
 An **upstream** is one MCP server transport plus its authentication:
-`stdioUpstream({ command, args })` or `httpUpstream({ url, headers, fetch })`. A
-custom `fetch` attaches and refreshes access tokens.
+`stdioUpstream({ command, args })` or `httpUpstream({ url, headers, fetch })`.
+Configured header and env values can be `{ fromEnv: "NAME" }`, read when a
+session opens.
 
-Publish an upstream with `hostMcpServer` in one or both modes:
+Publish an MCP server with `hostMcpServer` in one or both modes:
 
 | Mode | MCP sessions | On the hub | Capabilities | MCP features |
 | --- | --- | --- | --- | --- |
@@ -122,7 +123,6 @@ const hosted = await hostMcpServer({
             forward: {},
         },
     }),
-    fetch: fetchWithAccessToken,
 });
 ```
 
@@ -138,16 +138,57 @@ running MCP server, e.g. on this process's stdio via `streamInstanceTransport`,
 to one connection at a time), and `McpForwardClientTransport`, an MCP SDK client
 transport that opens one forwarded leg.
 
-Service callers share one upstream session. A caller that needs its own (for a
-stateful server) calls `mcp.server::openSession` and passes the returned
-unguessable `sessionId` to tool methods.
+Service callers share one upstream session per account. A caller that needs its
+own (for a stateful server) calls `mcp.server::openSession` and passes the
+returned unguessable `sessionId` to tool methods.
+
+### Accounts (MCP identities)
+
+A published server can be used with several accounts. Each **MCP identity** is
+one upstream; every tool method, `callTool`, `mcp.server` call, and
+`mcp.forward::connect` takes an optional `mcpIdentity` parameter, and omitting it
+selects the default identity. `mcp.identities::list` lists the accounts and
+their sign-in state; `authorize` starts signing in another one, if the source
+supports it.
+
+```ts
+// Static accounts: env vars per stdio process, or headers per HTTP account.
+mcpServerConfigSchema.parse({
+    id: "github",
+    transport: { kind: "stdio", command: "github-mcp-server", args: ["stdio"] },
+    identities: [
+        { id: "work", env: { GITHUB_PERSONAL_ACCESS_TOKEN: { fromEnv: "GITHUB_WORK_TOKEN" } } },
+        { id: "personal", default: true, env: { GITHUB_PERSONAL_ACCESS_TOKEN: { fromEnv: "GITHUB_TOKEN" } } },
+    ],
+});
+
+// OAuth accounts: tokens from any McpAccessTokenSource (e.g. a token service).
+await hostMcpServer({
+    connection,
+    serviceId: "me/slack",
+    server: mcpServerConfigSchema.parse({ id: "slack", transport: { kind: "streamable-http", url } }),
+    identities: oauthMcpIdentities({ url, tokens }),
+});
+```
+
+`oauthMcpIdentities` attaches each account's token to its requests, retries once
+with a fresh token after a 401, and reports `authorization-required` (with the
+sign-in URL) in `mcp.identities` and `mcp.server` state. The generated
+interfaces contain the union of all accounts' tools; `listTools` reports which
+accounts have each tool.
+
+Capabilities decide who may use which account: a permission with the parameter
+matcher `mcpIdentity: { exact: "work" }` allows only that account. Matchers
+name every parameter of a call, so a permission for a tool method also lists the
+tool's own parameters with `{ any: true }`.
 
 `HubMcpAggregator` discovers every MCP service and forwarded server visible
 through a signed channel and is an `McpToolSource`; `McpToolHost` serves tool
 sources on an MCP SDK `Server`. Service tools are called through their generated
 methods, so the
-hub's per-tool capabilities and consent apply. `linkrpc hub mcp` and the
-`hubTools` option are built from these.
+hub's per-tool capabilities and consent apply; `mcpIdentityFor` selects an
+account per service. `linkrpc hub mcp` and the `hubTools` option are built from
+these.
 
 `DelegatedHubSender` signs calls as a delegated principal over a channel it does
 not own, for services that act for many users, chats, or OAuth grants over one

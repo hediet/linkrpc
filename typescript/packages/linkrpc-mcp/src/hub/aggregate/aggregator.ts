@@ -25,6 +25,11 @@ export interface HubMcpAggregatorOptions {
     readonly requestDirectoryAccess?: (serviceId: string) => Promise<boolean>;
     readonly log?: (message: string) => void;
     readonly clientInfo?: McpClientInfo;
+    /**
+     * MCP identity (account) to use per service id; services without one use
+     * their default identity. Only that identity's tools are listed.
+     */
+    readonly mcpIdentityFor?: (serviceId: string) => string | undefined;
     /** Interval for retrying services that are advertised but failed. Defaults to 5 s. */
     readonly retryIntervalMs?: number;
 }
@@ -164,9 +169,11 @@ export class HubMcpAggregator implements McpToolSource {
         };
         client.setNotificationHandler(ToolListChangedNotificationSchema, () => this._refresh(entry));
         try {
+            const mcpIdentity = this._options.mcpIdentityFor?.(serviceId);
             await client.connect(new McpForwardClientTransport(this._sender, serviceId, {
                 interfaceId: endpoint.interfaceId,
                 clientInfo: this._options.clientInfo ?? defaultClientInfo,
+                ...(mcpIdentity !== undefined ? { mcpIdentity } : {}),
             }), { timeout: 10_000 });
             await this._refresh(entry);
             this._log(`Connected to ${serviceId}`);
@@ -186,7 +193,12 @@ export class HubMcpAggregator implements McpToolSource {
                 ));
                 if (this._entries.get(entry.serviceId) !== entry) return;
                 entry.catalog = catalog;
-                entry.tools = catalog.tools.map((tool) => this._serviceTool(entry.serviceId, catalog, tool));
+                const mcpIdentity = this._options.mcpIdentityFor?.(entry.serviceId);
+                const listedIdentity = mcpIdentity ?? catalog.defaultIdentity;
+                entry.tools = catalog.tools
+                    .filter((tool) => listedIdentity === undefined || tool.identities === undefined
+                        || tool.identities.includes(listedIdentity))
+                    .map((tool) => this._serviceTool(entry.serviceId, catalog, tool, mcpIdentity));
             } else {
                 const tools = await listAllTools(entry.client, AbortSignal.timeout(10_000));
                 if (this._entries.get(entry.serviceId) !== entry) return;
@@ -207,15 +219,20 @@ export class HubMcpAggregator implements McpToolSource {
         return entry.refresh;
     }
 
-    private _serviceTool(serviceId: string, catalog: McpToolCatalog, tool: McpToolCatalog["tools"][number]): AggregatedTool {
-        const { method, interfaceId, ...definition } = tool;
+    private _serviceTool(
+        serviceId: string,
+        catalog: McpToolCatalog,
+        tool: McpToolCatalog["tools"][number],
+        mcpIdentity: string | undefined,
+    ): AggregatedTool {
+        const { method, interfaceId, identities: _identities, ...definition } = tool;
         const interfaceHash = catalog.interfaces.find((candidate) => candidate.interfaceId === interfaceId)?.interfaceHash;
         return {
             definition: definition as Tool,
             call: async (args, extra) => {
                 const call = this._sender.sendRequestWithStream(
                     `${serviceId}::${interfaceId}::${method}`,
-                    { ...(args ?? {}) } as never,
+                    { ...(args ?? {}), ...(mcpIdentity !== undefined ? { mcpIdentity } : {}) } as never,
                     interfaceHash === undefined ? {} : { interfaceHash },
                 );
                 const cancel = () => void call.cancel("MCP request cancelled");

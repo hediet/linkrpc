@@ -1,5 +1,7 @@
 export * from "./contracts";
 export * from "./upstream";
+export * from "./mcpIdentities";
+export * from "./oauthIdentities";
 export * from "./clientSession";
 export * from "./sessionManager";
 export * from "./service/generatedInterface";

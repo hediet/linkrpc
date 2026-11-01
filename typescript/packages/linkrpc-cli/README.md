@@ -962,6 +962,9 @@ consent apply per tool; a forwarded server needs one capability for all its
 tools. Inaccessible directories and failed servers are reported on stderr;
 stdout contains only MCP protocol frames.
 
+`--mcp-identity <serviceId>=<identity>` (repeatable) uses another account of a
+published MCP server than its default and lists only that account's tools.
+
 `--scripts` additionally serves the LinkRPC script tools (`runLinkRpcScript`,
 `awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp` on the same
 connection, so one MCP entry gives both the hub's MCP tools and scripted access
@@ -977,8 +980,9 @@ This version aggregates tools, not resources, prompts, or sampling.
 ### Publishing MCP servers
 
 Producers stay separate. `mcp-publish` publishes one MCP server, given as a
-command after `--`, as a Streamable HTTP `--url` (with repeatable `--header`),
-or (forward only) as `--stdio`:
+command after `--`, as a Streamable HTTP `--url` (with repeatable `--header`,
+or `--header-env <header>=<ENV_VAR>` to read a secret from the environment),
+as `--mcp-config <file>`, or (forward only) as `--stdio`:
 
 ```sh
 linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> -- npx -y @modelcontextprotocol/server-everything
@@ -994,6 +998,24 @@ linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> 
   `--group admin=delete,merge`.
 - `--forward` relays MCP verbatim over `mcp.forward`. Each connection gets its
   own MCP session: a fresh child process, or a new HTTP session.
+- `--mcp-config <file>` reads the server from JSON: `transport`, optional
+  `identities` (accounts), `description`, `id`, and `expose` (flags override
+  `expose`). Each identity adds env vars (stdio) or headers (HTTP); values can be
+  `{ "fromEnv": "NAME" }`. Calls select an account with `mcpIdentity`:
+
+  ```json
+  {
+    "transport": { "kind": "streamable-http", "url": "https://api.githubcopilot.com/mcp/" },
+    "identities": [
+      { "id": "work", "headers": { "Authorization": { "fromEnv": "GITHUB_WORK_AUTHORIZATION" } } },
+      { "id": "personal", "default": true, "headers": { "Authorization": { "fromEnv": "GITHUB_AUTHORIZATION" } } }
+    ],
+    "expose": { "service": {} }
+  }
+  ```
+
+  A capability pins an account with the parameter matcher
+  `mcpIdentity: { "exact": "work" }`.
 - `--stdio` forwards an MCP server that is already running and attached to this
   process's stdin/stdout, one connection at a time. Later connections reach the
   same server; the command exits when stdin ends.
