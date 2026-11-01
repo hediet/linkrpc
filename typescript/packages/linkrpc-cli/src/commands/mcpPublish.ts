@@ -1,5 +1,4 @@
-import { LinkRpcConnection } from '@hediet/linkrpc';
-import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
+import { type IMessageTransport, LinkRpcConnection } from '@hediet/linkrpc';
 import type { CliConnection } from '@hediet/linkrpc-client-internal';
 import { readFile } from 'node:fs/promises';
 import {
@@ -12,20 +11,13 @@ import {
     streamInstanceTransport,
 } from '@hediet/linkrpc-mcp/hub';
 
-/**
- * Front door for claiming a serviceId within the connection's granted
- * namespace — interface-form `hubGrantedServiceId::register`. Same claim the
- * `tunnel` command uses.
- */
-const CLAIM_METHOD = `${hubGrantedServiceIdInterface.info.id}::register`;
-
-/** Read-only connection facts — `hubGrantedServiceId::get`. */
-const INFO_METHOD = `${hubGrantedServiceIdInterface.info.id}::get`;
+import { claimServiceId, resolveServiceIdToClaim } from './serviceIdClaim';
 
 export interface McpPublishOptions {
     /**
-     * Prefix to claim on the hub. When omitted, the connection's granted
-     * serviceId namespace (`hubGrantedServiceId::get`) is claimed as-is.
+     * Prefix to claim on the hub. `./<name>` is relative to the connection's
+     * granted namespace (or a namespace made up for this user and host). When
+     * omitted, the granted namespace itself is claimed.
      */
     readonly serviceId?: string;
     /** Live, signed connection to the hub we claim `serviceId` on and serve from. */
@@ -55,7 +47,8 @@ export interface McpPublishOptions {
  */
 export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> {
     const log = opts.log ?? ((line) => process.stderr.write(line + '\n'));
-    const serviceId = opts.serviceId ?? await _resolveGrantedServiceId(opts.local);
+    const resolved = await resolveServiceIdToClaim(opts.local, opts.serviceId);
+    const serviceId = resolved.serviceId;
     const connection = new LinkRpcConnection(opts.local.rpcChannel);
     if (opts.transport.kind === 'own-stdio') {
         if (opts.expose.service !== undefined || opts.expose.forward === undefined) {
@@ -68,7 +61,7 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
             log,
         });
         try {
-            await opts.local.channel.sendRequest(CLAIM_METHOD, { serviceId });
+            await claimServiceId(opts.local, serviceId);
             log(`mcp-publish: claimed '${serviceId}' — forwarding the MCP server on stdio to one connection at a time`);
             await Promise.race([instance.closed, opts.stop ?? _untilSignalled()]);
             log('mcp-publish: stopping');
@@ -83,7 +76,7 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
         connection,
         serviceId,
         server: mcpServerConfigSchema.parse({
-            id: opts.name ?? interfaceNameFor(serviceId),
+            id: opts.name ?? interfaceNameFor(resolved.relative ?? serviceId),
             ...(opts.description !== undefined ? { description: opts.description } : {}),
             transport,
             ...(opts.identities !== undefined ? { identities: opts.identities } : {}),
@@ -93,7 +86,7 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
         onRefreshError: (error) => log(`mcp-publish: tool refresh failed: ${error instanceof Error ? error.message : String(error)}`),
     });
     try {
-        await opts.local.channel.sendRequest(CLAIM_METHOD, { serviceId });
+        await claimServiceId(opts.local, serviceId);
         const modes = [opts.expose.service && 'as a service', opts.expose.forward && 'forwarded'].filter(Boolean).join(' and ');
         log(`mcp-publish: claimed '${serviceId}' — publishing ${_describe(transport)} ${modes}`);
         await (opts.stop ?? _untilSignalled());
@@ -101,6 +94,68 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
     } finally {
         await hosted.dispose();
     }
+}
+
+export interface McpServeOptions {
+    /** Transport to the client, e.g. NDJSON on this process's stdin/stdout. */
+    readonly transport: IMessageTransport;
+    readonly name: string;
+    readonly upstream: McpUpstreamConfig;
+    readonly expose: McpServerConfig['expose'];
+    readonly identities?: McpServerConfig['identities'];
+    readonly description?: string;
+    /** Resolves to stop serving. */
+    readonly stop: Promise<void>;
+    readonly log?: (line: string) => void;
+}
+
+/**
+ * Serve one MCP server as the root service of a LinkRPC connection, without a
+ * hub: e.g. `linkrpc ui --endpoint-cmd-stdio "linkrpc mcp-serve --service -- <mcp server>"`.
+ */
+export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
+    const log = opts.log ?? ((line) => process.stderr.write(line + '\n'));
+    // Requests wait until the tools are listed, so one-shot clients see every interface.
+    const held = holdIncoming(opts.transport);
+    const hosted = await hostMcpServer({
+        connection: LinkRpcConnection.fromTransport(held.transport),
+        serviceId: '',
+        server: mcpServerConfigSchema.parse({
+            id: opts.name,
+            ...(opts.description !== undefined ? { description: opts.description } : {}),
+            transport: opts.upstream,
+            ...(opts.identities !== undefined ? { identities: opts.identities } : {}),
+            expose: opts.expose,
+        }),
+        log,
+        onRefreshError: (error) => log(`mcp-serve: tool refresh failed: ${error instanceof Error ? error.message : String(error)}`),
+    });
+    held.release();
+    try {
+        await opts.stop;
+    } finally {
+        await hosted.dispose();
+    }
+}
+
+/** Defers delivering incoming messages until `release`; the transport buffers them meanwhile. */
+function holdIncoming(inner: IMessageTransport): { readonly transport: IMessageTransport; release(): void } {
+    let released = false;
+    let listener: Parameters<IMessageTransport['setListener']>[0];
+    return {
+        transport: {
+            send: (message) => inner.send(message),
+            setListener: (value) => {
+                listener = value;
+                if (released) inner.setListener(value);
+            },
+            dispose: () => inner.dispose(),
+        },
+        release: () => {
+            released = true;
+            inner.setListener(listener);
+        },
+    };
 }
 
 /** `mcp-publish --mcp-config` file: a server config whose `id` and `expose` may come from flags. */
@@ -128,20 +183,6 @@ export function interfaceNameFor(serviceId: string): string {
         .replace(/[^a-z0-9.-]+/g, '.')
         .replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
     return name.length > 0 ? name : 'server';
-}
-
-async function _resolveGrantedServiceId(local: CliConnection): Promise<string> {
-    const info = await local.channel.sendRequest(INFO_METHOD, {}) as {
-        grantedServiceIdNamespace?: string;
-    } | null | undefined;
-    const granted = info?.grantedServiceIdNamespace ?? '';
-    if (granted.length === 0) {
-        throw new Error(
-            'mcp-publish: this connection has no granted serviceId namespace to claim; '
-            + 'pass an explicit --serviceId.',
-        );
-    }
-    return granted;
 }
 
 function _untilSignalled(): Promise<void> {

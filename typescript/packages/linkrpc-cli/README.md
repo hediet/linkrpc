@@ -965,10 +965,11 @@ stdout contains only MCP protocol frames.
 `--mcp-identity <serviceId>=<identity>` (repeatable) uses another account of a
 published MCP server than its default and lists only that account's tools.
 
-`--scripts` additionally serves the LinkRPC script tools (`runLinkRpcScript`,
-`awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp` on the same
-connection, so one MCP entry gives both the hub's MCP tools and scripted access
-to every hub service.
+The same MCP server also serves the LinkRPC script tools (`runLinkRpcScript`,
+`awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp`, so one MCP
+entry gives both the hub's MCP tools and scripted access to every hub service.
+`--no-scripts` serves only the aggregated MCP tools and does not load the script
+sandbox.
 
 The command watches directory changes, refreshes changed tool lists (including
 paginated lists), and retries failed connections while they remain advertised.
@@ -985,8 +986,14 @@ or `--header-env <header>=<ENV_VAR>` to read a secret from the environment),
 as `--mcp-config <file>`, or (forward only) as `--stdio`:
 
 ```sh
-linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> -- npx -y @modelcontextprotocol/server-everything
+linkrpc hub mcp-publish --service --forward --serviceId ./everything -- npx -y @modelcontextprotocol/server-everything
 ```
+
+`--serviceId ./<name>` is relative: it claims `<granted namespace>/<name>` for
+free when the connection has a granted serviceId namespace, and otherwise
+requests `<user>@<host>/<name>` from the hub (an approval prompt). The command
+logs the resolved service id. Without `--serviceId`, the granted namespace
+itself is claimed; `tunnel` accepts relative service ids too.
 
 - `--service` publishes the MCP server as a LinkRPC service: every MCP tool is
   a method of a generated `mcp.tools.<name>` interface (`--name`, derived from
@@ -1023,7 +1030,7 @@ linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> 
 `mcp-forward` is shorthand for `mcp-publish --forward`:
 
 ```sh
-linkrpc hub mcp-forward --serviceId <authorized-service-id> -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
+linkrpc hub mcp-forward --serviceId ./component-explorer -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
 ```
 
 To forward a server that must not be restarted per connection, start it
@@ -1036,6 +1043,22 @@ start workspace builds or explorer daemons. Each forwarded connection spawns
 the configured MCP child, so producers must use attach-only commands when
 heavyweight services are managed separately. Children inherit the producer's
 environment plus `--env` values.
+
+### MCP servers without a hub
+
+`mcp-serve` serves one MCP server as a LinkRPC endpoint on its own
+stdin/stdout, with the same options as `mcp-publish` (except `--serviceId` and
+`--stdio`). Every LinkRPC client can then use it directly, including the
+terminal UI:
+
+```sh
+linkrpc ui --endpoint-cmd-stdio "linkrpc mcp-serve --service -- npx -y @modelcontextprotocol/server-everything"
+linkrpc --endpoint-cmd-stdio "linkrpc mcp-serve --service --name demo -- node server.mjs" call mcp.tools.demo::echo --p:message=hi
+```
+
+The tools appear as methods of `mcp.tools.<name>` at the root service, with
+forms built from their input schemas. `mcp-serve` answers requests only after
+it has listed the tools, so one-shot commands see every interface.
 
 ### Participant proxy
 
