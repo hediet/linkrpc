@@ -51,6 +51,7 @@ import {
     type WireMessageObserver,
 } from './channel';
 import { JsonRpcChannel } from './jsonRpcChannel';
+import { observedStreamOperation } from './streaming';
 import { bytesToBase64Url } from '../crypto/cryptoProvider';
 import { InspectionHost } from '../inspection/inspectionHost';
 import {
@@ -815,8 +816,9 @@ export class LinkRpcConnection<TInCtx = any, TOutCtx = any> {
                         const checked = addCheckedResult(result, member, allFailuresAsValues);
 
                         return Object.assign(checked, {
-                            send: async (payload: unknown) => call.send(payload as JsonValue),
-                            cancel: async (reason?: string) => call.cancel(reason),
+                            send: (payload: unknown) =>
+                                observedStreamOperation((async () => call.send(payload as JsonValue))()),
+                            cancel: (reason?: string) => observedStreamOperation((async () => call.cancel(reason))()),
                             dispose: (reason?: string) => call.dispose?.(reason),
                             ping: () => call.ping(),
                         });
