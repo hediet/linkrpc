@@ -159,3 +159,16 @@ export const STREAM_METHOD = `${streamInterface.info.id}::send` as const;
 /** Wire-level shape carried on `params` of {@link STREAM_METHOD}. */
 export type StreamSendParams = zInfer<typeof streamInterface.members.send.paramsSchema>;
 
+
+/**
+ * Marks a stream operation's promise as observed and returns it. Stream
+ * messages are often sent fire-and-forget (e.g. forwarding log entries to a
+ * watcher); once the connection closes such a send fails, and unobserved
+ * that failure would be an unhandled rejection, which terminates a Node
+ * process by default. Awaiting the returned promise still observes the
+ * failure.
+ */
+export function observedStreamOperation<T>(operation: Promise<T>): Promise<T> {
+    operation.catch(() => { });
+    return operation;
+}
