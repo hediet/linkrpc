@@ -3,6 +3,7 @@ import { LinkRpcConnection, type IMessageTransport } from '@hediet/linkrpc';
 import { connectNdjson, parseEndpointUri, runInitializeHandshake, WebSocketTransport, type ResolvedEndpoint } from '@hediet/linkrpc/node';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
 import { spawnCommand } from '@hediet/linkrpc-hub/spawn';
+import { loadClaimPrincipal, registerServiceIdAs } from '@hediet/linkrpc-hub/remote-claims';
 import type { ManagedService } from './config';
 import { LogBuffer } from './logBuffer';
 import type { LogLine, ServiceStatus } from './managementInterface';
@@ -105,6 +106,8 @@ export class ConnectionSupervisor {
             // Claims are performed before handing the transport to the remote endpoint.
             const registration = LinkRpcConnection.fromTransport(local.transport);
             await registration.get(hubGrantedServiceIdInterface).register({ serviceId: this._service.serviceId });
+            await this._claimOnTarget(target);
+            if (generation !== this._generation) { this._cleanup(); return; }
             local.transport.setListener(message => target.transport.send(message));
             target.transport.setListener(message => local.transport.send(message));
             this._setState('running');
@@ -137,6 +140,31 @@ export class ConnectionSupervisor {
     }
     private _setState(state: ServiceStatus['state']): void {
         this._state = state; this._since = Date.now(); this._changed();
+    }
+    /**
+     * Registers `claimServiceIds` on the far end before its transport is piped
+     * to the hub. Plain entries must succeed; `{ serviceId, as }` entries are
+     * logged on failure and retried on the next connect.
+     */
+    private async _claimOnTarget(target: TransportHandle): Promise<void> {
+        if (this._service.claimServiceIds.length === 0) return;
+        const remote = LinkRpcConnection.fromTransport(target.transport);
+        for (const claim of this._service.claimServiceIds) {
+            if (typeof claim === 'string') {
+                await remote.get(hubGrantedServiceIdInterface).register({ serviceId: claim });
+                continue;
+            }
+            try {
+                await registerServiceIdAs(
+                    (method, params) => remote.channel.sendRequest(method, params),
+                    claim.serviceId,
+                    await loadClaimPrincipal(claim.as),
+                );
+                this._logDaemon(`claimed '${claim.serviceId}' as ${claim.as}`);
+            } catch (error) {
+                this._logDaemon(`claiming '${claim.serviceId}' as ${claim.as} failed: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
     }
     private _openTarget(): Promise<TransportHandle> {
         if (this._endpoint.kind !== 'cmd-stdio') return openTransport(this._endpoint);

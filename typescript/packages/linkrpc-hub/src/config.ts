@@ -72,12 +72,32 @@ export const ConnectionHandlerSchema = z.discriminatedUnion('token', [
 ]);
 export type ConnectionHandlerConfig = z.infer<typeof ConnectionHandlerSchema>;
 
+/**
+ * A service id to register on a far end's hub:
+ *
+ * - a string claims it within the namespace the connection's token grants
+ *   (`hubGrantedServiceId::register`); failing fails the connection.
+ * - `{ serviceId, as }` claims it outside that namespace through the far hub's
+ *   admin-gated `hubServiceIdRegistry::registerServiceId`, signed as `as` in the
+ *   CLI's `--principal` syntax (`user:<id>` or `file:<path>`). The far hub must
+ *   trust that identity as a root or have granted it access. Failing is logged
+ *   and retried on the next connect; the connection's routes stay up.
+ */
+export const ClaimServiceIdSchema = z.union([
+    z.string().min(1),
+    z.object({
+        serviceId: z.string().min(1),
+        as: z.string().regex(/^(user|file):.+$/, 'expected "user:<id>" or "file:<path>"'),
+    }).strict(),
+]);
+export type ClaimServiceIdConfig = z.infer<typeof ClaimServiceIdSchema>;
+
 /** Routing fields common to every endpoint (outbound transport). */
 const routingFields = {
     /** The far end serves these service ids; route matching calls OUT to it. */
     routeServiceIds: z.array(z.string().min(1)).default([]),
     /** I serve these service ids; register them on the far end's hub. */
-    claimServiceIds: z.array(z.string().min(1)).default([]),
+    claimServiceIds: z.array(ClaimServiceIdSchema).default([]),
     /** Catch-all: anything not otherwise routed goes to this transport. */
     defaultRoute: z.boolean().default(false),
     /**

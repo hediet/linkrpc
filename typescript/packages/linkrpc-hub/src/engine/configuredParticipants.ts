@@ -11,6 +11,7 @@ import * as net from 'node:net';
 import type { ParticipantConnectorConfig } from '../config';
 import { spawnCommand } from '../spawn';
 import { endpointCommand, forwardStdin, killChild, pipeChildLogs } from './cmdEndpoint';
+import { loadClaimPrincipal, registerServiceIdAs } from './remoteClaims';
 import { RouteTable } from './routeTable';
 
 const REGISTER_METHOD = `${hubGrantedServiceIdInterface.info.id}::register`;
@@ -222,11 +223,12 @@ async function _connectParticipant(
     try {
         attachment = attachParticipant(opened.transport);
         onAttached(attachment);
-        for (const serviceId of config.claimServiceIds) {
-            await _registerOnRemote(attachment, serviceId);
+        for (const claim of config.claimServiceIds) {
+            if (typeof claim === 'string') await _registerOnRemote(attachment, claim);
         }
         for (const serviceId of config.routeServiceIds) attachment.claimPrefix(serviceId);
         if (config.defaultRoute) attachment.setDefaultRoute();
+        await _registerOutsideGrantedNamespace(attachment, config, name, log);
         return { ...opened, attachment };
     } catch (error) {
         attachment?.dispose();
@@ -355,6 +357,29 @@ function _registerOnRemote(
     timeoutMs = 10_000,
 ): Promise<JsonValue | undefined> {
     return attachment.request(REGISTER_METHOD, { serviceId: prefix }, timeoutMs);
+}
+
+/** Claims `{ serviceId, as }` entries; a failure is logged and leaves the connection up. */
+async function _registerOutsideGrantedNamespace(
+    attachment: ConfiguredParticipantAttachment,
+    config: ParticipantConnectorConfig,
+    name: string,
+    log: (line: string) => void,
+): Promise<void> {
+    for (const claim of config.claimServiceIds) {
+        if (typeof claim === 'string') continue;
+        try {
+            const principal = await loadClaimPrincipal(claim.as);
+            await registerServiceIdAs(
+                (method, params) => attachment.request(method, params, 10_000),
+                claim.serviceId,
+                principal,
+            );
+            log(`[${name}] claimed '${claim.serviceId}' as ${claim.as}`);
+        } catch (error) {
+            log(`[${name}] claiming '${claim.serviceId}' as ${claim.as} failed: ${_errorMessage(error)}`);
+        }
+    }
 }
 
 function _closeSignal(): { readonly closed: Promise<void>; readonly close: () => void; } {
