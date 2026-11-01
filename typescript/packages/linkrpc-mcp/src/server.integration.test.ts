@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { LinkRpcConnection, TransportPair, type JsonValue } from "@hediet/linkrpc";
 import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import type { IConnectionPool, PooledConnection } from "./connectionPool";
-import { registerMcpToolBridge } from "./hub/typed/bridge";
+import { registerMcpToolBridge } from "./hub/service/bridge";
 import { LinkRpcMcpServer, type LinkRpcMcpServerOptions } from "./server";
 
 /**

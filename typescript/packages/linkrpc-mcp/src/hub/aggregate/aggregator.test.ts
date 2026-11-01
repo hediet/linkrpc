@@ -21,7 +21,7 @@ import {
 import type { McpSessionFactory, McpToolDefinition } from "../clientSession";
 import { legacyMcpForwardInterface, mcpForwardInterface, mcpToolsInterface } from "../contracts";
 import { McpToolHost } from "../toolHost";
-import { registerMcpToolBridge } from "../typed/bridge";
+import { registerMcpToolBridge } from "../service/bridge";
 import { HubMcpAggregator } from "./aggregator";
 
 const tool = (name: string): Tool => ({ name, inputSchema: { type: "object" } });

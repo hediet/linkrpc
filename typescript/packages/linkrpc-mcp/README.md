@@ -106,7 +106,7 @@ Publish an upstream with `hostMcpServer` in one or both modes:
 
 | Mode | MCP sessions | On the hub | Capabilities | MCP features |
 | --- | --- | --- | --- | --- |
-| typed | one shared session; exclusive sessions on request | one method per tool on `mcp.tools.<name>`, plus `mcp.tools` and `mcp.server` | per tool | tools |
+| service | one shared session; exclusive sessions on request | one method per tool on `mcp.tools.<name>[.<group>]`, plus `mcp.tools` (`listTools`, `callTool`) and `mcp.server` | per tool or group | tools |
 | forward | one upstream session per `connect` | `mcp.forward` (and the legacy `vscode.mcp-forward`) | per server | all, relayed verbatim |
 
 ```ts
@@ -116,23 +116,36 @@ const hosted = await hostMcpServer({
     server: mcpServerConfigSchema.parse({
         id: "github",
         transport: { kind: "streamable-http", url: "https://api.example.com/mcp" },
-        expose: { typed: {}, forward: {} },
+        expose: {
+            // Tools whose name contains "delete" or "merge" go to `mcp.tools.github.admin`.
+            service: { groups: [{ name: "admin", keywords: ["delete", "merge"] }] },
+            forward: {},
+        },
     }),
     fetch: fetchWithAccessToken,
 });
 ```
 
-The building blocks are also exported individually: `registerMcpToolBridge`
-(typed), `serveMcpForward` (forward), and `McpForwardClientTransport`, an MCP SDK
-client transport that opens one forwarded leg.
+Groups are matched in order; a tool joins the first group listing its name
+(`tools`), a prefix of it (`prefixes`), or a case-insensitive substring of it
+(`keywords`). A capability for the exact interface `mcp.tools.github` then excludes
+the `admin` tools. `mcp.tools::callTool` calls any tool by name; narrow a
+capability for it with a `name` parameter matcher.
 
-Typed callers share one upstream session. A caller that needs its own (for a
+The building blocks are also exported individually: `registerMcpToolBridge`
+(service), `serveMcpForward` (forward), `serveMcpForwardInstance` (forwards one
+running MCP server, e.g. on this process's stdio via `streamInstanceTransport`,
+to one connection at a time), and `McpForwardClientTransport`, an MCP SDK client
+transport that opens one forwarded leg.
+
+Service callers share one upstream session. A caller that needs its own (for a
 stateful server) calls `mcp.server::openSession` and passes the returned
 unguessable `sessionId` to tool methods.
 
-`HubMcpAggregator` discovers every typed and forwarded server visible through a
-signed channel and is an `McpToolSource`; `McpToolHost` serves tool sources on an
-MCP SDK `Server`. Typed tools are called through their generated methods, so the
+`HubMcpAggregator` discovers every MCP service and forwarded server visible
+through a signed channel and is an `McpToolSource`; `McpToolHost` serves tool
+sources on an MCP SDK `Server`. Service tools are called through their generated
+methods, so the
 hub's per-tool capabilities and consent apply. `linkrpc hub mcp` and the
 `hubTools` option are built from these.
 

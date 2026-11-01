@@ -4,7 +4,6 @@ import {
     type InterfaceRegistration,
     type JsonValue,
     type LinkRpcConnection,
-    type LinkRpcInterfaceSchema,
     type LinkRpcJsonSchema,
     type MemberMap,
     RpcError,
@@ -12,6 +11,7 @@ import {
 } from "@hediet/linkrpc";
 import type { McpClientSession, McpToolDefinition } from "../clientSession";
 import {
+    callToolResultSchema,
     type McpAuthenticationState,
     type McpCatalogTool,
     type McpServerState,
@@ -20,23 +20,34 @@ import {
     mcpToolsInterface,
 } from "../contracts";
 import { McpSessionManager, type McpSessionManagerOptions } from "../sessionManager";
-import { createMcpToolsInterface, encodeToolMethodName } from "./generatedInterface";
+import {
+    assertGeneratedInterfaceId,
+    assertToolGroups,
+    createMcpToolsInterfaces,
+    type GeneratedToolMethod,
+    type McpToolGroup,
+} from "./generatedInterface";
 
 export interface RegisterMcpToolBridgeOptions extends McpSessionManagerOptions {
     readonly connection: LinkRpcConnection;
     readonly serviceId: string;
-    /** Generated interface id, `mcp.tools.<name>`. */
+    /** Base generated interface id, `mcp.tools.<name>`. */
     readonly interfaceId: string;
+    /** Split tools into further interfaces `<interfaceId>.<group>`. */
+    readonly groups?: readonly McpToolGroup[];
     readonly serviceDescription?: string;
     /** Register reflection for `serviceId`. Defaults to `true`. */
     readonly enableReflection?: boolean;
     readonly initialAuthenticationState?: McpAuthenticationState;
     readonly onRefreshError?: (error: unknown) => void;
+    /** Receives warnings, e.g. about tools published with unchecked params. */
+    readonly log?: (line: string) => void;
 }
 
 export interface McpToolBridgeRegistration {
     readonly sessionManager: McpSessionManager;
-    readonly currentInterface: InterfaceDefinition<MemberMap>;
+    /** The registered (non-empty) generated interfaces by id. */
+    readonly currentInterfaces: ReadonlyMap<string, InterfaceDefinition<MemberMap>>;
     getState(sessionId?: string): McpServerState;
     updateAuthenticationState(state: McpAuthenticationState): void;
     refreshTools(): Promise<void>;
@@ -47,12 +58,12 @@ export interface McpToolBridgeRegistration {
 const sharedSessionId = "";
 
 /**
- * Publish an MCP server's tools as typed LinkRPC methods under `serviceId`.
+ * Publish an MCP server as a LinkRPC service under `serviceId`.
  *
- * - `<interfaceId>` (`mcp.tools.<name>`): one method per tool, re-registered
- *   when the server reports `tools/list_changed`. Capabilities therefore apply
- *   per tool.
- * - `mcp.tools`: the tool catalog, mapping tools to generated methods.
+ * - `<interfaceId>` (`mcp.tools.<name>`) and `<interfaceId>.<group>`: one
+ *   method per tool, re-registered when the server reports
+ *   `tools/list_changed`. Capabilities can therefore apply per tool or group.
+ * - `mcp.tools`: the tool catalog and generic `callTool`.
  * - `mcp.server`: state, plus exclusive sessions.
  *
  * All callers share one MCP session unless they open an exclusive one with
@@ -63,6 +74,8 @@ const sharedSessionId = "";
 export async function registerMcpToolBridge(
     options: RegisterMcpToolBridgeOptions,
 ): Promise<McpToolBridgeRegistration> {
+    assertGeneratedInterfaceId(options.interfaceId);
+    assertToolGroups(options.groups ?? []);
     const sessions = new McpSessionManager(options);
     const exclusiveSessions = new Set<string>();
     const toolsChanged = sessions.onToolsChanged(() => scheduleRefresh());
@@ -80,13 +93,15 @@ export async function registerMcpToolBridge(
     let serverState: McpServerState["server"] = { status: "starting" };
     let transportState: McpServerState["transport"] = { status: "disconnected" };
     let authenticationState: McpAuthenticationState = options.initialAuthenticationState ?? { status: "not-required" };
-    let toolsState: McpServerState["tools"] = { status: "loading", interfaceId: options.interfaceId };
+    let toolsState: McpServerState["tools"] = { status: "loading" };
     let catalog: readonly McpCatalogTool[] = [];
+    let toolMethods: ReadonlyMap<string, GeneratedToolMethod> = new Map();
     let refreshChain: Promise<void> = Promise.resolve();
     let disposed = false;
-
-    let currentInterface = createMcpToolsInterface([], options.interfaceId).interface;
-    let application: InterfaceRegistration = options.connection.register(currentInterface, {}, registrationOptions);
+    const applications = new Map<string, {
+        readonly definition: InterfaceDefinition<MemberMap>;
+        readonly registration: InterfaceRegistration;
+    }>();
 
     function getState(sessionId = sharedSessionId): McpServerState {
         return {
@@ -156,68 +171,101 @@ export async function registerMcpToolBridge(
     }
 
     async function performRefresh(): Promise<void> {
-        toolsState = { status: "loading", interfaceId: options.interfaceId };
+        toolsState = { status: "loading" };
         emitState();
         let tools: readonly McpToolDefinition[];
-        let generated: ReturnType<typeof createMcpToolsInterface>;
+        let generated: ReturnType<typeof createMcpToolsInterfaces>;
         try {
             tools = await useSession(sharedSessionId, (session) => session.listTools());
-            generated = createMcpToolsInterface(tools, options.interfaceId);
+            generated = createMcpToolsInterfaces(tools, options.interfaceId, options.groups);
         } catch (error) {
             const message = errorMessage(error);
             serverState = { status: "error", error: message };
-            toolsState = { status: "error", interfaceId: options.interfaceId, error: message };
+            toolsState = { status: "error", error: message };
             emitState();
             throw error;
         }
-        if (generated.interface.schemaHash !== currentInterface.schemaHash) {
-            const reflectedSchema = generated.interface.toSchema();
+        for (const warning of generated.warnings) options.log?.(warning);
+        for (const [interfaceId, application] of applications) {
+            if (generated.interfaces.get(interfaceId)?.schemaHash === application.definition.schemaHash) continue;
+            application.registration.dispose();
+            applications.delete(interfaceId);
+        }
+        for (const [interfaceId, definition] of generated.interfaces) {
+            if (applications.has(interfaceId)) continue;
             const handlers: Record<string, (params: unknown, ctx: unknown, stream: { signal: AbortSignal }) => Promise<JsonValue>> = {};
-            for (const [methodName, toolName] of generated.routes) {
-                const methodSchema = reflectedSchema.methods[methodName];
-                if (methodSchema === undefined) throw new Error(`Missing generated schema for MCP tool '${toolName}'`);
-                handlers[methodName] = async (rawParams, _ctx, stream) => {
-                    assertSchemaValue(methodSchema.params, rawParams, "params", reflectedSchema);
+            for (const [toolName, method] of generated.tools) {
+                if (method.interfaceId !== interfaceId) continue;
+                handlers[method.method] = async (rawParams, _ctx, stream) => {
                     const { sessionId, args } = readToolCallParams(rawParams);
-                    const result = await useSession(resolveSessionId(sessionId), (session) =>
-                        session.callTool(toolName, args, stream.signal));
-                    if (methodSchema.result !== undefined) {
-                        assertSchemaValue(methodSchema.result, result, "result", reflectedSchema);
-                    }
-                    return result;
+                    return invokeTool(toolName, method, sessionId, args, stream.signal);
                 };
             }
-            application.dispose();
-            application = options.connection.register(generated.interface, handlers as never, registrationOptions);
-            currentInterface = generated.interface;
+            applications.set(interfaceId, {
+                definition,
+                registration: options.connection.register(definition, handlers as never, registrationOptions),
+            });
         }
-        catalog = tools.map((tool) => ({
-            name: tool.name,
-            method: encodeToolMethodName(tool.name),
-            ...(tool.title !== undefined ? { title: tool.title } : {}),
-            ...(tool.description !== undefined ? { description: tool.description } : {}),
-            inputSchema: tool.inputSchema,
-            ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
-            ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
-        }));
-        toolsState = {
-            status: "ready",
-            interfaceId: options.interfaceId,
-            interfaceHash: currentInterface.schemaHash,
-            count: tools.length,
-        };
+        toolMethods = generated.tools;
+        catalog = tools.map((tool) => {
+            const method = generated.tools.get(tool.name)!;
+            return {
+                name: tool.name,
+                interfaceId: method.interfaceId,
+                method: method.method,
+                ...(tool.title !== undefined ? { title: tool.title } : {}),
+                ...(tool.description !== undefined ? { description: tool.description } : {}),
+                inputSchema: tool.inputSchema,
+                ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
+                ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+            };
+        });
+        toolsState = { status: "ready", interfaces: interfaceSummaries(), count: tools.length };
         serverState = { status: "running" };
         emitState();
+    }
+
+    function interfaceSummaries(): McpToolCatalog["interfaces"] {
+        return [...applications].map(([interfaceId, application]) => ({
+            interfaceId,
+            interfaceHash: application.definition.schemaHash,
+            toolCount: catalog.filter((tool) => tool.interfaceId === interfaceId).length,
+        }));
+    }
+
+    /** Validates params against the tool's generated schema, then calls it. */
+    async function invokeTool(
+        toolName: string,
+        method: GeneratedToolMethod,
+        sessionId: string | undefined,
+        args: Readonly<Record<string, unknown>>,
+        signal: AbortSignal,
+    ): Promise<JsonValue> {
+        assertSchemaValue(method.params, { ...args }, method.components, "params");
+        const result = await useSession(resolveSessionId(sessionId), (session) =>
+            session.callTool(toolName, args, signal));
+        assertSchemaValue(method.result, result, method.components, "result");
+        return result;
     }
 
     staticRegistrations.push(options.connection.register(mcpToolsInterface, {
         listTools: async (): Promise<McpToolCatalog> => {
             await refreshChain;
             return {
-                interfaceId: options.interfaceId,
-                interfaceHash: currentInterface.schemaHash,
+                interfaces: interfaceSummaries(),
                 tools: catalog.map((tool) => ({ ...tool })),
             };
+        },
+        callTool: async ({ sessionId, name, arguments: args }, _ctx, stream) => {
+            await refreshChain;
+            const method = toolMethods.get(name);
+            if (method === undefined) throw new RpcError(`Unknown MCP tool: ${name}`, ErrorCode.invalidParams);
+            if (args !== undefined && "sessionId" in args) {
+                throw new RpcError("Pass sessionId next to arguments, not inside them", ErrorCode.invalidParams);
+            }
+            return callToolResultSchema.parse(
+                await invokeTool(name, method, sessionId, args ?? {}, stream.signal),
+            ) as never;
         },
     }, registrationOptions));
 
@@ -282,8 +330,8 @@ export async function registerMcpToolBridge(
 
     return {
         sessionManager: sessions,
-        get currentInterface() {
-            return currentInterface;
+        get currentInterfaces() {
+            return new Map([...applications].map(([interfaceId, application]) => [interfaceId, application.definition]));
         },
         getState,
         updateAuthenticationState: (state) => {
@@ -301,7 +349,8 @@ export async function registerMcpToolBridge(
             emitState();
             await refreshChain;
             toolsChanged.dispose();
-            application.dispose();
+            for (const application of applications.values()) application.registration.dispose();
+            applications.clear();
             for (const registration of staticRegistrations.reverse()) registration.dispose();
             reflection?.dispose();
             await sessions.dispose();
@@ -330,10 +379,10 @@ function readToolCallParams(value: unknown): {
 function assertSchemaValue(
     schema: LinkRpcJsonSchema,
     value: unknown,
+    components: Readonly<Record<string, LinkRpcJsonSchema>>,
     kind: "params" | "result",
-    interfaceSchema: LinkRpcInterfaceSchema,
 ): void {
-    if (schemaToZod(schema, interfaceSchema.components?.schemas).safeParse(value).success) return;
+    if (schemaToZod(schema, { ...components }).safeParse(value).success) return;
     throw new RpcError(
         `Invalid MCP tool ${kind}`,
         kind === "params" ? ErrorCode.invalidParams : ErrorCode.internalError,

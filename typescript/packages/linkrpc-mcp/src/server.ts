@@ -66,7 +66,7 @@ export interface LinkRpcMcpServerOptions {
     readonly maxHubResultBytes?: number;
     /**
      * Also list the tools of MCP servers published on the default connection's
-     * hub (typed bridges and forwarded servers), next to the script tools.
+     * hub (MCP services and forwarded servers), next to the script tools.
      */
     readonly hubTools?: boolean | Omit<HubMcpAggregatorOptions, "clientInfo">;
     /** Observes completed MCP tool calls exactly as their result is returned to the client. */

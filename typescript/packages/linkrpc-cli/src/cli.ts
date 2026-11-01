@@ -1254,7 +1254,7 @@ Batch options:
         program
             .command('mcp')
             .description(
-                'Expose the tools of all MCP servers published on the Hub (typed bridges and ' +
+                'Expose the tools of all MCP servers published on the Hub (MCP services and ' +
                 'forwarded servers) as one stdio MCP server.',
             )
             .option(
@@ -1626,12 +1626,17 @@ Batch options:
         )
         .option('--url <url>', 'publish a Streamable HTTP MCP server instead of a command after `--`')
         .option('--header <key=value>', 'HTTP header sent to the --url server (repeatable)', collectKeyValue)
-        .option('--env <key=value>', 'env var for the spawned MCP server child (repeatable)', collectKeyValue);
+        .option('--env <key=value>', 'env var for the spawned MCP server child (repeatable)', collectKeyValue)
+        .option(
+            '--stdio',
+            'forward the running MCP server attached to this process\'s stdin/stdout, one connection at a time',
+        );
     type McpUpstreamCliOptions = {
         serviceId?: string;
         url?: string;
         header?: Record<string, string>;
         env?: Record<string, string>;
+        stdio?: boolean;
     };
     const runMcpPublish = async (
         commandName: string,
@@ -1642,14 +1647,21 @@ Batch options:
     ): Promise<void> => {
         const localEp = needEndpoint(endpoint);
         const hasCommand = mcpCommand !== undefined && mcpCommand.length > 0;
-        if (hasCommand === (cmdOpts.url !== undefined)) {
+        const sources = [hasCommand, cmdOpts.url !== undefined, cmdOpts.stdio === true].filter(Boolean).length;
+        if (sources !== 1) {
             process.stderr.write(
-                `linkrpc: ${commandName} requires either an MCP server command after \`--\` or --url, e.g. ` +
-                `\`${commandName} -- npx -y @modelcontextprotocol/server-everything\`.\n`,
+                `linkrpc: ${commandName} requires exactly one of an MCP server command after \`--\`, --url, ` +
+                `or --stdio, e.g. \`${commandName} -- npx -y @modelcontextprotocol/server-everything\`.\n`,
             );
             process.exit(2);
         }
-        const transport = cmdOpts.url !== undefined
+        if (cmdOpts.stdio && expose.service !== undefined) {
+            process.stderr.write(`linkrpc: ${commandName} --stdio supports only --forward.\n`);
+            process.exit(2);
+        }
+        const transport = cmdOpts.stdio
+            ? { kind: 'own-stdio' as const }
+            : cmdOpts.url !== undefined
             ? { kind: 'streamable-http' as const, url: cmdOpts.url, ...(cmdOpts.header ? { headers: cmdOpts.header } : {}) }
             : {
                 kind: 'stdio' as const,
@@ -1679,14 +1691,11 @@ Batch options:
     mcpUpstreamOptions(program
         .command('mcp-forward [mcpCommand...]')
         .description(
-            'Expose an MCP server through the hub (--endpoint*) as a transparent forwarder. ' +
-            'By default it claims this connection\'s granted serviceId namespace; pass ' +
-            '--serviceId to claim a specific prefix. The MCP server command follows `--`, e.g. ' +
-            '`linkrpc mcp-forward -- npx -y @modelcontextprotocol/server-everything` or ' +
-            '`linkrpc mcp-forward --serviceId my-mcp -- npx -y @modelcontextprotocol/server-everything`; ' +
-            'use --url for a Streamable HTTP server. Each consumer that opens ' +
-            '`<serviceId>::mcp.forward::connect` (or the legacy `vscode.mcp-forward`) gets its own ' +
-            'MCP session (a fresh child, or a new HTTP session) relayed verbatim. Runs until Ctrl-C.',
+            'Shorthand for `mcp-publish --forward`: relay an MCP server verbatim through the hub ' +
+            '(--endpoint*) over `mcp.forward`. The MCP server is a command after `--` (a fresh ' +
+            'process per connection), --url (a new HTTP session per connection), or --stdio (the ' +
+            'running server attached to this process\'s stdin/stdout, one connection at a time). ' +
+            'By default it claims this connection\'s granted serviceId namespace. Runs until Ctrl-C.',
         ))
         .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions) => {
             await runMcpPublish('mcp-forward', mcpCommand, cmdOpts, { forward: { sharing: 'exclusive' } }, undefined);
@@ -1695,26 +1704,39 @@ Batch options:
     mcpUpstreamOptions(program
         .command('mcp-publish [mcpCommand...]')
         .description(
-            'Publish an MCP server through the hub (--endpoint*). --typed exposes each MCP tool as a ' +
-            'method of a generated `mcp.tools.<name>` interface (one shared MCP session; capabilities ' +
-            'per tool); --forward relays verbatim MCP over `mcp.forward` (one MCP session per ' +
-            'connection; one capability per server). Pass one or both. The MCP server command ' +
-            'follows `--`, or use --url for a Streamable HTTP server. Runs until Ctrl-C.',
+            'Publish an MCP server through the hub (--endpoint*). --service publishes it as a LinkRPC ' +
+            'service: one method per tool on generated `mcp.tools.<name>` interfaces (split with ' +
+            '--group), generic `mcp.tools::listTools`/`callTool`, and `mcp.server`; callers share ' +
+            'one MCP session. --forward relays verbatim MCP over `mcp.forward`. Pass one or both. ' +
+            'The MCP server is a command after `--`, --url, or (forward only) --stdio. Runs until Ctrl-C.',
         ))
-        .option('--typed', 'expose the tools as typed LinkRPC methods')
-        .option('--forward', 'expose verbatim MCP forwarding')
+        .option('--service', 'publish the MCP server as a LinkRPC service')
+        .option('--forward', 'relay MCP verbatim over mcp.forward')
         .option('--name <name>', 'generated interface name, `mcp.tools.<name>` (default: derived from the serviceId)')
+        .option(
+            '--group <name=keywords>',
+            'move tools whose name contains one of the comma-separated keywords into ' +
+            '`mcp.tools.<name>.<group>` (repeatable; first match wins)',
+            collectKeyValue,
+        )
         .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions & {
-            typed?: boolean;
+            service?: boolean;
             forward?: boolean;
             name?: string;
+            group?: Record<string, string>;
         }) => {
-            if (!cmdOpts.typed && !cmdOpts.forward) {
-                process.stderr.write('linkrpc: mcp-publish requires --typed, --forward, or both.\n');
+            if (!cmdOpts.service && !cmdOpts.forward) {
+                process.stderr.write('linkrpc: mcp-publish requires --service, --forward, or both.\n');
                 process.exit(2);
             }
+            if (cmdOpts.group && !cmdOpts.service) {
+                process.stderr.write('linkrpc: mcp-publish --group requires --service.\n');
+                process.exit(2);
+            }
+            const groups = Object.entries(cmdOpts.group ?? {})
+                .map(([groupName, keywords]) => ({ name: groupName, keywords: keywords.split(',').filter(Boolean) }));
             await runMcpPublish('mcp-publish', mcpCommand, cmdOpts, {
-                ...(cmdOpts.typed ? { typed: {} } : {}),
+                ...(cmdOpts.service ? { service: groups.length > 0 ? { groups } : {} } : {}),
                 ...(cmdOpts.forward ? { forward: { sharing: 'exclusive' as const } } : {}),
             }, cmdOpts.name);
         });

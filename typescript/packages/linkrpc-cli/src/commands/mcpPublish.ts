@@ -6,6 +6,8 @@ import {
     mcpServerConfigSchema,
     type McpServerConfig,
     type McpUpstreamConfig,
+    serveMcpForwardInstance,
+    streamInstanceTransport,
 } from '@hediet/linkrpc-mcp/hub';
 
 /**
@@ -28,7 +30,12 @@ export interface McpPublishOptions {
     readonly local: CliConnection;
     /** Name of the generated `mcp.tools.<name>` interface; derived from the service id by default. */
     readonly name?: string;
-    readonly transport: McpUpstreamConfig;
+    /**
+     * The MCP server: a command (a fresh process per MCP session), a Streamable
+     * HTTP URL, or `own-stdio`: one running server attached to this process's
+     * stdin/stdout, forwarded to one connection at a time.
+     */
+    readonly transport: McpUpstreamConfig | { readonly kind: 'own-stdio' };
     readonly expose: McpServerConfig['expose'];
     /** Resolves to stop publishing. Defaults to the first SIGINT/SIGTERM. */
     readonly stop?: Promise<void>;
@@ -37,21 +44,42 @@ export interface McpPublishOptions {
 }
 
 /**
- * Publish one MCP server on the hub until stopped: typed (one LinkRPC method
- * per tool, one shared MCP session), forwarded (verbatim MCP over
- * `mcp.forward`, one upstream session per connection), or both.
+ * Publish one MCP server on the hub until stopped: as a service (one LinkRPC
+ * method per tool plus generic `mcp.tools`, one shared MCP session), forwarded
+ * (verbatim MCP over `mcp.forward`), or both.
  */
 export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> {
     const log = opts.log ?? ((line) => process.stderr.write(line + '\n'));
     const serviceId = opts.serviceId ?? await _resolveGrantedServiceId(opts.local);
     const connection = new LinkRpcConnection(opts.local.rpcChannel);
+    if (opts.transport.kind === 'own-stdio') {
+        if (opts.expose.service !== undefined || opts.expose.forward === undefined) {
+            throw new Error('mcp-publish: an MCP server on this process\'s stdio can only be forwarded.');
+        }
+        const instance = serveMcpForwardInstance({
+            connection,
+            serviceId,
+            transport: streamInstanceTransport(process.stdin, process.stdout),
+            log,
+        });
+        try {
+            await opts.local.channel.sendRequest(CLAIM_METHOD, { serviceId });
+            log(`mcp-publish: claimed '${serviceId}' — forwarding the MCP server on stdio to one connection at a time`);
+            await Promise.race([instance.closed, opts.stop ?? _untilSignalled()]);
+            log('mcp-publish: stopping');
+        } finally {
+            instance.dispose();
+        }
+        return;
+    }
+    const transport = opts.transport;
     // Register before claiming, so no call can arrive before its handler exists.
     const hosted = await hostMcpServer({
         connection,
         serviceId,
         server: mcpServerConfigSchema.parse({
             id: opts.name ?? interfaceNameFor(serviceId),
-            transport: opts.transport,
+            transport,
             expose: opts.expose,
         }),
         log,
@@ -59,8 +87,8 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
     });
     try {
         await opts.local.channel.sendRequest(CLAIM_METHOD, { serviceId });
-        const modes = [opts.expose.typed && 'typed', opts.expose.forward && 'forwarded'].filter(Boolean).join(' and ');
-        log(`mcp-publish: claimed '${serviceId}' — publishing ${_describe(opts.transport)} ${modes}`);
+        const modes = [opts.expose.service && 'as a service', opts.expose.forward && 'forwarded'].filter(Boolean).join(' and ');
+        log(`mcp-publish: claimed '${serviceId}' — publishing ${_describe(transport)} ${modes}`);
         await (opts.stop ?? _untilSignalled());
         log('mcp-publish: stopping');
     } finally {

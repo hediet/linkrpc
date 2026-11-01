@@ -10,7 +10,9 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/sdk/types.js";
 // @ts-expect-error untyped test fixture
 import { createTestMcpServer } from "./testFixtures/mcpServer.mjs";
 import { mcpServerInterface, mcpToolsInterface } from "./contracts";
+import { spawn } from "node:child_process";
 import { McpForwardClientTransport } from "./forward/clientTransport";
+import { serveMcpForwardInstance, streamInstanceTransport } from "./forward/instance";
 import { hostMcpServer, mcpServerConfigSchema } from "./host";
 
 const fixture = fileURLToPath(new URL("./testFixtures/mcpServer.mjs", import.meta.url));
@@ -42,12 +44,12 @@ describe("hosted MCP servers", () => {
         }
     }, 20_000);
 
-    it("exposes a stdio server typed and forwarded at the same time", async () => {
+    it("exposes a stdio server as a service and forwarded at the same time", async () => {
         const { server, client } = pair();
         const hosted = await hostMcpServer({
             connection: server,
             serviceId: "mcp/both",
-            server: mcpServerConfigSchema.parse({ id: "both", transport: stdioTransport, expose: { typed: {}, forward: {} } }),
+            server: mcpServerConfigSchema.parse({ id: "both", transport: stdioTransport, expose: { service: {}, forward: {} } }),
         });
         try {
             const catalog = await client.service("mcp/both").get(mcpToolsInterface).listTools({});
@@ -87,7 +89,7 @@ describe("hosted MCP servers", () => {
             server: mcpServerConfigSchema.parse({
                 id: "http",
                 transport: { kind: "streamable-http", url: http.url, headers: { "x-test": "static" } },
-                expose: { typed: {}, forward: {} },
+                expose: { service: {}, forward: {} },
             }),
         });
         try {
@@ -107,6 +109,38 @@ describe("hosted MCP servers", () => {
         } finally {
             await hosted.dispose();
             await http.dispose();
+        }
+    }, 20_000);
+
+    it("forwards one running instance to one connection at a time", async () => {
+        const { server, client } = pair();
+        // A running MCP server whose stdio this process holds, as with `mcp-publish --forward --stdio`.
+        const notes = spawn(process.execPath, [fileURLToPath(new URL("./testFixtures/notesServer.mjs", import.meta.url))], {
+            stdio: ["pipe", "pipe", "inherit"],
+        });
+        const instance = serveMcpForwardInstance({
+            connection: server,
+            serviceId: "mcp/instance",
+            transport: streamInstanceTransport(notes.stdout, notes.stdin),
+            log: () => {},
+        });
+        try {
+            const first = await forwardedClient(client, "mcp/instance");
+            await first.callTool({ name: "add_note", arguments: { text: "kept" } });
+            await expect(forwardedClient(client, "mcp/instance")).rejects.toThrow();
+
+            await first.close();
+            // The next connection gets the same process and its state.
+            const second = await forwardedClient(client, "mcp/instance");
+            expect(await second.callTool({ name: "list_notes" })).toMatchObject({ content: [{ text: "[\"kept\"]" }] });
+            await second.close();
+
+            notes.kill();
+            await instance.closed;
+            await expect(forwardedClient(client, "mcp/instance")).rejects.toThrow();
+        } finally {
+            instance.dispose();
+            notes.kill();
         }
     }, 20_000);
 });

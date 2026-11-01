@@ -33,12 +33,12 @@ export interface HubMcpAggregatorOptions {
  * Discovers every MCP server published on a hub and presents their tools as
  * one {@link McpToolSource}:
  *
- * - typed bridges (`mcp.tools`): tools are called through their generated
+ * - MCP services (`mcp.tools`): tools are called through their generated
  *   methods, so the hub checks capabilities per tool;
  * - forwarded servers (`mcp.forward`, or the legacy `vscode.mcp-forward`): one
  *   MCP client session per server over a forwarded leg.
  *
- * A service offering both is used typed. All calls go through `sender`, so its
+ * A service offering both is used as an MCP service. All calls go through `sender`, so its
  * signing and capability negotiation apply. Tool names combine a readable
  * prefix with a stable hash of service id and tool name; descriptions start
  * with `[<serviceId>]`.
@@ -133,8 +133,8 @@ export class HubMcpAggregator implements McpToolSource {
             await Promise.all([...wanted].map(async ([serviceId, endpoint]) => {
                 const entry = this._entries.get(serviceId);
                 if (entry === undefined) await this._attach(serviceId, endpoint);
-                else if (entry.kind === "typed" && endpoint.kind === "typed"
-                    && endpoint.generatedHash !== entry.catalog?.interfaceHash) {
+                else if (entry.kind === "service" && endpoint.kind === "service"
+                    && endpoint.interfaces !== (entry.catalog && interfacesKey(entry.catalog.interfaces))) {
                     await this._refresh(entry);
                 }
             }));
@@ -143,11 +143,11 @@ export class HubMcpAggregator implements McpToolSource {
 
     private async _attach(serviceId: string, endpoint: Endpoint): Promise<void> {
         if (this._closed) return;
-        if (endpoint.kind === "typed") {
-            const entry: TypedEntry = { kind: "typed", serviceId, catalog: undefined, tools: [], refresh: Promise.resolve() };
+        if (endpoint.kind === "service") {
+            const entry: ServiceEntry = { kind: "service", serviceId, catalog: undefined, tools: [], refresh: Promise.resolve() };
             this._entries.set(serviceId, entry);
             await this._refresh(entry);
-            if (this._entries.get(serviceId) === entry) this._log(`Connected to ${serviceId} (typed)`);
+            if (this._entries.get(serviceId) === entry) this._log(`Connected to ${serviceId} (service)`);
             return;
         }
         const client = new Client({ ...(this._options.clientInfo ?? defaultClientInfo) }, { capabilities: {} });
@@ -179,14 +179,14 @@ export class HubMcpAggregator implements McpToolSource {
     private _refresh(entry: Entry): Promise<void> {
         entry.refresh = entry.refresh.then(async () => {
             if (this._entries.get(entry.serviceId) !== entry) return;
-            if (entry.kind === "typed") {
+            if (entry.kind === "service") {
                 const catalog = mcpToolCatalogSchema.parse(await this._sender.sendRequest(
                     `${entry.serviceId}::${mcpToolsInterface.info.id}::listTools`,
                     {},
                 ));
                 if (this._entries.get(entry.serviceId) !== entry) return;
                 entry.catalog = catalog;
-                entry.tools = catalog.tools.map((tool) => this._typedTool(entry.serviceId, catalog, tool));
+                entry.tools = catalog.tools.map((tool) => this._serviceTool(entry.serviceId, catalog, tool));
             } else {
                 const tools = await listAllTools(entry.client, AbortSignal.timeout(10_000));
                 if (this._entries.get(entry.serviceId) !== entry) return;
@@ -207,15 +207,16 @@ export class HubMcpAggregator implements McpToolSource {
         return entry.refresh;
     }
 
-    private _typedTool(serviceId: string, catalog: McpToolCatalog, tool: McpToolCatalog["tools"][number]): AggregatedTool {
-        const { method, ...definition } = tool;
+    private _serviceTool(serviceId: string, catalog: McpToolCatalog, tool: McpToolCatalog["tools"][number]): AggregatedTool {
+        const { method, interfaceId, ...definition } = tool;
+        const interfaceHash = catalog.interfaces.find((candidate) => candidate.interfaceId === interfaceId)?.interfaceHash;
         return {
             definition: definition as Tool,
             call: async (args, extra) => {
                 const call = this._sender.sendRequestWithStream(
-                    `${serviceId}::${catalog.interfaceId}::${method}`,
+                    `${serviceId}::${interfaceId}::${method}`,
                     { ...(args ?? {}) } as never,
-                    { interfaceHash: catalog.interfaceHash },
+                    interfaceHash === undefined ? {} : { interfaceHash },
                 );
                 const cancel = () => void call.cancel("MCP request cancelled");
                 extra.signal.addEventListener("abort", cancel, { once: true });
@@ -247,8 +248,8 @@ interface AggregatedTool {
     call(args: Readonly<Record<string, unknown>> | undefined, extra: ToolCallExtra): Promise<CallToolResult>;
 }
 
-interface TypedEntry {
-    readonly kind: "typed";
+interface ServiceEntry {
+    readonly kind: "service";
     readonly serviceId: string;
     catalog: McpToolCatalog | undefined;
     tools: readonly AggregatedTool[];
@@ -264,15 +265,16 @@ interface ForwardEntry {
     refresh: Promise<void>;
 }
 
-type Entry = TypedEntry | ForwardEntry;
+type Entry = ServiceEntry | ForwardEntry;
 
 type Endpoint =
-    | { readonly kind: "typed"; readonly generatedHash: string | undefined }
+    /** `interfaces` identifies the generated interfaces and their hashes. */
+    | { readonly kind: "service"; readonly interfaces: string }
     | { readonly kind: "forward"; readonly interfaceId: string };
 
 const defaultClientInfo: McpClientInfo = { name: "linkrpc-hub-mcp", version: "1.0.0" };
 
-/** One endpoint per service: typed if offered, else the preferred forward id. */
+/** One endpoint per service: the MCP service if offered, else the preferred forward id. */
 function wantedEndpoints(listings: readonly ServiceListing[]): Map<string, Endpoint> {
     const byService = new Map<string, ServiceListing[]>();
     for (const listing of listings) {
@@ -285,8 +287,11 @@ function wantedEndpoints(listings: readonly ServiceListing[]): Map<string, Endpo
     for (const [serviceId, items] of byService) {
         const ids = new Set(items.map((item) => item.interfaceId));
         if (ids.has(mcpToolsInterface.info.id)) {
-            const generated = items.find((item) => item.interfaceId.startsWith(generatedMcpToolsInterfacePrefix));
-            result.set(serviceId, { kind: "typed", generatedHash: generated?.hash });
+            const generated = items.filter((item) => item.interfaceId.startsWith(generatedMcpToolsInterfacePrefix));
+            result.set(serviceId, {
+                kind: "service",
+                interfaces: interfacesKey(generated.map((item) => ({ interfaceId: item.interfaceId, interfaceHash: item.hash }))),
+            });
         } else if (ids.has(mcpForwardInterface.info.id)) {
             result.set(serviceId, { kind: "forward", interfaceId: mcpForwardInterface.info.id });
         } else if (ids.has(legacyMcpForwardInterface.info.id)) {
@@ -298,7 +303,11 @@ function wantedEndpoints(listings: readonly ServiceListing[]): Map<string, Endpo
 
 function sameEndpoint(entry: Entry, endpoint: Endpoint | undefined): boolean {
     if (endpoint === undefined || endpoint.kind !== entry.kind) return false;
-    return entry.kind === "typed" || (endpoint.kind === "forward" && endpoint.interfaceId === entry.interfaceId);
+    return entry.kind === "service" || (endpoint.kind === "forward" && endpoint.interfaceId === entry.interfaceId);
+}
+
+function interfacesKey(interfaces: readonly { readonly interfaceId: string; readonly interfaceHash: string }[]): string {
+    return interfaces.map((item) => `${item.interfaceId}:${item.interfaceHash}`).sort().join(",");
 }
 
 /** Stable, MCP-safe (≤ 64 characters) and unique even for long service ids. */
