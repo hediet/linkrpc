@@ -117,15 +117,16 @@ it.each<Case>([
     }
 }, 60_000);
 
-it('serves an MCP server as a LinkRPC endpoint without a hub (mcp-serve)', async () => {
+it('publishes an MCP server to an in-process hub with hub --endpoint-cmd', async () => {
     const cwd = fileURLToPath(new URL('../../', import.meta.url));
-    const cli = `"${process.execPath}" --import tsx "${fileURLToPath(new URL('../linkrpc.ts', import.meta.url))}"`;
+    const cliPath = fileURLToPath(new URL('../linkrpc.ts', import.meta.url));
     const server = `"${process.execPath}" "${fileURLToPath(new URL('../fixtures/mcp-server.mjs', import.meta.url))}"`;
-    const endpoint = `${cli} mcp-serve --service --forward --name demo -- ${server}`;
+    const publisher = `"${process.execPath}" --import tsx "${cliPath}" hub mcp-publish --service --name demo -- ${server}`;
+    const home = await mkdtemp(join(tmpdir(), 'linkrpc-mcp-local-hub-'));
     const run = (...commandArgs: string[]) => new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve) => {
         const child = spawn(process.execPath, [
-            '--import', 'tsx', fileURLToPath(new URL('../linkrpc.ts', import.meta.url)),
-            '--endpoint-cmd-stdio', endpoint, ...commandArgs,
+            '--import', 'tsx', cliPath, 'hub', '--context', ':empty', '--no-use-env',
+            '--principal', `file:${join(home, 'identity.json')}`, ...commandArgs, '--endpoint-cmd', publisher,
         ], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
         let stdout = '';
         let stderr = '';
@@ -133,11 +134,16 @@ it('serves an MCP server as a LinkRPC endpoint without a hub (mcp-serve)', async
         child.stderr.on('data', chunk => { stderr += String(chunk); });
         child.once('exit', code => resolve({ code, stdout, stderr }));
     });
-
-    const listing = await run('ls');
-    expect(listing.stdout).toContain('mcp.tools.demo');
-    expect(listing.stdout).toContain('mcp.forward');
-    const call = await run('call', 'mcp.tools.demo::echo', '--p:message=hello');
-    expect(call.code, call.stderr).toBe(0);
-    expect(JSON.parse(call.stdout)).toEqual({ content: [{ type: 'text', text: '{"message":"hello"}' }] });
+    try {
+        // The publisher claims the local hub's granted namespace, `local`, before the client connects.
+        const listing = await run('ls');
+        expect(listing.stdout).toContain('mcp.tools.demo');
+        const call = await run('call', 'local::mcp.tools.demo::echo', '--p:message=hello');
+        expect(call.code, call.stderr).toBe(0);
+        expect(JSON.parse(call.stdout)).toEqual({ content: [{ type: 'text', text: '{"message":"hello"}' }] });
+        // The publisher stops with its hub.
+        expect(call.stderr).toContain('mcp-publish: the hub connection closed');
+    } finally {
+        await rm(home, { recursive: true, force: true });
+    }
 }, 60_000);

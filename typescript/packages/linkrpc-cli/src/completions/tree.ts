@@ -537,7 +537,6 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             description: 'Aggregate discoverable Hub MCP tools on stdio.',
             positionals: [],
             options: [
-                { name: '--scripts', takesValue: false },
                 { name: '--no-scripts', takesValue: false },
                 { name: '--mcp-identity', takesValue: true, valueType: 'free' },
             ],
@@ -574,23 +573,6 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--mcp-config', takesValue: true, valueType: 'free' },
                 { name: '--env', takesValue: true, valueType: 'free' },
                 { name: '--stdio', takesValue: false },
-            ],
-        },
-    {
-            name: 'mcp-serve',
-            description: 'Serve an MCP server as a LinkRPC endpoint on stdio, without a hub.',
-            positionals: [],
-            variadic: 'free',
-            options: [
-                { name: '--service', takesValue: false },
-                { name: '--forward', takesValue: false },
-                { name: '--name', takesValue: true, valueType: 'free' },
-                { name: '--group', takesValue: true, valueType: 'free' },
-                { name: '--url', takesValue: true, valueType: 'free' },
-                { name: '--header', takesValue: true, valueType: 'free' },
-                { name: '--header-env', takesValue: true, valueType: 'free' },
-                { name: '--mcp-config', takesValue: true, valueType: 'free' },
-                { name: '--env', takesValue: true, valueType: 'free' },
             ],
         },
     {

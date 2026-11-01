@@ -1,4 +1,4 @@
-import { type IMessageTransport, LinkRpcConnection } from '@hediet/linkrpc';
+import { LinkRpcConnection } from '@hediet/linkrpc';
 import type { CliConnection } from '@hediet/linkrpc-client-internal';
 import { readFile } from 'node:fs/promises';
 import {
@@ -34,7 +34,10 @@ export interface McpPublishOptions {
     /** Accounts (MCP identities), each adding env vars or headers to `transport`. */
     readonly identities?: McpServerConfig['identities'];
     readonly description?: string;
-    /** Resolves to stop publishing. Defaults to the first SIGINT/SIGTERM. */
+    /**
+     * Resolves to stop publishing. Defaults to the first SIGINT/SIGTERM. The
+     * command also stops, with a non-zero exit code, when the hub connection closes.
+     */
     readonly stop?: Promise<void>;
     /** Sink for human-readable status lines (defaults to stderr). */
     readonly log?: (line: string) => void;
@@ -47,6 +50,14 @@ export interface McpPublishOptions {
  */
 export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> {
     const log = opts.log ?? ((line) => process.stderr.write(line + '\n'));
+    // Without the hub, the published server is unreachable: stop so a supervisor can restart it.
+    const stop = Promise.race([
+        opts.stop ?? _untilSignalled(),
+        opts.local.closed.then(() => {
+            log('mcp-publish: the hub connection closed');
+            process.exitCode = 1;
+        }),
+    ]);
     const resolved = await resolveServiceIdToClaim(opts.local, opts.serviceId);
     const serviceId = resolved.serviceId;
     const connection = new LinkRpcConnection(opts.local.rpcChannel);
@@ -63,7 +74,7 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
         try {
             await claimServiceId(opts.local, serviceId);
             log(`mcp-publish: claimed '${serviceId}' — forwarding the MCP server on stdio to one connection at a time`);
-            await Promise.race([instance.closed, opts.stop ?? _untilSignalled()]);
+            await Promise.race([instance.closed, stop]);
             log('mcp-publish: stopping');
         } finally {
             instance.dispose();
@@ -89,73 +100,11 @@ export async function mcpPublishCommand(opts: McpPublishOptions): Promise<void> 
         await claimServiceId(opts.local, serviceId);
         const modes = [opts.expose.service && 'as a service', opts.expose.forward && 'forwarded'].filter(Boolean).join(' and ');
         log(`mcp-publish: claimed '${serviceId}' — publishing ${_describe(transport)} ${modes}`);
-        await (opts.stop ?? _untilSignalled());
+        await stop;
         log('mcp-publish: stopping');
     } finally {
         await hosted.dispose();
     }
-}
-
-export interface McpServeOptions {
-    /** Transport to the client, e.g. NDJSON on this process's stdin/stdout. */
-    readonly transport: IMessageTransport;
-    readonly name: string;
-    readonly upstream: McpUpstreamConfig;
-    readonly expose: McpServerConfig['expose'];
-    readonly identities?: McpServerConfig['identities'];
-    readonly description?: string;
-    /** Resolves to stop serving. */
-    readonly stop: Promise<void>;
-    readonly log?: (line: string) => void;
-}
-
-/**
- * Serve one MCP server as the root service of a LinkRPC connection, without a
- * hub: e.g. `linkrpc ui --endpoint-cmd-stdio "linkrpc mcp-serve --service -- <mcp server>"`.
- */
-export async function mcpServeCommand(opts: McpServeOptions): Promise<void> {
-    const log = opts.log ?? ((line) => process.stderr.write(line + '\n'));
-    // Requests wait until the tools are listed, so one-shot clients see every interface.
-    const held = holdIncoming(opts.transport);
-    const hosted = await hostMcpServer({
-        connection: LinkRpcConnection.fromTransport(held.transport),
-        serviceId: '',
-        server: mcpServerConfigSchema.parse({
-            id: opts.name,
-            ...(opts.description !== undefined ? { description: opts.description } : {}),
-            transport: opts.upstream,
-            ...(opts.identities !== undefined ? { identities: opts.identities } : {}),
-            expose: opts.expose,
-        }),
-        log,
-        onRefreshError: (error) => log(`mcp-serve: tool refresh failed: ${error instanceof Error ? error.message : String(error)}`),
-    });
-    held.release();
-    try {
-        await opts.stop;
-    } finally {
-        await hosted.dispose();
-    }
-}
-
-/** Defers delivering incoming messages until `release`; the transport buffers them meanwhile. */
-function holdIncoming(inner: IMessageTransport): { readonly transport: IMessageTransport; release(): void } {
-    let released = false;
-    let listener: Parameters<IMessageTransport['setListener']>[0];
-    return {
-        transport: {
-            send: (message) => inner.send(message),
-            setListener: (value) => {
-                listener = value;
-                if (released) inner.setListener(value);
-            },
-            dispose: () => inner.dispose(),
-        },
-        release: () => {
-            released = true;
-            inner.setListener(listener);
-        },
-    };
 }
 
 /** `mcp-publish --mcp-config` file: a server config whose `id` and `expose` may come from flags. */

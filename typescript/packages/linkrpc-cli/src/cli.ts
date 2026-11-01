@@ -45,7 +45,7 @@ import { loadHubConfig, printHubConfigSchema, serveCommand } from './commands/se
 import { proxyCommand, tunnelCommand } from './commands/tunnel';
 import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
-import { mcpPublishCommand, mcpServeCommand, readMcpPublishConfig } from './commands/mcpPublish';
+import { mcpPublishCommand, readMcpPublishConfig } from './commands/mcpPublish';
 import { resolveServiceIdToClaim } from './commands/serviceIdClaim';
 import { mcpCommand } from './commands/mcp';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
@@ -1240,7 +1240,7 @@ Batch options:
         if (sources !== 1) {
             process.stderr.write(
                 `linkrpc: ${commandName} requires exactly one of an MCP server command after \`--\`, --url, ` +
-                `${commandName === 'mcp-serve' ? '' : '--stdio, '}or --mcp-config, e.g. ` +
+                `--stdio, or --mcp-config, e.g. ` +
                 `\`${commandName} -- npx -y @modelcontextprotocol/server-everything\`.\n`,
             );
             process.exit(2);
@@ -1368,7 +1368,6 @@ Batch options:
                 'forwarded servers) as one stdio MCP server, together with the LinkRPC script tools ' +
                 '(runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask).',
             )
-            .option('--scripts', 'serve the LinkRPC script tools (default)')
             .option('--no-scripts', 'serve only the aggregated MCP tools, without loading the script sandbox')
             .option(
                 '--mcp-identity <serviceId=identity>',
@@ -1913,36 +1912,6 @@ Batch options:
             });
     }
 
-    mcpExposeOptions(mcpSourceOptions(program
-        .command('mcp-serve [mcpCommand...]')
-        .description(
-            'Serve an MCP server as a LinkRPC endpoint on this process\'s stdin/stdout, without a hub, ' +
-            'with the same modes as mcp-publish. For example ' +
-            '`linkrpc ui --endpoint-cmd-stdio "linkrpc mcp-serve --service -- npx -y ' +
-            '@modelcontextprotocol/server-everything"`. Exits when stdin ends.',
-        )))
-        .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions & McpExposeCliOptions) => {
-            const source = await resolveMcpSource('mcp-serve', mcpCommand, cmdOpts, exposeFromFlags('mcp-serve', cmdOpts));
-            if (source.transport.kind === 'own-stdio') throw new Error('unreachable: mcp-serve has no --stdio');
-            let markClosed!: () => void;
-            const closed = new Promise<void>((resolve) => { markClosed = resolve; });
-            const { transport } = await connectNdjson({
-                input: process.stdin,
-                output: process.stdout,
-                onClose: () => markClosed(),
-            });
-            await mcpServeCommand({
-                transport,
-                name: cmdOpts.name ?? source.file?.id ?? 'server',
-                upstream: source.transport,
-                expose: source.expose,
-                ...(source.file?.identities !== undefined ? { identities: source.file.identities } : {}),
-                ...(source.file?.description !== undefined ? { description: source.file.description } : {}),
-                stop: Promise.race([closed, _untilSignalled()]),
-            });
-            transport.dispose();
-        });
-
     registerViewCommands(program, action => withChannel(endpoint, getPrincipalSpec(), action));
 
     program
@@ -2370,7 +2339,11 @@ async function withChannel(
     // When `--config` runs an in-process hub, that hub already logs its routed
     // traffic (richer than the client leg) — so only tap the wire for a direct
     // remote connection, to avoid double-logging the control socket.
-    const conn = await connectEndpoint(acquired.ep, acquired.running === undefined ? wireLog('hub') : undefined);
+    const conn = await connectEndpoint(
+        acquired.ep,
+        acquired.running === undefined ? wireLog('hub') : undefined,
+        { cmdEnvLocalHub: g_invocation?.profile === 'hub' },
+    );
     try {
         const schemaSource = g_invocation?.values.schema;
         const channel = schemaSource === undefined

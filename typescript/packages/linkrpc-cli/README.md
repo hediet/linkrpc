@@ -579,7 +579,7 @@ it**. Pick one of:
 | Flag / env                       | Meaning                                                                                                    |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `--endpoint <uri>`               | A strict endpoint URI (see below).                                                                         |
-| `--endpoint-cmd <command>`       | Spawn a _server_, hand it a fresh socket + token via `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`, then connect to it. |
+| `--endpoint-cmd <command>`       | Spawn a _server_, hand it a fresh socket + token via `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`, then connect to it. With the hub profile, the server is a participant of an in-process hub and must claim its granted namespace (`local`) within 30 seconds. |
 | `--endpoint-cmd-stdio <command>` | Spawn a child and talk linkrpc over its stdio.                                                              |
 | `LINKRPC_ENDPOINT` (env)          | A URI, or a legacy bare socket path / `ws://` URL. Token from `LINKRPC_TOKEN`; enabled by default in the Hub profile and with `--use-env` in the RPC profile. |
 
@@ -993,7 +993,8 @@ linkrpc hub mcp-publish --service --forward --serviceId ./everything -- npx -y @
 free when the connection has a granted serviceId namespace, and otherwise
 requests `<user>@<host>/<name>` from the hub (an approval prompt). The command
 logs the resolved service id. Without `--serviceId`, the granted namespace
-itself is claimed; `tunnel` accepts relative service ids too.
+itself is claimed; `tunnel` accepts relative service ids too. The command stops,
+with a non-zero exit code, when its hub connection closes.
 
 - `--service` publishes the MCP server as a LinkRPC service: every MCP tool is
   a method of a generated `mcp.tools.<name>` interface (`--name`, derived from
@@ -1044,21 +1045,20 @@ the configured MCP child, so producers must use attach-only commands when
 heavyweight services are managed separately. Children inherit the producer's
 environment plus `--env` values.
 
-### MCP servers without a hub
+### MCP servers without a running hub
 
-`mcp-serve` serves one MCP server as a LinkRPC endpoint on its own
-stdin/stdout, with the same options as `mcp-publish` (except `--serviceId` and
-`--stdio`). Every LinkRPC client can then use it directly, including the
-terminal UI:
+With the hub profile, `--endpoint-cmd` runs the command as a participant of an
+in-process hub, so a publisher needs no hub daemon. Every hub client works
+against it, including the terminal UI:
 
 ```sh
-linkrpc ui --endpoint-cmd-stdio "linkrpc mcp-serve --service -- npx -y @modelcontextprotocol/server-everything"
-linkrpc --endpoint-cmd-stdio "linkrpc mcp-serve --service --name demo -- node server.mjs" call mcp.tools.demo::echo --p:message=hi
+linkrpc hub ui --endpoint-cmd "linkrpc hub mcp-publish --service -- npx -y @modelcontextprotocol/server-everything"
+linkrpc hub call local::mcp.tools.demo::echo --p:message=hi --endpoint-cmd "linkrpc hub mcp-publish --service --name demo -- node server.mjs"
 ```
 
-The tools appear as methods of `mcp.tools.<name>` at the root service, with
-forms built from their input schemas. `mcp-serve` answers requests only after
-it has listed the tools, so one-shot commands see every interface.
+The publisher claims the in-process hub's namespace `local`; its tools appear
+as methods of `local::mcp.tools.<name>`, with forms built from their input
+schemas. `mcp-publish` stops when its hub connection closes.
 
 ### Participant proxy
 
