@@ -579,7 +579,7 @@ it**. Pick one of:
 | Flag / env                       | Meaning                                                                                                    |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `--endpoint <uri>`               | A strict endpoint URI (see below).                                                                         |
-| `--endpoint-cmd <command>`       | Spawn a _server_, hand it a fresh socket + token via `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`, then connect to it. |
+| `--endpoint-cmd <command>`       | Spawn a _server_, hand it a fresh socket + token via `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN`, then connect to it. With the hub profile, the server is a participant of an in-process hub and must claim its granted namespace (`local`) within 30 seconds. |
 | `--endpoint-cmd-stdio <command>` | Spawn a child and talk linkrpc over its stdio.                                                              |
 | `LINKRPC_ENDPOINT` (env)          | A URI, or a legacy bare socket path / `ws://` URL. Token from `LINKRPC_TOKEN`; enabled by default in the Hub profile and with `--use-env` in the RPC profile. |
 
@@ -965,10 +965,11 @@ stdout contains only MCP protocol frames.
 `--mcp-identity <serviceId>=<identity>` (repeatable) uses another account of a
 published MCP server than its default and lists only that account's tools.
 
-`--scripts` additionally serves the LinkRPC script tools (`runLinkRpcScript`,
-`awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp` on the same
-connection, so one MCP entry gives both the hub's MCP tools and scripted access
-to every hub service.
+The same MCP server also serves the LinkRPC script tools (`runLinkRpcScript`,
+`awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp`, so one MCP
+entry gives both the hub's MCP tools and scripted access to every hub service.
+`--no-scripts` serves only the aggregated MCP tools and does not load the script
+sandbox.
 
 The command watches directory changes, refreshes changed tool lists (including
 paginated lists), and retries failed connections while they remain advertised.
@@ -985,8 +986,15 @@ or `--header-env <header>=<ENV_VAR>` to read a secret from the environment),
 as `--mcp-config <file>`, or (forward only) as `--stdio`:
 
 ```sh
-linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> -- npx -y @modelcontextprotocol/server-everything
+linkrpc hub mcp-publish --service --forward --serviceId ./everything -- npx -y @modelcontextprotocol/server-everything
 ```
+
+`--serviceId ./<name>` is relative: it claims `<granted namespace>/<name>` for
+free when the connection has a granted serviceId namespace, and otherwise
+requests `<user>@<host>/<name>` from the hub (an approval prompt). The command
+logs the resolved service id. Without `--serviceId`, the granted namespace
+itself is claimed; `tunnel` accepts relative service ids too. The command stops,
+with a non-zero exit code, when its hub connection closes.
 
 - `--service` publishes the MCP server as a LinkRPC service: every MCP tool is
   a method of a generated `mcp.tools.<name>` interface (`--name`, derived from
@@ -1023,7 +1031,7 @@ linkrpc hub mcp-publish --service --forward --serviceId <authorized-service-id> 
 `mcp-forward` is shorthand for `mcp-publish --forward`:
 
 ```sh
-linkrpc hub mcp-forward --serviceId <authorized-service-id> -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
+linkrpc hub mcp-forward --serviceId ./component-explorer -- component-explorer mcp -p <config> --use-daemon --no-daemon-autostart
 ```
 
 To forward a server that must not be restarted per connection, start it
@@ -1036,6 +1044,21 @@ start workspace builds or explorer daemons. Each forwarded connection spawns
 the configured MCP child, so producers must use attach-only commands when
 heavyweight services are managed separately. Children inherit the producer's
 environment plus `--env` values.
+
+### MCP servers without a running hub
+
+With the hub profile, `--endpoint-cmd` runs the command as a participant of an
+in-process hub, so a publisher needs no hub daemon. Every hub client works
+against it, including the terminal UI:
+
+```sh
+linkrpc hub ui --endpoint-cmd "linkrpc hub mcp-publish --service -- npx -y @modelcontextprotocol/server-everything"
+linkrpc hub call local::mcp.tools.demo::echo --p:message=hi --endpoint-cmd "linkrpc hub mcp-publish --service --name demo -- node server.mjs"
+```
+
+The publisher claims the in-process hub's namespace `local`; its tools appear
+as methods of `local::mcp.tools.<name>`, with forms built from their input
+schemas. `mcp-publish` stops when its hub connection closes.
 
 ### Participant proxy
 
