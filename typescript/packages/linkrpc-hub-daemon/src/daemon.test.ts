@@ -239,6 +239,20 @@ describe('HubDaemon', () => {
         }
     });
 
+    it('answers management calls for services that are stopping during shutdown', async () => {
+        writeConfig({ services: { a: service({ ECHO_EXIT_DELAY_MS: '1000' }) } });
+        await running('a');
+        const connection = await connectToHubManagement(home);
+        try {
+            const shutdown = daemon!.shutdown();
+            await waitFor(() => serviceStatus('a') === undefined, 'a to be stopping');
+            await expect(connection.management.getServiceLogs({ name: 'a' })).rejects.toThrow('the hub daemon is shutting down');
+            await shutdown;
+        } finally {
+            connection.close();
+        }
+    });
+
     it('records calls once enabled, without restarting the hub, and serves them to management and hub clients', async () => {
         writeConfig({ services: { a: service({ ECHO_PREFIX: 'a:' }) } });
         await serving('a');

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
+import { writeFileDurably } from './durableWrite';
 
 /**
  * How to reach one daemon endpoint. The daemon writes one file for
@@ -33,10 +34,8 @@ export function readEndpointDiscovery(file: string): EndpointDiscovery | undefin
     }
 }
 
-/** Atomically write a JSON file readable only by the current user. */
+/** Atomically and durably write a JSON file readable only by the current user. */
 export function writePrivateJson(file: string, value: unknown): void {
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
-    fs.renameSync(tmp, file);
+    writeFileDurably(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 }

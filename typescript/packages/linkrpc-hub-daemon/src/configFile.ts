@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { daemonConfigJsonSchema, DEFAULT_CONFIG_TEXT, parseDaemonConfigText } from './config';
+import { writeFileDurably } from './durableWrite';
 import type { ConfigDocument } from './managementInterface';
 
 /** Debounce for editors that save via several file operations. */
@@ -13,7 +14,7 @@ export class ConfigConflictError extends Error {
     }
 }
 
-/** The daemon config file: revisioned reads, validated atomic writes, and change watching. */
+/** The daemon config file: revisioned reads, validated atomic and durable writes, and change watching. */
 export class ConfigFile {
     constructor(
         public readonly path: string,
@@ -49,9 +50,7 @@ export class ConfigFile {
     public write(text: string, expectedRevision: string): string {
         parseDaemonConfigText(text);
         if (this.read().revision !== expectedRevision) throw new ConfigConflictError(this.path);
-        const tmp = `${this.path}.${process.pid}.tmp`;
-        fs.writeFileSync(tmp, text);
-        fs.renameSync(tmp, this.path);
+        writeFileDurably(this.path, text);
         return configRevision(text);
     }
 
