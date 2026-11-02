@@ -47,7 +47,7 @@ import { connectAs } from './commands/connectAs';
 import { openDialTransport, openTargetTransport, type DialEndpoint } from './commands/connectAsTransports';
 import { mcpPublishCommand, readMcpPublishConfig } from './commands/mcpPublish';
 import { resolveServiceIdToClaim } from './commands/serviceIdClaim';
-import { mcpCommand } from './commands/mcp';
+import { mcpCommand, mcpExportCommand } from './commands/mcp';
 import { jsonRpcStdioCommand } from './commands/jsonRpcStdio';
 import { jsonRpcExportCommand, JsonRpcExportRoutes } from './commands/jsonRpcExport';
 import { defaultHttpExportSessionFile, httpExportCommand } from './commands/httpExport';
@@ -130,9 +130,9 @@ export async function main(
         )
         .option(
             '--endpoint <uri>',
-            'endpoint URI (linkrpc:local, unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
-            'ws-no-init://host?…, ' +
-            'cmd:?command=… or cmd-stdio:?command=…)',
+            'endpoint URI (linkrpc:local, unix:/path?token=â€¦, npipe://./pipe/â€¦, ws[s]://host?token=â€¦, ' +
+            'ws-no-init://host?â€¦, ' +
+            'cmd:?command=â€¦ or cmd-stdio:?command=â€¦)',
         )
         .option('--endpoint-cmd <command>', 'spawn a server, connect via an injected env socket')
         .option('--endpoint-cmd-stdio <command>', 'spawn a child and talk over its stdio')
@@ -326,7 +326,7 @@ export async function main(
             : undefined;
         g_hubConfigPath = g_invocation.values.config;
         // Message logging goes to stderr, which would corrupt the full-screen
-        // TUI — so it applies to every command except `ui`.
+        // TUI â€” so it applies to every command except `ui`.
         g_logMessages = program.opts().logMessages === true
             && actionCommand.name() !== 'ui';
         g_logTransport = program.opts().logTransport === true
@@ -398,7 +398,7 @@ export async function main(
             + 'Pipe consoles: Ctrl+D on an empty line detaches. TTY consoles: keys go to the program; the detach '
             + 'keys (default Ctrl+B, then d) detach.',
         )
-        .option('--params <json>', "params of the console template instance, e.g. '{\"namespace\":\"…\",\"id\":\"main\"}'", '{}')
+        .option('--params <json>', "params of the console template instance, e.g. '{\"namespace\":\"â€¦\",\"id\":\"main\"}'", '{}')
         .option('--interface <id>', 'interface containing the console instance')
         .option('--instance <name>', 'console template instance name, when an interface has several')
         .option('--read-only', 'observe output without sending input')
@@ -1388,6 +1388,47 @@ Batch options:
             });
 
         program
+            .command('mcp-export')
+            .description(
+                'Serve what `mcp` serves over Streamable HTTP on a loopback port (http://127.0.0.1:<port>/mcp), ' +
+                'so many MCP clients share one process. Clients send `Authorization: Bearer <token>`; ' +
+                'the token is read from an environment variable.',
+            )
+            .requiredOption('--port <n>', 'loopback port to listen on', value => parsePositiveInteger(value, '--port'))
+            .option('--token-env <name>', 'environment variable holding the bearer token', 'LINKRPC_MCP_EXPORT_TOKEN')
+            .option('--no-scripts', 'serve only the aggregated MCP tools, without loading the script sandbox')
+            .option(
+                '--mcp-identity <serviceId=identity>',
+                'use this MCP identity (account) of a published MCP server instead of its default (repeatable)',
+                collectKeyValue,
+            )
+            .option(
+                '--idle-timeout <minutes>',
+                'close MCP sessions without requests for this long (clients must then initialize again)',
+                value => parsePositiveInteger(value, '--idle-timeout'),
+            )
+            .action(async (cmdOpts: {
+                port: number; tokenEnv: string; scripts?: boolean;
+                mcpIdentity?: Record<string, string>; idleTimeout?: number;
+            }) => {
+                const token = process.env[cmdOpts.tokenEnv];
+                if (!token) throw new Error(`mcp-export: set the bearer token in $${cmdOpts.tokenEnv}`);
+                await withChannel(endpoint, getPrincipalSpec(), async (channel, session, closed) => {
+                    await mcpExportCommand(channel, {
+                        port: cmdOpts.port,
+                        authorizationToken: token,
+                        scripts: cmdOpts.scripts !== false,
+                        ...(cmdOpts.mcpIdentity !== undefined ? { mcpIdentities: cmdOpts.mcpIdentity } : {}),
+                        ...(cmdOpts.idleTimeout !== undefined ? { idleSessionTimeoutMs: cmdOpts.idleTimeout * 60_000 } : {}),
+                        requestDirectoryAccess: session === undefined ? undefined : serviceId =>
+                            requestDirectoryAccess(session, serviceId, { watch: true }),
+                        ...(session !== undefined ? { access: session } : {}),
+                        stop: Promise.race([_untilSignalled(), closed.then(() => { throw new Error('mcp-export: the hub connection closed'); })]),
+                    });
+                }, { requestReflectionAccess: false, autoNegotiatePerCall: true });
+            });
+
+        program
             .command('json-rpc-stdio <serviceId>')
             .description(
                 'Expose <serviceId>::jsonRpcConnection::connectRaw as a newline-delimited '
@@ -1619,7 +1660,7 @@ Batch options:
             'then splice a target endpoint onto the hub as a first-class participant with that ' +
             'slot\'s managed identity and a granted serviceId namespace (--granted-service-id, ' +
             'defaulting to <slot>). No local hub is started: the CLI ' +
-            'proxies the connection (target ⟷ CLI ⟷ hub), so it works with every target kind and ' +
+            'proxies the connection (target âŸ· CLI âŸ· hub), so it works with every target kind and ' +
             '--log-messages taps the full flow. The hub-facing bound-token listener is ' +
             '--hub-endpoint (defaults to --endpoint when that is a ws/socket). Runs until Ctrl-C.',
         )
@@ -1627,7 +1668,7 @@ Batch options:
             '--hub-endpoint <uri>',
             'ws/socket bound-token listener to splice the target onto (default: --endpoint)',
         )
-        .option('--target-endpoint <uri>', 'target endpoint URI (unix:/…, ws[s]://…)')
+        .option('--target-endpoint <uri>', 'target endpoint URI (unix:/â€¦, ws[s]://â€¦)')
         .option('--target-endpoint-cmd <command>', 'spawn the target as a server; it dials the CLI back')
         .option('--target-endpoint-cmd-stdio <command>', 'spawn the target and talk linkrpc over its stdio')
         .option(
@@ -1994,11 +2035,11 @@ Batch options:
         .option('--line <line>', 'the partial command line, including the binary name')
         .option('--point <n>', 'cursor position (0-indexed) into --line', (v) => Number.parseInt(v, 10))
         .action(async (opts: { line?: string; point?: number; }) => {
-            // The completer must NEVER write to stderr or non-zero-exit — that
+            // The completer must NEVER write to stderr or non-zero-exit â€” that
             // would surface in the user's prompt. Always exit 0 with whatever
             // we managed to compute (possibly nothing). Force-exit at the end
             // so any open socket / setup-signing timer can't keep the process
-            // alive past the action — that hangs the user's shell on TAB.
+            // alive past the action â€” that hangs the user's shell on TAB.
             try {
                 const line = opts.line ?? '';
                 const point = typeof opts.point === 'number' && !Number.isNaN(opts.point)
@@ -2326,7 +2367,7 @@ function hasEndpointOverrides(values: ContextValues): boolean {
 async function withChannel(
     endpoint: ResolvedEndpoint | undefined,
     principalSpec: PrincipalSpec,
-    fn: (channel: import('@hediet/linkrpc-client-internal').CliChannel, session?: SigningSession) => Promise<void>,
+    fn: (channel: import('@hediet/linkrpc-client-internal').CliChannel, session: SigningSession | undefined, closed: Promise<void>) => Promise<void>,
     opts: {
         requestReflectionAccess?: boolean;
         requestTopologyAccess?: { readonly sourceServiceIds?: readonly string[] };
@@ -2337,7 +2378,7 @@ async function withChannel(
     const sign = resolveSigning(g_invocation?.profile ?? 'rpc', g_invocation?.values ?? {}, opts.requireSigning);
     const acquired = await acquireConnection(endpoint);
     // When `--config` runs an in-process hub, that hub already logs its routed
-    // traffic (richer than the client leg) — so only tap the wire for a direct
+    // traffic (richer than the client leg) â€” so only tap the wire for a direct
     // remote connection, to avoid double-logging the control socket.
     const conn = await connectEndpoint(
         acquired.ep,
@@ -2356,11 +2397,11 @@ async function withChannel(
             if (opts.requireSigning || g_invocation?.values.sign === true) {
                 throw new Error('Signing requires an initialized LinkRPC endpoint.');
             }
-            await fn(channel);
+            await fn(channel, undefined, conn.closed);
             return;
         }
         if (!sign) {
-            await fn(channel);
+            await fn(channel, undefined, conn.closed);
             return;
         }
 
@@ -2395,7 +2436,7 @@ async function withChannel(
                 );
             }
         }
-        await fn(channel, session);
+        await fn(channel, session, conn.closed);
     } finally {
         conn.close();
         acquired.running?.dispose();
@@ -2505,7 +2546,7 @@ let g_logTransport = false;
 /**
  * Build the wire-tap options for a direct {@link connect}, or `undefined` when
  * `--log-messages` is off. Logs every JSON-RPC message crossing the client
- * transport to stderr, rendered like the hub "Flows" view — the way to observe
+ * transport to stderr, rendered like the hub "Flows" view â€” the way to observe
  * a connection that never routes through a local hub.
  */
 function wireLog(remoteLabel: string): ConnectLogOptions | undefined {
@@ -2609,8 +2650,8 @@ function addTargetEndpointOptions(command: Command): Command {
     return command
         .option(
             '--target-endpoint <uri>',
-            'target endpoint URI (unix:/path?token=…, npipe://./pipe/…, ws[s]://host?token=…, ' +
-            'cmd:?command=… or cmd-stdio:?command=…)',
+            'target endpoint URI (unix:/path?token=â€¦, npipe://./pipe/â€¦, ws[s]://host?token=â€¦, ' +
+            'cmd:?command=â€¦ or cmd-stdio:?command=â€¦)',
         )
         .option(
             '--target-endpoint-cmd <command>',
@@ -2681,7 +2722,7 @@ function resolveTargetEndpointOrExit(
 }
 
 /**
- * Connect straight to a target endpoint — no routing hub. A spawned cmd-env
+ * Connect straight to a target endpoint â€” no routing hub. A spawned cmd-env
  * child is fronted with a RootOverlay: its root-form calls (identity::*,
  * hubGrantedServiceId::*, reflection, hubAccess) are served locally while every
  * forwarded request is relayed to the child through the overlay splitter. This

@@ -978,6 +978,35 @@ remaining unique and MCP-safe even for long service paths. Descriptions identify
 the source service. Disconnecting stdio closes this client's forwarding sessions.
 This version aggregates tools, not resources, prompts, or sampling.
 
+`mcp-export` serves the same over Streamable HTTP on a loopback port, so all
+agents of a machine share one process and one hub connection instead of
+starting `hub mcp` per session. Run it as a hub daemon service and point the
+agents at it, e.g. in `~/.copilot/mcp-config.json`:
+
+```sh
+LINKRPC_MCP_EXPORT_TOKEN=<secret> linkrpc hub mcp-export --port 8124
+```
+
+```json
+{
+  "mcpServers": {
+    "hub": {
+      "type": "http",
+      "url": "http://127.0.0.1:8124/mcp",
+      "headers": { "Authorization": "Bearer <secret>" }
+    }
+  }
+}
+```
+
+Clients must send the bearer token from the environment variable named by
+`--token-env` (default `LINKRPC_MCP_EXPORT_TOKEN`). Each MCP session has its own
+aggregator, forwarded sessions, and script state (`lastResultVal`, parked
+tasks); all sessions sign as the export's identity and share its grants.
+`--idle-timeout <minutes>` closes sessions without requests; a client then gets
+HTTP 404 and must initialize again. The export exits when its hub connection
+closes, so the daemon restarts it.
+
 ### Publishing MCP servers
 
 Producers stay separate. `mcp-publish` publishes one MCP server, given as a

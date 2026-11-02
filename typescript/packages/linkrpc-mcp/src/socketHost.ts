@@ -44,6 +44,16 @@ export interface McpSocketHostOptions {
      *   Use this until the socket transport is supported everywhere.
      */
     readonly transport?: "socket" | "http";
+    /** Loopback TCP port for the `http` transport. Defaults to a random free port. */
+    readonly port?: number;
+    /** Bearer token clients must send. Defaults to a random token. */
+    readonly authorizationToken?: string;
+    /**
+     * Close sessions that had no request for this long, including their hub
+     * resources. A client that uses a closed session gets HTTP 404 and must
+     * initialize again (MCP Streamable HTTP). Disabled by default.
+     */
+    readonly idleSessionTimeoutMs?: number;
 }
 
 /**
@@ -92,6 +102,9 @@ const REQUEST_PATH = "/mcp";
 interface ActiveSession {
     readonly server: LinkRpcMcpServer;
     readonly session: McpSession;
+    /** Requests (including open SSE streams) currently being handled. */
+    openRequests: number;
+    lastActivity: number;
 }
 
 /**
@@ -116,7 +129,8 @@ export class McpSocketHost {
 
     private readonly _options: McpSocketHostOptions;
     private readonly _http: http.Server;
-    private readonly _token = randomBytes(24).toString("base64url");
+    private readonly _token: string;
+    private readonly _idleTimer: NodeJS.Timeout | undefined;
     private readonly _transport: "socket" | "http";
     private readonly _kind: McpSocketEndpoint["kind"];
     /** Set for the socket/pipe transport; the OS path we listen on. */
@@ -132,6 +146,11 @@ export class McpSocketHost {
     private constructor(options: McpSocketHostOptions) {
         this._options = options;
         this._http = http.createServer((req, res) => void this._handleHttp(req, res));
+        this._token = options.authorizationToken ?? randomBytes(24).toString("base64url");
+        const idleTimeout = options.idleSessionTimeoutMs;
+        this._idleTimer = idleTimeout === undefined
+            ? undefined
+            : setInterval(() => this._closeIdleSessions(idleTimeout), Math.min(60_000, idleTimeout)).unref();
         this._transport = options.transport ?? "socket";
         if (this._transport === "http") {
             this._kind = "tcp";
@@ -169,6 +188,7 @@ export class McpSocketHost {
             return;
         }
         this._disposed = true;
+        clearInterval(this._idleTimer);
         for (const { server, session } of this._active.values()) {
             server.dispose();
             session.dispose?.();
@@ -206,7 +226,7 @@ export class McpSocketHost {
                 resolve();
             };
             if (this._kind === "tcp") {
-                this._http.listen(0, this._host, onListening);
+                this._http.listen(this._options.port ?? 0, this._host, onListening);
             } else {
                 this._http.listen(this._path!, onListening);
             }
@@ -231,6 +251,13 @@ export class McpSocketHost {
         let transport = sessionId ? this._transports.get(sessionId) : undefined;
 
         if (!transport) {
+            if (sessionId !== undefined) {
+                // Unknown or closed session: the client must initialize a new one.
+                this._log(`${req.method} for unknown session ${sessionId} → 404`);
+                res.statusCode = 404;
+                res.end();
+                return;
+            }
             if (req.method !== "POST") {
                 this._log(`${req.method} without known session id → 400 (only POST initialize starts a session)`);
                 res.statusCode = 400;
@@ -240,7 +267,31 @@ export class McpSocketHost {
             transport = await this._openSession();
         }
 
+        const active = this._active.get(transport);
+        if (active) {
+            active.openRequests++;
+            active.lastActivity = Date.now();
+            res.once("close", () => {
+                active.openRequests--;
+                active.lastActivity = Date.now();
+            });
+        }
         await transport.handleRequest(req, res);
+    }
+
+    /** Number of open MCP sessions. */
+    public get sessionCount(): number {
+        return this._active.size;
+    }
+
+    private _closeIdleSessions(timeoutMs: number): void {
+        const now = Date.now();
+        for (const [transport, active] of this._active) {
+            if (active.openRequests === 0 && now - active.lastActivity >= timeoutMs) {
+                this._log(`closing idle session sid=${transport.sessionId}`);
+                void transport.close();
+            }
+        }
     }
 
     private async _openSession(): Promise<StreamableHTTPServerTransport> {
@@ -257,7 +308,7 @@ export class McpSocketHost {
                 this._log(`session initialized sid=${sid}`);
             },
         });
-        this._active.set(transport, { server, session });
+        this._active.set(transport, { server, session, openRequests: 0, lastActivity: Date.now() });
 
         transport.onclose = () => {
             if (transport.sessionId) {

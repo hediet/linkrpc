@@ -542,6 +542,18 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             ],
         },
     {
+            name: 'mcp-export',
+            description: 'Serve the Hub MCP tools over loopback Streamable HTTP.',
+            positionals: [],
+            options: [
+                { name: '--port', takesValue: true, valueType: 'free' },
+                { name: '--token-env', takesValue: true, valueType: 'free' },
+                { name: '--no-scripts', takesValue: false },
+                { name: '--mcp-identity', takesValue: true, valueType: 'free' },
+                { name: '--idle-timeout', takesValue: true, valueType: 'free' },
+            ],
+        },
+    {
             name: 'mcp-forward',
             description: 'Expose an MCP server through the hub.',
             positionals: [],
