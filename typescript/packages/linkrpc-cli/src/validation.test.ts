@@ -35,6 +35,32 @@ describe("validateValueAgainstSchema", () => {
         expect(validateValueAgainstSchema({ name: 42 }, ref, components)).toMatch(/does not match/);
     });
 
+    it("validates records whose schema has no properties, such as enum-keyed partial records", () => {
+        const schema: SvcJsonSchema = {
+            type: "object",
+            properties: {
+                platforms: {
+                    type: "object",
+                    additionalProperties: { type: "object", properties: { executable: { type: "string" } },
+                        required: ["executable"], additionalProperties: false },
+                } as SvcJsonSchema,
+            },
+            required: ["platforms"],
+            additionalProperties: false,
+        };
+        expect(validateValueAgainstSchema({ platforms: { win32: { executable: "a.exe" } } }, schema)).toBeUndefined();
+        const invalid = { platforms: { win32: { executable: 1 } } };
+        expect(validateValueAgainstSchema(invalid, schema)).toMatch(/does not match/);
+        expect(explainValidation(invalid, schema)).toMatchInlineSnapshot(`
+          [
+            {
+              "path": ".platforms.win32.executable",
+              "reason": "expected string, got number (1)",
+            },
+          ]
+        `);
+    });
+
     it("checks object property types and required-ness", () => {
         const schema = {
             type: "object" as const,
