@@ -230,6 +230,44 @@ on the discovery file (written only by the daemon) or configure a token.
 `linkrpc-hub-daemon service enable|disable <name>` persists `enabled` with a
 minimal edit that keeps comments.
 
+### Managing a daemon from another machine
+
+The management API (`linkrpc.hubDaemon`) is also served at
+`<hubServiceId>/daemon`, next to `linkrpc.managedEndpoints` and the call log,
+so hub clients on other machines can read the config, change one service, and
+restart it. `shutdown` is only available on the local management endpoint.
+These calls pass the hub's forwarded-call checks: with
+`"forwardChecking": true`, only callers whose capability roots at a trusted
+root (`rootPrincipalIds`) get through, and those root identities authorize
+themselves. Other principals need a capability that a root approved. Without
+forward checking, any hub client can call it, as with
+`linkrpc.managedEndpoints`; do not connect untrusted peers to such a hub.
+
+`setService` adds, replaces, or (with `"definition": null`) removes one
+`services` entry with a minimal edit of the config file that keeps its other
+content and comments, then applies it like an edit of the file. The result
+must be a valid config. Pass the `revision` from `getConfig` as
+`expectedRevision` to reject the change if the file changed in between:
+
+```sh
+linkrpc hub call hediet/pc2/daemon::linkrpc.hubDaemon::getConfig
+linkrpc hub call hediet/pc2/daemon::linkrpc.hubDaemon::setService --params '{
+  "name": "copilot-proxy",
+  "definition": { "command": ["node", "C:/Users/me/AppData/Local/copilot-proxy/hub-05ffcb7.js"] },
+  "expectedRevision": "<revision>"
+}'
+linkrpc hub call hediet/pc2/daemon::linkrpc.hubDaemon::restartService --p:name=copilot-proxy
+linkrpc hub call hediet/pc2/daemon::linkrpc.hubDaemon::getServiceLogs --p:name=copilot-proxy
+```
+
+A changed `command` restarts the service by itself (see the table above);
+`restartService` restarts an unchanged one, for example after its files
+were replaced through `linkrpc.computeNode.filesystem`. A change of
+hub-wide settings restarts the hub and drops the caller's connection, which
+can make the call fail even though the config was written. When the call log
+records payloads, it also records the config text of `getConfig` and
+`setConfig` calls routed through the hub.
+
 ## Writing a service
 
 A service receives `LINKRPC_ENDPOINT` and `LINKRPC_TOKEN`, connects to a private
