@@ -74,6 +74,37 @@ headless xterm terminal. Lifetime ownership (stopping a process when its
 launcher disconnects) is deliberately not part of this protocol; see the hub
 daemon's `linkrpc.managedEndpoints` `run` call.
 
+## Observable values (`linkrpc.observableValue`)
+
+`@hediet/linkrpc-infra/observable-value` defines a value that changes over time
+as the interface template `linkrpc.observableValue.v1`
+(`ObservableValueTemplate`), with a `value` schema argument:
+
+- `get({})` returns `{ value }`.
+- `watch({})` streams `{ value }`: the current value first, then every change,
+  until cancelled. Rapid changes may be coalesced; the latest value always
+  arrives.
+
+Instantiate it once per value. Without a member mapping, instance `x` has the
+wire methods `x$get` and `x$watch`. Instantiating the template tags the
+containing interface with `linkrpc.observableValue`, so generic clients
+(dashboards, a Stream Deck) find values through directory tags and the
+reflected template metadata and can show any of them.
+`observableValueHandlers(source, { minIntervalMs? })` implements both methods
+for a source with `get()` and `subscribe(listener)`:
+
+```ts
+import { ObservableValueTemplate, observableValueHandlers } from '@hediet/linkrpc-infra/observable-value';
+
+const usage = defineInterface({ id: 'example.usage' }, {
+    tokensPerSecond: ObservableValueTemplate({ value: z.number() }),
+});
+connection.register(usage, {
+    tokensPerSecond: observableValueHandlers(tokensPerSecond, { minIntervalMs: 500 }),
+});
+// Client: usage.tokensPerSecond.watch({}, { onMessage: ({ value }) => show(value) })
+```
+
 ## Compute nodes
 
 `@hediet/linkrpc-infra/compute-node` defines browser-safe interfaces for
