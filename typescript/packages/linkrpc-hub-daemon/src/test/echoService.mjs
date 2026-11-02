@@ -8,6 +8,9 @@ if (process.env.ECHO_FAIL_AT_START) {
     process.exit(7);
 }
 
+// Linger after a stop request, so tests can observe the daemon while services stop.
+if (process.env.ECHO_EXIT_DELAY_MS) process.on('SIGTERM', () => { /* exit after the delay */ });
+
 console.log(`echo service ${process.pid} starting`);
 const host = await hostParticipant({
     registrationMode: 'grantedServiceId',
@@ -23,4 +26,5 @@ const host = await hostParticipant({
     },
 });
 await host.done;
+if (process.env.ECHO_EXIT_DELAY_MS) await new Promise(resolve => setTimeout(resolve, Number(process.env.ECHO_EXIT_DELAY_MS)));
 process.exit(0);

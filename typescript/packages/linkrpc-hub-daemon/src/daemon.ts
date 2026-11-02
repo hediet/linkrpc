@@ -87,6 +87,8 @@ export class HubDaemon {
     private _watcher: { dispose(): void; } | undefined;
     private _statusChangeScheduled = false;
     private _stopping = false;
+    /** While the hub restarts, its services are stopped and not yet re-added. */
+    private _restartingHub = false;
     private _shutdown: Promise<void> | undefined;
     private _resolveDone!: () => void;
 
@@ -220,6 +222,7 @@ export class HubDaemon {
         const hubKey = stableKey({ hub: config.hub, localEndpoint: config.localEndpoint });
         if (hubKey !== this._hubKey || !this._hub) {
             if (this._hub) this._log.line('hub settings changed; restarting the hub and all services');
+            this._restartingHub = true;
             await this._disposeAllServices();
             const endpointSnapshot = this._endpoints?.snapshot();
             await this._endpoints?.dispose();
@@ -267,6 +270,8 @@ export class HubDaemon {
         // Stop removed services first: a renamed service must release its resources (ports, devices)
         // before its successor starts.
         await Promise.all(removed.map(name => this._removeService(name)));
+        // New services are added synchronously, so lookups see them from here on.
+        this._restartingHub = false;
         await Promise.all(Object.entries(config.services).map(([name, service]) => this._applyService(name, service)));
     }
 
@@ -429,8 +434,11 @@ export class HubDaemon {
 
     private _service(name: string): ServiceSupervisor | ConnectionSupervisor {
         const service = this._services.get(name);
-        if (!service) throw new Error(`unknown service '${name}'`);
-        return service;
+        if (service) return service;
+        // Both stop all services before the management API goes away; the service is not unknown.
+        if (this._stopping) throw new Error('the hub daemon is shutting down');
+        if (this._restartingHub) throw new Error('the hub is restarting; try again shortly');
+        throw new Error(`unknown service '${name}'`);
     }
 
     private _discovery(endpoint: LocalEndpoint): EndpointDiscovery {
