@@ -1,13 +1,15 @@
-import type { InterfaceRegistration, LinkRpcConnection } from "@hediet/linkrpc";
+import { ErrorCode, type InterfaceRegistration, type LinkRpcConnection, RpcError } from "@hediet/linkrpc";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessageSchema, type JSONRPCMessage, type RequestId } from "@modelcontextprotocol/sdk/types.js";
 import { legacyMcpForwardInterface, mcpForwardInterface } from "../contracts";
+import { type McpIdentities, resolveMcpIdentity } from "../mcpIdentities";
 import type { McpUpstream } from "../upstream";
 
 export interface ServeMcpForwardOptions {
     readonly connection: LinkRpcConnection;
     readonly serviceId: string;
-    readonly upstream: McpUpstream;
+    /** The accounts to forward to; `connect` selects one with `mcpIdentity`. */
+    readonly identities: McpIdentities;
     /** Register reflection for `serviceId`. Defaults to `true`. */
     readonly enableReflection?: boolean;
     /** Also serve the deprecated `vscode.mcp-forward` id. Defaults to `true`. */
@@ -16,15 +18,25 @@ export interface ServeMcpForwardOptions {
 }
 
 /**
- * Serve `mcp.forward` for `upstream` under `serviceId`: every `connect` leg
- * gets its own upstream MCP session (exclusive forwarding: a new process for
- * stdio, a new MCP session for HTTP) and relays MCP JSON-RPC messages
- * verbatim in both directions.
+ * Serve `mcp.forward` under `serviceId`: every `connect` leg gets its own
+ * upstream MCP session of the selected MCP identity (exclusive forwarding: a
+ * new process for stdio, a new MCP session for HTTP) and relays MCP JSON-RPC
+ * messages verbatim in both directions.
  */
 export function serveMcpForward(options: ServeMcpForwardOptions): InterfaceRegistration {
     const log = options.log ?? ((line: string) => console.error(line));
     const handlers = {
-        connect: (_params: unknown, _ctx: unknown, stream: ForwardLegStream) => runForwardLeg(options.upstream, stream, log),
+        connect: (params: { mcpIdentity?: string }, _ctx: unknown, stream: ForwardLegStream) => {
+            const identityId = resolveMcpIdentity(options.identities, params.mcpIdentity);
+            const authentication = options.identities.authentication(identityId);
+            if (authentication.status === "authorization-required") {
+                throw new RpcError(
+                    `MCP identity '${identityId}' requires authorization at ${authentication.authorizationUri}`,
+                    ErrorCode.invalidRequest,
+                );
+            }
+            return runForwardLeg(options.identities.upstream(identityId), stream, log);
+        },
     };
     const registrations: InterfaceRegistration[] = [];
     // Register handlers before enabling reflection so a discovered service can always be connected.

@@ -1,6 +1,7 @@
 import type { JsonValue } from "@hediet/linkrpc";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { McpIdentities } from "./mcpIdentities";
 import type { McpUpstream } from "./upstream";
 
 export type McpToolDefinition = Pick<
@@ -21,6 +22,8 @@ export interface McpClientSession {
 
 export interface OpenMcpSessionContext {
     readonly sessionId: string;
+    /** MCP identity the session belongs to. */
+    readonly identityId: string;
     readonly signal: AbortSignal;
     readonly onToolsChanged: () => void;
 }
@@ -83,6 +86,16 @@ export function upstreamSessionFactory(
                 },
             };
         },
+    };
+}
+
+/** Opens each session on the upstream of its MCP identity. */
+export function identitySessionFactory(
+    identities: McpIdentities,
+    options: { readonly clientInfo?: McpClientInfo } = {},
+): McpSessionFactory {
+    return {
+        open: (context) => upstreamSessionFactory(identities.upstream(context.identityId), options).open(context),
     };
 }
 

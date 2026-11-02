@@ -7,6 +7,13 @@ server.setRequestHandler(ListToolsRequestSchema, () => ({
     tools: [{ name: 'echo', inputSchema: { type: 'object' } }],
 }));
 server.setRequestHandler(CallToolRequestSchema, request => ({
-    content: [{ type: 'text', text: JSON.stringify(request.params.arguments) }],
+    content: [{
+        type: 'text',
+        text: JSON.stringify({
+            ...request.params.arguments,
+            // The account this process was started for (MCP identity tests).
+            ...(process.env.MCP_TEST_ACCOUNT !== undefined ? { account: process.env.MCP_TEST_ACCOUNT } : {}),
+        }),
+    }],
 }));
 await server.connect(new StdioServerTransport());

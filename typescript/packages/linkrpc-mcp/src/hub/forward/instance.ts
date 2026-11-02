@@ -57,7 +57,10 @@ export function serveMcpForwardInstance(options: ServeMcpForwardInstanceOptions)
         void transport.close();
     });
 
-    const connect = (_params: unknown, _ctx: unknown, stream: ForwardLegStream) => {
+    const connect = (params: { mcpIdentity?: string }, _ctx: unknown, stream: ForwardLegStream) => {
+        if (params.mcpIdentity !== undefined) {
+            throw new RpcError("A running MCP server instance has no MCP identities", ErrorCode.invalidParams);
+        }
         if (ended) throw new RpcError("The MCP server instance has ended", ErrorCode.internalError);
         if (current !== undefined) {
             throw new RpcError("The MCP server instance is in use by another connection", ErrorCode.internalError);

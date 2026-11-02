@@ -12,13 +12,25 @@ import { z } from "zod";
  *   interface (or `mcp.tools.<name>.<group>` for grouped tools).
  * - `mcp.server`: lifecycle, authentication, and bridge-session state of an
  *   MCP service.
+ * - `mcp.identities`: the accounts (MCP identities) a published MCP server can
+ *   be used with, in both modes. Calls select one with `mcpIdentity`.
  */
+
+/** Ids of MCP identities: the accounts a published MCP server can be used with. */
+export const mcpIdentityIdPattern = /^[A-Za-z0-9][A-Za-z0-9._@+-]*$/;
+
+const mcpIdentityParamSchema = z
+    .string()
+    .regex(mcpIdentityIdPattern)
+    .optional()
+    .describe("MCP identity (account) to use, from `mcp.identities::list`. Omitted means the default identity.");
 
 const forwardMembers = {
     connect: requestType(
         z.object({
             /** Informational identity of the consumer. */
             clientInfo: z.object({ name: z.string(), version: z.string() }).optional(),
+            mcpIdentity: mcpIdentityParamSchema,
         }),
         z.object({
             /** Informational identity of the upstream server, if known. */
@@ -72,8 +84,9 @@ const sessionParamsSchema = z.object({
         .optional()
         .describe(
             "Exclusive bridge session returned by `mcp.server::openSession`. "
-            + "Omitted means the shared session.",
+            + "Omitted means the shared session of the MCP identity.",
         ),
+    mcpIdentity: mcpIdentityParamSchema,
 });
 
 /** Complete MCP `CallToolResult`, as returned by every generated tool method. */
@@ -108,6 +121,8 @@ export const mcpCatalogToolSchema = z.object({
     inputSchema: z.unknown(),
     outputSchema: z.unknown().optional(),
     annotations: toolAnnotationsSchema.optional(),
+    /** MCP identities whose tool list contains this tool. */
+    identities: z.array(z.string()).optional(),
 });
 
 export type McpCatalogTool = z.infer<typeof mcpCatalogToolSchema>;
@@ -121,7 +136,10 @@ export const mcpToolInterfaceSchema = z.object({
 export const mcpToolCatalogSchema = z.object({
     /** The non-empty generated interfaces. */
     interfaces: z.array(mcpToolInterfaceSchema),
+    /** The tools of all MCP identities. */
     tools: z.array(mcpCatalogToolSchema),
+    /** The identity used when a call omits `mcpIdentity`. */
+    defaultIdentity: z.string().optional(),
 });
 
 export type McpToolCatalog = z.infer<typeof mcpToolCatalogSchema>;
@@ -164,12 +182,12 @@ export const mcpAuthenticationStateSchema = z.discriminatedUnion("status", [
     z.object({
         status: z.literal("authorization-required"),
         authorizationUri: z.string(),
-        expiresAt: z.string(),
+        expiresAt: z.string().optional(),
     }),
     z.object({
         status: z.literal("authorizing"),
         authorizationUri: z.string(),
-        expiresAt: z.string(),
+        expiresAt: z.string().optional(),
     }),
     z.object({
         status: z.literal("ready"),
@@ -188,6 +206,8 @@ export type McpAuthenticationState = z.infer<typeof mcpAuthenticationStateSchema
 
 export const mcpServerStateSchema = z.object({
     revision: z.number().int().nonnegative(),
+    /** The MCP identity the state describes; absent when the server has none. */
+    identity: z.object({ id: z.string(), label: z.string().optional() }).optional(),
     server: z.object({
         status: z.enum(["starting", "running", "idle", "stopping", "stopped", "error"]),
         error: z.string().optional(),
@@ -224,13 +244,50 @@ export const mcpServerInterface = defineInterface(
         watchState: requestType(sessionParamsSchema, z.object({})).withStream({
             server: mcpServerStateSchema,
         }),
-        openSession: requestType(z.object({}), z.object({ sessionId: z.string() }), {
-            description:
-                "Open an exclusive MCP session (its own process or HTTP session) and return its "
-                + "unguessable id. Pass it as `sessionId` to tool methods; holding the id is the "
-                + "only way to use or close the session.",
-        }),
+        openSession: requestType(
+            z.object({ mcpIdentity: mcpIdentityParamSchema }),
+            z.object({ sessionId: z.string() }),
+            {
+                description:
+                    "Open an exclusive MCP session (its own process or HTTP session) of an MCP "
+                    + "identity and return its unguessable id. Pass it as `sessionId`, with the same "
+                    + "`mcpIdentity`, to tool methods; holding the id is the only way to use or "
+                    + "close the session.",
+            },
+        ),
         closeSession: requestType(sessionParamsSchema, z.object({ closed: z.boolean() })),
         restartSession: requestType(sessionParamsSchema, z.object({})),
+    },
+);
+
+export const mcpIdentityStateSchema = z.object({
+    id: z.string(),
+    label: z.string().optional(),
+    /** Whether calls without `mcpIdentity` use this identity. */
+    default: z.boolean(),
+    authentication: mcpAuthenticationStateSchema,
+});
+
+export type McpIdentityState = z.infer<typeof mcpIdentityStateSchema>;
+
+/** The MCP identities (accounts) of a published MCP server. */
+export const mcpIdentitiesInterface = defineInterface(
+    {
+        id: "mcp.identities",
+        description:
+            "The accounts (MCP identities) a published MCP server can be used with. Tool calls, "
+            + "sessions, and forwarded connections select one with `mcpIdentity`.",
+    },
+    {
+        list: requestType(z.object({}), z.object({ identities: z.array(mcpIdentityStateSchema) })),
+        authorize: requestType(
+            z.object({}),
+            z.object({ authorizationUri: z.string(), expiresAt: z.string().optional() }),
+            {
+                description:
+                    "Start signing in a new identity. Open `authorizationUri` in a browser; the "
+                    + "identity appears in `list` once authorized.",
+            },
+        ),
     },
 );

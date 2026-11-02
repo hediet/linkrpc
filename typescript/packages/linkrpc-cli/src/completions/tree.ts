@@ -538,6 +538,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             positionals: [],
             options: [
                 { name: '--scripts', takesValue: false },
+                { name: '--mcp-identity', takesValue: true, valueType: 'free' },
             ],
         },
     {
@@ -549,6 +550,8 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--serviceId', takesValue: true, valueType: 'serviceId' },
                 { name: '--url', takesValue: true, valueType: 'free' },
                 { name: '--header', takesValue: true, valueType: 'free' },
+                { name: '--header-env', takesValue: true, valueType: 'free' },
+                { name: '--mcp-config', takesValue: true, valueType: 'free' },
                 { name: '--env', takesValue: true, valueType: 'free' },
                 { name: '--stdio', takesValue: false },
             ],
@@ -566,6 +569,8 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
                 { name: '--group', takesValue: true, valueType: 'free' },
                 { name: '--url', takesValue: true, valueType: 'free' },
                 { name: '--header', takesValue: true, valueType: 'free' },
+                { name: '--header-env', takesValue: true, valueType: 'free' },
+                { name: '--mcp-config', takesValue: true, valueType: 'free' },
                 { name: '--env', takesValue: true, valueType: 'free' },
                 { name: '--stdio', takesValue: false },
             ],

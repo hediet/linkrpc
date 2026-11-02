@@ -9,6 +9,8 @@ export interface McpForwardClientTransportOptions {
     /** Forward interface the service advertises; defaults to `mcp.forward`. */
     readonly interfaceId?: string;
     readonly clientInfo?: McpClientInfo;
+    /** MCP identity (account) to connect as; defaults to the server's default identity. */
+    readonly mcpIdentity?: string;
 }
 
 /**
@@ -34,7 +36,10 @@ export class McpForwardClientTransport implements Transport {
         const interfaceId = this._options.interfaceId ?? mcpForwardInterface.info.id;
         const call = this._sender.sendRequestWithStream(
             `${this._serviceId}::${interfaceId}::connect`,
-            { clientInfo: { ...(this._options.clientInfo ?? { name: "linkrpc-mcp", version: "1.0.0" }) } },
+            {
+                clientInfo: { ...(this._options.clientInfo ?? { name: "linkrpc-mcp", version: "1.0.0" }) },
+                ...(this._options.mcpIdentity !== undefined ? { mcpIdentity: this._options.mcpIdentity } : {}),
+            },
             {
                 onStreamMessage: (payload) => {
                     const result = z.object({ frame: JSONRPCMessageSchema }).safeParse(payload);

@@ -39,7 +39,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
 server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
     if (params.name === "add_note") notes.push(String(params.arguments?.text));
     if (params.name === "clear_notes") notes.length = 0;
-    return { content: [{ type: "text", text: JSON.stringify(notes) }] };
+    // NOTES_OWNER is set per account by the demo's MCP identities.
+    const owner = process.env.NOTES_OWNER;
+    const text = JSON.stringify(notes);
+    return { content: [{ type: "text", text: owner === undefined ? text : `${owner}: ${text}` }] };
 });
 server.setRequestHandler(ListResourcesRequestSchema, async () => ({
     resources: [{ uri: "notes://all", name: "All notes", mimeType: "text/plain" }],

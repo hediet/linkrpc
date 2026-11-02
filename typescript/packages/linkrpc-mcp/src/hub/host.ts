@@ -1,9 +1,15 @@
 import type { InterfaceRegistration, LinkRpcConnection } from "@hediet/linkrpc";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { z } from "zod";
-import { type McpClientInfo, upstreamSessionFactory } from "./clientSession";
-import type { McpAuthenticationState } from "./contracts";
+import { identitySessionFactory, type McpClientInfo } from "./clientSession";
 import { serveMcpForward } from "./forward/producer";
+import {
+    type McpIdentities,
+    mcpIdentityConfigSchema,
+    serveMcpIdentities,
+    singleMcpIdentity,
+    staticMcpIdentities,
+} from "./mcpIdentities";
 import { type McpToolBridgeRegistration, registerMcpToolBridge } from "./service/bridge";
 import { mcpUpstreamConfigSchema, upstreamFromConfig } from "./upstream";
 
@@ -44,6 +50,11 @@ export const mcpServerConfigSchema = z.object({
     id: z.string().regex(/^[a-z0-9][a-z0-9.-]*$/, "must contain only lowercase letters, digits, dots, and hyphens"),
     description: z.string().optional(),
     transport: mcpUpstreamConfigSchema,
+    /**
+     * Accounts, each adding env (stdio) or headers (streamable-http) to the
+     * transport. Without it, the server has one identity, `default`.
+     */
+    identities: z.array(mcpIdentityConfigSchema).min(1).optional(),
     expose: mcpExposeConfigSchema.default({ service: {} }),
 });
 
@@ -54,10 +65,14 @@ export interface HostMcpServerOptions {
     /** Service id to publish under, e.g. `<namespace>/<server id>`. */
     readonly serviceId: string;
     readonly server: McpServerConfig;
-    /** Replaces `fetch` for a streamable-http transport, e.g. to attach access tokens. */
+    /**
+     * The accounts to use, e.g. `oauthMcpIdentities(...)`. Replaces
+     * `server.identities` and `server.transport`.
+     */
+    readonly identities?: McpIdentities;
+    /** Replaces `fetch` for a configured streamable-http transport. */
     readonly fetch?: FetchLike;
     readonly clientInfo?: McpClientInfo;
-    readonly initialAuthenticationState?: McpAuthenticationState;
     readonly onRefreshError?: (error: unknown) => void;
     readonly log?: (line: string) => void;
 }
@@ -65,14 +80,23 @@ export interface HostMcpServerOptions {
 export interface HostedMcpServer {
     /** The MCP service bridge, if the server is exposed as a service. */
     readonly service: McpToolBridgeRegistration | undefined;
+    readonly identities: McpIdentities;
     dispose(): Promise<void>;
 }
 
 /** Publish one configured MCP server on the hub in its configured modes. */
 export async function hostMcpServer(options: HostMcpServerOptions): Promise<HostedMcpServer> {
     const { server } = options;
-    const upstream = upstreamFromConfig(server.transport, { fetch: options.fetch });
+    const identities = options.identities
+        ?? (server.identities !== undefined
+            ? staticMcpIdentities(server.transport, server.identities, { fetch: options.fetch })
+            : singleMcpIdentity(upstreamFromConfig(server.transport, { fetch: options.fetch })));
     const reflection = options.connection.enableReflection({ serviceId: options.serviceId });
+    const identitiesRegistration = serveMcpIdentities({
+        connection: options.connection,
+        serviceId: options.serviceId,
+        identities,
+    });
     let forward: InterfaceRegistration | undefined;
     let service: McpToolBridgeRegistration | undefined;
     try {
@@ -80,7 +104,7 @@ export async function hostMcpServer(options: HostMcpServerOptions): Promise<Host
             forward = serveMcpForward({
                 connection: options.connection,
                 serviceId: options.serviceId,
-                upstream,
+                identities,
                 enableReflection: false,
                 log: options.log,
             });
@@ -92,24 +116,27 @@ export async function hostMcpServer(options: HostMcpServerOptions): Promise<Host
                 interfaceId: server.expose.service.interfaceId ?? `mcp.tools.${server.id}`,
                 groups: server.expose.service.groups,
                 serviceDescription: server.description,
-                factory: upstreamSessionFactory(upstream, { clientInfo: options.clientInfo }),
+                factory: identitySessionFactory(identities, { clientInfo: options.clientInfo }),
+                identities,
                 enableReflection: false,
                 ...server.expose.service.session,
-                initialAuthenticationState: options.initialAuthenticationState,
                 onRefreshError: options.onRefreshError,
                 log: options.log,
             });
         }
     } catch (error) {
         forward?.dispose();
+        identitiesRegistration.dispose();
         reflection.dispose();
         throw error;
     }
     return {
         service,
+        identities,
         dispose: async () => {
             await service?.dispose();
             forward?.dispose();
+            identitiesRegistration.dispose();
             reflection.dispose();
         },
     };

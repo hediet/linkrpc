@@ -39,7 +39,7 @@ export interface GeneratedMcpToolsInterfaces {
 export interface GeneratedToolMethod {
     readonly interfaceId: string;
     readonly method: string;
-    /** Params schema of the method, including `sessionId`. */
+    /** Params schema of the method, including `sessionId` and `mcpIdentity`. */
     readonly params: LinkRpcJsonSchema;
     readonly result: LinkRpcJsonSchema;
     /** Components the method's schemas reference. */
@@ -71,7 +71,7 @@ export function assertToolGroups(groups: readonly McpToolGroup[]): void {
 
 /**
  * One method per MCP tool, in the base interface or its group's interface.
- * Params are the tool's input schema plus an optional `sessionId`; the result
+ * Params are the tool's input schema plus optional `sessionId` and `mcpIdentity`; the result
  * is the complete MCP `CallToolResult`, with `structuredContent` typed by the
  * tool's output schema. Schema definitions (`$defs`, `definitions`) become
  * interface components.
@@ -177,7 +177,7 @@ interface ConvertedTool {
 function convertTool(tool: McpToolDefinition): ConvertedTool {
     const components: Record<string, LinkRpcJsonSchema> = {};
     const input = convertSchema(tool.inputSchema, `${tool.name}.input`, components);
-    const params = injectSessionId(asObjectSchema(input), tool.name);
+    const params = injectReservedParams(asObjectSchema(input), tool.name);
     const output = tool.outputSchema === undefined
         ? undefined
         : convertSchema(tool.outputSchema, `${tool.name}.output`, components);
@@ -265,34 +265,45 @@ function callToolResultSchema(outputSchema: LinkRpcJsonSchema | undefined): Link
     };
 }
 
-function permissiveParams(): LinkRpcJsonSchema {
-    return { type: "object", properties: { sessionId: sessionIdSchema() }, additionalProperties: true };
+/** Bridge params added to every generated tool method; tools cannot declare them. */
+export const reservedToolParams = ["sessionId", "mcpIdentity"] as const;
+
+function reservedParamSchemas(): Record<string, LinkRpcJsonSchema> {
+    return {
+        sessionId: {
+            type: "string",
+            description: "Exclusive bridge session from mcp.server::openSession. Omitted means the shared session.",
+        },
+        mcpIdentity: {
+            type: "string",
+            description: "MCP identity (account) from mcp.identities::list. Omitted means the default identity.",
+        },
+    };
 }
 
-function injectSessionId(schema: LinkRpcJsonSchema, toolName: string): LinkRpcJsonSchema {
+function permissiveParams(): LinkRpcJsonSchema {
+    return { type: "object", properties: reservedParamSchemas(), additionalProperties: true };
+}
+
+function injectReservedParams(schema: LinkRpcJsonSchema, toolName: string): LinkRpcJsonSchema {
     if (schema === true) return permissiveParams();
     if (schema === false) {
         throw new Error(`MCP tool '${toolName}' has an input schema that accepts no values`);
     }
     if ("type" in schema && schema.type === "object") {
         const properties = schema.properties ?? {};
-        if ("sessionId" in properties) {
-            throw new Error(`MCP tool '${toolName}' uses the reserved input property 'sessionId'`);
+        for (const name of reservedToolParams) {
+            if (name in properties) {
+                throw new Error(`MCP tool '${toolName}' uses the reserved input property '${name}'`);
+            }
         }
-        return { ...schema, properties: { ...properties, sessionId: sessionIdSchema() } };
+        return { ...schema, properties: { ...properties, ...reservedParamSchemas() } };
     }
     if ("anyOf" in schema) {
-        return { ...schema, anyOf: schema.anyOf.map((branch) => injectSessionId(branch, toolName)) };
+        return { ...schema, anyOf: schema.anyOf.map((branch) => injectReservedParams(branch, toolName)) };
     }
     if ("oneOf" in schema) {
-        return { ...schema, oneOf: schema.oneOf.map((branch) => injectSessionId(branch, toolName)) };
+        return { ...schema, oneOf: schema.oneOf.map((branch) => injectReservedParams(branch, toolName)) };
     }
     throw new Error(`MCP tool '${toolName}' must have an object-shaped input schema`);
-}
-
-function sessionIdSchema(): LinkRpcJsonSchema {
-    return {
-        type: "string",
-        description: "Exclusive bridge session from mcp.server::openSession. Omitted means the shared session.",
-    };
 }
