@@ -127,6 +127,19 @@ describe('capability parameter constraints', () => {
         })).toEqual({ value: { any: true } });
     });
 
+    it('bounds a number with a range', () => {
+        const portSchema = {
+            type: 'object' as const, properties: { port: { type: 'integer' as const } },
+            required: ['port'], additionalProperties: false as const,
+        };
+        expect(createParamMatchers({ port: 3000 }, ['port={"range":{"min":3000,"max":3999}}'], portSchema))
+            .toEqual({ port: { range: { min: 3000, max: 3999 } } });
+        expect(() => createParamMatchers({ port: 4000 }, ['port={"range":{"min":3000,"max":3999}}'], portSchema))
+            .toThrow('Parameters do not match');
+        expect(() => createParamMatchers({ port: 3000 }, ['port={"range":{"min":3999,"max":3000}}'], portSchema))
+            .toThrow('Invalid --cap:allow-param');
+    });
+
     it('checks enum alternatives with the reflected Zod validator', () => {
         expect(() => createParamMatchers({ email: 'a@example.com' }, [
             'email={"enum":["a@example.com","invalid"]}',

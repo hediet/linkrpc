@@ -46,6 +46,7 @@ type ParamMatcher =
   | { enum: unknown[] }
   | { prefix: string }
   | { subsetOf: string[] }
+  | { range: { min: number; max: number } }
   | { any: true };
 
 interface TargetPattern {
@@ -159,6 +160,9 @@ function paramValueMatches(value: unknown, matcher: ParamMatcher): boolean {
     return Array.isArray(value) && value.every(
       item => typeof item === "string" && matcher.subsetOf.includes(item),
     );
+  if ("range" in matcher)
+    return Number.isInteger(matcher.range.min) && Number.isInteger(matcher.range.max) &&
+      Number.isInteger(value) && value >= matcher.range.min && value <= matcher.range.max;
   if ("exact" in matcher) return jcsEqual(value, matcher.exact);
   if ("enum" in matcher)
     return matcher.enum.some(option => jcsEqual(value, option));
@@ -170,7 +174,7 @@ function jcsEqual(left: unknown, right: unknown): boolean {
 }
 ```
 
-An omitted `params` accepts any user params. `{ any: true }` permits any value for one explicitly allowed key. Empty `members` matches no call; `[{ prefix: "" }]` matches every member.
+An omitted `params` accepts any user params. `{ any: true }` permits any value for one explicitly allowed key. `range` admits integers between its bounds, both inclusive; it matches no value when a bound is not an integer or `min` exceeds `max`. Empty `members` matches no call; `[{ prefix: "" }]` matches every member.
 
 A `callBind` admits only the call whose `callHash` equals its `payloadHash`. This pins all signed fields at once and is intrinsically single-use because chapter 06 §4.1 rejects reuse of the signed nonce.
 

@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
 import { computeNodeTcpForwardInterface } from '../compute-node/index';
 import { registerComputeNode } from '../compute-node/node';
-import { approvalScope, codeOf, startHttpExport, type BrowserAccessRequest, type BrowserAccessResult, type HttpExport, type HttpExportOptions } from './node';
+import { codeOf, startHttpExport, type BrowserAccessRequest, type BrowserAccessResult, type HttpExport, type HttpExportOptions } from './node';
 
 const serviceId = 'test/compute';
 const cleanups: (() => Promise<void> | void)[] = [];
@@ -174,7 +174,7 @@ describe('http export', () => {
         expect(html.body).toContain('<code class="cmd">node server.js --token &#60;secret&#62;</code>');
     });
 
-    it('lets a browser through only after it was approved, and hands the approval to each site', async () => {
+    it('asks approval for the port range a browser chooses, and hands the approval to each site', async () => {
         const seenCookies: (string | undefined)[] = [];
         const targetPort = await startTarget((incoming, response) => {
             seenCookies.push(incoming.headers.cookie);
@@ -185,6 +185,7 @@ describe('http export', () => {
         const stateFile = join(mkdtempSync(join(tmpdir(), 'http-export-approval-')), 'sessions.json');
         cleanups.push(() => rmSync(dirname(stateFile), { recursive: true, force: true }));
         const callers: (string | undefined)[] = [];
+        const listedRanges: unknown[] = [];
         const approval = {
             gatewayName: 'test-machine',
             stateFile,
@@ -193,41 +194,61 @@ describe('http export', () => {
                 return new Promise<BrowserAccessResult>(resolve => { approve = resolve; });
             },
         };
-        const gatewayPort = await startGateway({ approval }, callers);
+        const outsidePort = targetPort === 65_535 ? targetPort - 10 : targetPort + 1;
+        const listPorts: HttpExportOptions['listPorts'] = async (_serviceId, caller) => {
+            listedRanges.push(caller?.portRange);
+            return [targetPort, outsidePort].map(port => ({ port, addresses: ['127.0.0.1'] }));
+        };
+        const gatewayPort = await startGateway({ approval, listPorts }, callers);
         const site = `${targetPort}.test--compute.localhost:${gatewayPort}`;
         const navigate = { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
         const fetchHeaders = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' };
+        const range = { min: Math.max(1, targetPort - 5), max: targetPort };
 
         const first = await send(gatewayPort, { host: site, path: '/page?x=1', headers: navigate });
         const login = new URL(first.headers.location!);
         const stateCookie = cookiePair(first.headers['set-cookie'], 'linkrpc-gateway-state');
-        const waiting = await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: navigate });
-        const sessionCookie = cookiePair(waiting.headers['set-cookie'], 'linkrpc-gateway');
+        const openLogin = (cookie?: string) => send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: { ...navigate, ...(cookie ? { cookie } : {}) } });
+        const form = await openLogin();
+        const sessionCookie = cookiePair(form.headers['set-cookie'], 'linkrpc-gateway');
+        const submit = (fields: Record<string, string>, fetchSite = 'same-origin') => send(gatewayPort, {
+            host: login.host, method: 'POST', path: login.pathname, body: new URLSearchParams({ return: login.searchParams.get('return')!, state: login.searchParams.get('state')!, ...fields }).toString(),
+            headers: { 'sec-fetch-site': fetchSite, 'sec-fetch-mode': 'navigate', 'content-type': 'application/x-www-form-urlencoded', cookie: sessionCookie },
+        });
+        const crossSite = await submit({ min: '1', max: '65535' }, 'cross-site');
+        const submitted = await submit({ min: String(range.min), max: String(range.max) });
+        const waiting = await openLogin(sessionCookie);
         await waitFor(() => requests.length === 1);
         const code = codeOf({ identity: { publicSigningIdentity: { principal: requests[0].principal } } } as unknown as Parameters<typeof codeOf>[0]);
         const beforeApproval = {
             fetch: (await send(gatewayPort, { host: site, path: '/api', headers: fetchHeaders })).status,
             tool: (await send(gatewayPort, { host: site, path: '/tool' })).body,
-            stillWaiting: (await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: { ...navigate, cookie: sessionCookie } })).body.includes('Waiting for approval'),
         };
-        approve({ status: 'granted', capabilities: [fakeCapability(requests[0].principal, requests[0].permissions[0].target.serviceId.prefix)] });
+        approve({ status: 'granted', capabilities: [fakeCapability(requests[0].principal, requests[0].permissions)] });
         await new Promise(resolve => setTimeout(resolve, 20));
-        const approved = await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: { ...navigate, cookie: sessionCookie } });
+        const approved = await openLogin(sessionCookie);
         const handoff = new URL(approved.headers.location!);
         const accepted = await send(gatewayPort, { host: handoff.host, path: `${handoff.pathname}${handoff.search}`, headers: { ...navigate, cookie: stateCookie } });
         const siteCookieHeader = accepted.headers['set-cookie']!.find(cookie => cookie.startsWith('linkrpc-gateway='))!;
         const siteCookie = cookiePair([siteCookieHeader], 'linkrpc-gateway');
         const page = await send(gatewayPort, { host: site, path: '/page?x=1', headers: { ...navigate, cookie: `${siteCookie}; app=1` } });
         const replayed = await send(gatewayPort, { host: handoff.host, path: `${handoff.pathname}${handoff.search}`, headers: { ...navigate, cookie: stateCookie } });
+        const listed = await send(gatewayPort, { host: `test--compute.localhost:${gatewayPort}`, headers: { ...navigate, accept: 'application/json', cookie: siteCookie } });
+        const outside = await send(gatewayPort, { host: `${outsidePort}.test--compute.localhost:${gatewayPort}`, headers: { ...navigate, cookie: siteCookie } });
+        const outsideLogin = new URL(outside.headers.location!);
+        const widen = await send(gatewayPort, { host: outsideLogin.host, path: `${outsideLogin.pathname}${outsideLogin.search}`, headers: { ...navigate, cookie: sessionCookie } });
         const sessionId = callers.at(-1);
 
-        const restartedPort = await startGateway({ approval: { ...approval, requestAccess: async () => ({ status: 'denied' }) } }, callers);
+        const restartedPort = await startGateway({ approval: { ...approval, requestAccess: async () => ({ status: 'denied' }) }, listPorts }, callers);
         const afterRestart = await send(restartedPort, { host: `${targetPort}.test--compute.localhost:${restartedPort}`, path: '/again', headers: { ...navigate, cookie: siteCookie } });
 
         expect({
             first: { status: first.status, login: `${login.host}${login.pathname}`, return: login.searchParams.get('return'), hasState: login.searchParams.get('state') === stateCookie.split('=')[1] },
+            form: { status: form.status, suggests: form.body.includes(`value="${targetPort}"`), showsCode: form.body.includes('class="code"'), allowsForm: form.headers['content-security-policy']?.includes("form-action 'self'") },
+            crossSite: crossSite.status,
+            submitted: { status: submitted.status, location: submitted.headers.location === login.href },
             waiting: { status: waiting.status, showsCode: waiting.body.includes(code), refresh: waiting.headers.refresh },
-            request: { name: requests[0].name, permissions: requests[0].permissions.map(permission => `${permission.target.serviceId.prefix}|${permission.target.interfaceId.exact}::${permission.target.members[0].exact}`) },
+            request: { name: requests[0].name, purpose: requests[0].purpose, permissions: requests[0].permissions },
             beforeApproval,
             handoff: { status: approved.status, host: handoff.host, path: handoff.pathname, return: handoff.searchParams.get('return') },
             siteCookie: siteCookieHeader.replace(/=[^;]+/, '=<token>'),
@@ -236,15 +257,33 @@ describe('http export', () => {
             appSawCookies: seenCookies,
             signedAsBrowser: sessionId !== undefined,
             replayed: replayed.status,
+            listed: { status: listed.status, ports: JSON.parse(listed.body).ports.map((port: { port: number }) => port.port), portRange: JSON.parse(listed.body).portRange, askedFor: listedRanges.at(-1) },
+            outside: { status: outside.status, login: outsideLogin.pathname },
+            widen: { status: widen.status, suggests: widen.body.includes(`value="${Math.max(range.max, outsidePort)}"`), replaces: widen.body.includes('A new approval replaces it') },
             afterRestart: { status: afterRestart.status, body: afterRestart.body, sameSession: callers.at(-1) === sessionId },
         }).toEqual({
             first: { status: 302, login: `localhost:${gatewayPort}/.linkrpc/login`, return: `http://${site}/page?x=1`, hasState: true },
+            form: { status: 200, suggests: true, showsCode: true, allowsForm: true },
+            crossSite: 403,
+            submitted: { status: 303, location: true },
             waiting: { status: 200, showsCode: true, refresh: '2' },
             request: {
                 name: `Browser ${code} via http-export on test-machine`,
-                permissions: ['test|linkrpc.computeNode.tcpForward::multiplex', 'test|linkrpc.computeNode.ports::listListening'],
+                purpose: `Open ports ${range.min}–${range.max} of ${serviceId} in a browser. The browser shows the code ${code}.`,
+                permissions: [
+                    {
+                        target: { serviceId: { exact: serviceId }, interfaceId: { exact: 'linkrpc.computeNode.tcpForward' }, members: [{ exact: 'multiplex' }] },
+                        canInvoke: true,
+                        params: { host: { exact: '127.0.0.1' }, port: { range } },
+                    },
+                    {
+                        target: { serviceId: { exact: serviceId }, interfaceId: { exact: 'linkrpc.computeNode.ports' }, members: [{ exact: 'listListening' }] },
+                        canInvoke: true,
+                        params: { portRange: { exact: range } },
+                    },
+                ],
             },
-            beforeApproval: { fetch: 401, tool: 'page /tool', stillWaiting: true },
+            beforeApproval: { fetch: 401, tool: 'page /tool' },
             handoff: { status: 302, host: site, path: '/.linkrpc/session', return: '/page?x=1' },
             siteCookie: 'linkrpc-gateway=<token>; Domain=test--compute.localhost; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=31536000',
             accepted: { status: 302, location: '/page?x=1' },
@@ -252,85 +291,48 @@ describe('http export', () => {
             appSawCookies: [undefined, 'app=1', undefined],
             signedAsBrowser: true,
             replayed: 403,
+            listed: { status: 200, ports: [targetPort], portRange: range, askedFor: range },
+            outside: { status: 302, login: '/.linkrpc/login' },
+            widen: { status: 200, suggests: true, replaces: true },
             afterRestart: { status: 200, body: 'page /again', sameSession: true },
         });
     });
 
-    it('re-requests for services an older grant does not cover, but does not loop when an approver narrowed it', async () => {
+    it('asks again for invalid ranges and for sessions of earlier versions', async () => {
         const targetPort = await startTarget((_incoming, response) => response.end('page'));
         const requests: BrowserAccessRequest[] = [];
-        const grants = ['test/other', 'test'];
         const stateFile = join(mkdtempSync(join(tmpdir(), 'http-export-approval-')), 'sessions.json');
         cleanups.push(() => rmSync(dirname(stateFile), { recursive: true, force: true }));
+        writeFileSync(stateFile, JSON.stringify({ version: 1, sessions: [], siteTokens: [] }));
         const gatewayPort = await startGateway({
-            approval: {
-                gatewayName: 'test-machine',
-                stateFile,
-                requestAccess: async request => {
-                    requests.push(request);
-                    const scope = grants[requests.length - 1];
-                    await new Promise(resolve => setTimeout(resolve, 10));
-                    return { status: 'granted', capabilities: [fakeCapability(request.principal, scope)] };
-                },
-            },
+            approval: { gatewayName: 'test-machine', stateFile, requestAccess: async request => { requests.push(request); return { status: 'denied', reason: 'not now' }; } },
         });
         const navigate = { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
-        const site = `${targetPort}.test--compute.localhost:${gatewayPort}`;
-        const loginPath = new URL((await send(gatewayPort, { host: site, path: '/', headers: navigate })).headers.location!);
-        const openLogin = (cookie: string | undefined, extra = '') => send(gatewayPort, { host: loginPath.host, path: `${loginPath.pathname}${loginPath.search}${extra}`, headers: { ...navigate, ...(cookie ? { cookie } : {}) } });
-        const started = await openLogin(undefined);
-        const firstSession = cookiePair(started.headers['set-cookie'], 'linkrpc-gateway');
-        await waitFor(() => requests.length === 1);
-        await new Promise(resolve => setTimeout(resolve, 40));
-        const narrowed = await openLogin(firstSession);
-        const reloaded = await openLogin(firstSession);
-        const askedAgain = await openLogin(firstSession, '&retry=1');
-        const secondSession = cookiePair(askedAgain.headers['set-cookie'], 'linkrpc-gateway');
-        await waitFor(() => requests.length === 2);
-        await new Promise(resolve => setTimeout(resolve, 40));
-        const approved = await openLogin(secondSession);
-
-        // A session from an older gateway asked for a narrower scope than this target needs: it asks again by itself.
-        const state = JSON.parse(readFileSync(stateFile, 'utf8'));
-        state.sessions[0].requestedScope = 'test/other';
-        state.sessions[0].capabilities = [fakeCapability(state.sessions[0].capabilities[0].audience, 'test/other')];
-        writeFileSync(stateFile, JSON.stringify(state));
-        const restartedPort = await startGateway({ approval: { gatewayName: 'test-machine', stateFile, requestAccess: async request => { requests.push(request); await new Promise(resolve => setTimeout(resolve, 10)); return { status: 'denied' }; } } });
-        const restartedSite = `${targetPort}.test--compute.localhost:${restartedPort}`;
-        const restartedLogin = new URL((await send(restartedPort, { host: restartedSite, path: '/', headers: { ...navigate, cookie: secondSession } })).headers.location!);
-        const reRequested = await send(restartedPort, { host: restartedLogin.host, path: `${restartedLogin.pathname}${restartedLogin.search}`, headers: { ...navigate, cookie: secondSession } });
-        await waitFor(() => requests.length === 3);
-
-        expect({
-            requestedScopes: requests.map(request => request.permissions[0].target.serviceId.prefix),
-            narrowed: { status: narrowed.status, explains: narrowed.body.includes('Not approved for this machine'), offersRetry: narrowed.body.includes('retry=1') },
-            reloadedStaysPut: reloaded.body.includes('Not approved for this machine'),
-            askedAgain: { status: askedAgain.status, waiting: askedAgain.body.includes('Waiting for approval'), newSession: secondSession !== firstSession },
-            approved: { status: approved.status, handsOff: approved.headers.location?.includes('/.linkrpc/session') },
-            reRequested: { status: reRequested.status, waiting: reRequested.body.includes('Waiting for approval') },
-        }).toEqual({
-            requestedScopes: ['test', 'test', 'test'],
-            narrowed: { status: 200, explains: true, offersRetry: true },
-            reloadedStaysPut: true,
-            askedAgain: { status: 200, waiting: true, newSession: true },
-            approved: { status: 302, handsOff: true },
-            reRequested: { status: 200, waiting: true },
+        const login = new URL((await send(gatewayPort, { host: `${targetPort}.test--compute.localhost:${gatewayPort}`, headers: navigate })).headers.location!);
+        const form = await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: navigate });
+        const cookie = cookiePair(form.headers['set-cookie'], 'linkrpc-gateway');
+        const submit = (min: string, max: string) => send(gatewayPort, {
+            host: login.host, method: 'POST', path: login.pathname, body: new URLSearchParams({ return: login.searchParams.get('return')!, min, max }).toString(),
+            headers: { 'sec-fetch-site': 'same-origin', 'content-type': 'application/x-www-form-urlencoded', cookie },
         });
-    });
-
-    it('scopes approval requests to the owner of the opened service, independent of discovery', () => {
+        const reversed = await submit(String(targetPort), String(targetPort - 1));
+        const excludesPort = await submit('1', String(targetPort - 1));
+        await submit(String(targetPort), String(targetPort));
+        await waitFor(() => requests.length === 1);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        const denied = await send(gatewayPort, { host: login.host, path: `${login.pathname}${login.search}`, headers: { ...navigate, cookie } });
         expect({
-            target: approvalScope('hediet/devbox/compute', []),
-            onlyTabletKnown: approvalScope('hediet/tablet/compute', ['hediet/tablet/compute']),
-            indexOneOwner: approvalScope(undefined, ['hediet/devbox/compute', 'hediet/tablet/compute']),
-            indexTwoOwners: approvalScope(undefined, ['hediet/devbox/compute', 'alice/pc/compute']),
-            indexNothingKnown: (() => { try { return approvalScope(undefined, []); } catch (error) { return (error as Error).message; } })(),
+            earlierVersionAsksAgain: form.status,
+            reversed: { status: reversed.status, explains: reversed.body.includes('must not exceed'), keepsInput: reversed.body.includes(`value="${targetPort - 1}"`) },
+            excludesPort: { status: excludesPort.status, explains: excludesPort.body.includes(`must include port ${targetPort}`) },
+            requests: requests.length,
+            denied: { status: denied.status, reason: denied.body.includes('not approved: not now'), formAgain: denied.body.includes('<form') },
         }).toEqual({
-            target: 'hediet',
-            onlyTabletKnown: 'hediet',
-            indexOneOwner: 'hediet',
-            indexTwoOwners: '',
-            indexNothingKnown: 'No forwardable services are known yet; reload this page in a moment.',
+            earlierVersionAsksAgain: 200,
+            reversed: { status: 400, explains: true, keepsInput: true },
+            excludesPort: { status: 400, explains: true },
+            requests: 1,
+            denied: { status: 200, reason: true, formAgain: true },
         });
     });
 });
@@ -376,11 +378,9 @@ function cookiePair(setCookie: readonly string[] | undefined, name: string): str
     return cookie.split(';')[0];
 }
 
-function fakeCapability(audience: string, prefix: string): SignedCapability {
-    return {
-        issuer: 'id:key:approver', audience, nonce: 'n', $hubrpcSignature: {},
-        permissions: [{ target: { serviceId: { prefix }, interfaceId: { exact: 'linkrpc.computeNode.tcpForward' }, members: [{ exact: 'multiplex' }] }, canInvoke: true }],
-    } as unknown as SignedCapability;
+/** A root capability granting `permissions`, as an approver that approves a request unchanged issues it. */
+function fakeCapability(audience: string, permissions: BrowserAccessRequest['permissions']): SignedCapability {
+    return { issuer: 'id:key:approver', audience, nonce: 'n', $hubrpcSignature: {}, permissions } as unknown as SignedCapability;
 }
 
 async function waitFor(condition: () => boolean): Promise<void> {

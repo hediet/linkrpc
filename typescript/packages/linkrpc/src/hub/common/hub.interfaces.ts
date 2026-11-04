@@ -42,6 +42,7 @@ const zParamMatcher = union([
     object({ enum: array(unknown()) }),
     object({ prefix: string() }),
     object({ subsetOf: array(string()) }),
+    object({ range: object({ min: number(), max: number() }) }),
     object({ any: literal(true) }),
 ]);
 

@@ -3,7 +3,7 @@
  */
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import type { ComputeNodeListeningPort } from './index';
+import type { ComputeNodeListeningPort, ComputeNodePortRange } from './index';
 import { readProcessDetails, type ProcessDetails } from './processDetails';
 
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -16,8 +16,16 @@ export interface Listener {
     readonly processName?: string;
 }
 
-export async function readListeningPorts(platform: NodeJS.Platform = process.platform): Promise<ComputeNodeListeningPort[]> {
-    const ports = groupListeners((await readListeners(platform)).filter(listener => isLoopbackReachable(listener.address)));
+export interface ReadListeningPortsOptions {
+    /** Lists only these ports; processes listening elsewhere are not inspected. */
+    readonly portRange?: ComputeNodePortRange;
+    readonly platform?: NodeJS.Platform;
+}
+
+export async function readListeningPorts({ portRange, platform = process.platform }: ReadListeningPortsOptions = {}): Promise<ComputeNodeListeningPort[]> {
+    const listeners = (await readListeners(platform)).filter(listener => isLoopbackReachable(listener.address)
+        && (portRange === undefined || (listener.port >= portRange.min && listener.port <= portRange.max)));
+    const ports = groupListeners(listeners);
     const details = await readProcessDetails(ports.flatMap(port => port.pid === undefined ? [] : [port.pid]), platform).catch(() => new Map<number, ProcessDetails>());
     return ports.map(port => ({ ...port, ...(port.pid === undefined ? undefined : details.get(port.pid)) }));
 }

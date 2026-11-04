@@ -71,6 +71,24 @@ describe('findCoveringCapabilities', () => {
         }], { nowMs: NOW })).toBeUndefined();
     });
 
+    it('reuses a range grant for values and narrower ranges inside it', () => {
+        const capability = cap({ ...requested[0].target, members: [...requested[0].target.members] });
+        capability.permissions[0].params = { port: { range: { min: 3000, max: 3999 } } };
+        const covers = (port: HubAccessPermission['params'] & object) =>
+            findCoveringCapabilities([capability], [{ ...requested[0], params: port }], { nowMs: NOW }) !== undefined;
+        expect({
+            exact: covers({ port: { exact: 3000 } }),
+            enum: covers({ port: { enum: [3001, 3999] } }),
+            narrowerRange: covers({ port: { range: { min: 3100, max: 3200 } } }),
+            outsideExact: covers({ port: { exact: 4000 } }),
+            overlappingRange: covers({ port: { range: { min: 3500, max: 4500 } } }),
+            nonNumber: covers({ port: { exact: '3000' } }),
+        }).toEqual({
+            exact: true, enum: true, narrowerRange: true,
+            outsideExact: false, overlappingRange: false, nonNumber: false,
+        });
+    });
+
     it('rejects sibling, stale, narrower, and one-shot grants', () => {
         const target = {
             serviceId: { prefix: 'embedded/parent/child' } as const,

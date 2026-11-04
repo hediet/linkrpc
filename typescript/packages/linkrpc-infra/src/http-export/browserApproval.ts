@@ -1,31 +1,38 @@
 /**
  * Browser approval for the http-export gateway.
  *
- * Each browser gets its own signing key, held by the gateway, and must have it approved once through
- * the Hub's consent flow (`hubAccess::requestAccess`), like any other consumer. The gateway then signs
- * that browser's `tcpForward` and port listing calls with the browser's key and granted capabilities,
- * so compute nodes authorize the browser, not the gateway.
+ * Each browser gets its own signing key, held by the gateway. Before a browser opens ports of a
+ * service, it chooses a port range for that service, and an approver grants that range through the
+ * Hub's consent flow (`hubAccess::requestAccess`), like any other consumer. The capability names the
+ * exact service and bounds the forwarded and listed ports, so compute nodes enforce the range, not
+ * just the gateway. The gateway signs the browser's `tcpForward` and port listing calls with the
+ * browser's key and that service's capabilities. A browser holds one grant per service: asking for
+ * another range of the same service replaces it.
  *
  * - The browser shows a code: the start of its key's principal ID. Approvers see the full principal
  *   ID in the request, which another requester cannot fake without that key.
  * - `localhost` holds the browser's session cookie; every service site (`<service>.localhost`) gets its
  *   own cookie through a single-use ticket handed over by `localhost`, since no cookie spans sites.
  * - Only browser requests need approval. Requests without `Sec-Fetch-*` and `Origin` headers (curl,
- *   scripts) keep using the gateway's own identity.
+ *   scripts) keep using the gateway's own identity, so the list of services needs no approval either.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { KeypairSigningIdentity, type SerializedKeypairSigningIdentity, type SignedCapability, type SigningIdentity } from '@hediet/linkrpc';
-import { computeNodePortsInterface, computeNodeTcpForwardInterface } from '../compute-node/index';
+import { KeypairSigningIdentity, type ParamMatcher, type SerializedKeypairSigningIdentity, type SignedCapability, type SigningIdentity } from '@hediet/linkrpc';
+import { findCoveringCapabilities, type HubAccessPermission } from '@hediet/linkrpc/hub/common';
+import { computeNodePortsInterface, computeNodeTcpForwardInterface, type ComputeNodePortRange } from '../compute-node/index';
 import { parseHttpExportHost, type ServiceReference } from './hostname';
+import { FORWARDED_HOST } from './tcpMultiplexer';
 
 /** The identity a request is forwarded with; absent for the gateway's own identity. */
 export interface HttpExportCaller {
     readonly id: string;
     readonly signer: SigningIdentity;
     readonly capabilities: readonly SignedCapability[];
+    /** The ports of the service this caller may open and list. */
+    readonly portRange: ComputeNodePortRange;
 }
 
 export type BrowserAccessResult =
@@ -37,16 +44,7 @@ export interface BrowserAccessRequest {
     readonly principal: string;
     readonly name: string;
     readonly purpose: string;
-    readonly permissions: readonly BrowserAccessPermission[];
-}
-
-export interface BrowserAccessPermission {
-    readonly target: {
-        readonly serviceId: { readonly prefix: string };
-        readonly interfaceId: { readonly exact: string };
-        readonly members: readonly { readonly exact: string }[];
-    };
-    readonly canInvoke: true;
+    readonly permissions: readonly HubAccessPermission[];
 }
 
 export interface BrowserApprovalOptions {
@@ -61,11 +59,6 @@ export interface BrowserApprovalOptions {
 export interface BrowserApprovalServices {
     /** Resolves a hostname's service reference to its service ID. */
     readonly resolve: (reference: ServiceReference) => Promise<string | undefined>;
-    /**
-     * The service ID prefix a browser asks access for when it opens `target` (or `localhost` when
-     * absent). It must not depend on how much of the directory has been discovered so far.
-     */
-    readonly scope: (target: string | undefined) => Promise<string>;
 }
 
 export const SESSION_COOKIE = 'linkrpc-gateway';
@@ -75,32 +68,54 @@ const LOGIN_PATH = '/.linkrpc/login';
 const SESSION_PATH = '/.linkrpc/session';
 const TICKET_TTL_MS = 30_000;
 const STATE_TTL_SECONDS = 600;
-
-type SessionStatus = 'pending' | 'approved' | 'denied';
+const MAX_FORM_BYTES = 8_192;
+const MAX_PORT = 65_535;
 
 interface Session {
     readonly id: string;
     readonly identity: KeypairSigningIdentity;
-    status: SessionStatus;
-    capabilities: readonly SignedCapability[];
-    reason?: string;
-    /** The service ID prefix the browser asked access for; unknown for sessions from older state files. */
-    requestedScope?: string;
     /** The browser's `localhost` cookie, hashed. */
     readonly secretHash: string;
+    /** The browser's grant per service ID. */
+    readonly grants: Map<string, Grant>;
+}
+
+interface Grant {
+    readonly id: string;
+    readonly serviceId: string;
+    readonly portRange: ComputeNodePortRange;
+    status: 'pending' | 'approved' | 'denied';
+    capabilities: readonly SignedCapability[];
+    reason?: string;
 }
 
 interface PersistedState {
-    readonly version: 1;
+    readonly version: 2;
     readonly sessions: readonly {
         readonly id: string;
         readonly secretHash: string;
         readonly identity: SerializedKeypairSigningIdentity;
-        readonly capabilities: readonly SignedCapability[];
-        readonly requestedScope?: string;
+        readonly grants: readonly {
+            readonly id: string;
+            readonly serviceId: string;
+            readonly portRange: ComputeNodePortRange;
+            readonly capabilities: readonly SignedCapability[];
+        }[];
     }[];
     /** Hashed site cookie → session ID and site. */
     readonly siteTokens: readonly { readonly hash: string; readonly sessionId: string; readonly site: string }[];
+}
+
+/** What a request addresses: a port of a service, or the list of its ports when `port` is absent. */
+interface Target {
+    readonly serviceId: string;
+    readonly port?: number;
+}
+
+/** Form field values, kept as typed so an invalid entry can be shown again. */
+interface RangeInput {
+    readonly min: string;
+    readonly max: string;
 }
 
 export type ApprovalDecision =
@@ -127,23 +142,27 @@ export class BrowserApproval {
     }
 
     /**
-     * Decides how to serve a request. Browser requests without an approved session are redirected
-     * to the approval page (navigations) or rejected; `handled` means a response was sent.
+     * Decides how to serve a request. Browser requests to a service without an approved grant are
+     * redirected to the approval page (navigations) or rejected; `handled` means a response was sent.
      */
     async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<ApprovalDecision> {
         const site = this._site(request);
         const path = new URL(request.url ?? '/', 'http://x').pathname;
         if (path === LOGIN_PATH && site === this._baseDomain) {
-            await this._login(request, response);
+            await (request.method === 'POST' ? this._requestGrant(request, response) : this._login(request, response));
             return { kind: 'handled' };
         }
         if (path === SESSION_PATH) {
             this._acceptTicket(request, response, site);
             return { kind: 'handled' };
         }
-        const session = this._sessionFor(request, site, await this._targetService(request.headers.host ?? ''));
-        if (session) {
-            return { kind: 'forward', caller: callerOf(session) };
+        const target = await this._target(request.headers.host ?? '');
+        if (!target) {
+            return { kind: 'forward' };
+        }
+        const caller = this._caller(request, site, target);
+        if (caller) {
+            return { kind: 'forward', caller };
         }
         const kind = requestKind(request);
         if (kind === 'tool') {
@@ -152,16 +171,17 @@ export class BrowserApproval {
         if (kind === 'navigation') {
             this._redirectToLogin(request, response, site);
         } else {
-            sendPage(response, 401, 'Browser not approved', '<h1>This browser is not approved yet</h1><p>Open the page directly to approve it.</p>');
+            sendPage(response, 401, 'Browser not approved', '<h1>This browser is not approved for this port</h1><p>Open the page directly to ask for approval.</p>');
         }
         return { kind: 'handled' };
     }
 
     /** For WebSocket upgrades: the caller, `undefined` for tools, or `'rejected'`. */
     async authorizeUpgrade(request: IncomingMessage): Promise<HttpExportCaller | undefined | 'rejected'> {
-        const session = this._sessionFor(request, this._site(request), await this._targetService(request.headers.host ?? ''));
-        if (session) {
-            return callerOf(session);
+        const target = await this._target(request.headers.host ?? '');
+        const caller = target && this._caller(request, this._site(request), target);
+        if (caller) {
+            return caller;
         }
         return requestKind(request) === 'tool' ? undefined : 'rejected';
     }
@@ -176,84 +196,153 @@ export class BrowserApproval {
         return hostname;
     }
 
-    /** The service a `<port>.<service>` or `<service>` host addresses; `undefined` for `localhost`. */
-    private async _targetService(host: string): Promise<string | undefined> {
+    /** What a `<port>.<service>` or `<service>` host addresses; `undefined` for `localhost` and unknown services. */
+    private async _target(host: string): Promise<Target | undefined> {
         const parsed = parseHttpExportHost(host, this._baseDomain);
-        return parsed?.kind === 'service' ? this._services.resolve(parsed.service) : undefined;
+        if (parsed?.kind !== 'service') {
+            return undefined;
+        }
+        const serviceId = await this._services.resolve(parsed.service);
+        return serviceId === undefined ? undefined : { serviceId, ...(parsed.params.port === undefined ? {} : { port: parsed.params.port }) };
     }
 
-    /** An approved session for `site` whose grant covers `serviceId` (when given). */
-    private _sessionFor(request: IncomingMessage, site: string, serviceId: string | undefined): Session | undefined {
+    /** The caller of the browser's grant for the target service, when that grant covers the target. */
+    private _caller(request: IncomingMessage, site: string, target: Target): HttpExportCaller | undefined {
+        const session = this._sessionAt(request, site);
+        const grant = session?.grants.get(target.serviceId);
+        return session && grant && covers(session, grant, target.port) ? callerOf(session, grant) : undefined;
+    }
+
+    private _sessionAt(request: IncomingMessage, site: string): Session | undefined {
         const token = readCookie(request, SESSION_COOKIE);
         if (!token) {
             return undefined;
         }
-        const session = site === this._baseDomain
-            ? this._sessionsBySecret.get(hash(token))
-            : (() => {
-                const entry = this._siteTokens.get(hash(token));
-                return entry?.site === site ? this._sessions.get(entry.sessionId) : undefined;
-            })();
-        return session?.status === 'approved' && hasFreshCapability(session) && (serviceId === undefined || covers(session, serviceId)) ? session : undefined;
+        if (site === this._baseDomain) {
+            return this._sessionsBySecret.get(hash(token));
+        }
+        const entry = this._siteTokens.get(hash(token));
+        return entry?.site === site ? this._sessions.get(entry.sessionId) : undefined;
     }
 
     private _redirectToLogin(request: IncomingMessage, response: ServerResponse, site: string): void {
-        const current = `http://${request.headers.host}${request.url ?? '/'}`;
-        const login = new URL(`http://${this._baseDomain}${portSuffix(request)}${LOGIN_PATH}`);
-        login.searchParams.set('return', current);
-        const headers: Record<string, string | string[]> = { location: login.href, 'cache-control': 'no-store' };
+        const current = new URL(`http://${request.headers.host}${request.url ?? '/'}`);
+        const headers: Record<string, string | string[]> = { 'cache-control': 'no-store' };
+        let state: string | undefined;
         if (site !== this._baseDomain) {
-            const state = randomToken();
-            login.searchParams.set('state', state);
-            headers.location = login.href;
+            state = randomToken();
             headers['set-cookie'] = `${STATE_COOKIE}=${state}; Path=${SESSION_PATH}; HttpOnly; Secure; SameSite=Lax; Max-Age=${STATE_TTL_SECONDS}`;
         }
+        headers.location = this._loginUrl(request, current, state);
         response.writeHead(302, headers);
         response.end();
+    }
+
+    private _loginUrl(request: IncomingMessage, returnUrl: URL, state: string | undefined): string {
+        const login = new URL(`http://${this._baseDomain}${portSuffix(request)}${LOGIN_PATH}`);
+        login.searchParams.set('return', returnUrl.href);
+        if (state) {
+            login.searchParams.set('state', state);
+        }
+        return login.href;
     }
 
     private async _login(request: IncomingMessage, response: ServerResponse): Promise<void> {
         const query = new URL(request.url ?? '/', 'http://x').searchParams;
         const returnUrl = this._validReturn(query.get('return'), request);
         const state = query.get('state') ?? undefined;
-        const secret = readCookie(request, SESSION_COOKIE);
-        let session = secret ? this._sessionsBySecret.get(hash(secret)) : undefined;
         const setCookie: string[] = [];
-        const direct = request.headers['sec-fetch-site'] === undefined || request.headers['sec-fetch-site'] === 'none' || request.headers['sec-fetch-site'] === 'same-origin';
-        const target = await this._targetService(returnUrl.host);
-        const wantedScope = await this._services.scope(target).catch(() => undefined);
-        const uncovered = session?.status === 'approved' && (!hasFreshCapability(session) || (target !== undefined && !covers(session, target)));
-        // An approver may grant less than requested; ask again automatically only for a different scope.
-        const narrowed = uncovered && session?.requestedScope !== undefined && session.requestedScope === wantedScope;
-        const retry = query.get('retry') === '1' && direct && (session?.status === 'denied' || narrowed);
-        if (!session || retry || (uncovered && !narrowed)) {
-            const created = await this._startSession(session, target, wantedScope);
+        let session = this._sessionAt(request, this._baseDomain);
+        if (!session) {
+            const created = await this._startSession();
             session = created.session;
             setCookie.push(`${SESSION_COOKIE}=${created.secret}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`);
         }
-        if (session.status === 'approved' && !(narrowed && !retry)) {
+        const target = await this._target(returnUrl.host);
+        const grant = target && session.grants.get(target.serviceId);
+        if (!target || (grant && covers(session, grant, target.port))) {
             return this._handOff(response, session, returnUrl, state, setCookie);
         }
+        if (grant?.status === 'pending') {
+            const code = codeOf(session);
+            return sendPage(response, 200, `Approve ${code}`, `<h1>Waiting for approval</h1>
+                <p class="code">${escapeHtml(code)}</p>
+                <p>Approve this browser on any approver, e.g. <code>linkrpc hub approval ui</code>.
+                Only approve a request whose principal starts with <code>id:key:${escapeHtml(code.replace('-', ''))}</code>.</p>
+                <p class="note">It asks to open ${escapeHtml(describePorts(grant.portRange))} of <code>${escapeHtml(grant.serviceId)}</code> through ${escapeHtml(this._options.gatewayName)}. This page continues by itself.</p>`,
+            { refresh: '2', ...(setCookie.length ? { 'set-cookie': setCookie } : {}) });
+        }
+        this._sendForm(response, { session, target, grant, returnUrl, state, setCookie });
+    }
+
+    /** Asks for the port range the browser chose for a service, replacing its grant for that service. */
+    private async _requestGrant(request: IncomingMessage, response: ServerResponse): Promise<void> {
+        // Only the form on this page may ask approvers for access, not other sites.
+        if (request.headers['sec-fetch-site'] !== 'same-origin') {
+            return sendPage(response, 403, 'Request rejected', '<h1>Request rejected</h1><p>Ask for approval with the form on the approval page.</p>');
+        }
+        const form = await readForm(request);
+        if (!form) {
+            return sendPage(response, 413, 'Request rejected', '<h1>Request rejected</h1><p>The form is too large.</p>');
+        }
+        const returnUrl = this._validReturn(form.get('return'), request);
+        const state = form.get('state') || undefined;
+        const session = this._sessionAt(request, this._baseDomain);
+        const target = await this._target(returnUrl.host);
+        if (!session || !target) {
+            response.writeHead(303, { location: this._loginUrl(request, returnUrl, state), 'cache-control': 'no-store' });
+            response.end();
+            return;
+        }
+        const input = { min: form.get('min') ?? '', max: form.get('max') ?? '' };
+        const range = parsePortRange(input);
+        const error = range === undefined
+            ? `Enter ports from 1 to ${MAX_PORT}; the first must not exceed the second.`
+            : target.port !== undefined && (target.port < range.min || target.port > range.max)
+                ? `The range must include port ${target.port}, which you are opening.`
+                : undefined;
+        if (error !== undefined || range === undefined) {
+            return this._sendForm(response, { session, target, grant: session.grants.get(target.serviceId), returnUrl, state, setCookie: [], error, input });
+        }
+        const grant: Grant = { id: randomToken(), serviceId: target.serviceId, portRange: range, status: 'pending', capabilities: [] };
+        session.grants.set(target.serviceId, grant);
+        void this._request(session, grant);
+        response.writeHead(303, { location: this._loginUrl(request, returnUrl, state), 'cache-control': 'no-store' });
+        response.end();
+    }
+
+    private _sendForm(response: ServerResponse, options: {
+        readonly session: Session;
+        readonly target: Target;
+        readonly grant: Grant | undefined;
+        readonly returnUrl: URL;
+        readonly state: string | undefined;
+        readonly setCookie: readonly string[];
+        readonly error?: string;
+        readonly input?: RangeInput;
+    }): void {
+        const { session, target, grant } = options;
         const code = codeOf(session);
-        const retryUrl = new URL(`http://${request.headers.host}${request.url}`);
-        retryUrl.searchParams.set('retry', '1');
-        const body = session.status === 'pending'
-            ? `<h1>Waiting for approval</h1>
-               <p class="code">${escapeHtml(code)}</p>
-               <p>Approve this browser on any approver, e.g. <code>linkrpc hub approval ui</code>.
-               Only approve a request whose principal starts with <code>id:key:${escapeHtml(code.replace('-', ''))}</code>.</p>
-               <p class="note">It asks to open forwarded ports of <code>${escapeHtml(session.requestedScope ? `${session.requestedScope}/*` : 'all services')}</code> through ${escapeHtml(this._options.gatewayName)}. This page continues by itself.</p>`
-            : session.status === 'approved'
-                ? `<h1>Not approved for this machine</h1><p class="code">${escapeHtml(code)}</p>
-                   <p>This browser was approved for fewer services than it asked for, which do not include <code>${escapeHtml(target ?? '')}</code>.</p>
-                   <p><a href="${escapeHtml(retryUrl.href)}">Ask again</a></p>`
-                : `<h1>Not approved</h1><p class="code">${escapeHtml(code)}</p>
-                   <p>${escapeHtml(session.reason ?? 'The request was denied.')}</p>
-                   <p><a href="${escapeHtml(retryUrl.href)}">Ask again</a></p>`;
-        sendPage(response, 200, session.status === 'pending' ? `Approve ${code}` : 'Not approved', body, {
-            ...(session.status === 'pending' ? { refresh: '2' } : {}),
-            ...(setCookie.length ? { 'set-cookie': setCookie } : {}),
-        });
+        const input = options.input ?? suggestedInput(target, grant);
+        const status = options.error !== undefined
+            ? `<p class="error">${escapeHtml(options.error)}</p>`
+            : grant?.status === 'denied'
+                ? `<p>The last request was not approved${grant.reason ? `: ${escapeHtml(grant.reason)}` : '.'}</p>`
+                : grant?.status === 'approved'
+                    ? `<p>This browser ${covers(session, grant, undefined) ? 'may open' : 'had an approval, now expired, for'} ${escapeHtml(describePorts(grant.portRange))} of this service. A new approval replaces it.</p>`
+                    : '';
+        const field = (name: keyof RangeInput) => `<input name="${name}" type="number" min="1" max="${MAX_PORT}" required value="${escapeHtml(input[name])}">`;
+        sendPage(response, options.error === undefined ? 200 : 400, 'Approve this browser', `<h1>Open ports of <code>${escapeHtml(target.serviceId)}</code></h1>
+            <p class="code">${escapeHtml(code)}</p>
+            ${status}
+            <form method="post" action="${LOGIN_PATH}">
+                <input type="hidden" name="return" value="${escapeHtml(options.returnUrl.href)}">
+                ${options.state ? `<input type="hidden" name="state" value="${escapeHtml(options.state)}">` : ''}
+                <p><label>Ports ${field('min')}</label> <label>to ${field('max')}</label></p>
+                <p><button type="submit">Ask for approval</button></p>
+            </form>
+            <p class="note">This browser can only open and list the ports in this range. Approvers see a request from a principal starting with <code>id:key:${escapeHtml(code.replace('-', ''))}</code>.</p>`,
+        options.setCookie.length ? { 'set-cookie': options.setCookie } : {}, { allowForm: true });
     }
 
     private _handOff(response: ServerResponse, session: Session, returnUrl: URL, state: string | undefined, setCookie: readonly string[]): void {
@@ -299,51 +388,42 @@ export class BrowserApproval {
         response.end();
     }
 
-    private async _startSession(previous: Session | undefined, target: string | undefined, scope: string | undefined): Promise<{ session: Session; secret: string }> {
-        if (previous) {
-            this._sessions.delete(previous.id);
-            this._sessionsBySecret.delete(previous.secretHash);
-        }
+    private async _startSession(): Promise<{ session: Session; secret: string }> {
         const secret = randomToken();
         const session: Session = {
             id: randomToken(),
             identity: await KeypairSigningIdentity.generateNew(),
-            status: 'pending',
-            capabilities: [],
             secretHash: hash(secret),
-            ...(scope === undefined ? {} : { requestedScope: scope }),
+            grants: new Map(),
         };
         this._sessions.set(session.id, session);
         this._sessionsBySecret.set(session.secretHash, session);
-        void this._request(session, target);
         return { session, secret };
     }
 
-    private async _request(session: Session, target: string | undefined): Promise<void> {
+    private async _request(session: Session, grant: Grant): Promise<void> {
         const code = codeOf(session);
         try {
-            const prefix = session.requestedScope ?? await this._services.scope(target);
-            session.requestedScope = prefix;
             const result = await this._options.requestAccess({
                 principal: session.identity.publicSigningIdentity.principal,
                 name: `Browser ${code} via http-export on ${this._options.gatewayName}`,
-                purpose: `Open forwarded ports of ${prefix ? `${prefix}/*` : 'all'} compute nodes in a browser. The browser shows the code ${code}.`,
+                purpose: `Open ${describePorts(grant.portRange)} of ${grant.serviceId} in a browser. The browser shows the code ${code}.`,
                 permissions: [
-                    permission(prefix, computeNodeTcpForwardInterface.info.id, 'multiplex'),
-                    permission(prefix, computeNodePortsInterface.info.id, 'listListening'),
+                    forwardPermission(grant.serviceId, { range: grant.portRange }),
+                    listPermission(grant.serviceId, grant.portRange),
                 ],
             });
             if (result.status === 'granted' && 'capabilities' in result && result.capabilities.length > 0) {
-                session.capabilities = result.capabilities;
-                session.status = 'approved';
+                grant.capabilities = result.capabilities;
+                grant.status = 'approved';
                 this._save();
             } else {
-                session.status = 'denied';
-                session.reason = 'reason' in result && result.reason ? `Denied: ${result.reason}` : undefined;
+                grant.status = 'denied';
+                grant.reason = 'reason' in result && result.reason ? result.reason : undefined;
             }
         } catch (error) {
-            session.status = 'denied';
-            session.reason = `The approval request failed: ${error instanceof Error ? error.message : String(error)}`;
+            grant.status = 'denied';
+            grant.reason = `the approval request failed: ${error instanceof Error ? error.message : String(error)}`;
         }
     }
 
@@ -371,19 +451,21 @@ export class BrowserApproval {
         } catch {
             return;
         }
-        for (const entry of state.sessions ?? []) {
+        // Sessions of earlier versions were approved for whole namespaces; their browsers ask again.
+        if (state.version !== 2) {
+            return;
+        }
+        for (const entry of state.sessions) {
             const session: Session = {
                 id: entry.id,
                 identity: KeypairSigningIdentity.fromJson(entry.identity),
-                status: 'approved',
-                capabilities: entry.capabilities,
                 secretHash: entry.secretHash,
-                ...(entry.requestedScope === undefined ? {} : { requestedScope: entry.requestedScope }),
+                grants: new Map(entry.grants.map(grant => [grant.serviceId, { ...grant, status: 'approved' as const }])),
             };
             this._sessions.set(session.id, session);
             this._sessionsBySecret.set(session.secretHash, session);
         }
-        for (const token of state.siteTokens ?? []) {
+        for (const token of state.siteTokens) {
             if (this._sessions.has(token.sessionId)) {
                 this._siteTokens.set(token.hash, { sessionId: token.sessionId, site: token.site });
             }
@@ -395,11 +477,19 @@ export class BrowserApproval {
         if (!file) {
             return;
         }
-        const approved = [...this._sessions.values()].filter(session => session.status === 'approved');
+        const sessions = [...this._sessions.values()]
+            .map(session => ({ session, grants: [...session.grants.values()].filter(grant => grant.status === 'approved') }))
+            .filter(({ grants }) => grants.length > 0);
+        const saved = new Set(sessions.map(({ session }) => session.id));
         const state: PersistedState = {
-            version: 1,
-            sessions: approved.map(session => ({ id: session.id, secretHash: session.secretHash, identity: session.identity.toJson(), capabilities: session.capabilities, ...(session.requestedScope === undefined ? {} : { requestedScope: session.requestedScope }) })),
-            siteTokens: [...this._siteTokens].filter(([, entry]) => this._sessions.get(entry.sessionId)?.status === 'approved').map(([tokenHash, entry]) => ({ hash: tokenHash, ...entry })),
+            version: 2,
+            sessions: sessions.map(({ session, grants }) => ({
+                id: session.id,
+                secretHash: session.secretHash,
+                identity: session.identity.toJson(),
+                grants: grants.map(grant => ({ id: grant.id, serviceId: grant.serviceId, portRange: grant.portRange, capabilities: grant.capabilities })),
+            })),
+            siteTokens: [...this._siteTokens].filter(([, entry]) => saved.has(entry.sessionId)).map(([tokenHash, entry]) => ({ hash: tokenHash, ...entry })),
         };
         this._saving = this._saving.then(async () => {
             await mkdir(dirname(file), { recursive: true });
@@ -410,8 +500,70 @@ export class BrowserApproval {
     }
 }
 
-function permission(prefix: string, interfaceId: string, member: string): BrowserAccessPermission {
-    return { target: { serviceId: { prefix }, interfaceId: { exact: interfaceId }, members: [{ exact: member }] }, canInvoke: true };
+/** Forwarding to the service's loopback ports that `port` matches. */
+function forwardPermission(serviceId: string, port: ParamMatcher): HubAccessPermission {
+    return {
+        target: { serviceId: { exact: serviceId }, interfaceId: { exact: computeNodeTcpForwardInterface.info.id }, members: [{ exact: 'multiplex' }] },
+        canInvoke: true,
+        params: { host: { exact: FORWARDED_HOST }, port },
+    };
+}
+
+/** Listing the service's ports within `portRange`; the gateway always passes that range. */
+function listPermission(serviceId: string, portRange: ComputeNodePortRange): HubAccessPermission {
+    return {
+        target: { serviceId: { exact: serviceId }, interfaceId: { exact: computeNodePortsInterface.info.id }, members: [{ exact: 'listListening' }] },
+        canInvoke: true,
+        params: { portRange: { exact: { min: portRange.min, max: portRange.max } } },
+    };
+}
+
+/**
+ * Whether the grant's capabilities still permit opening `port`, or listing the grant's range when
+ * `port` is absent. The approver may have granted less than requested.
+ */
+function covers(session: Session, grant: Grant, port: number | undefined): boolean {
+    if (grant.status !== 'approved') {
+        return false;
+    }
+    const needed = port === undefined ? listPermission(grant.serviceId, grant.portRange) : forwardPermission(grant.serviceId, { exact: port });
+    return findCoveringCapabilities(grant.capabilities, [needed], {
+        audience: session.identity.publicSigningIdentity.principal,
+        freshnessMarginMs: 5_000,
+    }) !== undefined;
+}
+
+/** The range shown in the form: the opened port, widened by the ports approved before. */
+function suggestedInput(target: Target, grant: Grant | undefined): RangeInput {
+    const previous = grant?.portRange;
+    if (target.port === undefined) {
+        return previous ? { min: String(previous.min), max: String(previous.max) } : { min: '', max: '' };
+    }
+    return grant?.status === 'approved' && previous
+        ? { min: String(Math.min(previous.min, target.port)), max: String(Math.max(previous.max, target.port)) }
+        : { min: String(target.port), max: String(target.port) };
+}
+
+function parsePortRange(input: RangeInput): ComputeNodePortRange | undefined {
+    const parse = (value: string) => /^\d{1,5}$/.test(value.trim()) ? Number(value.trim()) : undefined;
+    const min = parse(input.min);
+    const max = parse(input.max);
+    return min !== undefined && max !== undefined && min >= 1 && max <= MAX_PORT && min <= max ? { min, max } : undefined;
+}
+
+function describePorts(range: ComputeNodePortRange): string {
+    return range.min === range.max ? `port ${range.min}` : `ports ${range.min}–${range.max}`;
+}
+
+async function readForm(request: IncomingMessage): Promise<URLSearchParams | undefined> {
+    let body = '';
+    for await (const chunk of request) {
+        body += String(chunk);
+        if (body.length > MAX_FORM_BYTES) {
+            return undefined;
+        }
+    }
+    return new URLSearchParams(body);
 }
 
 /** The first eight characters of the key, as approvers see them in the principal `id:key:<key>`. */
@@ -420,24 +572,8 @@ export function codeOf(session: { readonly identity: SigningIdentity }): string 
     return `${key.slice(0, 4)}-${key.slice(4, 8)}`;
 }
 
-function callerOf(session: Session): HttpExportCaller {
-    return { id: session.id, signer: session.identity, capabilities: session.capabilities };
-}
-
-function hasFreshCapability(session: Session): boolean {
-    const now = Date.now();
-    return session.capabilities.some(capability => capability.expiresAtMs === undefined || capability.expiresAtMs > now + 5_000);
-}
-
-/** Whether the session's grant addresses `serviceId`; prefixes match whole `/` segments, as the Hub matches them. */
-function covers(session: Session, serviceId: string): boolean {
-    return session.capabilities.some(capability => capability.permissions.some(permission => {
-        const pattern = permission.target.serviceId;
-        if ('exact' in pattern) {
-            return pattern.exact === serviceId;
-        }
-        return pattern.prefix === '' || serviceId === pattern.prefix || serviceId.startsWith(`${pattern.prefix}/`);
-    }));
+function callerOf(session: Session, grant: Grant): HttpExportCaller {
+    return { id: `${session.id}/${grant.id}`, signer: session.identity, capabilities: grant.capabilities, portRange: grant.portRange };
 }
 
 /** Navigations may be redirected to approve; other browser requests are rejected; tools pass. */
@@ -476,19 +612,20 @@ function hash(value: string): string {
     return createHash('sha256').update(value).digest('base64url');
 }
 
-function sendPage(response: ServerResponse, status: number, title: string, body: string, headers: Record<string, string | readonly string[]> = {}): void {
+function sendPage(response: ServerResponse, status: number, title: string, body: string, headers: Record<string, string | readonly string[]> = {}, options: { readonly allowForm?: boolean } = {}): void {
     response.writeHead(status, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
         'x-content-type-options': 'nosniff',
-        'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        'content-security-policy': `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action ${options.allowForm ? "'self'" : "'none'"}`,
         'x-frame-options': 'DENY',
         'referrer-policy': 'no-referrer',
         ...headers,
     });
     response.end(`<!doctype html><meta charset="utf-8"><title>${escapeHtml(title)}</title>`
         + '<style>body{font:15px system-ui,sans-serif;margin:3em auto;max-width:42em;color-scheme:light dark}'
-        + '.code{font:600 2.4em ui-monospace,monospace;letter-spacing:.08em;margin:.4em 0}.note{opacity:.7}</style>'
+        + '.code{font:600 2.4em ui-monospace,monospace;letter-spacing:.08em;margin:.4em 0}.note{opacity:.7}.error{color:#c33}'
+        + 'input[type=number]{width:7em}</style>'
         + body);
 }
 

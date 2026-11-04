@@ -29,7 +29,8 @@ export async function httpExportCommand(options: {
         baseDomain: options.baseDomain,
         getTcpForward: (serviceId, caller) => connection.service(serviceId).get(computeNodeTcpForwardInterface, signedAs(caller)),
         listServices: () => services.get(),
-        listPorts: async (serviceId, caller) => (await connection.service(serviceId).get(computeNodePortsInterface, signedAs(caller)).listListening({})).ports,
+        listPorts: async (serviceId, caller) => (await connection.service(serviceId).get(computeNodePortsInterface, signedAs(caller))
+            .listListening(caller ? { portRange: caller.portRange } : {})).ports,
         ...(options.auth === 'browser' ? {
             approval: {
                 gatewayName: hostname(),

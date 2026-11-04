@@ -11,6 +11,10 @@ const matcherSchema = z.union([
     z.strictObject({ enum: z.array(z.json()).min(1) }),
     z.strictObject({ prefix: z.string() }),
     z.strictObject({ subsetOf: z.array(z.string()) }),
+    z.strictObject({
+        range: z.strictObject({ min: z.int(), max: z.int() })
+            .refine(range => range.min <= range.max, 'min must not exceed max'),
+    }),
     z.strictObject({ any: z.literal(true) }),
 ]);
 
@@ -100,7 +104,8 @@ export function createParamMatchers(
     const samples = [actual];
     for (const [key, matcher] of Object.entries(matchers)) {
         const values = 'exact' in matcher ? [matcher.exact] : 'enum' in matcher ? matcher.enum
-            : 'subsetOf' in matcher ? [[], ...matcher.subsetOf.map(value => [value])] : [];
+            : 'subsetOf' in matcher ? [[], ...matcher.subsetOf.map(value => [value])]
+                : 'range' in matcher ? [matcher.range.min, matcher.range.max] : [];
         for (const value of values) samples.push({ ...actual, [key]: value });
     }
     for (const sample of samples) {
@@ -115,6 +120,7 @@ export function createParamMatchers(
 function matcherToSchema(matcher: ParamMatcher): LinkRpcJsonSchema {
     if ('any' in matcher) return true;
     if ('prefix' in matcher) return { type: 'string' };
+    if ('range' in matcher) return { type: 'integer' };
     if ('subsetOf' in matcher) {
         return { type: 'array', items: { enum: matcher.subsetOf } };
     }

@@ -12,6 +12,9 @@ import type {
 } from '../compute-node/index';
 
 export type TcpForwardClient = InterfaceClient<typeof computeNodeTcpForwardInterface>;
+
+/** The address forwarded connections are opened to on the compute node. */
+export const FORWARDED_HOST = '127.0.0.1';
 type TcpMultiplexCall = ReturnType<TcpForwardClient['multiplex']>;
 
 const MAX_TCP_FRAME_BYTES = 64 * 1_024;
@@ -47,7 +50,7 @@ export class HubTcpMultiplexer {
         this._readyTimer = setTimeout(() => this._fail(new Error('Timed out opening the TCP multiplex session')), READY_TIMEOUT_MS);
         this._readyTimer.unref?.();
         this._call = client.multiplex(
-            { host: '127.0.0.1', port },
+            { host: FORWARDED_HOST, port },
             { onMessage: message => this._handleMessage(message) },
         );
         void this._call.then(

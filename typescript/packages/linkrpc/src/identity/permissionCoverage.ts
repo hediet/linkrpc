@@ -37,6 +37,10 @@ function paramCovers(granted: ParamMatcher, requested: ParamMatcher): boolean {
         return requested.enum.every(value => matchParams({ value: granted }, { value }).ok);
     }
     if ("prefix" in requested) return "prefix" in granted && requested.prefix.startsWith(granted.prefix);
+    if ("range" in requested) {
+        return "range" in granted
+            && requested.range.min >= granted.range.min && requested.range.max <= granted.range.max;
+    }
     return "subsetOf" in requested && "subsetOf" in granted
         && requested.subsetOf.every(value => granted.subsetOf.includes(value));
 }

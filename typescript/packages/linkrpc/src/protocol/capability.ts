@@ -41,6 +41,8 @@ export type Pattern = { exact: string } | { prefix: string };
  * - `subsetOf` — value MUST be a `string[]` whose every element is in this
  *                set. Order-independent; the empty array is a valid subset.
  *                Used to bound a requested scope set.
+ * - `range`    — value MUST be an integer within `min`..`max`, both inclusive.
+ *                Used to bound e.g. a port.
  * - `any`      — matches anything (the explicit wildcard).
  */
 export type ParamMatcher =
@@ -48,6 +50,7 @@ export type ParamMatcher =
     | { enum: unknown[] }
     | { prefix: string }
     | { subsetOf: string[] }
+    | { range: { min: number; max: number } }
     | { any: true };
 
 /**
@@ -247,6 +250,11 @@ function _hasParamMatcherShape(value: unknown): value is ParamMatcher {
     if ("subsetOf" in value) {
         return Array.isArray(value.subsetOf) && value.subsetOf.every((item) => typeof item === "string");
     }
+    if ("range" in value) {
+        const range = value.range;
+        return _isRecord(range) && Number.isSafeInteger(range.min) && Number.isSafeInteger(range.max)
+            && (range.min as number) <= (range.max as number);
+    }
     return value.any === true;
 }
 
@@ -394,6 +402,9 @@ function _matchParamValue(matcher: ParamMatcher, value: unknown): boolean {
             Array.isArray(value) &&
             value.every((v) => typeof v === "string" && matcher.subsetOf.includes(v))
         );
+    }
+    if ("range" in matcher) {
+        return Number.isInteger(value) && (value as number) >= matcher.range.min && (value as number) <= matcher.range.max;
     }
     if ("exact" in matcher) {
         return jcsCanonicalize(matcher.exact) === jcsCanonicalize(value);

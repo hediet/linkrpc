@@ -1,3 +1,4 @@
+import { createServer, type AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { isLoopbackReachable, parseLsof, parseProcNetTcp, parseSs, parseTasklistCsv, parseWindowsNetstat, readListeningPorts } from './listeningPorts';
 
@@ -47,5 +48,17 @@ describe('listening ports', () => {
     it('lists ports on this machine', async () => {
         const ports = await readListeningPorts();
         expect(ports.every(port => port.port > 0 && port.addresses.length > 0)).toBe(true);
+    });
+
+    it('lists only ports within a range', async () => {
+        const server = createServer();
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const { port } = server.address() as AddressInfo;
+            const listed = (await readListeningPorts({ portRange: { min: port, max: port } })).map(entry => entry.port);
+            expect(listed).toEqual([port]);
+        } finally {
+            await new Promise(resolve => server.close(resolve));
+        }
     });
 });
