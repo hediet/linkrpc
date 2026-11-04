@@ -91,3 +91,57 @@ const unsignedAccess: NonNullable<McpOptions['access']> = {
     listGrants: () => [],
     requestAccess: async () => ({ status: 'denied', reason: 'This connection does not sign calls.' }) as HubAccessResult,
 };
+
+export interface McpExportOptions {
+    /** Loopback TCP port to listen on. */
+    readonly port: number;
+    /** Bearer token clients must send in the `Authorization` header. */
+    readonly authorizationToken: string;
+    readonly scripts?: boolean;
+    readonly mcpIdentities?: Readonly<Record<string, string>>;
+    readonly requestDirectoryAccess?: (serviceId: string) => Promise<boolean>;
+    readonly access?: McpOptions['access'];
+    readonly idleSessionTimeoutMs?: number;
+    readonly log?: (message: string) => void;
+    /** Resolves when the export should stop. */
+    readonly stop: Promise<void>;
+}
+
+/**
+ * Serve what {@link mcpCommand} serves over Streamable HTTP on a loopback port,
+ * so many MCP clients share one process and one hub connection. Every MCP
+ * session gets its own aggregator, forwarded sessions, and script state.
+ */
+export async function mcpExportCommand(channel: CliChannel, options: McpExportOptions): Promise<void> {
+    const log = options.log ?? (message => { process.stderr.write(`linkrpc mcp-export: ${message}\n`); });
+    const { singleConnectionPool } = await import('@hediet/linkrpc-mcp');
+    const { McpSocketHost } = await import('@hediet/linkrpc-mcp/node');
+    const access = options.access ?? unsignedAccess;
+    const host = await McpSocketHost.start({
+        transport: 'http',
+        port: options.port,
+        authorizationToken: options.authorizationToken,
+        ...(options.idleSessionTimeoutMs !== undefined ? { idleSessionTimeoutMs: options.idleSessionTimeoutMs } : {}),
+        log,
+        createSession: async ({ sessionId }) => ({
+            serverOptions: {
+                pool: singleConnectionPool(channel, access, `mcp-export:${sessionId}`),
+                scriptTools: options.scripts !== false,
+                hubTools: {
+                    requestDirectoryAccess: options.requestDirectoryAccess,
+                    log: message => log(`[${sessionId.slice(0, 8)}] ${message}`),
+                    ...(options.mcpIdentities !== undefined
+                        ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
+                        : {}),
+                },
+            },
+        }),
+    });
+    const endpoint = host.endpoint;
+    if (endpoint.kind === 'tcp') log(`listening at http://${endpoint.host}:${endpoint.port}${endpoint.requestPath}`);
+    try {
+        await options.stop;
+    } finally {
+        host.dispose();
+    }
+}

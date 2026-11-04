@@ -69,6 +69,8 @@ export interface LinkRpcMcpServerOptions {
      * hub (MCP services and forwarded servers), next to the script tools.
      */
     readonly hubTools?: boolean | Omit<HubMcpAggregatorOptions, "clientInfo">;
+    /** Serve the script tools (`runLinkRpcScript`, ...). Defaults to `true`. */
+    readonly scriptTools?: boolean;
     /** Observes completed MCP tool calls exactly as their result is returned to the client. */
     readonly onToolCall?: (call: McpToolCall) => void;
     /** Observes every sandbox `con.explore` call, including calls that fail. */
@@ -138,7 +140,7 @@ export class LinkRpcMcpServer {
                         : {}),
                 }));
         const host = new McpToolHost(this._mcp);
-        host.addTools(this._createTools());
+        if (options.scriptTools !== false) host.addTools(this._createTools());
         if (options.hubTools !== undefined && options.hubTools !== false) {
             const aggregatorOptions = options.hubTools === true ? {} : options.hubTools;
             this._hubTools = this._pool.resolve(undefined).then((pooled) =>
