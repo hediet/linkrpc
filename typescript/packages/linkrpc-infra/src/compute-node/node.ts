@@ -4,7 +4,7 @@
  */
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { lstat, open, readdir, readFile as readFileContents, statfs, writeFile as writeFileContents } from 'node:fs/promises';
+import { lstat, open, readdir, readFile as readFileContents, rm, rmdir, statfs, unlink, writeFile as writeFileContents } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { createConnection, type Socket } from 'node:net';
 import * as os from 'node:os';
@@ -269,6 +269,22 @@ export class ComputeNode {
         return { path: resolved, bytesWritten: content.byteLength };
     }
 
+    async deleteFile(filePath: string): Promise<{ path: string; }> {
+        const resolved = path.resolve(filePath);
+        if ((await lstat(resolved)).isDirectory()) throw new Error(`${resolved} is a directory; use deleteDirectory`);
+        await unlink(resolved);
+        return { path: resolved };
+    }
+
+    async deleteDirectory(directoryPath: string, recursive = false): Promise<{ path: string; }> {
+        const resolved = path.resolve(directoryPath);
+        if (path.parse(resolved).root === resolved) throw new Error(`refusing to delete the filesystem root ${resolved}`);
+        if (!(await lstat(resolved)).isDirectory()) throw new Error(`${resolved} is not a directory; use deleteFile`);
+        if (recursive) await rm(resolved, { recursive: true });
+        else await rmdir(resolved);
+        return { path: resolved };
+    }
+
     requestHttp(params: ComputeNodeHttpRequest, signal?: AbortSignal): Promise<{
         statusCode: number;
         headers: Record<string, string | string[]>;
@@ -444,6 +460,8 @@ export function registerComputeNode(registrar: InterfaceRegistrar, node: Compute
             readDirectory: params => node.readDirectory(params.path, params.limit),
             readFile: params => node.readFile(params.path, params.offset, params.length),
             writeFile: params => node.writeFile(params.path, params.contentBase64, params.createNew),
+            deleteFile: ({ path: filePath }) => node.deleteFile(filePath),
+            deleteDirectory: params => node.deleteDirectory(params.path, params.recursive),
         }),
         registrar.register(computeNodeHttpInterface, { request: (params, _ctx, stream) => node.requestHttp(params, stream.signal) }),
         registrar.register(computeNodeTcpForwardInterface, {
