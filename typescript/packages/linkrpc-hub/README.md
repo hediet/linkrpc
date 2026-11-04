@@ -95,8 +95,12 @@ failures are reported and also reject `host.done` on shutdown.
 
 When the peer provisions a managed identity overlay, set the top-level
 `managedIdentity: true` to sign outbound calls. A granted namespace alone does
-not imply this overlay exists. The helper does not spawn a hub, retry connections,
-install process signal handlers, or exit the process.
+not imply this overlay exists. `managedIdentity: { autoNegotiateCaps: true }`
+also presents the identity's stored grants on every call (and negotiates
+missing ones); `setup` receives the `principal`, whose persistent `capBag`
+holds them, e.g. after an explicit `hubAccess::requestAccess`. The helper does
+not spawn a hub, retry connections, install process signal handlers, or exit
+the process.
 
 Migrating from the earlier API: replace `transport` with `endpoint` and the
 required `registrationMode`; move `serviceId`/`managedIdentity` to the top level.

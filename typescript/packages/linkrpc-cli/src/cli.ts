@@ -1597,13 +1597,14 @@ Batch options:
         .option(
             '--claim <serviceId>',
             'register <serviceId> on the hub (this registration is signed as --principal) and ' +
-            "forward requests for it to the participant unchanged, keeping callers' signatures",
+            "forward requests for it to the participant unchanged, keeping callers' signatures (repeatable)",
+            collectOption,
         )
         .option('--no-outbound', 'drop calls the participant makes instead of forwarding them to the hub')
         .action(async (cmdOpts: TargetEndpointCliOptions & {
             stdio?: boolean;
             signAs?: string | true;
-            claim?: string;
+            claim?: readonly string[];
             outbound: boolean;
         }) => {
             const localEp = needEndpoint(endpoint);
@@ -1637,13 +1638,13 @@ Batch options:
             // synchronously, before any message the participant sent is dispatched.
             const participant = targetEp === undefined
                 ? await connectStdioParticipant()
-                : await connectTargetEndpoint(targetEp, cmdOpts.claim ?? '').then((connection) => ({ connection, closed: connection.closed }));
+                : await connectTargetEndpoint(targetEp, cmdOpts.claim?.[0] ?? '').then((connection) => ({ connection, closed: connection.closed }));
             try {
                 await proxyCommand({
                     hub,
                     participant: participant.connection,
                     outbound: !cmdOpts.outbound ? 'none' : cmdOpts.signAs !== undefined ? 'signed' : 'verbatim',
-                    ...(cmdOpts.claim !== undefined ? { claimServiceId: cmdOpts.claim } : {}),
+                    ...(cmdOpts.claim !== undefined ? { claimServiceIds: cmdOpts.claim } : {}),
                     ...(participant.closed !== undefined ? { stop: participant.closed } : {}),
                 });
             } finally {
