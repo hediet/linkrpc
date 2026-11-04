@@ -20,7 +20,9 @@ const methodSchemaFields = [
  * changing identity:
  *
  *   1. Normalize every JSON-Schema position (`params`, `result`, streams, and
- *      `components.schemas`) onto the decidable linkrpc subset.
+ *      `components.schemas`) onto the decidable linkrpc subset, dropping
+ *      schema-level `x-…` keys first (`keepExtensions: false`), so a schema
+ *      that carries only extensions hashes like `true`.
  *   2. Strip every `comment` field (non-normative — must not affect identity).
  *      `description` is NORMATIVE and kept in the hash.
  *   3. Strip every **specification-extension** field — any object key whose name
@@ -52,6 +54,8 @@ export function computeInterfaceHash(schema: LinkRpcInterfaceSchema): string {
     return result;
 }
 
+const HASH_NORMALIZATION = { keepExtensions: false } as const;
+
 function normalizeSchemaPositions(schema: LinkRpcInterfaceSchema): LinkRpcInterfaceSchema {
     const methods: LinkRpcInterfaceSchema["methods"] = Object.fromEntries(
         Object.entries(schema.methods).map(([name, method]) => {
@@ -59,13 +63,13 @@ function normalizeSchemaPositions(schema: LinkRpcInterfaceSchema): LinkRpcInterf
             for (const field of methodSchemaFields) {
                 const value = normalized[field];
                 if (value !== undefined) {
-                    normalized[field] = normalizeJsonSchema(value);
+                    normalized[field] = normalizeJsonSchema(value, HASH_NORMALIZATION);
                 }
             }
             if (method.errors !== undefined) {
                 normalized.errors = method.errors.map((error) => error.schema !== undefined
-                    ? { ...error, schema: normalizeJsonSchema(error.schema) }
-                    : { ...error, ...(error.data === undefined ? {} : { data: normalizeJsonSchema(error.data) }) });
+                    ? { ...error, schema: normalizeJsonSchema(error.schema, HASH_NORMALIZATION) }
+                    : { ...error, ...(error.data === undefined ? {} : { data: normalizeJsonSchema(error.data, HASH_NORMALIZATION) }) });
             }
             return [name, normalized];
         }),
@@ -78,7 +82,7 @@ function normalizeSchemaPositions(schema: LinkRpcInterfaceSchema): LinkRpcInterf
             schemas: Object.fromEntries(
                 Object.entries(componentSchemas).map(([name, value]) => [
                     name,
-                    normalizeJsonSchema(value),
+                    normalizeJsonSchema(value, HASH_NORMALIZATION),
                 ]),
             ),
         };

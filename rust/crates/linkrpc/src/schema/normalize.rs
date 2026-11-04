@@ -3,7 +3,8 @@
 //! This is the cross-language interop bridge. TS derives schemas from zod
 //! (`z.toJSONSchema`), Rust derives them from `schemars`; the two emit different
 //! incidental keys and defaults. By running *both* through this identical
-//! normalization — keeping only [`KEPT_KEYS`], defaulting object closure,
+//! normalization — keeping only [`KEPT_KEYS`] (plus verbatim `x-…`
+//! specification extensions, which the interface hash drops), defaulting object closure,
 //! synthesizing discriminators, collapsing `{}`/`{"not":{}}` to `true`/`false` —
 //! the canonical subset (and therefore the interface hash) matches.
 //!
@@ -15,6 +16,8 @@ use crate::protocol::json_value::{JsonMap, JsonValue};
 /// Keys that survive normalization. Everything else (annotations like
 /// `examples`, `default`, `$schema`, `minLength`, …) is dropped: it is not part
 /// of the decidable subset and must not influence the interface hash.
+/// Specification-extension keys (`x-…`, spec §4.1) are kept verbatim unless
+/// normalizing for the hash; see [`normalize_json_schema_without_extensions`].
 pub const KEPT_KEYS: &[&str] = &[
     "type",
     "format",
@@ -37,13 +40,34 @@ fn is_kept_key(k: &str) -> bool {
     KEPT_KEYS.contains(&k)
 }
 
+/// Specification-extension key (spec §4.1); same prefix as `hash::EXTENSION_PREFIX`.
+fn is_extension_key(k: &str) -> bool {
+    k.starts_with("x-")
+}
+
 /// Normalize a raw JSON Schema value into the linkrpc subset.
 ///
 /// Returns `Value::Bool(true)` for top (any) and `Value::Bool(false)` for bottom
 /// (never), mirroring the boolean-schema convention. Errors only on structurally
 /// impossible inputs (a bare array where an object/boolean schema is required),
 /// matching the TS `throw`.
+///
+/// Specification-extension keys (`x-…`) are copied verbatim (their values are
+/// not normalized), so a node that carries only extensions stays an object.
 pub fn normalize_json_schema(raw: &JsonValue) -> Result<JsonValue, NormalizeError> {
+    normalize(raw, true)
+}
+
+/// Like [`normalize_json_schema`], but drops every `x-…` key like any other
+/// unlisted key, so an extension-only node collapses to `true`. This is the
+/// projection the interface hash uses (TS: `keepExtensions: false`).
+pub fn normalize_json_schema_without_extensions(
+    raw: &JsonValue,
+) -> Result<JsonValue, NormalizeError> {
+    normalize(raw, false)
+}
+
+fn normalize(raw: &JsonValue, keep_extensions: bool) -> Result<JsonValue, NormalizeError> {
     match raw {
         JsonValue::Bool(b) => return Ok(JsonValue::Bool(*b)),
         JsonValue::Object(_) => {}
@@ -81,6 +105,16 @@ pub fn normalize_json_schema(raw: &JsonValue) -> Result<JsonValue, NormalizeErro
                 union.insert(key.into(), value);
             }
         }
+        let extension_keys: Vec<String> = branch
+            .keys()
+            .filter(|k| is_extension_key(k))
+            .cloned()
+            .collect();
+        for key in extension_keys {
+            if let Some(value) = branch.remove(&key) {
+                union.insert(key, value);
+            }
+        }
         let branches = types
             .iter()
             .map(|value| {
@@ -103,15 +137,21 @@ pub fn normalize_json_schema(raw: &JsonValue) -> Result<JsonValue, NormalizeErro
             })
             .collect();
         union.insert("anyOf".into(), JsonValue::Array(branches));
-        return normalize_json_schema(&JsonValue::Object(union));
+        return normalize(&JsonValue::Object(union), keep_extensions);
     }
 
     let mut out = JsonMap::new();
     for (k, v) in r {
+        if is_extension_key(k) {
+            if keep_extensions {
+                out.insert(k.clone(), v.clone());
+            }
+            continue;
+        }
         if !is_kept_key(k) {
             continue;
         }
-        if let Some(normalized) = normalize_child(k, v)? {
+        if let Some(normalized) = normalize_child(k, v, keep_extensions)? {
             out.insert(k.clone(), normalized);
         }
     }
@@ -147,7 +187,11 @@ pub fn normalize_json_schema(raw: &JsonValue) -> Result<JsonValue, NormalizeErro
     Ok(JsonValue::Object(out))
 }
 
-fn normalize_child(key: &str, v: &JsonValue) -> Result<Option<JsonValue>, NormalizeError> {
+fn normalize_child(
+    key: &str,
+    v: &JsonValue,
+    keep_extensions: bool,
+) -> Result<Option<JsonValue>, NormalizeError> {
     match key {
         "properties" => {
             let Some(obj) = v.as_object() else {
@@ -155,7 +199,7 @@ fn normalize_child(key: &str, v: &JsonValue) -> Result<Option<JsonValue>, Normal
             };
             let mut out = JsonMap::new();
             for (pk, pv) in obj {
-                out.insert(pk.clone(), normalize_json_schema(pv)?);
+                out.insert(pk.clone(), normalize(pv, keep_extensions)?);
             }
             Ok(Some(JsonValue::Object(out)))
         }
@@ -163,7 +207,7 @@ fn normalize_child(key: &str, v: &JsonValue) -> Result<Option<JsonValue>, Normal
             if *v == JsonValue::Bool(false) {
                 return Ok(Some(JsonValue::Bool(false)));
             }
-            Ok(Some(normalize_json_schema(v)?))
+            Ok(Some(normalize(v, keep_extensions)?))
         }
         "prefixItems" | "anyOf" | "oneOf" => {
             let Some(arr) = v.as_array() else {
@@ -171,7 +215,7 @@ fn normalize_child(key: &str, v: &JsonValue) -> Result<Option<JsonValue>, Normal
             };
             let mut out = Vec::with_capacity(arr.len());
             for s in arr {
-                out.push(normalize_json_schema(s)?);
+                out.push(normalize(s, keep_extensions)?);
             }
             Ok(Some(JsonValue::Array(out)))
         }
@@ -311,5 +355,62 @@ mod tests {
                 Err(NormalizeError::InvalidTypeArray)
             ));
         }
+    }
+
+    #[test]
+    fn keeps_extension_keys_verbatim() {
+        let raw = json!({
+            "type": ["object", "null"],
+            "minLength": 1,
+            "x-resource": { "kind": "repository" },
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "x-json-schema": { "contentMediaType": "text/javascript", "type": ["string"] }
+                }
+            }
+        });
+        assert_eq!(
+            normalize_json_schema(&raw).unwrap(),
+            json!({
+                "x-resource": { "kind": "repository" },
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {
+                            "code": {
+                                "type": "string",
+                                "x-json-schema": { "contentMediaType": "text/javascript", "type": ["string"] }
+                            }
+                        },
+                        "additionalProperties": false
+                    },
+                    { "type": "null" }
+                ]
+            })
+        );
+        assert_eq!(
+            normalize_json_schema_without_extensions(&raw).unwrap(),
+            json!({
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": { "code": { "type": "string" } },
+                        "additionalProperties": false
+                    },
+                    { "type": "null" }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn extension_only_schema_is_kept_unless_hashing() {
+        let raw = json!({ "x-foo": 1, "default": 2 });
+        assert_eq!(normalize_json_schema(&raw).unwrap(), json!({ "x-foo": 1 }));
+        assert_eq!(
+            normalize_json_schema_without_extensions(&raw).unwrap(),
+            json!(true)
+        );
     }
 }

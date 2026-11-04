@@ -20,5 +20,6 @@ npm run gen
 ```
 
 Schema-normalization vectors call the built TypeScript normalizer directly.
-They cover lowering producer type arrays to wire `anyOf` unions; the Rust
+They cover lowering producer type arrays to wire `anyOf` unions and keeping
+`x-…` specification extensions on schema nodes; the Rust
 conformance tests consume the same fixtures to verify normalization and hashes.

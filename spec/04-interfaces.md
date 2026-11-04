@@ -267,13 +267,13 @@ This chapter does not prescribe a complete decision procedure for every semantic
 
 Before an interface schema is hashed (§4), every `JsonSchema` in it MUST be in the following canonical form, so that structurally-equal schemas produce byte-identical bytes:
 
-1. Drop every key not listed above (annotation keys such as `examples`, `default`, `$comment`, `readOnly`, and every excluded keyword).
+1. Drop every key not listed above (annotation keys such as `examples`, `default`, `$comment`, `readOnly`, and every excluded keyword), except specification-extension keys (`x-…`, §4.1). Extension keys stay in the document with their values copied verbatim (an extension value is not itself normalized); only the hash computation (§4) removes them, before step 2, so a node such as `{ "x-hint": 1 }` stays an object in the document but hashes as `true`.
 2. The empty schema `{}` (after dropping) becomes `true`.
 3. `{ "not": {} }` becomes `false`; any other `not` is dropped.
 4. A `{ type: "object" }` with no `additionalProperties` becomes closed — `additionalProperties: false`.
 5. `required` is sorted ascending.
 6. For a `oneOf` with no explicit `discriminator`, a `discriminator` MAY be synthesized when every branch is an object schema sharing exactly one property that is `const`-valued and pairwise-distinct across branches; a `discriminator` with no `oneOf` to attach to is dropped.
-7. When lowering a producer's array-valued `type`, expand it into `anyOf` in the original order. Each branch replaces the array with one scalar type and is normalized recursively with the remaining constraints. Keep `title` and `description` on the outer union. Retain `properties`/`required`/`additionalProperties` only on object branches, `items`/`prefixItems` only on array branches, and `format` only on string/number/integer branches. The input array MUST be nonempty and contain distinct valid JSON Schema type names. For example, `{ "type": ["string", "null"] }` becomes `{ "anyOf": [{ "type": "string" }, { "type": "null" }] }`.
+7. When lowering a producer's array-valued `type`, expand it into `anyOf` in the original order. Each branch replaces the array with one scalar type and is normalized recursively with the remaining constraints. Keep `title`, `description`, and extension keys on the outer union. Retain `properties`/`required`/`additionalProperties` only on object branches, `items`/`prefixItems` only on array branches, and `format` only on string/number/integer branches. The input array MUST be nonempty and contain distinct valid JSON Schema type names. For example, `{ "type": ["string", "null"] }` becomes `{ "anyOf": [{ "type": "string" }, { "type": "null" }] }`.
 
 > **Rationale.** The subset trades JSON Schema's full expressivity for interoperable structural checks and a stable, language-independent canonical form — both prerequisites for the interface hash (§4) and for schema-compatibility checks across versions.
 
@@ -336,7 +336,7 @@ Guardedness is a well-formedness condition, not a non-emptiness or productivity 
 
 The **interface hash** is the content identity of an interface schema. It is computed as:
 
-1. **Canonical document.** Take the finite schema document with each `JsonSchema` normalized (§3.1), recursively remove every `comment` field, every specification-extension field (any key beginning with `x-`, §4.1), and, at the top level, the `hash` field itself, and remove members whose value is `undefined`. (No other field is removed; `description` and `annotations` remain.) Hash the component definitions and their `$ref` strings as written; do not unfold references.
+1. **Canonical document.** Take the finite schema document with each `JsonSchema` normalized (§3.1, dropping its extension keys in step 1), recursively remove every `comment` field, every specification-extension field (any key beginning with `x-`, §4.1), and, at the top level, the `hash` field itself, and remove members whose value is `undefined`. (No other field is removed; `description` and `annotations` remain.) Hash the component definitions and their `$ref` strings as written; do not unfold references.
 2. **Canonicalize.** Serialize the canonical document with [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) (JCS).
 3. **Hash.** Compute SHA-256 ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) over the UTF-8 bytes of the JCS output.
 4. **Truncate.** Take the first 8 bytes of the digest and render them as 16 lowercase hexadecimal characters. This string is the hash.

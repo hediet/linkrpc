@@ -2,7 +2,8 @@ import type { LinkRpcJsonSchema, DiscriminatorSchema } from "./linkRpcJsonSchema
 
 /**
  * Keys that describe structural shape and are part of the decidable subset.
- * Everything else gets stripped during normalization.
+ * Everything else, except specification extensions (`x-…`), gets stripped
+ * during normalization.
  *
  * Note: `not` is intentionally NOT in this list. The special case `{"not":{}}`
  * (i.e. matches-nothing) is mapped to the literal `false` bottom; any other
@@ -18,14 +19,27 @@ const KEPT_KEYS = new Set([
     "title", "description",
 ]);
 
+export interface NormalizeJsonSchemaOptions {
+    /**
+     * Keep specification-extension keys (`x-…`, spec §4.1) on schema nodes,
+     * copied verbatim. Defaults to `true`. The interface hash normalizes with
+     * `false`, so extensions never affect identity and a node that carries only
+     * extensions hashes like `true`.
+     */
+    readonly keepExtensions?: boolean;
+}
+
 /**
  * Normalize raw JSON Schema output (e.g. from `z.toJSONSchema`) into the
  * SvcJsonSchema subset:
  *
+ *  - keep specification-extension keys (`x-…`) verbatim: they are
+ *    non-normative, but consumers (codegen, consent UIs) read them
  *  - drop annotation keys (`examples`, `default`, `$comment`, `readOnly`, ...)
  *  - drop out-of-subset refinements (`pattern`, `minimum`, `multipleOf`,
  *    `allOf`, `oneOf`, `if/then/else`, `patternProperties`, ...)
- *  - empty schema `{}` ⇒ `true` (top)
+ *  - empty schema `{}` ⇒ `true` (top); a schema with only `x-…` keys is
+ *    kept as is
  *  - `{"not":{}}` ⇒ `false` (bottom); any other `not` is stripped
  *  - `type:"object"` without `additionalProperties` ⇒ closed (`false`),
  *    matching linkrpc's stricter contract
@@ -34,7 +48,14 @@ const KEPT_KEYS = new Set([
  * The output is canonical: structurally equal inputs produce structurally
  * equal outputs, which is what `computeInterfaceHash` relies on.
  */
-export function normalizeJsonSchema(raw: unknown): LinkRpcJsonSchema {
+export function normalizeJsonSchema(
+    raw: unknown,
+    options: NormalizeJsonSchemaOptions = {},
+): LinkRpcJsonSchema {
+    return _normalize(raw, options.keepExtensions ?? true);
+}
+
+function _normalize(raw: unknown, keepExtensions: boolean): LinkRpcJsonSchema {
     if (raw === true || raw === false) return raw;
     if (raw === null || typeof raw !== "object") {
         throw new Error(`normalizeJsonSchema: expected object, got ${typeof raw}`);
@@ -54,9 +75,16 @@ export function normalizeJsonSchema(raw: unknown): LinkRpcJsonSchema {
             || types.some(type => !["null", "boolean", "number", "integer", "string", "array", "object"].includes(type))) {
             throw new Error("normalizeJsonSchema: type array must contain distinct JSON Schema type names");
         }
-        const { title, description, ...branch } = r;
-        return normalizeJsonSchema({
+        const { title, description, ...rest } = r;
+        const extensions: Record<string, unknown> = {};
+        const branch: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(rest)) {
+            if (isExtensionKey(k)) extensions[k] = v;
+            else branch[k] = v;
+        }
+        return _normalize({
             title, description,
+            ...extensions,
             anyOf: types.map(type => {
                 const schema: Record<string, unknown> = { ...branch, type };
                 if (type !== "object") {
@@ -71,13 +99,17 @@ export function normalizeJsonSchema(raw: unknown): LinkRpcJsonSchema {
                 if (type !== "string" && type !== "number" && type !== "integer") delete schema.format;
                 return schema;
             }),
-        });
+        }, keepExtensions);
     }
 
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(r)) {
+        if (isExtensionKey(k)) {
+            if (keepExtensions && v !== undefined) out[k] = cloneJson(v);
+            continue;
+        }
         if (!KEPT_KEYS.has(k)) continue;
-        const normalized = normalizeChild(k, v);
+        const normalized = normalizeChild(k, v, keepExtensions);
         if (normalized === undefined) continue;
         out[k] = normalized;
     }
@@ -110,26 +142,26 @@ export function normalizeJsonSchema(raw: unknown): LinkRpcJsonSchema {
     return out as unknown as LinkRpcJsonSchema;
 }
 
-function normalizeChild(key: string, v: unknown): unknown {
+function normalizeChild(key: string, v: unknown, keepExtensions: boolean): unknown {
     switch (key) {
         case "properties": {
             if (!isPlainObject(v)) return {};
             const out: Record<string, LinkRpcJsonSchema> = {};
             for (const [pk, pv] of Object.entries(v)) {
-                out[pk] = normalizeJsonSchema(pv);
+                out[pk] = _normalize(pv, keepExtensions);
             }
             return out;
         }
         case "items":
         case "additionalProperties": {
             if (v === false) return false;
-            return normalizeJsonSchema(v);
+            return _normalize(v, keepExtensions);
         }
         case "prefixItems":
         case "anyOf":
         case "oneOf": {
             if (!Array.isArray(v)) return [];
-            return v.map((s) => normalizeJsonSchema(s));
+            return v.map((s) => _normalize(s, keepExtensions));
         }
         case "discriminator": {
             // Only `propertyName` is part of the subset. OpenAPI's `mapping`
@@ -151,6 +183,24 @@ function normalizeChild(key: string, v: unknown): unknown {
         default:
             return v;
     }
+}
+
+/** Specification-extension key (spec §4.1); same prefix as `EXTENSION_PREFIX` in `hash.ts`. */
+function isExtensionKey(key: string): boolean {
+    return key.startsWith("x-");
+}
+
+/** Extension values are opaque JSON: copy them without normalizing. */
+function cloneJson(v: unknown): unknown {
+    if (Array.isArray(v)) return v.map(cloneJson);
+    if (isPlainObject(v)) {
+        const out: Record<string, unknown> = {};
+        for (const [k, child] of Object.entries(v)) {
+            if (child !== undefined) out[k] = cloneJson(child);
+        }
+        return out;
+    }
+    return v;
 }
 
 function isEmptyObject(v: unknown): boolean {
