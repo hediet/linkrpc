@@ -3,6 +3,7 @@ import { z } from "zod";
 import { defineInterface } from "../connection/interfaceDefinition";
 import { notificationType, requestType } from "./memberTypes";
 import { computeInterfaceHash, EXTENSION_PREFIX } from "./hash";
+import { normalizeJsonSchema } from "./normalize";
 import type { LinkRpcInterfaceSchema } from "./linkRpcInterfaceSchema";
 import { topologyInterface } from "../inspection/inspection.interfaces";
 
@@ -353,6 +354,38 @@ describe("specification extensions (x-*): rich single document, simple identity"
             plainTrue.methods.op.params = true;
             expect(computeInterfaceHash(extensionOnly)).toBe(computeInterfaceHash(plainTrue));
         });
+
+        it("hashes a normalized document that kept schema x- keys like the plain one", () => {
+            const withExtensions = structuredClone(normalized);
+            withExtensions.methods.op.params = normalizeJsonSchema({
+                type: "object",
+                properties: {
+                    b: { type: "string", "x-json-schema": { contentMediaType: "text/javascript" } },
+                    a: { type: "integer", "x-resource": { kind: "repository" } },
+                },
+                required: ["b", "a"],
+                "x-resource": { kind: "repository" },
+            });
+            withExtensions.methods.op.serverStream = normalizeJsonSchema({ "x-only": "extension" });
+            expect(withExtensions.methods.op.serverStream).toEqual({ "x-only": "extension" });
+            expect(computeInterfaceHash(withExtensions)).toBe(computeInterfaceHash(normalized));
+        });
+    });
+
+    it("zod .meta() x- keys survive into the document without changing the hash", () => {
+        const plain = defineInterface({ id: "test.meta" }, {
+            run: requestType(z.object({ code: z.string(), repo: z.string() }), z.void()),
+        });
+        const annotated = defineInterface({ id: "test.meta" }, {
+            run: requestType(z.object({
+                code: z.string().meta({ "x-json-schema": { contentMediaType: "text/javascript" } }),
+                repo: z.string().meta({ "x-resource": { kind: "repository" } }),
+            }), z.void()),
+        });
+        const params = annotated.toSchema().methods.run.params as { properties: Record<string, unknown> };
+        expect(params.properties.code).toEqual({ type: "string", "x-json-schema": { contentMediaType: "text/javascript" } });
+        expect(params.properties.repo).toEqual({ type: "string", "x-resource": { kind: "repository" } });
+        expect(annotated.schemaHash).toBe(plain.schemaHash);
     });
 
     it("editing only an x-* value never changes the hash", () => {

@@ -406,3 +406,93 @@ describe("zodToSvcJsonSchema (post-normalization)", () => {
         `);
     });
 });
+
+describe("normalizeJsonSchema specification extensions (x-…)", () => {
+    it("keeps x- keys verbatim without normalizing their values", () => {
+        const raw = {
+            type: "string",
+            minLength: 1,
+            "x-json-schema": { contentMediaType: "text/javascript", type: ["string", "null"], minLength: 1 },
+            "x-resource": { kind: "repository" },
+        };
+        const normalized = normalizeJsonSchema(raw);
+        expect(normalized).toEqual({
+            type: "string",
+            "x-json-schema": { contentMediaType: "text/javascript", type: ["string", "null"], minLength: 1 },
+            "x-resource": { kind: "repository" },
+        });
+        // Deep copy: later edits of the producer's object do not leak into the document.
+        raw["x-resource"].kind = "changed";
+        expect((normalized as unknown as Record<string, unknown>)["x-resource"]).toEqual({ kind: "repository" });
+        expect(normalizeJsonSchema(normalized)).toEqual(normalized);
+    });
+
+    it("keeps x- keys on nested schemas", () => {
+        expect(normalizeJsonSchema({
+            type: "object",
+            properties: {
+                code: { type: "string", "x-json-schema": { contentMediaType: "text/javascript" } },
+                tags: { type: "array", items: { type: "string", "x-resource": { kind: "label" } } },
+                target: { anyOf: [{ type: "string", "x-a": 1 }, { type: "null" }], "x-b": [true] },
+            },
+            required: ["code"],
+            "x-resource": { kind: "repository" },
+        })).toEqual({
+            type: "object",
+            properties: {
+                code: { type: "string", "x-json-schema": { contentMediaType: "text/javascript" } },
+                tags: { type: "array", items: { type: "string", "x-resource": { kind: "label" } } },
+                target: { anyOf: [{ type: "string", "x-a": 1 }, { type: "null" }], "x-b": [true] },
+            },
+            required: ["code"],
+            additionalProperties: false,
+            "x-resource": { kind: "repository" },
+        });
+    });
+
+    it("keeps x- keys on the outer union when lowering type arrays", () => {
+        expect(normalizeJsonSchema({
+            type: ["string", "null"],
+            title: "Path",
+            "x-resource": { kind: "file" },
+        })).toEqual({
+            title: "Path",
+            "x-resource": { kind: "file" },
+            anyOf: [{ type: "string" }, { type: "null" }],
+        });
+    });
+
+    it("keeps an extension-only schema instead of collapsing it to true", () => {
+        expect(normalizeJsonSchema({ "x-foo": 1, default: 2 })).toEqual({ "x-foo": 1 });
+        expect(normalizeJsonSchema({ "x-foo": 1 }, { keepExtensions: false })).toBe(true);
+    });
+
+    it("drops x- keys at every schema level with keepExtensions: false", () => {
+        expect(normalizeJsonSchema({
+            type: ["object", "null"],
+            "x-outer": 1,
+            properties: { a: { type: "string", "x-inner": 2 } },
+        }, { keepExtensions: false })).toEqual({
+            anyOf: [
+                { type: "object", properties: { a: { type: "string" } }, additionalProperties: false },
+                { type: "null" },
+            ],
+        });
+    });
+
+    it("keeps x- metadata from zod .meta()", () => {
+        const schema = z.object({
+            code: z.string().meta({ "x-json-schema": { contentMediaType: "text/javascript" } }),
+            repo: z.string().meta({ "x-resource": { kind: "repository" } }),
+        });
+        expect(zodToSvcJsonSchema(schema)).toEqual({
+            type: "object",
+            properties: {
+                code: { type: "string", "x-json-schema": { contentMediaType: "text/javascript" } },
+                repo: { type: "string", "x-resource": { kind: "repository" } },
+            },
+            required: ["code", "repo"],
+            additionalProperties: false,
+        });
+    });
+});

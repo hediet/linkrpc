@@ -6,7 +6,7 @@
 //! un-normalized material without changing identity:
 //!   1. **Normalize** every JSON-Schema position — each method's `params`,
 //!      `result`, `clientStream`, `serverStream`, error `data` / `schema`, and every entry under
-//!      `components.schemas` — through [`normalize_json_schema`]. This collapses
+//!      `components.schemas` — through [`normalize_json_schema_without_extensions`]. This collapses
 //!      a raw schema onto the decidable linkrpc subset: incidental keys are
 //!      dropped, object closure is defaulted, `required` is sorted, `{}` becomes
 //!      `true`, `{x-only: …}` becomes `true`, etc. Two documents that differ only
@@ -29,7 +29,7 @@
 use crate::protocol::jcs::jcs_canonicalize_bytes;
 use crate::protocol::json_value::{JsonMap, JsonValue};
 use crate::schema::interface_schema::LinkRpcInterfaceSchema;
-use crate::schema::normalize::normalize_json_schema;
+use crate::schema::normalize::normalize_json_schema_without_extensions;
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
 
@@ -66,7 +66,9 @@ pub fn compute_interface_hash(schema: &LinkRpcInterfaceSchema) -> String {
 }
 
 /// Project the interface's JSON-Schema positions onto the decidable linkrpc
-/// subset via [`normalize_json_schema`], leaving all non-schema material intact.
+/// subset via [`normalize_json_schema_without_extensions`] (schema-level `x-…`
+/// keys are dropped before the `{}` ⇒ `true` collapse), leaving all non-schema
+/// material intact.
 ///
 /// The normalized positions are exactly the schema-bearing fields of the
 /// interface contract: each method's `params` / `result` / `clientStream` /
@@ -92,7 +94,7 @@ fn normalize_schema_positions(schema: &JsonValue) -> JsonValue {
                 .iter()
                 .filter_map(|field| {
                     let value = method.get(*field)?;
-                    let normalized = normalize_json_schema(value).ok()?;
+                    let normalized = normalize_json_schema_without_extensions(value).ok()?;
                     Some(((*field).to_string(), normalized))
                 })
                 .collect();
@@ -103,7 +105,8 @@ fn normalize_schema_positions(schema: &JsonValue) -> JsonValue {
                 for error in errors {
                     for field in ["data", "schema"] {
                         if let Some(schema) = error.get_mut(field) {
-                            if let Ok(normalized) = normalize_json_schema(schema) {
+                            if let Ok(normalized) = normalize_json_schema_without_extensions(schema)
+                            {
                                 *schema = normalized;
                             }
                         }
@@ -120,7 +123,7 @@ fn normalize_schema_positions(schema: &JsonValue) -> JsonValue {
         .and_then(JsonValue::as_object_mut)
     {
         for schema in schemas.values_mut() {
-            if let Ok(normalized) = normalize_json_schema(schema) {
+            if let Ok(normalized) = normalize_json_schema_without_extensions(schema) {
                 *schema = normalized;
             }
         }

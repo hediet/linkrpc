@@ -124,11 +124,13 @@ function isPlainObject(v) {
 // method's params/result/clientStream/serverStream and every components.schemas
 // entry) onto the decidable subset before stripping + hashing. Un-normalized
 // schema spelling and schema-level `x-…` extensions therefore never change the
-// hash; already-normalized schemas are a fixed point. Best-effort: a position
-// that cannot be normalized is left untouched.
+// hash; already-normalized schemas are a fixed point. The hash projection drops
+// schema-level `x-…` keys during normalization, so an extension-only schema
+// hashes like `true`. Best-effort: a position that cannot be normalized is left
+// untouched.
 function normalizeForHash(v) {
   try {
-    return normalizeJsonSchema(v);
+    return normalizeJsonSchema(v, { keepExtensions: false });
   } catch {
     return v;
   }
@@ -462,6 +464,22 @@ const normalizeFixtures = [
   },
   { name: "ref-passthrough", raw: { $ref: "#/components/schemas/Foo", description: "kept" } },
   { name: "tuple-prefixitems", raw: { type: "array", prefixItems: [{ type: "string" }, { type: "integer" }] } },
+  // Specification extensions (`x-…`) are kept verbatim on every schema node;
+  // their values are opaque and not normalized. Only the hash drops them.
+  {
+    name: "keeps-extension-keys",
+    raw: {
+      type: "object",
+      properties: {
+        code: { type: "string", minLength: 1, "x-json-schema": { contentMediaType: "text/javascript", type: ["string"] } },
+        tags: { type: "array", items: { type: "string", "x-resource": { kind: "label" } } },
+      },
+      required: ["code"],
+      "x-resource": { kind: "repository" },
+    },
+  },
+  { name: "type-array-keeps-extensions-on-union", raw: { type: ["string", "null"], title: "Path", "x-resource": { kind: "file" } } },
+  { name: "extension-only-kept", raw: { "x-only": "extension", default: 1 } },
 ];
 write(
   "normalize.json",

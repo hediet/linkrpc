@@ -378,5 +378,105 @@
         }
       ]
     }
+  },
+  {
+    "name": "keeps-extension-keys",
+    "raw": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "x-json-schema": {
+            "contentMediaType": "text/javascript",
+            "type": [
+              "string"
+            ]
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "x-resource": {
+              "kind": "label"
+            }
+          }
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "x-resource": {
+        "kind": "repository"
+      }
+    },
+    "normalized": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "x-json-schema": {
+            "contentMediaType": "text/javascript",
+            "type": [
+              "string"
+            ]
+          }
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "x-resource": {
+              "kind": "label"
+            }
+          }
+        }
+      },
+      "required": [
+        "code"
+      ],
+      "x-resource": {
+        "kind": "repository"
+      },
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "type-array-keeps-extensions-on-union",
+    "raw": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "title": "Path",
+      "x-resource": {
+        "kind": "file"
+      }
+    },
+    "normalized": {
+      "title": "Path",
+      "x-resource": {
+        "kind": "file"
+      },
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  {
+    "name": "extension-only-kept",
+    "raw": {
+      "x-only": "extension",
+      "default": 1
+    },
+    "normalized": {
+      "x-only": "extension"
+    }
   }
 ]

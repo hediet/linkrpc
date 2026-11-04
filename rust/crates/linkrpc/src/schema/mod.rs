@@ -24,7 +24,9 @@ pub use interface_schema::{
     Components, ErrorSchema, InterfaceSchemaError, LinkRpcInterfaceSchema, MemberAnnotations,
     MethodMap, MethodSchema,
 };
-pub use normalize::{normalize_json_schema, NormalizeError, KEPT_KEYS};
+pub use normalize::{
+    normalize_json_schema, normalize_json_schema_without_extensions, NormalizeError, KEPT_KEYS,
+};
 pub use schemars_subset::{
     schemars_to_subset, schemars_to_subset_with_components, InterfaceSchemaCollector,
     SchemarsSubsetError,

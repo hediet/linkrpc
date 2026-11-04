@@ -713,13 +713,19 @@ function _numberExpr(format: string | undefined): string {
 interface SchemaMeta {
     title?: string;
     description?: string;
+    /** Specification-extension (`x-…`) entries, emitted verbatim into `.meta()`. */
+    extensions?: [string, unknown][];
 }
 
 function _metaOf(s: Record<string, unknown>): SchemaMeta | undefined {
     const meta: SchemaMeta = {};
     if (typeof s['description'] === 'string') meta.description = s['description'];
     if (typeof s['title'] === 'string') meta.title = s['title'];
-    return meta.description === undefined && meta.title === undefined ? undefined : meta;
+    const extensions = Object.entries(s).filter(([key, value]) => key.startsWith('x-') && value !== undefined);
+    if (extensions.length > 0) meta.extensions = extensions;
+    return meta.description === undefined && meta.title === undefined && meta.extensions === undefined
+        ? undefined
+        : meta;
 }
 
 /** Wrap a single-line zod expression with `.describe()` / `.meta()`. */
@@ -730,13 +736,14 @@ function _writeMetaWrapped(w: CodeWriter, expr: string, meta: SchemaMeta | undef
 
 function _writeMetaSuffix(w: CodeWriter, meta: SchemaMeta | undefined): void {
     if (meta === undefined) return;
-    if (meta.title === undefined && meta.description !== undefined) {
+    if (meta.title === undefined && meta.extensions === undefined && meta.description !== undefined) {
         w.append(`.describe(${JSON.stringify(meta.description)})`);
         return;
     }
     const entries: string[] = [];
     if (meta.title !== undefined) entries.push(`title: ${JSON.stringify(meta.title)}`);
     if (meta.description !== undefined) entries.push(`description: ${JSON.stringify(meta.description)}`);
+    for (const [key, value] of meta.extensions ?? []) entries.push(`${JSON.stringify(key)}: ${JSON.stringify(value)}`);
     w.append(`.meta({ ${entries.join(', ')} })`);
 }
 

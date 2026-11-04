@@ -433,6 +433,22 @@ client.read({}).then((value) => {
         expect(() => generateTsInterface(schema, { preserveWireSchema })).toThrow("unsupported schema");
     });
 
+    it("round-trips schema x- extensions through .meta()", async () => {
+        const definition = defineInterface({ id: "test.extensions" }, {
+            run: requestType(
+                z.object({
+                    code: z.string().meta({ "x-json-schema": { contentMediaType: "text/javascript" } }),
+                    repo: z.string().describe("Repository").meta({ "x-resource": { kind: "repository" } }),
+                }).meta({ "x-note": [1, "two"] }),
+                z.void(),
+            ),
+        });
+        const source = generateTsInterface(definition.toSchema());
+        expect(source).toContain('z.string().meta({ "x-json-schema": {"contentMediaType":"text/javascript"} })');
+        expect(source).toContain('z.string().meta({ description: "Repository", "x-resource": {"kind":"repository"} })');
+        await _roundTrip(definition);
+    });
+
     it("round-trips defaultsInterface", async () => {
         await _roundTrip(defaultsInterface);
     });
