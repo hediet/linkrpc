@@ -146,6 +146,8 @@ class HttpExportGateway {
         for (const socket of this._sockets) {
             socket.destroy();
         }
+        // An approval granted just before a restart must survive it.
+        await this._approval?.flush();
     }
 
     private async _handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {

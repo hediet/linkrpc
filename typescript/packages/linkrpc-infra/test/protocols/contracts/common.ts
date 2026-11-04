@@ -95,7 +95,7 @@ export function componentClosure(
         if ("anyOf" in value) value.anyOf.forEach(visit);
         if ("oneOf" in value) value.oneOf.forEach(visit);
         if ("type" in value && value.type === "object") {
-            Object.values(value.properties).forEach(visit);
+            Object.values(value.properties ?? {}).forEach(visit);
             if (value.additionalProperties !== false) visit(value.additionalProperties);
         }
         if ("type" in value && value.type === "array") {

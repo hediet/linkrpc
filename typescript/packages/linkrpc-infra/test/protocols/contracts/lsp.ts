@@ -193,7 +193,7 @@ function structureSchema(
                     nextSeen,
                 );
                 if (inherited !== true && inherited !== false && "properties" in inherited) {
-                    for (const [propertyName, propertySchema] of Object.entries(inherited.properties)) {
+                    for (const [propertyName, propertySchema] of Object.entries(inherited.properties ?? {})) {
                         mergeProperty(
                             properties,
                             propertyName,

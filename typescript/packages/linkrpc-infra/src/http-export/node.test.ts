@@ -193,7 +193,8 @@ describe('http export', () => {
                 return new Promise<BrowserAccessResult>(resolve => { approve = resolve; });
             },
         };
-        const gatewayPort = await startGateway({ approval }, callers);
+        const gateway = await startClosableGateway({ approval }, callers);
+        const gatewayPort = gateway.port;
         const site = `${targetPort}.test--compute.localhost:${gatewayPort}`;
         const navigate = { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
         const fetchHeaders = { 'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors', 'sec-fetch-dest': 'empty' };
@@ -221,6 +222,7 @@ describe('http export', () => {
         const replayed = await send(gatewayPort, { host: handoff.host, path: `${handoff.pathname}${handoff.search}`, headers: { ...navigate, cookie: stateCookie } });
         const sessionId = callers.at(-1);
 
+        await gateway.close();
         const restartedPort = await startGateway({ approval: { ...approval, requestAccess: async () => ({ status: 'denied' }) } }, callers);
         const afterRestart = await send(restartedPort, { host: `${targetPort}.test--compute.localhost:${restartedPort}`, path: '/again', headers: { ...navigate, cookie: siteCookie } });
 
@@ -262,7 +264,7 @@ describe('http export', () => {
         const grants = ['test/other', 'test'];
         const stateFile = join(mkdtempSync(join(tmpdir(), 'http-export-approval-')), 'sessions.json');
         cleanups.push(() => rmSync(dirname(stateFile), { recursive: true, force: true }));
-        const gatewayPort = await startGateway({
+        const gateway = await startClosableGateway({
             approval: {
                 gatewayName: 'test-machine',
                 stateFile,
@@ -274,6 +276,7 @@ describe('http export', () => {
                 },
             },
         });
+        const gatewayPort = gateway.port;
         const navigate = { 'sec-fetch-site': 'none', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' };
         const site = `${targetPort}.test--compute.localhost:${gatewayPort}`;
         const loginPath = new URL((await send(gatewayPort, { host: site, path: '/', headers: navigate })).headers.location!);
@@ -291,6 +294,7 @@ describe('http export', () => {
         const approved = await openLogin(secondSession);
 
         // A session from an older gateway asked for a narrower scope than this target needs: it asks again by itself.
+        await gateway.close();
         const state = JSON.parse(readFileSync(stateFile, 'utf8'));
         state.sessions[0].requestedScope = 'test/other';
         state.sessions[0].capabilities = [fakeCapability(state.sessions[0].capabilities[0].audience, 'test/other')];
@@ -345,6 +349,11 @@ async function startTarget(handler: Parameters<typeof createServer>[1]): Promise
 }
 
 async function startGateway(overrides: Partial<HttpExportOptions> = {}, callers: (string | undefined)[] = []): Promise<number> {
+    return (await startClosableGateway(overrides, callers)).port;
+}
+
+/** Like {@link startGateway}; `close` stops it as a restart would, before the next gateway reads its state. */
+async function startClosableGateway(overrides: Partial<HttpExportOptions> = {}, callers: (string | undefined)[] = []): Promise<{ port: number; close(): Promise<void> }> {
     const pair = new TransportPair();
     const node = LinkRpcConnection.fromTransport(pair.a);
     const client = LinkRpcConnection.fromTransport(pair.b);
@@ -365,7 +374,7 @@ async function startGateway(overrides: Partial<HttpExportOptions> = {}, callers:
         ...overrides,
     });
     cleanups.push(() => gateway.close());
-    return Number(new URL(gateway.urls[0]).port);
+    return { port: Number(new URL(gateway.urls[0]).port), close: () => gateway.close() };
 }
 
 function cookiePair(setCookie: readonly string[] | undefined, name: string): string {
