@@ -1,5 +1,7 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ErrorCode, LinkRpcConnection, RpcError, defineInterface, directoryInterface, requestType } from '@hediet/linkrpc';
 import { hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
@@ -425,6 +427,37 @@ describe('hostParticipant', () => {
             expect(cleaned).toBe(1);
         } finally {
             hub.dispose();
+        }
+    });
+
+    it('passes the managed principal to setup', async () => {
+        const path = socketPath();
+        const config = HubConfigSchema.parse({
+            forwardChecking: false,
+            listeners: [{
+                type: 'socket',
+                path,
+                handlers: [{ token: 'static', value: 'host-test-token', grantedServiceId: 'host-test', managedIdentity: { slot: 'host-test' } }],
+            }],
+        });
+        const identityStoreDir = await mkdtemp(join(tmpdir(), 'participant-host-'));
+        const hub = await runHub({ config, log: () => { }, identityStoreDir });
+        try {
+            const principals: (string | undefined)[] = [];
+            for (const managedIdentity of [false, { autoNegotiateCaps: true }] as const) {
+                const host = await hostParticipant({
+                    endpoint: { endpoint: path, token: 'host-test-token' },
+                    registrationMode: 'root',
+                    managedIdentity,
+                    setup: ({ principal }) => { principals.push(principal?.id); },
+                });
+                await host.dispose();
+            }
+            expect(principals[0]).toBeUndefined();
+            expect(principals[1]).toMatch(/^id:key:/);
+        } finally {
+            hub.dispose();
+            await rm(identityStoreDir, { recursive: true, force: true });
         }
     });
 
