@@ -115,7 +115,7 @@ function injectIntoParams(
         return injectIntoParams(components[name], components, methodName, nextResolving);
     }
     if ('type' in schema && schema.type === 'object') {
-        if (jsonRpcConnectionIdParameter in schema.properties) {
+        if (schema.properties !== undefined && jsonRpcConnectionIdParameter in schema.properties) {
             throw new Error(
                 `JSON-RPC bridge interface '${methodName}' already defines reserved parameter '${jsonRpcConnectionIdParameter}'`,
             );
