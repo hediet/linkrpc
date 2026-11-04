@@ -52,6 +52,13 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
     if (requestCap && opts.signingSession === undefined) {
         throw new Error('Capability requests require a signed LinkRPC connection.');
     }
+    const once = requestCap && opts.duration === 'once';
+    if (once && opts.capabilityOnly) {
+        throw new Error('A once capability is bound to one call; use `call --cap:request --cap:duration once`.');
+    }
+    if (once && (opts.allowParams !== undefined || opts.delegate === true)) {
+        throw new Error('--cap:duration once cannot be combined with --cap:allow-param or --cap:delegate.');
+    }
     const onStreamChunk = opts.onStreamChunk ?? writeChunkToStderr;
     try {
         const validation = requestCap ? 'required' : opts.noValidate ? 'off' : (opts.validation ?? 'required');
@@ -60,8 +67,12 @@ export async function callCommand(channel: CliChannel, opts: CallCommandOptions)
             if (schema === undefined || opts.signingSession === undefined) {
                 throw new Error('Capability requests require a method schema and signing session.');
             }
-            const result = await requestCallCapability(channel, opts.signingSession, ref, params, schema, opts);
-            if (opts.capabilityOnly) return result;
+            if (once) {
+                opts.signingSession.requestOnceForNextCall(ref.getMethodOnWire());
+            } else {
+                const result = await requestCallCapability(channel, opts.signingSession, ref, params, schema, opts);
+                if (opts.capabilityOnly) return result;
+            }
         }
         // Always use the streaming send path: it behaves identically to a plain
         // request when no stream messages arrive, and surfaces them live when

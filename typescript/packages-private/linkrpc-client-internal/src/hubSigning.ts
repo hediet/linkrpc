@@ -62,6 +62,14 @@ export interface SigningSession {
      * automatically. Use this instead of relying on per-call auto-negotiation.
      */
     requestAccess(req: HubAccessRequest): Promise<HubAccessResult>;
+    /**
+     * Negotiate a one-shot (`once`) capability for the next signed call to
+     * `wireMethod` (form-3 `service::interface::member`), even when per-call
+     * auto-negotiation is disabled. The grant is bound to that call's exact
+     * params, nonce, and timestamp, so it authorizes that call only. Calls the
+     * existing durable grants already cover negotiate nothing.
+     */
+    requestOnceForNextCall(wireMethod: string): void;
 }
 
 /**
@@ -108,6 +116,7 @@ export async function setupSigning(
     // needed to reach the consent front door.
     const hubAccessMethod = `${hubAccessInterface.info.id}::requestAccess`;
     const consumerPrincipalId = principal.id;
+    const onceMethods = new Set<string>();
 
     if (opts.negotiateHubCaps) {
         // The principal may itself be a capability root of the hub (its
@@ -135,14 +144,15 @@ export async function setupSigning(
             if (!call) return present;
             if (call.serviceId === '' || call.interfaceId === hubAccessInterface.info.id) return present;
             const request: AccessCallRequest = { call, method, params, nonce, signedAtMs, interfaceHash };
+            const requestedOnce = onceMethods.delete(method);
             if (await _capBagCovers(presentCaps, consumerPrincipalId, request)) return present;
 
             // Per-call auto-negotiation is opt-out. When disabled, never trigger
             // a `requestAccess` round-trip behind a call — just present whatever
             // is already in the bag and let the call surface `permissionRequired`
             // if it is gated. The consumer is expected to call
-            // `SigningSession.requestAccess` ahead of time.
-            if (opts.autoNegotiatePerCall === false) return present;
+            // `SigningSession.requestAccess` (or `requestOnceForNextCall`) ahead of time.
+            if (opts.autoNegotiatePerCall === false && !requestedOnce) return present;
 
             try {
                 const granted = await _requestAccessForCall(channel, hubAccessMethod, consumerPrincipalId, request);
@@ -175,6 +185,15 @@ export async function setupSigning(
         hubAccessMethod,
         listGrants: () => principal.capBag.capabilities,
         requestAccess: (req) => _sessionRequestAccess(channel, hubAccessMethod, principal, req),
+        requestOnceForNextCall: (wireMethod) => {
+            if (!opts.negotiateHubCaps) {
+                throw new Error('One-shot capabilities require a hub endpoint.');
+            }
+            if (_wireMethodToCall(wireMethod) === undefined) {
+                throw new Error(`One-shot capabilities require a fully qualified service::interface::method, got "${wireMethod}".`);
+            }
+            onceMethods.add(wireMethod);
+        },
     };
 }
 

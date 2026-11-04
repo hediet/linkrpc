@@ -70,6 +70,75 @@ describe('sign-time delegated capability cache', () => {
     });
 });
 
+describe('one-shot capability for the next call', () => {
+    async function onceFixture(negotiateHubCaps = true) {
+        const consumer = await createSeededMemoryPrincipal({ seed: 850 });
+        const resolve = vi.spyOn(principalResolution, 'resolvePrincipal').mockResolvedValue({
+            principal: consumer,
+            source: { kind: 'user', id: 'test' },
+        });
+        onTestFinished(() => resolve.mockRestore());
+        const sendRequest = vi.fn<IRequestSender<SigningCallCtx>['sendRequest']>()
+            .mockResolvedValue({ status: 'denied' });
+        const channel: IRequestSender<SigningCallCtx> = {
+            sendRequest,
+            sendNotification: async () => {},
+            sendRequestWithStream: () => { throw new Error('unexpected stream'); },
+            close: () => {},
+        };
+        const signing: CliSigning = {};
+        const session = await setupSigning(channel, signing, { kind: 'user', id: 'test' }, {
+            negotiateHubCaps,
+            autoNegotiatePerCall: false,
+        });
+        const sign = (method: string, nonce: string) => signing.capProvider!({
+            method, signer: consumer.id, params: { path: '/a' }, nonce, signedAtMs: 1000,
+        });
+        return { session, sendRequest, sign };
+    }
+
+    it('negotiates a once grant bound to exactly the next call of the armed method', async () => {
+        const f = await onceFixture();
+        f.session.requestOnceForNextCall('files::test.files::read');
+        await f.sign('files::hubrpc.schemas::get', 'schema-lookup');
+        await f.sign('files::test.files::read', 'armed');
+        await f.sign('files::test.files::read', 'later');
+        expect(f.sendRequest.mock.calls.map(([method, params]) => ({ method, params }))).toEqual([{
+            method: 'hubAccess::requestAccess',
+            params: {
+                consumer: {
+                    name: 'linkrpc-cli',
+                    principal: f.session.principal.id,
+                    purpose: 'Invoke files::test.files::read.',
+                },
+                permissions: [{
+                    target: {
+                        serviceId: { exact: 'files' },
+                        interfaceId: { exact: 'test.files' },
+                        members: [{ exact: 'read' }],
+                    },
+                    canInvoke: true,
+                    callIntent: {
+                        method: 'files::test.files::read',
+                        params: { path: '/a' },
+                        nonce: 'armed',
+                        signedAtMs: 1000,
+                        suggestion: 'once',
+                    },
+                }],
+                duration: 'once',
+            },
+        }]);
+    });
+
+    it('rejects methods it cannot bind and non-hub endpoints', async () => {
+        const hub = await onceFixture();
+        expect(() => hub.session.requestOnceForNextCall('test.files::read')).toThrow('fully qualified');
+        const direct = await onceFixture(false);
+        expect(() => direct.session.requestOnceForNextCall('files::test.files::read')).toThrow('hub endpoint');
+    });
+});
+
 describe('concurrent access negotiation', () => {
     it('a pending negotiation neither blocks nor strips the capabilities of another call', async () => {
         const consumer = await createSeededMemoryPrincipal({ seed: 840 });
@@ -176,6 +245,7 @@ describe('requestReflectionAccess', () => {
             hubAccessMethod: 'hubAccess::requestAccess',
             listGrants: () => capBag.capabilities,
             requestAccess,
+            requestOnceForNextCall: vi.fn(),
         };
 
         await expect(requestReflectionAccess(session)).resolves.toBe('granted');
@@ -194,6 +264,7 @@ describe('requestReflectionAccess', () => {
                 hubAccessMethod: 'hubAccess::requestAccess',
                 listGrants: () => principal.capBag.capabilities,
                 requestAccess,
+                requestOnceForNextCall: vi.fn(),
             };
 
             await expect(requestTopologyAccess(session)).resolves.toBe('granted');
@@ -231,6 +302,7 @@ describe('requestReflectionAccess', () => {
                 hubAccessMethod: 'hubAccess::requestAccess',
                 listGrants: () => principal.capBag.capabilities,
                 requestAccess,
+                requestOnceForNextCall: vi.fn(),
             };
 
             await requestTopologyAccess(session, {
@@ -269,6 +341,7 @@ describe('requestReflectionAccess', () => {
             hubAccessMethod: 'hubAccess::requestAccess',
             listGrants: () => principal.capBag.capabilities,
             requestAccess,
+            requestOnceForNextCall: vi.fn(),
         };
 
         await expect(requestReflectionAccess(session)).resolves.toBe('granted');
