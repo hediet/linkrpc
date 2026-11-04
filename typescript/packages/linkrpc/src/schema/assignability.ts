@@ -146,9 +146,12 @@ function _checkObject(
         if (!subReq.has(k)) return false;
     }
 
+    const subProps = sub.properties ?? {};
+    const supProps = sup.properties ?? {};
+
     // for each named prop in sup: sub.prop (or sub.additionalProperties) <: sup.prop
-    for (const [k, supProp] of Object.entries(sup.properties)) {
-        const subProp = sub.properties[k] ?? sub.additionalProperties;
+    for (const [k, supProp] of Object.entries(supProps)) {
+        const subProp = subProps[k] ?? sub.additionalProperties;
         if (subProp === false) {
             // sub forbids this prop; only OK if sup doesn't require it AND
             // its schema is `true` (any). Otherwise sub-values omit it but
@@ -160,8 +163,8 @@ function _checkObject(
     }
 
     // sub may have extra named props: each must be <: sup.additionalProperties
-    for (const [k, subProp] of Object.entries(sub.properties)) {
-        if (k in sup.properties) continue;
+    for (const [k, subProp] of Object.entries(subProps)) {
+        if (k in supProps) continue;
         if (sup.additionalProperties === false) return false;
         if (!_check(subProp, sup.additionalProperties, c, seen)) return false;
     }
@@ -321,8 +324,9 @@ function _matchesObject(
             valid = false;
         }
     }
+    const props = sup.properties ?? {};
     for (const [k, val] of Object.entries(v)) {
-        const s = Object.hasOwn(sup.properties, k) ? sup.properties[k] : sup.additionalProperties;
+        const s = Object.hasOwn(props, k) ? props[k] : sup.additionalProperties;
         if (!_matches(val, s, c, new Set(), issues, path + jsonPointerSegment(k))) valid = false;
     }
     return valid;

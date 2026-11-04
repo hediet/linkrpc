@@ -101,7 +101,8 @@ export interface TupleSchema extends SchemaBase {
 
 export interface ObjectSchema extends SchemaBase {
     type: "object";
-    properties: Record<string, LinkRpcJsonSchema>;
+    /** Omitted for records (e.g. zod `z.record`), whose keys are all covered by `additionalProperties`. */
+    properties?: Record<string, LinkRpcJsonSchema>;
     /** Names of required properties. Must all be keys of `properties`. */
     required?: string[];
     /** `false` => closed; schema => value type for unknown keys. */

@@ -183,12 +183,7 @@ function _walk(
 
 function _walkObject(
     value: unknown,
-    schema: {
-        type: "object";
-        properties: Record<string, SvcJsonSchema>;
-        required?: string[];
-        additionalProperties: SvcJsonSchema | false;
-    },
+    schema: Extract<SvcJsonSchema, { type: "object"; additionalProperties: unknown }>,
     path: string,
     components: Record<string, SvcJsonSchema>,
     out: ValidationIssue[],
@@ -198,16 +193,17 @@ function _walkObject(
         return;
     }
     const obj = value as Record<string, unknown>;
+    const properties = schema.properties ?? {};
     for (const req of schema.required ?? []) {
         if (!(req in obj)) {
             const p = _joinKey(path, req);
-            const propSchema = schema.properties[req];
+            const propSchema = properties[req];
             const typeHint = propSchema ? ` (${_typeHint(propSchema, components)})` : "";
             out.push({ path: p, reason: `required${typeHint}, but missing` });
         }
     }
     for (const [k, v] of Object.entries(obj)) {
-        const propSchema = schema.properties[k];
+        const propSchema = Object.hasOwn(properties, k) ? properties[k] : undefined;
         const p = _joinKey(path, k);
         if (propSchema !== undefined) {
             _walk(v, propSchema, p, components, out);

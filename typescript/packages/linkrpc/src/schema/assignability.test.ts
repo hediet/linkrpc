@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { isAssignable, matchesJsonSchema, validateJsonSchema } from "./assignability";
 import type { LinkRpcJsonSchema } from "./linkRpcJsonSchema";
 import { normalizeJsonSchema } from "./normalize";
@@ -25,6 +26,40 @@ describe("JSON schema diagnostics", () => {
         expect(validateJsonSchema(null, nullable)).toEqual([]);
         expect(matchesJsonSchema(null, nullable)).toBe(true);
         expect(validateJsonSchema(3, { description: "any JSON" } as LinkRpcJsonSchema)).toEqual([]);
+    });
+
+    it("handles records keyed by an enum, which normalize to objects without properties", () => {
+        const platforms = normalizeJsonSchema(z.toJSONSchema(
+            z.partialRecord(z.enum(["win32", "linux"]), z.strictObject({ executable: z.string() }))));
+        expect(platforms).toMatchInlineSnapshot(`
+          {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "properties": {
+                "executable": {
+                  "type": "string",
+                },
+              },
+              "required": [
+                "executable",
+              ],
+              "type": "object",
+            },
+            "type": "object",
+          }
+        `);
+        const value = { win32: { executable: "a.exe" } };
+        expect(validateJsonSchema(value, platforms)).toEqual([]);
+        expect(validateJsonSchema({ win32: { executable: 1 } }, platforms))
+            .toEqual([{ path: "/win32/executable", message: "Expected string" }]);
+        const valueSchema: LinkRpcJsonSchema = {
+            type: "object", properties: { win32: { type: "object", properties: { executable: { const: "a.exe" } },
+                required: ["executable"], additionalProperties: false } },
+            required: ["win32"], additionalProperties: false,
+        };
+        expect(isAssignable(valueSchema, platforms)).toBe(true);
+        expect(isAssignable(platforms, platforms)).toBe(true);
+        expect(isAssignable(platforms, valueSchema)).toBe(false);
     });
 
     it("does not accept unnormalized type arrays", () => {

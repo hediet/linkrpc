@@ -558,7 +558,7 @@ function resolveSchema(
 
 function isObjectSchema(
     s: SvcJsonSchema | undefined,
-): s is Extract<SvcJsonSchema, { type: "object"; properties: Record<string, SvcJsonSchema> }> {
+): s is Extract<SvcJsonSchema, { type: "object"; additionalProperties: unknown }> & { properties: Record<string, SvcJsonSchema> } {
     return !!s
         && typeof s === "object"
         && "type" in s
