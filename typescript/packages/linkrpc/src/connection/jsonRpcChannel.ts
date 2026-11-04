@@ -14,6 +14,7 @@ import {
     STREAM_METHOD,
     StreamControlType,
     StreamDir,
+    observedStreamOperation,
     type StreamSendParams,
 } from './streaming';
 import {
@@ -248,13 +249,13 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         });
         return {
             result,
-            send: (payload) => this._sendStream(id, StreamDir.toCallee, { payload }),
+            send: (payload) => observedStreamOperation(this._sendStream(id, StreamDir.toCallee, { payload })),
             cancel: (reason) =>
-                this._sendStream(id, StreamDir.toCallee, {
+                observedStreamOperation(this._sendStream(id, StreamDir.toCallee, {
                     control: reason !== undefined ?
                         { type: StreamControlType.cancel, reason } :
                         { type: StreamControlType.cancel },
-                }),
+                })),
             dispose,
             ping: pinger.ping,
         };
@@ -432,7 +433,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         // `toCaller`, so an inbound ping is answered with a `toCaller` pong.
         const pinger = this._makePinger(m.id, StreamDir.toCaller);
         const stream: IncomingStream = {
-            send: (payload) => this._sendStream(m.id, StreamDir.toCaller, { payload }),
+            send: (payload) => observedStreamOperation(this._sendStream(m.id, StreamDir.toCaller, { payload })),
             onMessage: (listener) => {
                 if (listener) this._streamListeners.set(key, listener);
                 else this._streamListeners.delete(key);
