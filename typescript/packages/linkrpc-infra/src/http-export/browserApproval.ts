@@ -126,6 +126,11 @@ export class BrowserApproval {
         return approval;
     }
 
+    /** Resolves once every change made so far has been written to the state file. */
+    flush(): Promise<void> {
+        return this._saving;
+    }
+
     /**
      * Decides how to serve a request. Browser requests without an approved session are redirected
      * to the approval page (navigations) or rejected; `handled` means a response was sent.
