@@ -65,9 +65,25 @@ export type ProvisionConfig = z.infer<z.ZodObject<typeof provisionFields>>;
  *   **intrinsic** to the token's mint binding (identity slot and/or granted
  *   namespace), so it carries no inline provision.
  */
+/**
+ * Listener-only provision: the accepted connection becomes the hub's default
+ * route (uplink). For a parent hub that connects in, e.g. through `hub proxy`.
+ */
+const listenerProvisionFields = {
+    ...provisionFields,
+    /**
+     * Route everything no other link claims to this connection, like an
+     * endpoint's `defaultRoute`. A call that arrives from the uplink and
+     * matches nothing fails instead of going back up. At most one connection
+     * holds the role; set it only on a handler that admits a single trusted
+     * peer (e.g. a `static` token).
+     */
+    defaultRoute: z.boolean().default(false),
+};
+
 export const ConnectionHandlerSchema = z.discriminatedUnion('token', [
-    z.object({ token: z.literal('anonymous'), ...provisionFields }),
-    z.object({ token: z.literal('static'), value: z.string().min(1), ...provisionFields }),
+    z.object({ token: z.literal('anonymous'), ...listenerProvisionFields }),
+    z.object({ token: z.literal('static'), value: z.string().min(1), ...listenerProvisionFields }),
     z.object({ token: z.literal('bound') }),
 ]);
 export type ConnectionHandlerConfig = z.infer<typeof ConnectionHandlerSchema>;
