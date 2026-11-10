@@ -239,6 +239,14 @@ export async function runHub(opts: RunHubOptions): Promise<RunningHub> {
 
         // Validate conflicts across both reusable connector participants and the
         // host-specific cmd-env participants before starting either category.
+        // A listener handler's default route competes with the endpoints'.
+        for (const listener of config.listeners) {
+            for (const handler of listener.handlers) {
+                if (handler.token !== 'bound' && handler.defaultRoute) {
+                    routes.setDefault(`listener ${listener.type === 'socket' ? listener.path : `${listener.host}:${listener.port}${listener.path}`}`);
+                }
+            }
+        }
         for (const { label, ep } of planned) {
             for (const serviceId of ep.routeServiceIds) routes.claim(serviceId, label);
             if (ep.defaultRoute) routes.setDefault(label);
@@ -620,9 +628,9 @@ function _buildHandlers(
     return configs.map((h) => {
         switch (h.token) {
             case 'anonymous':
-                return anonymousHandler(_provisionFromConfig(h, tokenStore, identities));
+                return anonymousHandler({ ..._provisionFromConfig(h, tokenStore, identities), defaultRoute: h.defaultRoute });
             case 'static':
-                return staticTokenHandler(h.value, _provisionFromConfig(h, tokenStore, identities));
+                return staticTokenHandler(h.value, { ..._provisionFromConfig(h, tokenStore, identities), defaultRoute: h.defaultRoute });
             case 'bound':
                 return boundTokenHandler(tokenStore, (slot) => identities.slotFor(slot));
         }

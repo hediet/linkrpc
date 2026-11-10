@@ -157,6 +157,11 @@ export interface PendingRequestInfo {
 export interface AttachedLink extends IDisposable {
     /** Make this link the hub's root handler. Throws if another link already holds the role. */
     setAsLoopback(): void;
+    /**
+     * Make this link the hub's default route (uplink). Throws if another link
+     * already holds the role. Detaching the link clears it.
+     */
+    setAsUplink(): void;
     /** Bind `prefix` to this link (see {@link Hub.claimPrefix}). */
     addPrefixRoute(prefix: ServiceId): void;
     /** Release `prefix` from the table. Returns `true` if it existed. */
@@ -480,6 +485,15 @@ export class Hub {
                     throw new Error('setAsLoopback: link is detached');
                 }
                 this.setLoopback(link);
+            },
+            setAsUplink: () => {
+                if (disposed || !this._links.has(link)) {
+                    throw new Error('setAsUplink: link is detached');
+                }
+                if (this._uplink !== undefined && this._uplink !== link) {
+                    throw new Error('setAsUplink: another link is already the uplink');
+                }
+                this.setUplink(link);
             },
             addPrefixRoute: (prefix) => this.claimPrefix(link, prefix),
             releasePrefix: (prefix) => this.releasePrefix(prefix),
