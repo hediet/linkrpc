@@ -390,7 +390,7 @@ The full normative protocol lives in the repository's shared [`spec/`](../../../
 |---|---|
 | **`linkrpc`** (this crate) | protocol core, schema/hashing, the connection runtime, reflection |
 | **`linkrpc-macros`** | the `#[link_rpc_interface]` procedural macro |
-| **`linkrpc-tokio`** | Tokio transports (NDJSON over Unix sockets) |
+| **`linkrpc-tokio`** | Tokio transports (NDJSON over Unix sockets, named pipes, and stdio; WebSockets) and `LINKRPC_ENDPOINT` entry points (`start_endpoint`, `host_participant`, `connect_to_hub`); see its [README](../linkrpc-tokio/README.md) |
 
 ## Status
 

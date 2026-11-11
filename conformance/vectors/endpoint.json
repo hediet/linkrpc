@@ -130,6 +130,16 @@
       }
     },
     {
+      "input": "cmd-stdio:?command=run-hub&cwd=%2Fwork%2Fdir",
+      "result": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "run-hub"
+        },
+        "cwd": "/work/dir"
+      }
+    },
+    {
       "input": "cmd:?command=run-hub",
       "result": {
         "kind": "cmd-env",
@@ -162,6 +172,21 @@
         "env": {
           "K": "V"
         }
+      }
+    },
+    {
+      "input": "cmd:?argv=run&env=K=V&cwd=C%3A%5Cwork",
+      "result": {
+        "kind": "cmd-env",
+        "command": {
+          "argv": [
+            "run"
+          ]
+        },
+        "env": {
+          "K": "V"
+        },
+        "cwd": "C:\\work"
       }
     },
     {
@@ -309,6 +334,17 @@
     },
     {
       "spec": {
+        "kind": "cmd-stdio",
+        "command": {
+          "command": "run-hub"
+        },
+        "cwd": "/work/dir"
+      },
+      "options": null,
+      "formatted": "cmd-stdio:?command=run-hub&cwd=%2Fwork%2Fdir"
+    },
+    {
+      "spec": {
         "kind": "cmd-env",
         "command": {
           "command": "run-hub"
@@ -333,6 +369,22 @@
       },
       "options": null,
       "formatted": "cmd:?argv=run&argv=--x&env=K%3DV"
+    },
+    {
+      "spec": {
+        "kind": "cmd-env",
+        "command": {
+          "argv": [
+            "run"
+          ]
+        },
+        "env": {
+          "K": "V"
+        },
+        "cwd": "C:\\work"
+      },
+      "options": null,
+      "formatted": "cmd:?argv=run&env=K%3DV&cwd=C%3A%5Cwork"
     }
   ],
   "isHubEndpoint": [

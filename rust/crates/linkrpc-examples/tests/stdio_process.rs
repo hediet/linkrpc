@@ -18,6 +18,7 @@ async fn connect_to_hub_spawns_cmd_stdio_endpoint() {
         &ResolvedEndpoint::CmdStdio {
             command: EndpointCommand::Argv(vec![program.get_program().to_string_lossy().into()]),
             env: None,
+            cwd: None,
         },
         FormatEndpointOptions::default(),
     );
