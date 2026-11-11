@@ -1,5 +1,6 @@
 import type { JsonValue } from "@hediet/linkrpc";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { McpIdentities } from "./mcpIdentities";
 import type { McpUpstream } from "./upstream";
@@ -39,6 +40,15 @@ export interface McpClientInfo {
 
 const defaultClientInfo: McpClientInfo = { name: "linkrpc-mcp", version: "1.0.0" };
 
+/**
+ * Request options for calls made on behalf of a caller: only the caller's
+ * signal ends them. The SDK always arms a timer (60 s by default) and Node
+ * fires delays above 2^31 - 1 ms after 1 ms, so pass the largest valid delay.
+ */
+export function callerOwnedRequest(signal: AbortSignal | undefined): RequestOptions {
+    return { signal, timeout: 2_147_483_647 };
+}
+
 /** Opens one SDK MCP client session per bridge session on `upstream`. */
 export function upstreamSessionFactory(
     upstream: McpUpstream,
@@ -76,7 +86,7 @@ export function upstreamSessionFactory(
                     const result = await client.callTool(
                         { name, ...(args === undefined ? {} : { arguments: { ...args } }) },
                         undefined,
-                        { signal },
+                        callerOwnedRequest(signal),
                     );
                     return result as unknown as JsonValue;
                 },
@@ -112,7 +122,7 @@ export async function listAllTools(
     const seen = new Set<string>();
     let cursor: string | undefined;
     do {
-        const page = await client.listTools(cursor === undefined ? {} : { cursor }, { signal });
+        const page = await client.listTools(cursor === undefined ? {} : { cursor }, callerOwnedRequest(signal));
         tools.push(...page.tools);
         cursor = page.nextCursor;
         if (cursor !== undefined) {

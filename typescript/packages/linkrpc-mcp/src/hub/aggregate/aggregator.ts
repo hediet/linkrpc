@@ -8,7 +8,7 @@ import {
     type Tool,
     ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { listAllTools, type McpClientInfo } from "../clientSession";
+import { callerOwnedRequest, listAllTools, type McpClientInfo } from "../clientSession";
 import {
     generatedMcpToolsInterfacePrefix,
     legacyMcpForwardInterface,
@@ -207,7 +207,7 @@ export class HubMcpAggregator implements McpToolSource {
                     call: (args, extra) => entry.client.callTool(
                         { name: definition.name, ...(args === undefined ? {} : { arguments: { ...args } }) },
                         CallToolResultSchema,
-                        { signal: extra.signal },
+                        callerOwnedRequest(extra.signal),
                     ) as Promise<CallToolResult>,
                 }));
             }
