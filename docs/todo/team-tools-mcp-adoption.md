@@ -37,7 +37,7 @@ This plan covers the MCP part only. Replacing the rest of the HubRPC copies
 | --- | --- | --- |
 | Script server per MCP session, in-process default connection, managed identity | Yes: `McpSocketHost` + `LinkRpcMcpServer({ defaultConnection })` | Unchanged API. Gains MCP cancellation. |
 | Loopback HTTP / socket hosting with bearer token | Yes: `McpSocketHost` | |
-| Aggregating forwarded servers | Yes: `HubMcpAggregator` over any signed channel | Also aggregates MCP services; accepts `mcp.forward` and `vscode.mcp-forward`. |
+| Aggregating forwarded servers | **No longer**: `HubMcpAggregator` aggregates only MCP services (`mcp.tools`) | MCP servers are onboarded to the hub as services; `mcp.forward` and `vscode.mcp-forward` listings are ignored. |
 | Hosting an aggregator-only MCP server over HTTP | **Gap**: `McpSocketHost.createSession` can only create a `LinkRpcMcpServer` | See decision 1. |
 | Trusted (ungated) aggregation | Possible: the aggregator uses whatever channel it gets | See decision 2. |
 | Tool names `<serviceId>__<toolName>` | **Changes**: hashed names (`<prefix>__<sha256>`), unique and ≤ 64 characters | Saved tool references to forwarded tools break once. |

@@ -28,19 +28,12 @@ export interface McpOptions {
 const clientInfo = { name: 'linkrpc-hub-mcp', version: '1.0.0' };
 
 /**
- * Serve the tools of every MCP server published on the hub (MCP services and
- * forwarded servers) as one stdio MCP server, optionally with the script tools.
+ * Serve the tools of every MCP service published on the hub as one stdio MCP
+ * server, optionally with the script tools.
  */
 export async function mcpCommand(channel: CliChannel, options: McpOptions = {}): Promise<void> {
     const log = options.log ?? (message => { process.stderr.write(`linkrpc mcp: ${message}\n`); });
-    const aggregatorOptions: HubMcpAggregatorOptions = {
-        requestDirectoryAccess: options.requestDirectoryAccess,
-        log,
-        clientInfo,
-        ...(options.mcpIdentities !== undefined
-            ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
-            : {}),
-    };
+    const aggregatorOptions = hubMcpAggregatorOptions(options, log);
     const transport = new StdioServerTransport(options.input ?? process.stdin, options.output ?? process.stdout);
     const input = options.input ?? process.stdin;
     let stop!: () => void;
@@ -87,6 +80,19 @@ export async function mcpCommand(channel: CliChannel, options: McpOptions = {}):
     }
 }
 
+function hubMcpAggregatorOptions(
+    options: Pick<McpOptions, 'requestDirectoryAccess' | 'mcpIdentities'>,
+    log: (message: string) => void,
+): HubMcpAggregatorOptions {
+    return {
+        requestDirectoryAccess: options.requestDirectoryAccess,
+        log,
+        ...(options.mcpIdentities !== undefined
+            ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
+            : {}),
+    };
+}
+
 const unsignedAccess: NonNullable<McpOptions['access']> = {
     listGrants: () => [],
     requestAccess: async () => ({ status: 'denied', reason: 'This connection does not sign calls.' }) as HubAccessResult,
@@ -109,39 +115,38 @@ export interface McpExportOptions {
 
 /**
  * Serve what {@link mcpCommand} serves over Streamable HTTP on a loopback port,
- * so many MCP clients share one process and one hub connection. Every MCP
- * session gets its own aggregator, forwarded sessions, and script state.
+ * so many MCP clients share one process and one hub connection. All MCP
+ * sessions share one {@link HubMcpAggregator} (one directory watch, one tool
+ * list); every session gets its own script state.
  */
 export async function mcpExportCommand(channel: CliChannel, options: McpExportOptions): Promise<void> {
     const log = options.log ?? (message => { process.stderr.write(`linkrpc mcp-export: ${message}\n`); });
     const { singleConnectionPool } = await import('@hediet/linkrpc-mcp');
     const { McpSocketHost } = await import('@hediet/linkrpc-mcp/node');
     const access = options.access ?? unsignedAccess;
-    const host = await McpSocketHost.start({
-        transport: 'http',
-        port: options.port,
-        authorizationToken: options.authorizationToken,
-        ...(options.idleSessionTimeoutMs !== undefined ? { idleSessionTimeoutMs: options.idleSessionTimeoutMs } : {}),
-        log,
-        createSession: async ({ sessionId }) => ({
-            serverOptions: {
-                pool: singleConnectionPool(channel, access, `mcp-export:${sessionId}`),
-                scriptTools: options.scripts !== false,
-                hubTools: {
-                    requestDirectoryAccess: options.requestDirectoryAccess,
-                    log: message => log(`[${sessionId.slice(0, 8)}] ${message}`),
-                    ...(options.mcpIdentities !== undefined
-                        ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
-                        : {}),
-                },
-            },
-        }),
-    });
-    const endpoint = host.endpoint;
-    if (endpoint.kind === 'tcp') log(`listening at http://${endpoint.host}:${endpoint.port}${endpoint.requestPath}`);
+    const hubTools = new HubMcpAggregator(channel, hubMcpAggregatorOptions(options, log));
+    hubTools.ready.catch(error => log(`hub MCP tools unavailable: ${error instanceof Error ? error.message : String(error)}`));
+    let host: InstanceType<typeof McpSocketHost> | undefined;
     try {
+        host = await McpSocketHost.start({
+            transport: 'http',
+            port: options.port,
+            authorizationToken: options.authorizationToken,
+            ...(options.idleSessionTimeoutMs !== undefined ? { idleSessionTimeoutMs: options.idleSessionTimeoutMs } : {}),
+            log,
+            createSession: async ({ sessionId }) => ({
+                serverOptions: {
+                    pool: singleConnectionPool(channel, access, `mcp-export:${sessionId}`),
+                    scriptTools: options.scripts !== false,
+                    sharedHubTools: hubTools,
+                },
+            }),
+        });
+        const endpoint = host.endpoint;
+        if (endpoint.kind === 'tcp') log(`listening at http://${endpoint.host}:${endpoint.port}${endpoint.requestPath}`);
         await options.stop;
     } finally {
-        host.dispose();
+        host?.dispose();
+        await hubTools.dispose();
     }
 }

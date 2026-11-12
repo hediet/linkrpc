@@ -7,10 +7,14 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
+import { LinkRpcConnection, TransportPair, type JsonValue } from '@hediet/linkrpc';
+import { connectViaTransport, type CliChannel } from '@hediet/linkrpc-client-internal';
+import { mcpForwardInterface, registerMcpToolBridge } from '@hediet/linkrpc-mcp/hub';
 import { HubConfigSchema } from '@hediet/linkrpc-hub/config';
 import { runHub } from '@hediet/linkrpc-hub/engine/runHub';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { mcpExportCommand } from './mcp';
 
 it('serves the hub MCP tools to several HTTP clients from one mcp-export process', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'linkrpc-mcp-export-'));
@@ -92,6 +96,75 @@ it('serves the hub MCP tools to several HTTP clients from one mcp-export process
         await rm(directory, { recursive: true, force: true });
     }
 }, 60_000);
+
+it('shares one hub aggregator between all MCP sessions and ignores forwarded servers', async () => {
+    const pair = new TransportPair();
+    const hub = LinkRpcConnection.fromTransport(pair.a);
+    hub.enableReflection();
+    const bridge = await registerMcpToolBridge({
+        connection: hub, serviceId: 'explorer', interfaceId: 'mcp.tools.explorer',
+        factory: {
+            open: async () => ({
+                listTools: async () => [{ name: 'echo', inputSchema: { type: 'object' } }],
+                callTool: async (_name, args) => ({ content: [{ type: 'text', text: JSON.stringify(args) }] }) as JsonValue,
+                close: async () => {},
+            }),
+        },
+    });
+    let forwardConnects = 0;
+    hub.register(mcpForwardInterface, {
+        connect: async () => { forwardConnects++; return {}; },
+    }, { serviceId: 'forward-only' });
+    const local = connectViaTransport(pair.b);
+    const requests: string[] = [];
+    const channel: CliChannel = {
+        sendRequest: (method, params, options) => {
+            requests.push(method);
+            return local.channel.sendRequest(method, params, options);
+        },
+        sendRequestWithStream: (method, params, options) => {
+            requests.push(method);
+            return local.channel.sendRequestWithStream(method, params, options);
+        },
+        sendNotification: (method, params, options) => local.channel.sendNotification(method, params, options),
+        close: () => local.channel.close(),
+    };
+    const port = await freePort();
+    const url = new URL(`http://127.0.0.1:${port}/mcp`);
+    let stop!: () => void;
+    const exported = mcpExportCommand(channel, {
+        port, authorizationToken: 'token', scripts: false, log: () => {},
+        stop: new Promise<void>(resolve => { stop = resolve; }),
+    });
+    const connect = async () => {
+        const client = new Client({ name: 'agent', version: '1' });
+        await client.connect(new StreamableHTTPClientTransport(url, {
+            requestInit: { headers: { Authorization: 'Bearer token' } },
+        }));
+        return client;
+    };
+    const clients: Client[] = [];
+    try {
+        clients.push(await vi.waitFor(connect));
+        clients.push(await connect(), await connect());
+        for (const client of clients) {
+            expect((await client.listTools()).tools.map(tool => tool.description)).toEqual(['[explorer] echo']);
+        }
+        const counts = (method: string) => requests.filter(request => request === method).length;
+        expect({
+            rootDirectoryWatches: counts('hubrpc.directory::watch'),
+            explorerListTools: counts('explorer::mcp.tools::listTools'),
+            forwardConnects,
+        }).toEqual({ rootDirectoryWatches: 1, explorerListTools: 1, forwardConnects: 0 });
+    } finally {
+        for (const client of clients) await client.close();
+        stop();
+        await exported;
+        await bridge.dispose();
+        local.close();
+        hub.close();
+    }
+});
 
 function freePort(): Promise<number> {
     return new Promise((resolve, reject) => {
