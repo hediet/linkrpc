@@ -1,5 +1,5 @@
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createTcpServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -85,6 +85,45 @@ describe('compute node', () => {
             const content = await fs.readFile({ path: filePath, offset: 1, length: 3 });
             expect({ text: Buffer.from(content.contentBase64, 'base64').toString(), eof: content.eof }).toEqual({ text: 'ell', eof: false });
             expect(await readFile(filePath, 'utf8')).toBe('hello');
+        } finally {
+            close();
+        }
+    });
+
+    it('deletes files, links, and directories without following links', async () => {
+        const directory = await mkdtemp(path.join(tmpdir(), 'compute-node-'));
+        temporaryDirectories.push(directory);
+        const outside = path.join(directory, 'outside');
+        const tree = path.join(directory, 'tree');
+        await mkdir(path.join(tree, 'nested'), { recursive: true });
+        await mkdir(outside);
+        await writeFile(path.join(outside, 'keep.txt'), 'keep');
+        await writeFile(path.join(tree, 'nested', 'a.txt'), 'a');
+        const linkType = process.platform === 'win32' ? 'junction' : 'dir';
+        await symlink(outside, path.join(tree, 'nested', 'link'), linkType);
+        await symlink(outside, path.join(directory, 'link'), linkType);
+        const { client, close } = createClient();
+        try {
+            const fs = client.service(serviceId).get(computeNodeFileSystemInterface);
+            const error = (promise: Promise<unknown>) => promise.then(() => 'resolved', (e: Error) => e.message.replaceAll(directory, '<dir>'));
+
+            expect(await error(fs.deleteFile({ path: tree }))).toBe(`${path.join('<dir>', 'tree')} is a directory; use deleteDirectory`);
+            expect(await error(fs.deleteDirectory({ path: path.join(directory, 'link') })))
+                .toBe(`${path.join('<dir>', 'link')} is not a directory; use deleteFile`);
+            expect(await error(fs.deleteDirectory({ path: path.parse(directory).root }))).toMatch(/^refusing to delete the filesystem root/);
+            expect(await error(fs.deleteDirectory({ path: tree }))).toMatch(/ENOTEMPTY|EEXIST|EPERM/);
+
+            await expect(fs.deleteFile({ path: path.join(tree, 'nested', 'a.txt') }))
+                .resolves.toEqual({ path: path.join(tree, 'nested', 'a.txt') });
+            await expect(fs.deleteFile({ path: path.join(directory, 'link') })).resolves.toEqual({ path: path.join(directory, 'link') });
+            await expect(fs.deleteDirectory({ path: tree, recursive: true })).resolves.toEqual({ path: tree });
+            expect((await readdir(directory)).sort()).toEqual(['outside']);
+            expect(await readFile(path.join(outside, 'keep.txt'), 'utf8')).toBe('keep');
+
+            await expect(fs.deleteDirectory({ path: outside, recursive: false })).rejects.toThrow();
+            await fs.deleteFile({ path: path.join(outside, 'keep.txt') });
+            await expect(fs.deleteDirectory({ path: outside })).resolves.toEqual({ path: outside });
+            expect(await error(fs.deleteFile({ path: outside }))).toMatch(/ENOENT/);
         } finally {
             close();
         }

@@ -78,7 +78,9 @@ daemon's `linkrpc.managedEndpoints` `run` call.
 
 `@hediet/linkrpc-infra/compute-node` defines browser-safe interfaces for
 remote machine access: `linkrpc.computeNode.status`, `.command` (streamed
-output and stdin), `.filesystem`, `.http`, `.tcpForward` (multiplexed TCP
+output and stdin), `.filesystem` (`stat`, `readDirectory`, `readFile`,
+`writeFile`, `deleteFile`, and `deleteDirectory`, recursive only on request
+and never following links), `.http`, `.tcpForward` (multiplexed TCP
 with credit-based flow control), `.power` (`keepAwake` prevents sleep while
 the call stays open; `sleep`, `restart`, and `shutdown`), and `.session`
 (`lock`); see the

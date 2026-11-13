@@ -181,6 +181,20 @@ export function setServiceEnabledInText(text: string, name: string, enabled: boo
     return _modify(text, ['services', name, 'enabled'], enabled ? undefined : false);
 }
 
+/**
+ * Add, replace, or (with `undefined`) remove the `services.<name>` entry with a
+ * minimal text edit that keeps the rest of the file's comments and formatting.
+ * The edited config must be valid; otherwise this throws and nothing changes.
+ */
+export function setServiceInText(text: string, name: string, definition: Readonly<Record<string, unknown>> | undefined): string {
+    const config = parseDaemonConfigText(text);
+    if (!SERVICE_NAME.test(name)) throw new Error(`invalid service name '${name}': use letters, digits, ".", "_", and "-"`);
+    if (definition === undefined && !(name in config.services)) throw new Error(`unknown service '${name}'`);
+    const edited = _modify(text.trim() === '' ? '{}' : text, ['services', name], definition);
+    parseDaemonConfigText(edited);
+    return edited;
+}
+
 /** Persist `callLog.level` with a minimal text edit. `off` removes the key (the default), and `callLog` once empty. */
 export function setCallLogLevelInText(text: string, level: CallLogLevel): string {
     parseDaemonConfigText(text);

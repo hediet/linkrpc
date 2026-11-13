@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyServiceChange, parseDaemonConfigText, setCallLogLevelInText, setServiceEnabledInText, stableKey } from './config';
+import { classifyServiceChange, parseDaemonConfigText, setCallLogLevelInText, setServiceEnabledInText, setServiceInText, stableKey } from './config';
 
 describe('daemon config', () => {
     it('applies service defaults and the per-user hub defaults', () => {
@@ -99,6 +99,56 @@ describe('daemon config', () => {
         expect(parseDaemonConfigText(disabled).services.a!.enabled).toBe(false);
         expect(setServiceEnabledInText(disabled, 'a', true)).not.toContain('enabled');
         expect(() => setServiceEnabledInText(text, 'missing', false)).toThrow(`unknown service 'missing'`);
+    });
+
+    it('adds, replaces, and removes one service with a minimal edit that keeps comments', () => {
+        const text = [
+            '{',
+            '    // my services',
+            '    "services": {',
+            '        // keep a',
+            '        "a": { "command": ["x"] },',
+            '        "b": { "command": ["y"] }',
+            '    }',
+            '}',
+            '',
+        ].join('\n');
+        const replaced = setServiceInText(text, 'b', { command: ['z'], env: { A: '1' } });
+        expect(replaced).toMatchInlineSnapshot(`
+          "{
+              // my services
+              "services": {
+                  // keep a
+                  "a": { "command": ["x"] },
+                  "b": {
+                      "command": [
+                          "z"
+                      ],
+                      "env": {
+                          "A": "1"
+                      }
+                  }
+              }
+          }
+          "
+        `);
+        const added = setServiceInText(replaced, 'c', { endpoint: 'unix:/c' });
+        expect(parseDaemonConfigText(added).services.c).toMatchObject({ endpoint: 'unix:/c', serviceId: 'hub/c' });
+        expect(setServiceInText(added, 'c', undefined)).toBe(replaced);
+        expect(setServiceInText('', 'a', { command: ['x'] })).toMatchInlineSnapshot(`
+          "{
+              "services": {
+                  "a": {
+                      "command": [
+                          "x"
+                      ]
+                  }
+              }
+          }"
+        `);
+        expect(() => setServiceInText(text, 'missing', undefined)).toThrow(`unknown service 'missing'`);
+        expect(() => setServiceInText(text, 'b', { command: [] })).toThrow(/at b\.command/);
+        expect(() => setServiceInText(text, 'bad name', { command: ['x'] })).toThrow(`invalid service name 'bad name'`);
     });
 
     it('defaults the call log to off with truncated, redacted payloads', () => {
