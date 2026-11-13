@@ -467,6 +467,12 @@ export type HubDirectoryGraphEvent =
  * new watch is opened. A directory whose watch keeps failing — for example a
  * provider that does not implement `watch`, or one the caller may list but not
  * watch — is therefore polled at the backoff interval instead of hammered.
+ *
+ * Failures that retrying cannot fix — the hub has no route to the directory,
+ * or rejects the caller's capability (see `_isPermanentFailure`) — stop
+ * both list and watch retries for that node and are logged once. The node is
+ * tried again only once its referral changes: the referring listings or the
+ * contributions of its parents (see {@link PermanentFailure}).
  */
 export class HubDirectoryExplorer {
     private readonly _maxDepth: number;
@@ -644,6 +650,7 @@ export class HubDirectoryExplorer {
      * {@link DirectoryNode.loadRun} where the finished state is required.
      */
     private _loadNode(node: DirectoryNode, reconcileOutgoing = true): Promise<void> {
+        if (this._permanentFailureHolds(node)) return Promise.resolve();
         if (node.loading) {
             node.reloadRequested = true;
             return Promise.resolve();
@@ -679,14 +686,19 @@ export class HubDirectoryExplorer {
                 } catch (error) {
                     if (this._disposed) break;
                     if (await this._tryUnlock(node, error)) {
+                        // Access was granted, so an earlier rejected watch may succeed now.
+                        node.permanentFailure = undefined;
                         node.reloadRequested = true;
                         continue;
                     }
                     const previous = this._nodeReport(node);
                     node.inaccessibleReason = errorMessage(error);
-                    this._options.log?.(
-                        `hub directory list(${node.target ?? '<root>'}) failed: ${node.inaccessibleReason}`,
-                    );
+                    const permanent = this._isPermanentFailure(node, error);
+                    if (!permanent) {
+                        this._options.log?.(
+                            `hub directory list(${node.target ?? '<root>'}) failed: ${node.inaccessibleReason}`,
+                        );
+                    }
                     // A watcher retains the last good branch while it is
                     // temporarily inaccessible. A never-loaded node contributes
                     // no entries but remains in the inaccessible report.
@@ -696,6 +708,7 @@ export class HubDirectoryExplorer {
                     }
                     node.state = 'inaccessible';
                     this._emitNodeUpdated(node, previous, 'inaccessible');
+                    if (permanent) this._failPermanently(node, node.inaccessibleReason);
                     if (node.loaded && reconcileOutgoing) await this._reconcileOutgoing(node);
                     break;
                 }
@@ -711,7 +724,7 @@ export class HubDirectoryExplorer {
                 node.state = 'loaded';
                 this._emitNodeUpdated(node, previous, 'loaded');
                 if (reconcileOutgoing) await this._reconcileOutgoing(node);
-            } while (node.reloadRequested && !this._disposed);
+            } while (node.reloadRequested && !this._disposed && !this._permanentFailureHolds(node));
         } finally {
             node.loading = false;
         }
@@ -1069,9 +1082,12 @@ export class HubDirectoryExplorer {
         throw new Error('Hub directory watch synchronization did not converge');
     }
 
-    /** Whether the node lacks a watch for its current scopes and is not backing off. */
+    /**
+     * Whether the node lacks a watch for its current scopes, is not backing
+     * off, and has not failed permanently for its current referral.
+     */
     private _needsWatch(node: DirectoryNode): boolean {
-        if (!this._watching || this._disposed) return false;
+        if (!this._watching || this._disposed || this._permanentFailureHolds(node)) return false;
         const watch = node.watch;
         return watch.kind === 'idle'
             || (watch.kind === 'active' && watch.scopesKey !== scopesKey(node.scopes));
@@ -1091,7 +1107,7 @@ export class HubDirectoryExplorer {
                 onStreamMessage: () => this._queueTick(node.key),
             });
         } catch (error) {
-            this._watchFailed(node, `failed: ${errorMessage(error)}`);
+            this._watchFailed(node, `failed: ${errorMessage(error)}`, error);
             return false;
         }
         const previous = this._nodeReport(node);
@@ -1103,12 +1119,17 @@ export class HubDirectoryExplorer {
         }
         void call.result.then(
             () => this._onWatchEnded(node, call, 'ended'),
-            (error) => this._onWatchEnded(node, call, `ended: ${errorMessage(error)}`),
+            (error) => this._onWatchEnded(node, call, `ended: ${errorMessage(error)}`, error),
         );
         return true;
     }
 
-    private _onWatchEnded(node: DirectoryNode, call: RawStreamingCall, outcome: string): void {
+    private _onWatchEnded(
+        node: DirectoryNode,
+        call: RawStreamingCall,
+        outcome: string,
+        error?: unknown,
+    ): void {
         if (
             this._disposed
             || this._nodes.get(node.key) !== node
@@ -1117,14 +1138,19 @@ export class HubDirectoryExplorer {
         ) {
             return;
         }
-        this._watchFailed(node, outcome);
+        this._watchFailed(node, outcome, error);
     }
 
     /**
-     * Puts the node into backoff. Its current watch, if any, is cancelled: a
-     * replacement for new scopes failed, so the old one is stale.
+     * Puts the node into backoff, or stops retrying if `error` is permanent.
+     * Its current watch, if any, is cancelled: a replacement for new scopes
+     * failed, so the old one is stale.
      */
-    private _watchFailed(node: DirectoryNode, outcome: string): void {
+    private _watchFailed(node: DirectoryNode, outcome: string, error?: unknown): void {
+        if (this._isPermanentFailure(node, error)) {
+            this._failPermanently(node, errorMessage(error));
+            return;
+        }
         this._options.log?.(`hub directory watch(${node.target ?? '<root>'}) ${outcome}`);
         if (!this._watching || this._disposed || this._nodes.get(node.key) !== node) return;
         const previous = this._nodeReport(node);
@@ -1155,6 +1181,56 @@ export class HubDirectoryExplorer {
             await this._synchronizeWatches();
             this._settle();
         }).catch((error) => this._reconciliationFailed('watch retry', error));
+    }
+
+    /**
+     * Whether `error` cannot be fixed by retrying `node` until its referral
+     * changes. The root has no referral and keeps the backoff.
+     */
+    private _isPermanentFailure(node: DirectoryNode, error: unknown): boolean {
+        if (node.key === ROOT_NODE_KEY || typeof error !== 'object' || error === null || !('code' in error)) {
+            return false;
+        }
+        return error.code === ErrorCode.permissionRequired
+            || (error.code === ErrorCode.methodNotFound && UNROUTABLE_MESSAGE.test(errorMessage(error)));
+    }
+
+    /** Stops list and watch retries of `node` until its referral changes; logs once. */
+    private _failPermanently(node: DirectoryNode, reason: string): void {
+        if (this._disposed || this._nodes.get(node.key) !== node) return;
+        const referralKey = this._referralKey(node);
+        if (node.permanentFailure?.referralKey === referralKey) return;
+        node.permanentFailure = { reason, referralKey };
+        this._options.log?.(
+            `hub directory ${node.target ?? '<root>'} failed permanently, `
+            + `not retrying until its referral changes: ${reason}`,
+        );
+        const previous = this._nodeReport(node);
+        const watch = node.watch;
+        if (watch.kind === 'active') cancelWatch(watch.call, 'directory explorer watch failed permanently');
+        if (watch.kind === 'backoff') clearTimeout(watch.timer);
+        node.watch = { kind: 'idle' };
+        node.watchFailures = 0;
+        if (watch.kind === 'active') this._emitNodeUpdated(node, previous, 'watch-ended');
+    }
+
+    /** Whether `node` failed permanently for its current referral; forgets stale failures. */
+    private _permanentFailureHolds(node: DirectoryNode): boolean {
+        if (node.permanentFailure === undefined) return false;
+        if (node.permanentFailure.referralKey === this._referralKey(node)) return true;
+        node.permanentFailure = undefined;
+        return false;
+    }
+
+    /** Identifies the referral of `node`: its parents' contributions and referring listings. */
+    private _referralKey(node: DirectoryNode): string {
+        const referrals = [...node.parents.keys()].sort().map((parentKey) => [
+            parentKey,
+            (this._nodes.get(parentKey)?.listings ?? []).filter((item) =>
+                item.interfaceId === DIRECTORY_INTERFACE_ID
+                && this._nodeKeyForTarget(item.serviceId) === node.key),
+        ]);
+        return `${parentContributionsKey(node.parents)}\u0004${JSON.stringify(referrals)}`;
     }
 
     /**
@@ -1401,7 +1477,23 @@ interface DirectoryNode {
     watch: DirectoryWatch;
     /** Consecutive watch failures since the last tick; selects the retry delay. */
     watchFailures: number;
+    /** Set while list and watch must not be retried; see {@link PermanentFailure}. */
+    permanentFailure?: PermanentFailure;
 }
+
+/**
+ * A list or watch failure that retrying cannot fix, such as a missing route
+ * or a rejected capability. It holds only while the node's referral, as
+ * identified by `referralKey`, is unchanged: a changed referral may route or
+ * authorize differently, so the node is retried.
+ */
+interface PermanentFailure {
+    readonly reason: string;
+    readonly referralKey: string;
+}
+
+/** Hub routing failures (`methodNotFound`), as opposed to a missing method. */
+const UNROUTABLE_MESSAGE = /^(no route for|unroutable): /;
 
 /**
  * Lifecycle of one node's `hubrpc.directory::watch`. This is the single source

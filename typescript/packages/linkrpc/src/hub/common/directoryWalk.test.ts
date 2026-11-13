@@ -555,7 +555,176 @@ describe('HubDirectoryExplorer failed watches', () => {
         stop();
         explorer.dispose();
     });
+
+    it('keeps a pending retry while other directories tick', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('static')]);
+        endpoint.set('static', [listing('static', 'demo')]);
+        endpoint.rejectWatches('static', watchNotFound('static'));
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+
+        for (let i = 0; i < 20; i++) {
+            endpoint.emit(undefined);
+            await vi.advanceTimersByTimeAsync(27);
+        }
+
+        expect(watchTimes(endpoint, 'static')).toEqual([0, 200]);
+        stop();
+        explorer.dispose();
+    });
+
+    it('keeps the backoff for transient failures such as a detached target', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('flaky')]);
+        const detached = new RpcError(
+            'target detached before responding', ErrorCode.peerDisconnected, undefined, 'remote');
+        endpoint.fail('flaky', detached);
+        endpoint.rejectWatches('flaky', detached);
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(2_000);
+
+        expect({
+            watchAttemptsAt: watchTimes(endpoint, 'flaky'),
+            lists: endpoint.listCount('flaky'),
+        }).toEqual({ watchAttemptsAt: [0, 200, 600, 1400], lists: 4 });
+        stop();
+        explorer.dispose();
+    });
 });
+
+describe('HubDirectoryExplorer permanent failures', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('does not retry an unroutable directory until its referral changes', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('nested')]);
+        endpoint.fail('nested', noRoute('nested::hubrpc.directory::list'));
+        endpoint.rejectWatches('nested', noRoute('nested::hubrpc.directory::watch'));
+        const logs: string[] = [];
+        const explorer = new HubDirectoryExplorer(endpoint, { log: (line) => logs.push(line) });
+        const stop = await explorer.watch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(120_000);
+        // A parent relist that still refers to `nested` unchanged does not re-arm it.
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect({
+            lists: endpoint.listCount('nested'),
+            watches: endpoint.watchCount('nested'),
+            pendingTimers: vi.getTimerCount(),
+            node: nodeState(explorer, 'nested'),
+            logs,
+        }).toMatchInlineSnapshot(`
+          {
+            "lists": 1,
+            "logs": [
+              "hub directory nested failed permanently, not retrying until its referral changes: no route for: nested::hubrpc.directory::watch",
+            ],
+            "node": {
+              "inaccessibleReason": "no route for: nested::hubrpc.directory::list",
+              "state": "inaccessible",
+              "watching": false,
+            },
+            "pendingTimers": 0,
+            "watches": 1,
+          }
+        `);
+
+        // Only the referring listing changes, not the scopes it grants.
+        endpoint.set(undefined, [{ ...referral('nested'), hash: 'hash:directory.v2' }]);
+        endpoint.fail('nested', noRoute('nested::hubrpc.directory::list'));
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect({
+            lists: endpoint.listCount('nested'),
+            watches: endpoint.watchCount('nested'),
+            logs: logs.length,
+        }).toMatchInlineSnapshot(`
+          {
+            "lists": 2,
+            "logs": 2,
+            "watches": 2,
+          }
+        `);
+        stop();
+        explorer.dispose();
+    });
+
+    it('does not retry a rejected capability until the referral reappears', async () => {
+        vi.useFakeTimers({ now: 0 });
+        const endpoint = new FakeDirectoryEndpoint();
+        endpoint.set(undefined, [referral('tablet')]);
+        const rejected = new RpcError(
+            'capability root issuer x is not accepted for service tablet',
+            ErrorCode.permissionRequired,
+            undefined,
+            'remote',
+        );
+        endpoint.fail('tablet', rejected);
+        endpoint.rejectWatches('tablet', rejected);
+        const explorer = new HubDirectoryExplorer(endpoint);
+        const stop = await explorer.watch(() => undefined);
+
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect({
+            lists: endpoint.listCount('tablet'),
+            watches: endpoint.watchCount('tablet'),
+            node: nodeState(explorer, 'tablet'),
+        }).toMatchInlineSnapshot(`
+          {
+            "lists": 1,
+            "node": {
+              "inaccessibleReason": "capability root issuer x is not accepted for service tablet",
+              "state": "inaccessible",
+              "watching": false,
+            },
+            "watches": 1,
+          }
+        `);
+
+        endpoint.set(undefined, []);
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        endpoint.set(undefined, [referral('tablet')]);
+        endpoint.fail('tablet', rejected);
+        endpoint.emit(undefined);
+        await explorer.whenIdle();
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect({
+            lists: endpoint.listCount('tablet'),
+            watches: endpoint.watchCount('tablet'),
+        }).toEqual({ lists: 2, watches: 2 });
+        stop();
+        explorer.dispose();
+    });
+});
+
+function noRoute(method: string): RpcError {
+    return new RpcError(`no route for: ${method}`, ErrorCode.methodNotFound, undefined, 'remote');
+}
+
+function nodeState(explorer: HubDirectoryExplorer, serviceId: string) {
+    const node = explorer.graphSnapshot.directories.find((directory) =>
+        directory.target.kind === 'addressed' && directory.target.serviceId === serviceId);
+    return {
+        state: node?.state,
+        inaccessibleReason: node?.inaccessibleReason,
+        watching: node?.watching,
+    };
+}
 
 function watchNotFound(target: string): RpcError {
     return new RpcError(
@@ -608,7 +777,7 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
         scopes: readonly ServiceIdPattern[] | undefined;
     }> = [];
     private readonly _directories = new Map<string, readonly ServiceListing[]>();
-    private readonly _failures = new Map<string, string>();
+    private readonly _failures = new Map<string, string | Error>();
     private readonly _watchers = new Map<string, Set<() => void>>();
     private readonly _watchCalls = new Map<string, number>();
     private readonly _watchFailures = new Map<string, Error>();
@@ -624,7 +793,7 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
         this._failures.delete(key(target));
     }
 
-    public fail(target: string | undefined, reason: string): void {
+    public fail(target: string | undefined, reason: string | Error): void {
         this._failures.set(key(target), reason);
     }
 
@@ -667,7 +836,7 @@ class FakeDirectoryEndpoint implements IRequestSender<SigningCallCtx> {
             ?.serviceIdScopes;
         this.listCalls.push({ target, scopes });
         const failure = this._failures.get(key(target));
-        if (failure !== undefined) throw new Error(failure);
+        if (failure !== undefined) throw typeof failure === 'string' ? new Error(failure) : failure;
         const items = this._directories.get(key(target)) ?? [];
         const result = {
             items: items.map((item) => ({
