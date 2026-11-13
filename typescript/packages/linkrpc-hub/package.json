@@ -37,6 +37,10 @@
             "import": "./dist/configFile.js",
             "types": "./dist/configFile.d.ts"
         },
+        "./remote-claims": {
+            "import": "./dist/engine/remoteClaims.js",
+            "types": "./dist/engine/remoteClaims.d.ts"
+        },
         "./spawn": {
             "import": "./dist/spawn.js",
             "types": "./dist/spawn.d.ts"

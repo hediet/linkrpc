@@ -14,6 +14,7 @@ export default defineConfig({
         'serve': 'src/serve.ts',
         'participantHost': 'src/participantHost.ts',
         'engine/runHub': 'src/engine/runHub.ts',
+        'engine/remoteClaims': 'src/engine/remoteClaims.ts',
         'hub/server/index': 'src/hub/server/index.ts',
         'hub/server/client': 'src/hub/server/client.ts',
         'hub/server/transit': 'src/hub/server/transit.ts',

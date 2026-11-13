@@ -37,6 +37,19 @@ describe('configured participants', () => {
         }).success).toBe(false);
     });
 
+    it('accepts claims signed as a CLI-style principal and rejects other identities', () => {
+        const claims = (claimServiceIds: unknown[]) => ParticipantConnectorConfigSchema.safeParse({
+            kind: 'ws', url: 'wss://hub.example.test', claimServiceIds,
+        }).success;
+        expect({
+            plain: claims(['granted/service']),
+            user: claims([{ serviceId: 'hediet/tablet', as: 'user:hubrpc-cli' }]),
+            file: claims([{ serviceId: 'hediet/tablet', as: 'file:/keys/hub.json' }]),
+            managed: claims([{ serviceId: 'hediet/tablet', as: 'managed' }]),
+            unknownField: claims([{ serviceId: 'hediet/tablet', as: 'user:x', via: 'registry' }]),
+        }).toEqual({ plain: true, user: true, file: true, managed: false, unknownField: false });
+    });
+
     it('rejects conflicting routes before starting participants', () => {
         expect(() => validateConfiguredParticipants([
             participant('a', { routeServiceIds: ['shared'] }),
