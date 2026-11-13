@@ -16,6 +16,7 @@ export default defineConfig({
         'json-rpc/protocol': 'src/json-rpc/protocol.ts',
         'json-rpc/node': 'src/json-rpc/node.ts',
         'logging/index': 'src/logging/index.ts',
+        'observable-value/index': 'src/observable-value/index.ts',
     },
     format: 'esm',
     platform: 'node',
