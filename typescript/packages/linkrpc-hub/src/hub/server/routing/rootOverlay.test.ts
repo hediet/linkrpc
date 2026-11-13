@@ -323,7 +323,9 @@ describe('RootOverlay + hub services (end-to-end)', () => {
 
         participant.enableReflection({ serviceId: 'acme/new' });
 
-        await until(() => ticks === 1);
+        // The routing change and the participant root's own directory tick
+        // arrive in separate turns, so the count can pass 1 between polls.
+        await until(() => ticks >= 1);
         const after = await consumer.service('hub').get(directoryInterface).list({
             interfaceId: directoryInterface.info.id,
         });
@@ -351,7 +353,7 @@ describe('RootOverlay + hub services (end-to-end)', () => {
             ping: () => ({ pong: true }),
         });
 
-        await until(() => ticks === 1);
+        await until(() => ticks >= 1);
         const after = await participant.get(directoryInterface).list({
             interfaceId: pingInterface.info.id,
         });
