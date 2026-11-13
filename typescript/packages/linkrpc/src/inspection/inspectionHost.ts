@@ -54,6 +54,8 @@ interface LazyTrafficSource {
 /** A shared inspection scope, independent of both routing and its RPC connections. */
 export class InspectionHost {
     private readonly _sources = new Map<InspectionSource, InterfaceRegistration>();
+    /** Port IDs of each source's latest snapshot, refreshed once per topology change. */
+    private readonly _sourcePorts = new Map<InspectionSource, ReadonlySet<string>>();
     private readonly _trackedConnections = new Set<InterfaceRegistration>();
     private readonly _bindings = new Set<InspectionBinding>();
     private readonly _subscribers = new Set<BoundedTrafficSubscription>();
@@ -78,12 +80,13 @@ export class InspectionHost {
         if (this._sources.has(source)) throw new Error('Inspection source is already registered');
         const readPorts = () => new Set(source.snapshotTopology().nodes.flatMap(node =>
             node.ports.map(port => port.portId)));
-        let ports = readPorts();
+        this._sourcePorts.set(source, readPorts());
         const topology = source.onTopologyChanged(() => {
+            const ports = this._sourcePorts.get(source);
+            if (ports === undefined) return;
             const nextPorts = readPorts();
-            const removed = [...ports].filter(port => !nextPorts.has(port));
-            ports = nextPorts;
-            this._forgetUnusedPorts(removed);
+            this._sourcePorts.set(source, nextPorts);
+            this._forgetUnusedPorts([...ports].filter(port => !nextPorts.has(port)));
             this._invalidateTopology();
         });
         let traffic: InterfaceRegistration;
@@ -91,6 +94,7 @@ export class InspectionHost {
             traffic = source.observeTraffic(event => this.publishTransit(event));
         } catch (error) {
             topology.dispose();
+            this._sourcePorts.delete(source);
             throw error;
         }
         const registration = {
@@ -99,6 +103,8 @@ export class InspectionHost {
                 this._sources.delete(source);
                 topology.dispose();
                 traffic.dispose();
+                const ports = this._sourcePorts.get(source) ?? new Set();
+                this._sourcePorts.delete(source);
                 this._forgetUnusedPorts([...ports]);
                 this._invalidateTopology();
             },
@@ -333,10 +339,20 @@ export class InspectionHost {
 
     private _forgetUnusedPorts(portIds: readonly string[]): void {
         if (this._disposed) return;
-        const remaining = new Set(this.getGraph('').nodes.flatMap(node => node.ports.map(port => port.portId)));
         for (const portId of portIds) {
-            if (!remaining.has(portId)) this._trafficWatches.forgetPort(portId);
+            if (!this._hasPort(portId)) this._trafficWatches.forgetPort(portId);
         }
+    }
+
+    /** Whether a binding or a source's latest notified snapshot has `portId`, without building the graph. */
+    private _hasPort(portId: string): boolean {
+        for (const ports of this._sourcePorts.values()) {
+            if (ports.has(portId)) return true;
+        }
+        for (const binding of this._bindings) {
+            if (binding.portId === portId) return true;
+        }
+        return false;
     }
 
     private _watchGraph<T>(

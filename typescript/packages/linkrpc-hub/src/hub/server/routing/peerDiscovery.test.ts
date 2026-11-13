@@ -43,6 +43,7 @@ describe('automatic peer discovery', () => {
         const a = first.attach(pair.a);
         const b = second.attach(pair.b);
         const from = first.getTopologyGraph('observer').links[0].from;
+        await Promise.resolve();
         changes.mockClear();
         const routingChanges = vi.fn();
         first.onDidChangeRouting(routingChanges);
@@ -56,11 +57,13 @@ describe('automatic peer discovery', () => {
         });
         expect(second.getTopologyGraph('observer').links[0].to)
             .toEqual({ nodeId: 'first', portId: a.portId });
+        await vi.advanceTimersByTimeAsync(100);
         expect(changes).toHaveBeenCalledOnce();
         expect(routingChanges).not.toHaveBeenCalled();
         expect(first.pendingRequests()).toHaveLength(0);
         a.dispose();
         b.dispose();
+        await vi.advanceTimersByTimeAsync(100);
         expect(vi.getTimerCount()).toBe(0);
     });
 
