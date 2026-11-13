@@ -2,8 +2,9 @@
 //!
 //! Spawning mirrors the TS hub's `spawnCommand`: a verbatim `command` runs through the OS shell,
 //! `argv` runs directly — except on Windows for binaries that are not `.exe`/`.com` (e.g. npm
-//! `.cmd` shims), which need `cmd.exe`. The child's stderr is inherited, no `hubrpc::initialize` handshake is
-//! written (the parent owns the child), and the child is killed when the transport is dropped.
+//! `.cmd` shims), which need `cmd.exe`. The child's stderr is inherited, no `hubrpc::initialize`
+//! handshake is written (the parent owns the child), and the child is killed when the transport is
+//! dropped. The same spawning is used for `cmd:` children ([`crate::cmd_env`]).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -27,8 +28,16 @@ impl ChildStdioTransport {
         command: &EndpointCommand,
         env: Option<&BTreeMap<String, String>>,
     ) -> io::Result<Self> {
-        let mut child = build_command(command)?
-            .envs(env.into_iter().flatten())
+        Self::spawn_in(command, env, None)
+    }
+
+    /// Like [`spawn`](Self::spawn), running the child in `cwd` when given.
+    pub fn spawn_in(
+        command: &EndpointCommand,
+        env: Option<&BTreeMap<String, String>>,
+        cwd: Option<&str>,
+    ) -> io::Result<Self> {
+        let mut child = build_command(command, env, cwd)?
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -43,7 +52,21 @@ impl ChildStdioTransport {
     }
 }
 
-fn build_command(command: &EndpointCommand) -> io::Result<Command> {
+/// The spawn command for an endpoint command, with `env` added and `cwd` applied.
+pub(crate) fn build_command(
+    command: &EndpointCommand,
+    env: Option<&BTreeMap<String, String>>,
+    cwd: Option<&str>,
+) -> io::Result<Command> {
+    let mut built = program_command(command)?;
+    built.envs(env.into_iter().flatten());
+    if let Some(cwd) = cwd {
+        built.current_dir(cwd);
+    }
+    Ok(built)
+}
+
+fn program_command(command: &EndpointCommand) -> io::Result<Command> {
     match command {
         EndpointCommand::Argv(argv) => {
             let (program, args) = argv.split_first().ok_or_else(|| {
@@ -102,7 +125,7 @@ mod tests {
     use super::*;
 
     fn program_and_args(command: &EndpointCommand) -> (String, Vec<String>) {
-        let command = build_command(command).unwrap();
+        let command = program_command(command).unwrap();
         let std = command.as_std();
         (
             std.get_program().to_string_lossy().into_owned(),

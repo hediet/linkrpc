@@ -16,6 +16,7 @@ const COMMAND_PARAM = "command";
 const ARGV_PARAM = "argv";
 const PROVISION_SLOT_PARAM = "provisionSlot";
 const ENV_PARAM = "env";
+const CWD_PARAM = "cwd";
 
 function _tryParseUrl(uri) {
   try {
@@ -101,19 +102,25 @@ function parseEndpointUri(uri) {
     }
     case "cmd-stdio:": {
       const env = _parseEnv(url);
-      return env !== undefined
-        ? { kind: "cmd-stdio", command: _parseCommand(url), env }
-        : { kind: "cmd-stdio", command: _parseCommand(url) };
+      const cwd = url.searchParams.get(CWD_PARAM) ?? undefined;
+      return {
+        kind: "cmd-stdio",
+        command: _parseCommand(url),
+        ...(env !== undefined ? { env } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
+      };
     }
     case "cmd:": {
       const command = _parseCommand(url);
       const provisionSlot = url.searchParams.get(PROVISION_SLOT_PARAM) ?? undefined;
       const env = _parseEnv(url);
+      const cwd = url.searchParams.get(CWD_PARAM) ?? undefined;
       return {
         kind: "cmd-env",
         command,
         ...(provisionSlot !== undefined ? { provisionSlot } : {}),
         ...(env !== undefined ? { env } : {}),
+        ...(cwd !== undefined ? { cwd } : {}),
       };
     }
     default:
@@ -170,6 +177,7 @@ function formatEndpointUri(spec, options) {
       const params = new URLSearchParams();
       _appendCommand(params, spec.command);
       _appendEnv(params, spec.env);
+      if (spec.cwd !== undefined) params.set(CWD_PARAM, spec.cwd);
       return `cmd-stdio:?${params.toString()}`;
     }
     case "cmd-env": {
@@ -179,6 +187,7 @@ function formatEndpointUri(spec, options) {
         params.set(PROVISION_SLOT_PARAM, spec.provisionSlot);
       }
       _appendEnv(params, spec.env);
+      if (spec.cwd !== undefined) params.set(CWD_PARAM, spec.cwd);
       return `cmd:?${params.toString()}`;
     }
   }
@@ -211,10 +220,12 @@ const parseInputs = [
   "cmd-stdio:?command=run-hub",
   "cmd-stdio:?argv=run-hub&argv=--flag",
   "cmd-stdio:?command=run-hub&env=A=1&env=B=2",
+  "cmd-stdio:?command=run-hub&cwd=%2Fwork%2Fdir",
   // cmd
   "cmd:?command=run-hub",
   "cmd:?command=run-hub&provisionSlot=slot-7",
   "cmd:?argv=run&argv=--x&provisionSlot=s&env=K=V",
+  "cmd:?argv=run&env=K=V&cwd=C%3A%5Cwork",
   // errors
   "",
   "   ",
@@ -244,8 +255,10 @@ const formatSpecs = [
   { spec: { kind: "cmd-stdio", command: { command: "run-hub" } } },
   { spec: { kind: "cmd-stdio", command: { argv: ["run-hub", "--flag"] } } },
   { spec: { kind: "cmd-stdio", command: { command: "run-hub" }, env: { A: "1", B: "2" } } },
+  { spec: { kind: "cmd-stdio", command: { command: "run-hub" }, cwd: "/work/dir" } },
   { spec: { kind: "cmd-env", command: { command: "run-hub" }, provisionSlot: "slot-7" } },
   { spec: { kind: "cmd-env", command: { argv: ["run", "--x"] }, env: { K: "V" } } },
+  { spec: { kind: "cmd-env", command: { argv: ["run"] }, env: { K: "V" }, cwd: "C:\\work" } },
 ];
 
 const format = formatSpecs.map(({ spec, options }) => ({

@@ -60,10 +60,13 @@ fn spec_to_value(spec: &ResolvedEndpoint) -> Value {
             }
             obj
         }
-        ResolvedEndpoint::CmdStdio { command, env } => {
+        ResolvedEndpoint::CmdStdio { command, env, cwd } => {
             let mut obj = json!({ "kind": "cmd-stdio", "command": command_to_value(command) });
             if let Some(env) = env_to_value(env) {
                 obj["env"] = env;
+            }
+            if let Some(cwd) = cwd {
+                obj["cwd"] = json!(cwd);
             }
             obj
         }
@@ -71,6 +74,7 @@ fn spec_to_value(spec: &ResolvedEndpoint) -> Value {
             command,
             provision_slot,
             env,
+            cwd,
         } => {
             let mut obj = json!({ "kind": "cmd-env", "command": command_to_value(command) });
             if let Some(slot) = provision_slot {
@@ -78,6 +82,9 @@ fn spec_to_value(spec: &ResolvedEndpoint) -> Value {
             }
             if let Some(env) = env_to_value(env) {
                 obj["env"] = env;
+            }
+            if let Some(cwd) = cwd {
+                obj["cwd"] = json!(cwd);
             }
             obj
         }
@@ -126,11 +133,13 @@ fn spec_from_value(v: &Value) -> ResolvedEndpoint {
         "cmd-stdio" => ResolvedEndpoint::CmdStdio {
             command: command_from_value(&v["command"]),
             env: env_from_value(v),
+            cwd: opt_string(v, "cwd"),
         },
         "cmd-env" => ResolvedEndpoint::CmdEnv {
             command: command_from_value(&v["command"]),
             provision_slot: opt_string(v, "provisionSlot"),
             env: env_from_value(v),
+            cwd: opt_string(v, "cwd"),
         },
         other => panic!("unknown kind {other:?}"),
     }

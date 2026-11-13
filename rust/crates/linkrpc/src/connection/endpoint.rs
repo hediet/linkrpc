@@ -20,6 +20,7 @@ const COMMAND_PARAM: &str = "command";
 const ARGV_PARAM: &str = "argv";
 const PROVISION_SLOT_PARAM: &str = "provisionSlot";
 const ENV_PARAM: &str = "env";
+const CWD_PARAM: &str = "cwd";
 
 const REDACTED: &str = "***";
 
@@ -55,8 +56,10 @@ pub enum ResolvedEndpoint {
         command: EndpointCommand,
         /// Extra environment variables for the child.
         env: Option<BTreeMap<String, String>>,
+        /// Working directory for the child.
+        cwd: Option<String>,
     },
-    /// Start a local hub and inject `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` into the child.
+    /// Spawn a child against a private socket and inject `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` into the child.
     CmdEnv {
         /// Command to spawn.
         command: EndpointCommand,
@@ -64,6 +67,8 @@ pub enum ResolvedEndpoint {
         provision_slot: Option<String>,
         /// Extra environment variables for the child.
         env: Option<BTreeMap<String, String>>,
+        /// Working directory for the child.
+        cwd: Option<String>,
     },
 }
 
@@ -230,16 +235,19 @@ pub fn parse_endpoint_uri(uri: &str) -> Result<ResolvedEndpoint, EndpointError> 
         "cmd-stdio" => {
             let env = parse_env(&url)?;
             let command = parse_command(&url)?;
-            Ok(ResolvedEndpoint::CmdStdio { command, env })
+            let cwd = get_param(&url, CWD_PARAM);
+            Ok(ResolvedEndpoint::CmdStdio { command, env, cwd })
         }
         "cmd" => {
             let command = parse_command(&url)?;
             let provision_slot = get_param(&url, PROVISION_SLOT_PARAM);
             let env = parse_env(&url)?;
+            let cwd = get_param(&url, CWD_PARAM);
             Ok(ResolvedEndpoint::CmdEnv {
                 command,
                 provision_slot,
                 env,
+                cwd,
             })
         }
         _ => Err(EndpointError::new(format!(
@@ -307,21 +315,24 @@ pub fn format_endpoint_uri(spec: &ResolvedEndpoint, options: FormatEndpointOptio
             }
             parsed.to_string()
         }
-        ResolvedEndpoint::CmdStdio { command, env } => {
+        ResolvedEndpoint::CmdStdio { command, env, cwd } => {
             let mut pairs = command_pairs(command);
             append_env_pairs(&mut pairs, env);
+            append_cwd_pair(&mut pairs, cwd);
             format!("cmd-stdio:?{}", encode_query(&pairs))
         }
         ResolvedEndpoint::CmdEnv {
             command,
             provision_slot,
             env,
+            cwd,
         } => {
             let mut pairs = command_pairs(command);
             if let Some(slot) = provision_slot {
                 pairs.push((PROVISION_SLOT_PARAM.to_string(), slot.clone()));
             }
             append_env_pairs(&mut pairs, env);
+            append_cwd_pair(&mut pairs, cwd);
             format!("cmd:?{}", encode_query(&pairs))
         }
     }
@@ -344,6 +355,12 @@ fn append_env_pairs(pairs: &mut Vec<(String, String)>, env: &Option<BTreeMap<Str
         for (k, v) in env {
             pairs.push((ENV_PARAM.to_string(), format!("{k}={v}")));
         }
+    }
+}
+
+fn append_cwd_pair(pairs: &mut Vec<(String, String)>, cwd: &Option<String>) {
+    if let Some(cwd) = cwd {
+        pairs.push((CWD_PARAM.to_string(), cwd.clone()));
     }
 }
 

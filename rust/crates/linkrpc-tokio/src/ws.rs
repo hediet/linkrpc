@@ -1,16 +1,16 @@
 //! WebSocket transport for linkrpc (the `ws://` / `wss://` endpoint half of M6).
 //!
-//! Each WebSocket message carries exactly one JSON-RPC frame (text). Unlike the NDJSON socket
-//! transport there is **no `hello` preamble** — the auth token rides in the `Authorization: Bearer`
-//! header at connect time (see [`connect_ws`]). This matches the TS `openHubChannel` WebSocket path.
+//! Each WebSocket message carries exactly one JSON-RPC frame (text). Like the NDJSON socket
+//! transport, the token travels in the in-band `hubrpc::initialize` handshake (see [`connect_ws`]),
+//! matching the TS `openHubChannel` WebSocket path and hub WebSocket servers (browsers cannot set
+//! upgrade headers).
 
 use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Error as WsError, Message};
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use linkrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
 
@@ -84,16 +84,22 @@ fn map_ws_err(e: WsError) -> TransportError {
     }
 }
 
-/// Dial a `ws://` / `wss://` hub. The `token` (when non-empty) is sent as
-/// `Authorization: Bearer <token>`; there is no `hello` preamble.
-pub async fn connect_ws(url: &str, token: &str) -> Result<WebSocketTransport, WsError> {
-    let mut request = url.into_client_request()?;
-    if !token.is_empty() {
-        let value = format!("Bearer {token}").parse().map_err(|_| {
-            WsError::Url(tokio_tungstenite::tungstenite::error::UrlError::NoHostName)
-        })?;
-        request.headers_mut().insert(AUTHORIZATION, value);
-    }
-    let (ws, _response) = tokio_tungstenite::connect_async(request).await?;
-    Ok(WebSocketTransport::new(ws))
+/// Errors from [`connect_ws`].
+#[derive(Debug, thiserror::Error)]
+pub enum WsConnectError {
+    /// The WebSocket upgrade failed.
+    #[error(transparent)]
+    WebSocket(#[from] WsError),
+    /// The `hubrpc::initialize` handshake failed (for example, the token was rejected).
+    #[error(transparent)]
+    Initialize(#[from] std::io::Error),
+}
+
+/// Dial a `ws://` / `wss://` LinkRPC endpoint and complete the `hubrpc::initialize` handshake,
+/// presenting `token` in band.
+pub async fn connect_ws(url: &str, token: &str) -> Result<WebSocketTransport, WsConnectError> {
+    let (ws, _response) = tokio_tungstenite::connect_async(url).await?;
+    let transport = WebSocketTransport::new(ws);
+    crate::initialize::initialize_client(&transport, Some(token.to_owned())).await?;
+    Ok(transport)
 }

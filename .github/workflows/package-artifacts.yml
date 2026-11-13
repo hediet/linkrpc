@@ -83,6 +83,11 @@ jobs:
         env:
           LINKRPC_STREAMING_INTEROP: "1"
         run: pnpm --filter @hediet/linkrpc test src/connection/streamingInterop.test.ts
+      - name: Test Rust and TypeScript endpoints in both directions
+        working-directory: typescript
+        env:
+          LINKRPC_ENDPOINT_INTEROP: "1"
+        run: pnpm --filter @hediet/linkrpc test src/node/endpointInterop.test.ts
       - name: Verify conformance vectors
         run: |
           npm --prefix conformance/generate run gen
