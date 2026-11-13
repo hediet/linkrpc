@@ -65,10 +65,18 @@ export interface LinkRpcMcpServerOptions {
      */
     readonly maxHubResultBytes?: number;
     /**
-     * Also list the tools of MCP servers published on the default connection's
-     * hub (MCP services and forwarded servers), next to the script tools.
+     * Also list the tools of MCP services published on the default connection's
+     * hub, next to the script tools. This server creates and owns its own
+     * {@link HubMcpAggregator}; use {@link sharedHubTools} to share one.
      */
-    readonly hubTools?: boolean | Omit<HubMcpAggregatorOptions, "clientInfo">;
+    readonly hubTools?: boolean | HubMcpAggregatorOptions;
+    /**
+     * Also list the tools of this source, e.g. one {@link HubMcpAggregator}
+     * shared by many sessions. The server only subscribes to it, and
+     * unsubscribes on {@link LinkRpcMcpServer.dispose}; the owner disposes the
+     * source. Mutually exclusive with {@link hubTools}.
+     */
+    readonly sharedHubTools?: McpToolSource;
     /** Serve the script tools (`runLinkRpcScript`, ...). Defaults to `true`. */
     readonly scriptTools?: boolean;
     /** Observes completed MCP tool calls exactly as their result is returned to the client. */
@@ -117,7 +125,9 @@ export class LinkRpcMcpServer {
     private readonly _mcp: Server;
     private readonly _pool: IConnectionPool;
     private readonly _maxHubResultBytes: number | undefined;
-    private readonly _hubTools: Promise<HubMcpAggregator> | undefined;
+    /** Set only when this server owns its aggregator. */
+    private readonly _ownedHubTools: Promise<HubMcpAggregator> | undefined;
+    private readonly _hubToolsRegistration: { dispose(): void } | undefined;
     private readonly _tasks = new TaskRegistry();
     private readonly _onToolCall: ((call: McpToolCall) => void) | undefined;
     private readonly _onExploreCall: ((call: McpExploreCall) => void) | undefined;
@@ -141,11 +151,16 @@ export class LinkRpcMcpServer {
                 }));
         const host = new McpToolHost(this._mcp);
         if (options.scriptTools !== false) host.addTools(this._createTools());
-        if (options.hubTools !== undefined && options.hubTools !== false) {
+        if (options.sharedHubTools !== undefined) {
+            if (options.hubTools !== undefined && options.hubTools !== false) {
+                throw new Error("hubTools and sharedHubTools are mutually exclusive");
+            }
+            this._hubToolsRegistration = host.addSource(_lazySource(Promise.resolve(options.sharedHubTools)));
+        } else if (options.hubTools !== undefined && options.hubTools !== false) {
             const aggregatorOptions = options.hubTools === true ? {} : options.hubTools;
-            this._hubTools = this._pool.resolve(undefined).then((pooled) =>
-                new HubMcpAggregator(pooled.channel, { clientInfo: { name: SERVER_NAME, version: SERVER_VERSION }, ...aggregatorOptions }));
-            host.addSource(_lazySource(this._hubTools));
+            this._ownedHubTools = this._pool.resolve(undefined).then((pooled) =>
+                new HubMcpAggregator(pooled.channel, aggregatorOptions));
+            this._hubToolsRegistration = host.addSource(_lazySource(this._ownedHubTools));
         }
     }
 
@@ -155,7 +170,8 @@ export class LinkRpcMcpServer {
 
     /** Cancels parked tasks, closes hub connections owned by the pool, and closes the MCP connection. */
     public dispose(): void {
-        void this._hubTools?.then((aggregator) => aggregator.dispose(), () => { /* never started */ });
+        this._hubToolsRegistration?.dispose();
+        void this._ownedHubTools?.then((aggregator) => aggregator.dispose(), () => { /* never started */ });
         this._tasks.dispose();
         this._pool.dispose();
         void this._mcp.close().catch(() => { /* already closed */ });
@@ -494,14 +510,25 @@ export class LinkRpcMcpServer {
     }
 }
 
-/** A tool source that becomes available once `pending` resolves; failures are logged, not fatal. */
+/**
+ * A tool source that becomes available once `pending` resolves; failures are
+ * logged, not fatal. Subscribes to the underlying source only while it has
+ * listeners, so it does not keep a closed session alive through a shared source.
+ */
 function _lazySource(pending: Promise<McpToolSource>): McpToolSource {
     let current: McpToolSource | undefined;
+    let unsubscribe: (() => void) | undefined;
     const listeners = new Set<() => void>();
+    const notify = () => { for (const listener of listeners) listener(); };
+    const subscribe = () => {
+        if (current !== undefined && unsubscribe === undefined && listeners.size > 0) {
+            unsubscribe = current.onDidChange(notify);
+        }
+    };
     const ready = pending.then(async (source) => {
         current = source;
-        source.onDidChange(() => { for (const listener of listeners) listener(); });
-        for (const listener of listeners) listener();
+        subscribe();
+        notify();
         await source.ready;
     }).catch((error: unknown) => {
         process.stderr.write(`linkrpc-mcp: hub MCP tools unavailable: ${_describeError(error)}\n`);
@@ -510,7 +537,14 @@ function _lazySource(pending: Promise<McpToolSource>): McpToolSource {
         tools: () => current?.tools() ?? [],
         onDidChange: (listener) => {
             listeners.add(listener);
-            return () => listeners.delete(listener);
+            subscribe();
+            return () => {
+                listeners.delete(listener);
+                if (listeners.size === 0) {
+                    unsubscribe?.();
+                    unsubscribe = undefined;
+                }
+            };
         },
         ready,
     };

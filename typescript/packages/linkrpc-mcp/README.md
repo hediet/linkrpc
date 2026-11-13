@@ -71,8 +71,12 @@ stops waiting; use `cancelLinkRpcTask` to stop a parked task.
 
 `LinkRpcMcpServer` also accepts:
 
-- `hubTools`: additionally list the tools of MCP servers published on the default
-  connection's hub (see below), next to the script tools.
+- `hubTools`: additionally list the tools of MCP services published on the
+  default connection's hub (see below), next to the script tools. The server
+  owns that aggregator.
+- `sharedHubTools`: list the tools of an existing `McpToolSource` instead, e.g.
+  one `HubMcpAggregator` shared by all sessions of an `McpSocketHost`. The
+  server unsubscribes on `dispose()`; the owner disposes the source.
 - `maxHubResultBytes`: reject hub results above this size before they enter the
   sandbox.
 - `pool`, `provider`, `defaultConnection`: choose how sessions reach the hub. Use
@@ -182,18 +186,20 @@ matcher `mcpIdentity: { exact: "work" }` allows only that account. Matchers
 name every parameter of a call, so a permission for a tool method also lists the
 tool's own parameters with `{ any: true }`.
 
-`HubMcpAggregator` discovers every MCP service and forwarded server visible
-through a signed channel and is an `McpToolSource`; `McpToolHost` serves tool
+`HubMcpAggregator` discovers every MCP service (`mcp.tools`) visible through a
+signed channel and is an `McpToolSource`; it does not consume forwarded servers
+(`mcp.forward`). It keeps no per-caller state, so one instance can serve many
+MCP sessions; `McpToolHost` serves tool
 sources on an MCP SDK `Server`. Service tools are called through their generated
 methods, so the
 hub's per-tool capabilities and consent apply; `mcpIdentityFor` selects an
-account per service. `linkrpc hub mcp` and the `hubTools` option are built from
-these.
+account per service. `linkrpc hub mcp`, `linkrpc hub mcp-export` (one shared
+aggregator), and the `hubTools` option are built from these.
 
 `DelegatedHubSender` signs calls as a delegated principal over a channel it does
 not own, for services that act for many users, chats, or OAuth grants over one
 hub connection. Granted capabilities are persisted through `onGranted`.
 
 Not yet supported: aggregation of resources and prompts, server-to-client
-requests (sampling, elicitation, roots) through the aggregator, and shared
-forwarding.
+requests (sampling, elicitation, roots) through the aggregator, and aggregating
+forwarded servers.

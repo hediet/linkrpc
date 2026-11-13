@@ -5,6 +5,7 @@ import { LinkRpcConnection, TransportPair, type JsonValue } from "@hediet/linkrp
 import { connectViaTransport } from "@hediet/linkrpc-client-internal";
 import type { IConnectionPool, PooledConnection } from "./connectionPool";
 import { registerMcpToolBridge } from "./hub/service/bridge";
+import type { HostedTool, McpToolSource } from "./hub/toolHost";
 import { LinkRpcMcpServer, type LinkRpcMcpServerOptions } from "./server";
 
 /**
@@ -497,5 +498,46 @@ describe("LinkRpcMcpServer MCP integration", () => {
             local.close();
             hub.close();
         }
+    });
+
+    it("lists a shared hub tool source and unsubscribes from it on dispose", async () => {
+        const listeners = new Set<() => void>();
+        let tools: HostedTool[] = [];
+        const shared: McpToolSource = {
+            tools: () => tools,
+            onDidChange: (listener) => {
+                listeners.add(listener);
+                return () => listeners.delete(listener);
+            },
+        };
+        const connect = async () => {
+            const server = new LinkRpcMcpServer({
+                pool: { resolve: async () => { throw new Error("unused"); }, dispose: () => {} },
+                scriptTools: false,
+                sharedHubTools: shared,
+            });
+            const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+            await server.connect(serverTransport);
+            const client = new Client({ name: "test-client", version: "0.0.0" });
+            await client.connect(clientTransport);
+            return { server, client };
+        };
+        const first = await connect();
+        const second = await connect();
+        try {
+            tools = [{ definition: { name: "shared", inputSchema: { type: "object" } }, call: async () => ({ content: [] }) }];
+            for (const listener of listeners) listener();
+            expect((await first.client.listTools()).tools.map((tool) => tool.name)).toEqual(["shared"]);
+            expect((await second.client.listTools()).tools.map((tool) => tool.name)).toEqual(["shared"]);
+            expect(listeners.size).toBe(2);
+            first.server.dispose();
+            expect(listeners.size).toBe(1);
+            expect((await second.client.listTools()).tools.map((tool) => tool.name)).toEqual(["shared"]);
+        } finally {
+            await first.client.close();
+            await second.client.close();
+            second.server.dispose();
+        }
+        expect(listeners.size).toBe(0);
     });
 });

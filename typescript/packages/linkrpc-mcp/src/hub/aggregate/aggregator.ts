@@ -1,30 +1,19 @@
 import { createHash } from "node:crypto";
 import type { IRequestSender, SigningCallCtx } from "@hediet/linkrpc";
 import { HubDirectoryExplorer, type ServiceListing } from "@hediet/linkrpc/hub/common";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import {
-    CallToolResultSchema,
-    type CallToolResult,
-    type Tool,
-    ToolListChangedNotificationSchema,
-} from "@modelcontextprotocol/sdk/types.js";
-import { callerOwnedRequest, listAllTools, type McpClientInfo } from "../clientSession";
+import { CallToolResultSchema, type CallToolResult, type Tool } from "@modelcontextprotocol/sdk/types.js";
 import {
     generatedMcpToolsInterfacePrefix,
-    legacyMcpForwardInterface,
     type McpToolCatalog,
-    mcpForwardInterface,
     mcpToolCatalogSchema,
     mcpToolsInterface,
 } from "../contracts";
-import { McpForwardClientTransport } from "../forward/clientTransport";
 import type { HostedTool, McpToolSource, ToolCallExtra } from "../toolHost";
 
 export interface HubMcpAggregatorOptions {
     /** Unlock a gated directory, e.g. by requesting reflection access. */
     readonly requestDirectoryAccess?: (serviceId: string) => Promise<boolean>;
     readonly log?: (message: string) => void;
-    readonly clientInfo?: McpClientInfo;
     /**
      * MCP identity (account) to use per service id; services without one use
      * their default identity. Only that identity's tools are listed.
@@ -35,18 +24,15 @@ export interface HubMcpAggregatorOptions {
 }
 
 /**
- * Discovers every MCP server published on a hub and presents their tools as
- * one {@link McpToolSource}:
+ * Discovers every MCP service (`mcp.tools`) published on a hub and presents
+ * their tools as one {@link McpToolSource}. Tools are called through their
+ * generated methods, so the hub checks capabilities per tool. Forwarded MCP
+ * servers (`mcp.forward`, legacy `vscode.mcp-forward`) are not consumed.
  *
- * - MCP services (`mcp.tools`): tools are called through their generated
- *   methods, so the hub checks capabilities per tool;
- * - forwarded servers (`mcp.forward`, or the legacy `vscode.mcp-forward`): one
- *   MCP client session per server over a forwarded leg.
- *
- * A service offering both is used as an MCP service. All calls go through `sender`, so its
- * signing and capability negotiation apply. Tool names combine a readable
- * prefix with a stable hash of service id and tool name; descriptions start
- * with `[<serviceId>]`.
+ * The aggregator keeps no per-caller state, so one instance can serve many MCP
+ * sessions. All calls go through `sender`, so its signing and capability
+ * negotiation apply. Tool names combine a readable prefix with a stable hash of
+ * service id and tool name; descriptions start with `[<serviceId>]`.
  */
 export class HubMcpAggregator implements McpToolSource {
     public readonly ready: Promise<void>;
@@ -95,14 +81,14 @@ export class HubMcpAggregator implements McpToolSource {
         return () => this._listeners.delete(listener);
     }
 
-    /** Close every forwarded session; producers and other clients are unaffected. */
+    /** Stop watching the hub; the services and other clients are unaffected. */
     public async dispose(): Promise<void> {
         if (this._closed) return;
         this._closed = true;
         clearInterval(this._retry);
         this._unsubscribe();
         this._explorer.dispose();
-        await Promise.all([...this._entries.values()].map((entry) => this._detach(entry)));
+        this._entries.clear();
         await this._reconciling;
         this._listeners.clear();
     }
@@ -131,90 +117,47 @@ export class HubMcpAggregator implements McpToolSource {
         this._reconciling = this._reconciling.then(async () => {
             this._queued = false;
             if (this._closed) return;
-            const wanted = wantedEndpoints(this._explorer.result.listings);
-            await Promise.all([...this._entries.values()]
-                .filter((entry) => !sameEndpoint(entry, wanted.get(entry.serviceId)))
-                .map((entry) => this._detach(entry)));
-            await Promise.all([...wanted].map(async ([serviceId, endpoint]) => {
+            const wanted = wantedServices(this._explorer.result.listings);
+            for (const entry of this._entries.values()) {
+                if (!wanted.has(entry.serviceId)) this._detach(entry);
+            }
+            await Promise.all([...wanted].map(async ([serviceId, interfaces]) => {
                 const entry = this._entries.get(serviceId);
-                if (entry === undefined) await this._attach(serviceId, endpoint);
-                else if (entry.kind === "service" && endpoint.kind === "service"
-                    && endpoint.interfaces !== (entry.catalog && interfacesKey(entry.catalog.interfaces))) {
+                if (entry === undefined) await this._attach(serviceId);
+                else if (interfaces !== (entry.catalog && interfacesKey(entry.catalog.interfaces))) {
                     await this._refresh(entry);
                 }
             }));
         }).catch((error: unknown) => this._log(`Discovery reconciliation failed: ${errorMessage(error)}`));
     }
 
-    private async _attach(serviceId: string, endpoint: Endpoint): Promise<void> {
+    private async _attach(serviceId: string): Promise<void> {
         if (this._closed) return;
-        if (endpoint.kind === "service") {
-            const entry: ServiceEntry = { kind: "service", serviceId, catalog: undefined, tools: [], refresh: Promise.resolve() };
-            this._entries.set(serviceId, entry);
-            await this._refresh(entry);
-            if (this._entries.get(serviceId) === entry) this._log(`Connected to ${serviceId} (service)`);
-            return;
-        }
-        const client = new Client({ ...(this._options.clientInfo ?? defaultClientInfo) }, { capabilities: {} });
-        const entry: ForwardEntry = {
-            kind: "forward", serviceId, interfaceId: endpoint.interfaceId, client, tools: [], refresh: Promise.resolve(),
-        };
+        const entry: Entry = { serviceId, catalog: undefined, tools: [], refresh: Promise.resolve() };
         this._entries.set(serviceId, entry);
-        client.onerror = (error) => this._log(`${serviceId}: ${error.message}`);
-        client.onclose = () => {
-            if (this._entries.get(serviceId) !== entry) return;
-            this._log(`Disconnected from ${serviceId}; will retry while advertised`);
-            this._entries.delete(serviceId);
-            this._notifyChanged();
-        };
-        client.setNotificationHandler(ToolListChangedNotificationSchema, () => this._refresh(entry));
-        try {
-            const mcpIdentity = this._options.mcpIdentityFor?.(serviceId);
-            await client.connect(new McpForwardClientTransport(this._sender, serviceId, {
-                interfaceId: endpoint.interfaceId,
-                clientInfo: this._options.clientInfo ?? defaultClientInfo,
-                ...(mcpIdentity !== undefined ? { mcpIdentity } : {}),
-            }), { timeout: 10_000 });
-            await this._refresh(entry);
-            this._log(`Connected to ${serviceId}`);
-        } catch (error) {
-            this._log(`Cannot connect to ${serviceId}: ${errorMessage(error)}`);
-            await this._detach(entry);
-        }
+        await this._refresh(entry);
+        if (this._entries.get(serviceId) === entry) this._log(`Connected to ${serviceId}`);
     }
 
     private _refresh(entry: Entry): Promise<void> {
         entry.refresh = entry.refresh.then(async () => {
             if (this._entries.get(entry.serviceId) !== entry) return;
-            if (entry.kind === "service") {
-                const catalog = mcpToolCatalogSchema.parse(await this._sender.sendRequest(
-                    `${entry.serviceId}::${mcpToolsInterface.info.id}::listTools`,
-                    {},
-                ));
-                if (this._entries.get(entry.serviceId) !== entry) return;
-                entry.catalog = catalog;
-                const mcpIdentity = this._options.mcpIdentityFor?.(entry.serviceId);
-                const listedIdentity = mcpIdentity ?? catalog.defaultIdentity;
-                entry.tools = catalog.tools
-                    .filter((tool) => listedIdentity === undefined || tool.identities === undefined
-                        || tool.identities.includes(listedIdentity))
-                    .map((tool) => this._serviceTool(entry.serviceId, catalog, tool, mcpIdentity));
-            } else {
-                const tools = await listAllTools(entry.client, AbortSignal.timeout(10_000));
-                if (this._entries.get(entry.serviceId) !== entry) return;
-                entry.tools = tools.map((definition) => ({
-                    definition,
-                    call: (args, extra) => entry.client.callTool(
-                        { name: definition.name, ...(args === undefined ? {} : { arguments: { ...args } }) },
-                        CallToolResultSchema,
-                        callerOwnedRequest(extra.signal),
-                    ) as Promise<CallToolResult>,
-                }));
-            }
+            const catalog = mcpToolCatalogSchema.parse(await this._sender.sendRequest(
+                `${entry.serviceId}::${mcpToolsInterface.info.id}::listTools`,
+                {},
+            ));
+            if (this._entries.get(entry.serviceId) !== entry) return;
+            entry.catalog = catalog;
+            const mcpIdentity = this._options.mcpIdentityFor?.(entry.serviceId);
+            const listedIdentity = mcpIdentity ?? catalog.defaultIdentity;
+            entry.tools = catalog.tools
+                .filter((tool) => listedIdentity === undefined || tool.identities === undefined
+                    || tool.identities.includes(listedIdentity))
+                .map((tool) => this._serviceTool(entry.serviceId, catalog, tool, mcpIdentity));
             this._notifyChanged();
-        }).catch(async (error: unknown) => {
+        }).catch((error: unknown) => {
             this._log(`Cannot list tools from ${entry.serviceId}: ${errorMessage(error)}`);
-            await this._detach(entry);
+            this._detach(entry);
         });
         return entry.refresh;
     }
@@ -246,12 +189,10 @@ export class HubMcpAggregator implements McpToolSource {
         };
     }
 
-    private async _detach(entry: Entry): Promise<void> {
-        if (this._entries.get(entry.serviceId) === entry) {
-            this._entries.delete(entry.serviceId);
-            this._notifyChanged();
-        }
-        if (entry.kind === "forward") await entry.client.close();
+    private _detach(entry: Entry): void {
+        if (this._entries.get(entry.serviceId) !== entry) return;
+        this._entries.delete(entry.serviceId);
+        this._notifyChanged();
     }
 
     private _notifyChanged(): void {
@@ -265,34 +206,19 @@ interface AggregatedTool {
     call(args: Readonly<Record<string, unknown>> | undefined, extra: ToolCallExtra): Promise<CallToolResult>;
 }
 
-interface ServiceEntry {
-    readonly kind: "service";
+interface Entry {
     readonly serviceId: string;
     catalog: McpToolCatalog | undefined;
     tools: readonly AggregatedTool[];
     refresh: Promise<void>;
 }
 
-interface ForwardEntry {
-    readonly kind: "forward";
-    readonly serviceId: string;
-    readonly interfaceId: string;
-    readonly client: Client;
-    tools: readonly AggregatedTool[];
-    refresh: Promise<void>;
-}
-
-type Entry = ServiceEntry | ForwardEntry;
-
-type Endpoint =
-    /** `interfaces` identifies the generated interfaces and their hashes. */
-    | { readonly kind: "service"; readonly interfaces: string }
-    | { readonly kind: "forward"; readonly interfaceId: string };
-
-const defaultClientInfo: McpClientInfo = { name: "linkrpc-hub-mcp", version: "1.0.0" };
-
-/** One endpoint per service: the MCP service if offered, else the preferred forward id. */
-function wantedEndpoints(listings: readonly ServiceListing[]): Map<string, Endpoint> {
+/**
+ * The MCP services among `listings`, each with a key of its generated
+ * interfaces and their hashes. Other services, including forwarded MCP
+ * servers, are ignored.
+ */
+function wantedServices(listings: readonly ServiceListing[]): Map<string, string> {
     const byService = new Map<string, ServiceListing[]>();
     for (const listing of listings) {
         if (listing.serviceId.length === 0) continue;
@@ -300,27 +226,13 @@ function wantedEndpoints(listings: readonly ServiceListing[]): Map<string, Endpo
         items.push(listing);
         byService.set(listing.serviceId, items);
     }
-    const result = new Map<string, Endpoint>();
+    const result = new Map<string, string>();
     for (const [serviceId, items] of byService) {
-        const ids = new Set(items.map((item) => item.interfaceId));
-        if (ids.has(mcpToolsInterface.info.id)) {
-            const generated = items.filter((item) => item.interfaceId.startsWith(generatedMcpToolsInterfacePrefix));
-            result.set(serviceId, {
-                kind: "service",
-                interfaces: interfacesKey(generated.map((item) => ({ interfaceId: item.interfaceId, interfaceHash: item.hash }))),
-            });
-        } else if (ids.has(mcpForwardInterface.info.id)) {
-            result.set(serviceId, { kind: "forward", interfaceId: mcpForwardInterface.info.id });
-        } else if (ids.has(legacyMcpForwardInterface.info.id)) {
-            result.set(serviceId, { kind: "forward", interfaceId: legacyMcpForwardInterface.info.id });
-        }
+        if (!items.some((item) => item.interfaceId === mcpToolsInterface.info.id)) continue;
+        const generated = items.filter((item) => item.interfaceId.startsWith(generatedMcpToolsInterfacePrefix));
+        result.set(serviceId, interfacesKey(generated.map((item) => ({ interfaceId: item.interfaceId, interfaceHash: item.hash }))));
     }
     return result;
-}
-
-function sameEndpoint(entry: Entry, endpoint: Endpoint | undefined): boolean {
-    if (endpoint === undefined || endpoint.kind !== entry.kind) return false;
-    return entry.kind === "service" || (endpoint.kind === "forward" && endpoint.interfaceId === entry.interfaceId);
 }
 
 function interfacesKey(interfaces: readonly { readonly interfaceId: string; readonly interfaceHash: string }[]): string {

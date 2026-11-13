@@ -1364,8 +1364,8 @@ Batch options:
         program
             .command('mcp')
             .description(
-                'Expose the tools of all MCP servers published on the Hub (MCP services and ' +
-                'forwarded servers) as one stdio MCP server, together with the LinkRPC script tools ' +
+                'Expose the tools of all MCP services (mcp.tools) published on the Hub ' +
+                'as one stdio MCP server, together with the LinkRPC script tools ' +
                 '(runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask).',
             )
             .option('--no-scripts', 'serve only the aggregated MCP tools, without loading the script sandbox')
@@ -1391,7 +1391,7 @@ Batch options:
             .command('mcp-export')
             .description(
                 'Serve what `mcp` serves over Streamable HTTP on a loopback port (http://127.0.0.1:<port>/mcp), ' +
-                'so many MCP clients share one process. Clients send `Authorization: Bearer <token>`; ' +
+                'so many MCP clients share one process and one hub aggregator. Clients send `Authorization: Bearer <token>`; ' +
                 'the token is read from an environment variable.',
             )
             .requiredOption('--port <n>', 'loopback port to listen on', value => parsePositiveInteger(value, '--port'))

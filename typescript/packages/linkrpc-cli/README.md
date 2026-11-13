@@ -936,10 +936,10 @@ idle minutes.
 ### Hub MCP aggregation
 
 `linkrpc hub mcp` is a lightweight stdio MCP server that discovers every MCP
-server published in the selected Hub and aggregates their tools: MCP services
-(`mcp.tools`) and forwarded servers (`mcp.forward`, or the legacy
-`vscode.mcp-forward`). No service IDs, filters, or principal overrides are
-required:
+service (`mcp.tools`) published in the selected Hub and aggregates their tools.
+Forwarded servers (`mcp.forward`, or the legacy `vscode.mcp-forward`) are not
+aggregated; publish MCP servers with `mcp-publish --service`. No service IDs,
+filters, or principal overrides are required:
 
 ```json
 {
@@ -958,8 +958,7 @@ rules. An explicit endpoint can be supplied before `mcp`, for example
 `linkrpc hub --endpoint npipe://./pipe/my-hub mcp`. Signing and capability
 negotiation remain enabled by default; discovery does not bypass authorization.
 Service tools are called through their generated methods, so capabilities and
-consent apply per tool; a forwarded server needs one capability for all its
-tools. Inaccessible directories and failed servers are reported on stderr;
+consent apply per tool. Inaccessible directories and failed servers are reported on stderr;
 stdout contains only MCP protocol frames.
 
 `--mcp-identity <serviceId>=<identity>` (repeatable) uses another account of a
@@ -972,11 +971,10 @@ entry gives both the hub's MCP tools and scripted access to every hub service.
 sandbox.
 
 The command watches directory changes, refreshes changed tool lists (including
-paginated lists), and retries failed connections while they remain advertised.
+paginated lists), and retries failed services while they remain advertised.
 Tool names use a readable prefix and a stable hash of service ID plus tool name,
 remaining unique and MCP-safe even for long service paths. Descriptions identify
-the source service. Disconnecting stdio closes this client's forwarding sessions.
-This version aggregates tools, not resources, prompts, or sampling.
+the source service. This version aggregates tools, not resources, prompts, or sampling.
 
 `mcp-export` serves the same over Streamable HTTP on a loopback port, so all
 agents of a machine share one process and one hub connection instead of
@@ -1000,9 +998,11 @@ LINKRPC_MCP_EXPORT_TOKEN=<secret> linkrpc hub mcp-export --port 8124
 ```
 
 Clients must send the bearer token from the environment variable named by
-`--token-env` (default `LINKRPC_MCP_EXPORT_TOKEN`). Each MCP session has its own
-aggregator, forwarded sessions, and script state (`lastResultVal`, parked
-tasks); all sessions sign as the export's identity and share its grants.
+`--token-env` (default `LINKRPC_MCP_EXPORT_TOKEN`). All MCP sessions share one
+aggregator, so the export walks and watches the hub directory and refreshes tool
+lists once, however many sessions are open. Each MCP session has its own script
+state (`lastResultVal`, parked tasks); all sessions sign as the export's
+identity and share its grants.
 `--idle-timeout <minutes>` closes sessions without requests; a client then gets
 HTTP 404 and must initialize again. The export exits when its hub connection
 closes, so the daemon restarts it.
@@ -1068,8 +1068,9 @@ yourself and connect its stdio, e.g. with a named pipe pair or a supervisor:
 `linkrpc hub mcp-forward --stdio --serviceId <id>`.
 
 Manage that producer and `component-explorer serve -p <same-config>` with your
-workspace daemon. The aggregator opens lightweight MCP connections; it does not
-start workspace builds or explorer daemons. Each forwarded connection spawns
+workspace daemon. `hub mcp` and `mcp-export` do not aggregate forwarded
+servers; other `mcp.forward` clients connect to them directly. Each forwarded
+connection spawns
 the configured MCP child, so producers must use attach-only commands when
 heavyweight services are managed separately. Children inherit the producer's
 environment plus `--env` values.

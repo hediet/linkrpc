@@ -23,9 +23,6 @@ type Case = {
 const scriptTools = ['runLinkRpcScript', 'awaitLinkRpcTask', 'cancelLinkRpcTask'];
 
 it.each<Case>([
-    { command: ['mcp-forward'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
-    // The MCP server runs on its own; the producer forwards it over its own stdin/stdout.
-    { command: ['mcp-forward', '--stdio'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
     { command: ['mcp-publish', '--service'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
     // The script tools are on by default.
     { command: ['mcp-publish', '--service', '--forward'], consumer: ['mcp'], scriptTools },
@@ -66,18 +63,12 @@ it.each<Case>([
     const cwd = fileURLToPath(new URL('../../', import.meta.url));
     const args = ['--import', 'tsx', cli, 'hub', '--endpoint', endpoint, '--no-sign'];
     const serverScript = fileURLToPath(new URL('../fixtures/mcp-server.mjs', import.meta.url));
-    const ownStdio = command.includes('--stdio');
     const configFile = join(directory, 'mcp.json');
     if (config) await writeFile(configFile, JSON.stringify(config(serverScript)));
     // `./explorer` is relative to the connection's granted namespace `test`.
     const producer = spawn(process.execPath, [...args, ...command, '--serviceId', './explorer',
-        ...(config ? ['--mcp-config', configFile] : ownStdio ? [] : ['--', process.execPath, serverScript])],
-    { cwd, stdio: [ownStdio ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
-    const server = ownStdio ? spawn(process.execPath, [serverScript], { stdio: ['pipe', 'pipe', 'inherit'] }) : undefined;
-    if (server) {
-        server.stdout!.pipe(producer.stdin!);
-        producer.stdout!.pipe(server.stdin!);
-    }
+        ...(config ? ['--mcp-config', configFile] : ['--', process.execPath, serverScript])],
+    { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     let producerLog = '';
     producer.stderr!.on('data', chunk => { producerLog += String(chunk); });
     const exited = once(producer, 'exit');
@@ -93,7 +84,6 @@ it.each<Case>([
         let diagnostics = '';
         transport.stderr?.on('data', chunk => { diagnostics += String(chunk); });
         await client.connect(transport);
-        // A cold first producer can miss the aggregator's connect timeout; it retries while advertised.
         let tools = await client.listTools();
         await vi.waitFor(async () => {
             tools = await client.listTools();
@@ -110,7 +100,6 @@ it.each<Case>([
     } finally {
         await client.close();
         producer.kill();
-        server?.kill();
         await exited;
         hub.dispose();
         await rm(directory, { recursive: true, force: true });
