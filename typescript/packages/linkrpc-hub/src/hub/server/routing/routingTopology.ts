@@ -12,6 +12,7 @@ import type { ServiceId } from '@hediet/linkrpc/hub/common';
 import { GET_NODE_ID_METHOD, PeerDiscovery } from './peerDiscovery';
 export { GET_NODE_ID_METHOD } from './peerDiscovery';
 
+/** Treated as an immutable value: dispose its registration and register a new one to change it. */
 export interface ManagedRoutingTopology {
     readonly node: TopologyGraph['nodes'][number];
     readonly hubLinks: readonly {
@@ -28,6 +29,7 @@ export interface ManagedRoutingTopology {
     readonly adjacentLinks?: TopologyGraph['links'];
 }
 
+/** Treated as an immutable value: dispose its registration and register a new one to change it. */
 export interface ManagedTopologyFragment {
     readonly nodes: TopologyGraph['nodes'];
     readonly links?: TopologyGraph['links'];
@@ -38,6 +40,10 @@ interface Disposable {
     dispose(): void;
 }
 
+/**
+ * The owner must call {@link RoutingTopology.invalidate} whenever `links`,
+ * `forwardingEntries`, `edgeId` or `transportInfo` would return something else.
+ */
 export interface RoutingTopologyOptions {
     readonly nodeId: string;
     readonly generateTopologyId: TopologyIdGenerator;
@@ -70,18 +76,21 @@ export class RoutingTopology {
     private readonly _managedRoutingTopologies =
         new WeakMap<IMessageTransport, ManagedRoutingTopology>();
     private readonly _managedTopologyFragments = new Set<ManagedTopologyFragment>();
+    /** Built lazily; every change of a graph input must go through {@link invalidate}. */
+    private _graph: TopologyGraph | undefined;
 
     constructor(private readonly _options: RoutingTopologyOptions) {
         this._peers = new PeerDiscovery({
             timeoutMs: _options.peerIdentificationTimeoutMs,
             request: (link, timeoutMs) =>
                 _options.requestOnLink(link, GET_NODE_ID_METHOD, {}, timeoutMs),
-            onDidChange: _options.onDidChange,
+            onDidChange: () => this.invalidate(),
         });
     }
 
     public attachLink(link: IMessageTransport): void {
         this._peers.attach(link);
+        this.invalidate();
     }
 
     public portId(link: IMessageTransport): string {
@@ -107,7 +116,7 @@ export class RoutingTopology {
     ): Disposable {
         const link = this._attachedLink(attached, 'registerManagedRoutingTopology');
         this._managedRoutingTopologies.set(link, topology);
-        this._options.onDidChange();
+        this.invalidate();
         let disposed = false;
         return {
             dispose: () => {
@@ -115,21 +124,21 @@ export class RoutingTopology {
                 disposed = true;
                 if (this._managedRoutingTopologies.get(link) !== topology) return;
                 this._managedRoutingTopologies.delete(link);
-                this._options.onDidChange();
+                this.invalidate();
             },
         };
     }
 
     public registerManagedTopologyFragment(fragment: ManagedTopologyFragment): Disposable {
         this._managedTopologyFragments.add(fragment);
-        this._options.onDidChange();
+        this.invalidate();
         let disposed = false;
         return {
             dispose: () => {
                 if (disposed) return;
                 disposed = true;
                 this._managedTopologyFragments.delete(fragment);
-                this._options.onDidChange();
+                this.invalidate();
             },
         };
     }
@@ -141,24 +150,48 @@ export class RoutingTopology {
             services = new Set();
             this._inspectionServices.set(link, services);
         }
+        if (services.has(serviceId)) return;
         services.add(serviceId);
+        this.invalidate();
     }
 
     public isInspectionService(link: IMessageTransport, serviceId: string): boolean {
         return this._inspectionServices.get(link)?.has(serviceId) === true;
     }
 
+    /**
+     * Returns the graph as of the latest change. It is built at most once per
+     * change; callers must treat the nodes, links and routes as immutable.
+     */
     public getTopologyGraph(observerServiceId: string): TopologyGraph {
+        this._graph ??= this._buildGraph();
+        return {
+            observerServiceId,
+            entryNodeId: this._graph.entryNodeId,
+            nodes: [...this._graph.nodes],
+            links: [...this._graph.links],
+            routes: [...this._graph.routes],
+        };
+    }
+
+    /** Discards the cached graph and notifies listeners. Call after every change of a graph input. */
+    public invalidate(): void {
+        this._graph = undefined;
+        this._options.onDidChange();
+    }
+
+    private _buildGraph(): TopologyGraph {
         const allLinks = [...this._options.links()];
         const visibleLinks = allLinks.filter((link) => !this._inspectionServices.has(link));
-        const hubPorts = allLinks.map((link) => ({
-            portId: this.portId(link),
-            label: this._options.edgeId(link),
-        }));
+        const hubPorts = new Map<string, TopologyGraph['nodes'][number]['ports'][number]>();
+        for (const link of allLinks) {
+            const portId = this.portId(link);
+            hubPorts.set(portId, { portId, label: this._options.edgeId(link) });
+        }
         for (const link of visibleLinks) {
             for (const hubLink of this._managedRoutingTopologies.get(link)?.hubLinks ?? []) {
-                if (!hubPorts.some((port) => port.portId === hubLink.hubPortId)) {
-                    hubPorts.push({
+                if (!hubPorts.has(hubLink.hubPortId)) {
+                    hubPorts.set(hubLink.hubPortId, {
                         portId: hubLink.hubPortId,
                         label: hubLink.label ?? hubLink.hubPortId,
                     });
@@ -174,9 +207,12 @@ export class RoutingTopology {
             ...(this._options.descriptors !== undefined
                 ? { descriptors: [...this._options.descriptors] }
                 : {}),
-            ports: hubPorts,
+            ports: [...hubPorts.values()],
         }];
-        const peerNodes = new Map<string, TopologyGraph['nodes'][number]>();
+        const peerNodes = new Map<string, {
+            readonly node: TopologyGraph['nodes'][number];
+            readonly portIds: Set<string>;
+        }>();
         const links: TopologyGraph['links'] = [];
 
         for (const link of visibleLinks) {
@@ -184,15 +220,16 @@ export class RoutingTopology {
             const managed = this._managedRoutingTopologies.get(link);
             let peerNode = peerNodes.get(peer.nodeId);
             if (peerNode === undefined) {
-                peerNode = { nodeId: peer.nodeId, ports: [] };
+                peerNode = { node: { nodeId: peer.nodeId, ports: [] }, portIds: new Set() };
                 peerNodes.set(peer.nodeId, peerNode);
-                nodes.push(peerNode);
+                nodes.push(peerNode.node);
             }
-            if (!peerNode.ports.some((port) => port.portId === peer.portId)) {
-                peerNode.ports.push({ portId: peer.portId });
+            if (!peerNode.portIds.has(peer.portId)) {
+                peerNode.portIds.add(peer.portId);
+                peerNode.node.ports.push({ portId: peer.portId });
             }
             if (managed?.peerDescriptors !== undefined && managed.peerDescriptors.length > 0) {
-                peerNode.descriptors = [...peerNode.descriptors ?? [], ...managed.peerDescriptors];
+                (peerNode.node.descriptors ??= []).push(...managed.peerDescriptors);
             }
             if (managed !== undefined) {
                 nodes.push({
@@ -265,7 +302,7 @@ export class RoutingTopology {
         }
 
         return {
-            observerServiceId,
+            observerServiceId: '',
             entryNodeId: this._options.nodeId,
             nodes,
             links,
@@ -277,6 +314,7 @@ export class RoutingTopology {
         this._inspectionServices.delete(link);
         this._peers.detach(link);
         this._managedRoutingTopologies.delete(link);
+        this.invalidate();
     }
 
     private _attachedLink(attached: object, operation: string): IMessageTransport {

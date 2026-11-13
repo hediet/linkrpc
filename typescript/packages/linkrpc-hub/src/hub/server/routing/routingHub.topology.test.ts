@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
     ErrorCode,
     LinkRpcConnection,
@@ -438,20 +438,98 @@ describe('Hub topology', () => {
     });
 
     it('notifies topology watchers for attach, identify, claim, release, roles, and detach', async () => {
-        const first = new Hub();
-        const second = new Hub();
-        let changes = 0;
-        first.onDidChangeTopology(() => changes++);
-        const pair = new TransportPair();
-        const link = first.attach(pair.a);
-        second.attach(pair.b);
-        await link.identifyPeer();
-        link.addPrefixRoute('svc');
-        link.releasePrefix('svc');
-        first.setUplink(pair.a);
-        first.setLoopback(pair.a);
-        link.dispose();
+        vi.useFakeTimers();
+        try {
+            const first = new Hub();
+            const second = new Hub();
+            let changes = 0;
+            first.onDidChangeTopology(() => changes++);
+            const pair = new TransportPair();
+            const notified = async (action: () => unknown) => {
+                const before = changes;
+                await action();
+                await vi.advanceTimersByTimeAsync(100);
+                return changes - before;
+            };
+            let link!: ReturnType<Hub['attach']>;
 
-        expect(changes).toBeGreaterThanOrEqual(7);
+            expect([
+                await notified(() => { link = first.attach(pair.a); }),
+                // The far end's attachment lets automatic discovery identify the peer.
+                await notified(() => second.attach(pair.b)),
+                await notified(() => link.addPrefixRoute('svc')),
+                await notified(() => link.releasePrefix('svc')),
+                await notified(() => first.setUplink(pair.a)),
+                await notified(() => first.setLoopback(pair.a)),
+                await notified(() => link.dispose()),
+            ]).toEqual([1, 1, 1, 1, 1, 1, 1]);
+            expect(first.getTopologyGraph('o').links).toEqual([]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('coalesces bursts of topology changes and notifies after the last change', async () => {
+        vi.useFakeTimers();
+        try {
+            const hub = new Hub({ nodeId: 'hub' });
+            const observed: number[] = [];
+            hub.onDidChangeTopology(() => observed.push(hub.getTopologyGraph('observer').links.length));
+            const links = Array.from({ length: 100 }, () => hub.attachOut());
+            links.slice(50).forEach((link) => link.dispose());
+            expect(observed).toEqual([]);
+
+            await Promise.resolve();
+            expect(observed).toEqual([50]);
+
+            links[0].dispose();
+            await vi.advanceTimersByTimeAsync(10);
+            links[1].dispose();
+            await vi.advanceTimersByTimeAsync(89);
+            expect(observed).toEqual([50]);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(observed).toEqual([50, 48]);
+
+            links.forEach((link) => link.dispose());
+            await vi.advanceTimersByTimeAsync(100);
+            expect(observed).toEqual([50, 48, 0]);
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('does not notify a listener that subscribed after the change', async () => {
+        const hub = new Hub({ nodeId: 'hub' });
+        const link = hub.attachOut();
+        const late = vi.fn();
+        hub.onDidChangeTopology(late);
+        await Promise.resolve();
+        expect(late).not.toHaveBeenCalled();
+        link.dispose();
+        await Promise.resolve();
+        expect(late).toHaveBeenCalledOnce();
+    });
+
+    it('rebuilds a cached graph after any change, including label and transport updates', () => {
+        const hub = new Hub({ nodeId: 'hub' });
+        const pair = new TransportPair();
+        const link = hub.attach(pair.a);
+        const portLabel = () => hub.getTopologyGraph('observer').nodes[0].ports
+            .find((port) => port.portId === link.portId)?.label;
+        expect(hub.getTopologyGraph('a')).toEqual({ ...hub.getTopologyGraph('b'), observerServiceId: 'a' });
+        expect(hub.getTopologyGraph('a').observerServiceId).toBe('a');
+
+        const before = portLabel();
+        hub.attach(pair.a, { edgeId: 'renamed', transport: { type: 'websocket', path: '/x' } });
+        expect({ before, after: portLabel(), transport: hub.getTopologyGraph('o').links[0].transport })
+            .toEqual({ before: 'e1', after: 'renamed', transport: { type: 'websocket', path: '/x' } });
+
+        link.addPrefixRoute('svc');
+        expect(hub.getTopologyGraph('o').routes.map((route) => route.serviceId)).toEqual(['svc']);
+        link.releasePrefix('svc');
+        expect(hub.getTopologyGraph('o').routes).toEqual([]);
+        link.dispose();
+        expect(hub.getTopologyGraph('o').links).toEqual([]);
     });
 });
