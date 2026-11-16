@@ -66,6 +66,14 @@
             "@hediet/source": "./src/logging/index.ts",
             "default": "./dist/logging/index.js"
         },
+        "./observable-log": {
+            "@hediet/source": "./src/observable-log/index.ts",
+            "default": "./dist/observable-log/index.js"
+        },
+        "./observable-query": {
+            "@hediet/source": "./src/observable-query/index.ts",
+            "default": "./dist/observable-query/index.js"
+        },
         "./observable-value": {
             "@hediet/source": "./src/observable-value/index.ts",
             "default": "./dist/observable-value/index.js"
@@ -119,6 +127,8 @@
             "./json-rpc/node": "./dist/json-rpc/node.js",
             "./json-rpc/protocol": "./dist/json-rpc/protocol.js",
             "./logging": "./dist/logging/index.js",
+            "./observable-log": "./dist/observable-log/index.js",
+            "./observable-query": "./dist/observable-query/index.js",
             "./observable-value": "./dist/observable-value/index.js",
             "./package.json": "./package.json"
         }

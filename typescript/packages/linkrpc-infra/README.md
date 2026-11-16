@@ -105,6 +105,45 @@ connection.register(usage, {
 // Client: usage.tokensPerSecond.watch({}, { onMessage: ({ value }) => show(value) })
 ```
 
+## Observable queries and logs (`linkrpc.observableQuery`, `linkrpc.observableLog`)
+
+Two parameterized relatives of the observable value, for things a client wants
+to wait for (the state of a pull request, its comments, a chat channel). Both
+are built so that a client that was disconnected can catch up without missing
+anything:
+
+- `@hediet/linkrpc-infra/observable-query`: `ObservableQueryTemplate({ params, value })`
+  is a family of changing values, one per `params`. `get({ params })` returns
+  `{ value }`; `watch({ params })` streams `{ value }`, current value first.
+  The value is the whole state, so a missed update is harmless: read it again.
+  Served by `observableQueryHandlers(source)` for a source with `get(params)`
+  (may be async) and `subscribe(params, listener)`.
+- `@hediet/linkrpc-infra/observable-log`: `ObservableLogTemplate({ params, entry })`
+  is a family of append-only logs. Entries have opaque, ordered cursors.
+  `read({ params, after?, limit? })` returns a page `{ entries, gap, cursor? }`;
+  `follow({ params, after? })` streams such pages, starting with one right away
+  (only new entries when `after` is omitted). Store the last `cursor` to
+  resume; `gap: true` says entries after `after` are no longer retained, so
+  the loss is visible. Served by `observableLogHandlers(source)` for a source
+  with `read(params, after, limit)`, `latest(params)` and
+  `subscribe(params, listener)`.
+
+Instances are tagged `linkrpc.observableQuery` / `linkrpc.observableLog`, so a
+generic client (for example a service that wakes agent sessions on changes)
+finds them through directory tags and the reflected template metadata.
+
+```ts
+const github = defineInterface({ id: 'example.github' }, {
+    pullRequest: ObservableQueryTemplate({ params: z.object({ repo: z.string(), number: z.number() }), value: zPullRequestState }),
+    pullRequestActivity: ObservableLogTemplate({ params: z.object({ repo: z.string(), number: z.number() }), entry: zActivity }),
+});
+connection.register(github, {
+    pullRequest: observableQueryHandlers(pullRequests),
+    pullRequestActivity: observableLogHandlers(activity),
+});
+// Client: github.pullRequestActivity.follow({ params, after: storedCursor }, { onMessage: page => ... })
+```
+
 ## Compute nodes
 
 `@hediet/linkrpc-infra/compute-node` defines browser-safe interfaces for
