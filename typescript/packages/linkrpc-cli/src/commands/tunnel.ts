@@ -25,8 +25,8 @@ export interface ProxyOptions {
     readonly hub: CliConnection;
     /** Live connection to the participant the proxy stands in for. */
     readonly participant: CliConnection;
-    /** Claim this service id on the hub and forward its requests verbatim to the participant. */
-    readonly claimServiceId?: string;
+    /** Claim these service ids on the hub and forward their requests verbatim to the participant. */
+    readonly claimServiceIds?: readonly string[];
     readonly outbound: OutboundForwarding;
     /**
      * Resolves to stop the proxy (e.g. when the participant disconnects). When
@@ -41,7 +41,7 @@ export interface ProxyOptions {
  * Stand in for a participant on the hub until stopped.
  *
  * Requests the hub routes to this connection (e.g. for
- * {@link ProxyOptions.claimServiceId}) are forwarded verbatim to the
+ * {@link ProxyOptions.claimServiceIds}) are forwarded verbatim to the
  * participant: the original caller's `$hubrpc` envelope rides inside `params`,
  * so it is not re-wrapped. Calls the participant emits are forwarded to the hub
  * according to {@link ProxyOptions.outbound}. The streaming sub-protocol is
@@ -58,9 +58,9 @@ export async function proxyCommand(opts: ProxyOptions): Promise<void> {
         opts.participant.setRequestHandler(createForwardingHandler(opts.hub, opts.outbound));
     }
 
-    if (opts.claimServiceId !== undefined) {
-        await claimServiceId(opts.hub, opts.claimServiceId);
-        log(`proxy: claimed '${opts.claimServiceId}' — forwarding its requests to the participant unchanged`);
+    for (const serviceId of opts.claimServiceIds ?? []) {
+        await claimServiceId(opts.hub, serviceId);
+        log(`proxy: claimed '${serviceId}' — forwarding its requests to the participant unchanged`);
     }
     log({
         signed: 'proxy: forwarding participant calls to the hub, signed as the identity above',
@@ -101,7 +101,7 @@ export async function tunnelCommand(opts: TunnelOptions): Promise<void> {
     await proxyCommand({
         hub: opts.local,
         participant: opts.remote,
-        claimServiceId: opts.serviceId,
+        claimServiceIds: [opts.serviceId],
         outbound: opts.bidi ? 'verbatim' : 'none',
         ...(opts.stop !== undefined ? { stop: opts.stop } : {}),
         ...(opts.log !== undefined ? { log: opts.log } : {}),

@@ -369,3 +369,82 @@ describe('runHub far-end federation', () => {
         }
     });
 });
+
+describe('runHub listener default route', () => {
+    const CHILD_SERVICE_ID = `${PRIMARY_SERVICE_ID}/child`;
+    const CHILD_ECHO_SERVICE_ID = `${CHILD_SERVICE_ID}/echo`;
+    const ELSEWHERE_ECHO_SERVICE_ID = 'test.elsewhere/echo';
+
+    // The child only listens; the parent connects in (like the devbox Docker
+    // hub, whose uplink comes from outside), and the listener makes it the
+    // child's default route.
+    const childConfig = (socketPath: string) => HubConfigSchema.parse({
+        hubServiceId: CHILD_SERVICE_ID,
+        forwardChecking: false,
+        listeners: [{
+            type: 'socket',
+            path: socketPath,
+            handlers: [{ token: 'static', value: UPLINK_TOKEN, defaultRoute: true }],
+        }],
+    });
+    const parentConfig = (socketPath: string) => HubConfigSchema.parse({
+        hubServiceId: PRIMARY_SERVICE_ID,
+        forwardChecking: false,
+        endpoints: [{ kind: 'socket', path: socketPath, token: UPLINK_TOKEN, routeServiceIds: [CHILD_SERVICE_ID] }],
+    });
+    const echo = (peer: { connection: LinkRpcConnection<unknown> }, serviceId: string, value: string) =>
+        peer.connection.service(serviceId).get(echoInterface).echo({ value });
+    /** Retries `call` until it succeeds (or fails), e.g. while the parent (re)connects. */
+    const settles = async (call: () => Promise<unknown>, succeeds: boolean, description: string) => {
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline) {
+            if (await call().then(() => true, () => false) === succeeds) return;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(`timed out waiting for ${description}`);
+    };
+
+    it('routes unclaimed ids up, fails unknown child ids without looping, and follows reconnects', async () => {
+        const socketPath = SocketServer.allocSocketPath();
+        const child = await runHub({ config: childConfig(socketPath), log: () => { } });
+        const childEcho = attachEcho(child, CHILD_ECHO_SERVICE_ID, 'child');
+        const childCaller = attachPeer(child);
+        let parent = await runHub({ config: parentConfig(socketPath), log: () => { } });
+        let elsewhereEcho = attachEcho(parent, ELSEWHERE_ECHO_SERVICE_ID, 'parent-1');
+        let parentCaller = attachPeer(parent);
+        try {
+            await settles(() => echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'probe'), true, 'uplink');
+            await expect(echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'up')).resolves.toEqual({ value: 'parent-1:up' });
+            await expect(echo(parentCaller, CHILD_ECHO_SERVICE_ID, 'down')).resolves.toEqual({ value: 'child:down' });
+            await expect(echo(childCaller, `${CHILD_SERVICE_ID}/missing`, 'x')).rejects.toThrow(/no route|Method not found/);
+            await expect(echo(parentCaller, `${CHILD_SERVICE_ID}/missing`, 'x')).rejects.toThrow(/no route|Method not found/);
+
+            parentCaller.dispose();
+            elsewhereEcho.dispose();
+            parent.dispose();
+            await settles(() => echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'probe'), false, 'uplink cleared');
+            await expect(echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'gone')).rejects.toThrow(/no route|Method not found/);
+
+            parent = await runHub({ config: parentConfig(socketPath), log: () => { } });
+            elsewhereEcho = attachEcho(parent, ELSEWHERE_ECHO_SERVICE_ID, 'parent-2');
+            parentCaller = attachPeer(parent);
+            await settles(() => echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'probe'), true, 'uplink again');
+            await expect(echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'again')).resolves.toEqual({ value: 'parent-2:again' });
+        } finally {
+            parentCaller.dispose();
+            childCaller.dispose();
+            elsewhereEcho.dispose();
+            childEcho.dispose();
+            parent.dispose();
+            child.dispose();
+        }
+    });
+
+    it('rejects a second default route in the same config', async () => {
+        const config = HubConfigSchema.parse({
+            ...childConfig(SocketServer.allocSocketPath()),
+            endpoints: [{ kind: 'socket', path: SocketServer.allocSocketPath(), defaultRoute: true }],
+        });
+        await expect(runHub({ config, log: () => { } })).rejects.toThrow(/default-route conflict/);
+    });
+});

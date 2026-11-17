@@ -241,7 +241,9 @@ describe('HubDaemon', () => {
 
     it('answers management calls for services that are stopping during shutdown', async () => {
         writeConfig({ services: { a: service({ ECHO_EXIT_DELAY_MS: '1000' }) } });
-        await running('a');
+        // Running only means connected; stopping a service still claiming its namespace fails
+        // its startup, and it exits without lingering.
+        await serving('a');
         const connection = await connectToHubManagement(home);
         try {
             const shutdown = daemon!.shutdown();

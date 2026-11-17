@@ -54,6 +54,12 @@ export interface RootProvision {
     readonly storage?: ManagedIdentityStorageBackend;
     /** Token-minting front door (`connectionTokenBinder::*`). Omit for none. */
     readonly connectionTokenBinder?: RegisterConnectionTokenBinderOptions;
+    /**
+     * Make the connection the hub's default route (uplink): requests for
+     * serviceIds no other link claims go to it. At most one connection can
+     * hold the role; a second one is rejected while the first is attached.
+     */
+    readonly defaultRoute?: boolean;
 }
 
 /**
@@ -95,6 +101,9 @@ export function resolveConnectionHandler(
  * shared installer every built-in handler funnels through.
  */
 export function provisionRoot(ctx: ConnectionContext, provision: RootProvision): void {
+    if (provision.defaultRoute === true) {
+        ctx.upstream.setAsUplink();
+    }
     registerHubServices(ctx.root, ctx.upstream, {
         hubServiceId: ctx.hubServiceId,
         ...(provision.grantedServiceIdNamespace !== undefined

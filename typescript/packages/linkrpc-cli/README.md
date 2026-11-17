@@ -1107,7 +1107,9 @@ participant cannot do itself:
   is rejected here to keep this choice explicit.
 - `--claim <serviceId>` registers the service id (that registration is signed
   as `--principal`) and forwards requests the hub routes to it to the
-  participant unchanged, keeping callers' signatures.
+  participant unchanged, keeping callers' signatures. Repeat it to route
+  several service ids to the same participant, e.g. the outbound routes of a
+  nested hub whose uplink is this proxy.
 
 ```sh
 # A Rust client that cannot sign yet reaches a gated remote service.

@@ -18,6 +18,12 @@ interface PeerDiscoveryOptions {
     readonly onDidChange: () => void;
 }
 
+/** First retry delay after a failed probe, doubled after each further failure. */
+const MIN_RETRY_DELAY_MS = 200;
+/** Peers that do not serve `getNodeId` rarely gain it, so their first retry waits longer. */
+const MIN_UNSUPPORTED_RETRY_DELAY_MS = 30_000;
+const MAX_RETRY_DELAY_MS = 5 * 60_000;
+
 /** Background policy for direct-peer identity; forwarding never waits for it. */
 export class PeerDiscovery {
     private readonly _peers = new WeakMap<IMessageTransport, PeerState>();
@@ -32,7 +38,7 @@ export class PeerDiscovery {
 
     public attach(link: IMessageTransport): void {
         if (this._peers.has(link)) return;
-        const state: PeerState = { status: 'pending', retryDelayMs: 200 };
+        const state: PeerState = { status: 'pending', retryDelayMs: MIN_RETRY_DELAY_MS };
         this._peers.set(link, state);
         this._schedule(link, state, 0);
     }
@@ -83,8 +89,10 @@ export class PeerDiscovery {
                     state.status = status;
                     this._options.onDidChange();
                 }
-                const delay = state.status === 'unsupported' ? 30_000 : state.retryDelayMs;
-                state.retryDelayMs = Math.min(5_000, state.retryDelayMs * 2);
+                const delay = state.status === 'unsupported'
+                    ? Math.max(MIN_UNSUPPORTED_RETRY_DELAY_MS, state.retryDelayMs)
+                    : state.retryDelayMs;
+                state.retryDelayMs = Math.min(MAX_RETRY_DELAY_MS, delay * 2);
                 this._schedule(link, state, delay * (0.8 + Math.random() * 0.4));
             }
             throw new Error(

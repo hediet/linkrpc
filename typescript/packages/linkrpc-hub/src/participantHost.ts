@@ -1,10 +1,10 @@
 import {
     ErrorCode, LinkRpcConnection, RpcError,
     type InterfaceDeclarations, type InterfaceDefinition, type InterfaceHandlers, type InterfaceRegistration, type MemberMap,
-    type RegisterOptions,
+    type PrincipalWithStore, type RegisterOptions,
 } from '@hediet/linkrpc';
 import { hubFromConnection } from '@hediet/linkrpc/hub/client';
-import { createManagedSigningChannel, hubGrantedServiceIdInterface } from '@hediet/linkrpc/hub/common';
+import { createManagedSigningChannel, hubGrantedServiceIdInterface, type ManagedSigningOptions } from '@hediet/linkrpc/hub/common';
 import { startEndpoint, type EndpointConnection, type StartEndpointOptions, type StartedEndpoint } from '@hediet/linkrpc/node';
 
 export type ParticipantEndpoint =
@@ -18,8 +18,12 @@ export interface ParticipantHostOptions {
     readonly registrationMode: 'all' | 'root' | 'grantedServiceId';
     /** Optionally claim a descendant of the granted namespace. Invalid claims reject. */
     readonly serviceId?: string;
-    /** Requires a peer provisioned with the managed-identity overlay. */
-    readonly managedIdentity?: boolean;
+    /**
+     * Requires a peer provisioned with the managed-identity overlay. Pass
+     * {@link ManagedSigningOptions} to also negotiate capabilities, e.g.
+     * `{ autoNegotiateCaps: true }` to present held grants on every call.
+     */
+    readonly managedIdentity?: boolean | ManagedSigningOptions;
     readonly signal?: AbortSignal;
     readonly onError?: StartEndpointOptions['onError'];
     /** Called once per peer. Return cleanup for resources owned by this connection. */
@@ -34,6 +38,11 @@ export interface ParticipantHostContext {
     readonly services: ParticipantServices;
     /** The claimed namespace, or undefined for root-only registration. */
     readonly serviceId: string | undefined;
+    /**
+     * The managed principal the connection signs as, with its persistent
+     * capability bag; undefined without {@link ParticipantHostOptions.managedIdentity}.
+     */
+    readonly principal: PrincipalWithStore | undefined;
     /** Aborted on peer disconnect or host shutdown, including during setup. */
     readonly signal: AbortSignal;
 }
@@ -201,15 +210,18 @@ class ParticipantPeer {
             // A participant does not grant namespaces. Let peer discovery receive
             // method-not-found even when both peers are still bootstrapping.
             this._source.resumeRequests([`${hubGrantedServiceIdInterface.info.id}::get`]);
-            const channel = this._options.managedIdentity
-                ? (await createManagedSigningChannel(this._source.channel)).channel
-                : this._source.channel;
-            const connection = this._connection = new LinkRpcConnection(channel);
+            const managed = this._options.managedIdentity
+                ? await createManagedSigningChannel(
+                    this._source.channel,
+                    typeof this._options.managedIdentity === 'object' ? this._options.managedIdentity : undefined,
+                )
+                : undefined;
+            const connection = this._connection = new LinkRpcConnection(managed?.channel ?? this._source.channel);
             const serviceId = await this._claimNamespace(connection);
             this._abort.signal.throwIfAborted();
             const services = this._services = new ParticipantServices(connection, this._options.registrationMode, serviceId);
             this._setupResult = await this._options.setup({
-                connection, services, serviceId, signal: this._abort.signal,
+                connection, services, serviceId, principal: managed?.principal, signal: this._abort.signal,
             });
             this._abort.signal.throwIfAborted();
         } catch (error) {

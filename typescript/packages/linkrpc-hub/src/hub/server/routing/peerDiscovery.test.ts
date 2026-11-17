@@ -120,19 +120,55 @@ describe('automatic peer discovery', () => {
         expect(vi.getTimerCount()).toBe(0);
     });
 
+    it('backs off exponentially up to five minutes for peers that never answer', async () => {
+        const p = peer();
+        const probeTimes: number[] = [];
+        p.pair.b.setListener((message) => {
+            if (isRequest(message)) probeTimes.push(Date.now());
+        });
+        await vi.advanceTimersByTimeAsync(30 * 60_000);
+        const waitsAfterTimeout = probeTimes.slice(1).map((time, i) => time - probeTimes[i] - 100);
+        expect(waitsAfterTimeout).toMatchInlineSnapshot(`
+          [
+            200,
+            400,
+            800,
+            1600,
+            3200,
+            6400,
+            12800,
+            25600,
+            51200,
+            102400,
+            204800,
+            300000,
+            300000,
+            300000,
+            300000,
+          ]
+        `);
+        p.link.dispose();
+    });
+
     it('reprobes unsupported peers slowly and discovers newly installed support', async () => {
         const p = peer();
-        await vi.advanceTimersByTimeAsync(0);
-        await p.pair.b.send({
-            jsonrpc: '2.0', id: p.requests[0].id,
+        const unsupported = (request: JsonRpcRequest) => p.pair.b.send({
+            jsonrpc: '2.0', id: request.id,
             error: { code: ErrorCode.methodNotFound, message: 'not installed' },
         });
+        await vi.advanceTimersByTimeAsync(0);
+        await unsupported(p.requests[0]);
         await vi.advanceTimersByTimeAsync(29_999);
         expect(p.graph().links[0].peerState).toBe('unsupported');
         expect(p.requests).toHaveLength(1);
         await vi.advanceTimersByTimeAsync(1);
         expect(p.requests).toHaveLength(2);
-        await p.reply(p.requests[1]);
+        await unsupported(p.requests[1]);
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(p.requests).toHaveLength(2);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(p.requests).toHaveLength(3);
+        await p.reply(p.requests[2]);
         await vi.advanceTimersByTimeAsync(0);
         expect(p.graph().links[0].peerState).toBe('identified');
         p.link.dispose();

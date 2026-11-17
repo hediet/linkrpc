@@ -388,6 +388,27 @@ describe('Hub routing', () => {
         expect(errOf(resp).code).toBe(ErrorCode.methodNotFound);
     });
 
+    it('lets one attached link hold the uplink until it detaches', async () => {
+        const hub = new Hub();
+        const caller = attachEndpoint(hub);
+        const first = new TransportPair();
+        const firstLink = hub.attach(first.a);
+        const second = hub.attach(new TransportPair().a);
+
+        firstLink.setAsUplink();
+        expect(() => second.setAsUplink()).toThrow(/already the uplink/);
+
+        const up = new Endpoint(first.b);
+        const respP = caller.request('far::iface::m', {});
+        await waitFor(() => up.inbox.length > 0);
+        up.respond(up.inbox[0] as JsonRpcRequest, { reached: 'first' });
+        expect(okResult(await respP)).toEqual({ reached: 'first' });
+
+        firstLink.dispose();
+        expect(errOf(await caller.request('far::iface::m', {})).code).toBe(ErrorCode.methodNotFound);
+        second.setAsUplink();
+    });
+
     it('routes a prefix owner calling its own prefix back to itself', async () => {
         const hub = new Hub();
         const ownerPair = new TransportPair();
