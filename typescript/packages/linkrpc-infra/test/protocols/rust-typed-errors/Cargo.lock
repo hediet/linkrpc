@@ -610,12 +610,14 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures-util",
+ "getrandom 0.3.4",
  "linkrpc",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]
