@@ -244,7 +244,8 @@ function withJsonSchemaObjectDefaults(value: unknown): unknown {
     const result = Object.fromEntries(
         Object.entries(input).map(([key, child]) => [key, withJsonSchemaObjectDefaults(child)]),
     );
-    if (result.type === "object" && result.additionalProperties === undefined) {
+    const isObject = result.type === "object" || (Array.isArray(result.type) && result.type.includes("object"));
+    if (isObject && result.additionalProperties === undefined) {
         result.additionalProperties = true;
     }
     return result;
