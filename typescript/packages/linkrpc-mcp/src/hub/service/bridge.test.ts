@@ -172,6 +172,21 @@ describe("registerMcpToolBridge", () => {
         await bridge.dispose();
     });
 
+    it("keeps nullable objects without additionalProperties open, as JSON Schema defines", async () => {
+        const { server, client } = setup();
+        const factory = new FakeFactory();
+        factory.tools = [{
+            name: "edit",
+            inputSchema: { type: "object", properties: { bag: { type: ["object", "null"] } } },
+        }];
+        const bridge = await registerMcpToolBridge({
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory,
+        });
+        await client.channel.sendRequest("mcp/demo::mcp.tools.demo::edit", { bag: { Extensions: { a: "b" } } });
+        expect(factory.calls.map((call) => call.args)).toEqual([{ bag: { Extensions: { a: "b" } } }]);
+        await bridge.dispose();
+    });
+
     it("replaces the reflected interface and ticks directory watchers on tools/list_changed", async () => {
         const { server, client } = setup();
         const factory = new FakeFactory();
