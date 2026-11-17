@@ -13,30 +13,19 @@
 //! constructors live alongside; the Unix-socket ones are `#[cfg(unix)]`.
 
 use std::io;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use tokio::io::{
     AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf, WriteHalf,
 };
 use tokio::sync::Mutex;
 
-use linkrpc::prelude::{
-    error_codes, JsonRpcError, JsonRpcMessage, JsonRpcRequest, JsonRpcResponse, MessageTransport,
-    RequestId, TransportError,
-};
-use linkrpc::protocol::jsonrpc::ResponsePayload;
+use linkrpc::prelude::{JsonRpcMessage, MessageTransport, TransportError};
 
-/// The transport-level handshake method; never forwarded to a routed service.
-pub const INITIALIZE_METHOD: &str = "hubrpc::initialize";
-/// Accepted alias of [`INITIALIZE_METHOD`]; dialers send the canonical spelling.
-pub const LINKRPC_INITIALIZE_METHOD_ALIAS: &str = "linkrpc::initialize";
-/// The transport protocol version negotiated by `hubrpc::initialize`.
-pub const INITIALIZE_PROTOCOL_VERSION: u32 = 1;
-const INITIALIZE_REQUEST_ID: i64 = 0;
-const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+pub use crate::initialize::{
+    INITIALIZE_METHOD, INITIALIZE_PROTOCOL_VERSION, LINKRPC_INITIALIZE_METHOD_ALIAS,
+};
 
 type BoxRead = Box<dyn AsyncRead + Send + Unpin>;
 type BoxWrite = Box<dyn AsyncWrite + Send + Unpin>;
@@ -116,45 +105,7 @@ impl NdjsonTransport {
     /// Dialing side of the `hubrpc::initialize` handshake (spec 02-transport §1.1), as hubs
     /// require on socket connections. Call once, before any RPC.
     pub async fn initialize(&self, token: Option<String>) -> io::Result<()> {
-        let mut params = json!({ "protocolVersion": INITIALIZE_PROTOCOL_VERSION });
-        if let Some(token) = token {
-            params["token"] = token.into();
-        }
-        self.send(JsonRpcMessage::Request(JsonRpcRequest {
-            id: RequestId::Number(INITIALIZE_REQUEST_ID),
-            method: INITIALIZE_METHOD.to_owned(),
-            params: Some(params),
-        }))
-        .await
-        .map_err(|e| io::Error::other(e.to_string()))?;
-        let reply = tokio::time::timeout(INITIALIZE_TIMEOUT, self.recv())
-            .await
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "hubrpc::initialize: handshake timed out",
-                )
-            })?;
-        match reply {
-            Some(JsonRpcMessage::Response(JsonRpcResponse {
-                id: Some(RequestId::Number(INITIALIZE_REQUEST_ID)),
-                payload,
-            })) => match payload {
-                ResponsePayload::Result(_) => Ok(()),
-                ResponsePayload::Error(error) => Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("hubrpc::initialize rejected: {}", error.message),
-                )),
-            },
-            Some(_) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "hubrpc::initialize: unexpected reply to handshake",
-            )),
-            None => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "hubrpc::initialize: transport closed during handshake",
-            )),
-        }
+        crate::initialize::initialize_client(self, token).await
     }
 
     /// Accepting side of the `hubrpc::initialize` handshake: require it as the first message,
@@ -164,57 +115,9 @@ impl NdjsonTransport {
         &self,
         is_token_accepted: impl FnOnce(Option<&str>) -> bool,
     ) -> io::Result<Option<String>> {
-        let request = match self.recv().await {
-            Some(JsonRpcMessage::Request(request))
-                if request.method == INITIALIZE_METHOD
-                    || request.method == LINKRPC_INITIALIZE_METHOD_ALIAS =>
-            {
-                request
-            }
-            Some(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "hubrpc::initialize: expected initialize as the first message",
-                ))
-            }
-            None => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "hubrpc::initialize: transport closed before the handshake",
-                ))
-            }
-        };
-        let token = request
-            .params
-            .as_ref()
-            .and_then(|params| params.get("token"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        let accepted = is_token_accepted(token.as_deref());
-        let payload = if accepted {
-            ResponsePayload::Result(json!({ "protocolVersion": INITIALIZE_PROTOCOL_VERSION }))
-        } else {
-            ResponsePayload::Error(JsonRpcError::new(
-                error_codes::INVALID_REQUEST,
-                "unauthenticated",
-            ))
-        };
-        self.send(JsonRpcMessage::Response(JsonRpcResponse {
-            id: Some(request.id),
-            payload,
-        }))
-        .await
-        .map_err(|e| io::Error::other(e.to_string()))?;
-        if !accepted {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "hubrpc::initialize: unauthenticated",
-            ));
-        }
-        Ok(token)
+        crate::initialize::accept_initialize(self, is_token_accepted).await
     }
 }
-
 #[async_trait]
 impl MessageTransport for NdjsonTransport {
     async fn send(&self, msg: JsonRpcMessage) -> Result<(), TransportError> {

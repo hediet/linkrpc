@@ -226,6 +226,9 @@ server and in-flight setup callbacks before resolving `closed`. Disposal is
 idempotent. The helper installs no signal handlers, performs no reconnection, and
 never calls `process.exit`.
 
+The Rust counterparts are `start_endpoint` and `host_participant` in the
+`linkrpc-tokio` crate, with the same endpoint table and token rules.
+
 ## Interface templates
 
 This bounded v1 adds TypeScript authoring groups over ordinary concrete RPC methods.

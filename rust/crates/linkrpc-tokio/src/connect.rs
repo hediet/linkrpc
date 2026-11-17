@@ -2,17 +2,19 @@
 //! wrap it in a [`LinkRpcConnection`] — the participant side of M6 (`node/hubClient.ts`).
 //!
 //! [`connect_to_hub`] is the entrypoint. Token precedence follows the TS CLI:
-//! `endpoint_token ?? token-from-URI ?? LINKRPC_TOKEN ?? ""`. Socket endpoints (UDS / named pipe)
-//! send the `hubrpc::initialize` handshake carrying the token before any RPC; WebSocket endpoints send the token
-//! in the `Authorization` header with no preamble. `cmd-stdio:` endpoints spawn the child and speak
-//! NDJSON over its stdio (see [`crate::stdio`]).
+//! `endpoint_token ?? token-from-URI ?? LINKRPC_TOKEN ?? ""` (the legacy `HUBRPC_ENDPOINT` /
+//! `HUBRPC_TOKEN` pair is used only when `LINKRPC_ENDPOINT` is unset; the families are not mixed).
+//! Socket and WebSocket endpoints send the `hubrpc::initialize` handshake carrying the token before
+//! any RPC. `cmd-stdio:` endpoints spawn the child and speak NDJSON over its stdio (see
+//! [`crate::stdio`]); `cmd:` endpoints spawn the child against a private socket and accept its
+//! dial-back (see [`crate::cmd_env`]).
 
-use std::env;
 use std::future::Future;
 use std::time::Duration;
 
 use linkrpc::prelude::{parse_endpoint_uri, EndpointError, LinkRpcConnection, ResolvedEndpoint};
 
+use crate::endpoint::{BoxError, HubEnvironment};
 use crate::ws::connect_ws;
 
 /// The env var naming the hub endpoint URI.
@@ -40,15 +42,22 @@ pub enum ConnectError {
     /// The endpoint URI failed to parse.
     #[error("{0}")]
     Endpoint(#[from] EndpointError),
-    /// The endpoint scheme is a spawn mode not supported by this connector.
-    #[error("endpoint kind '{0}' is not supported by the Rust connector (only socket, ws/wss, and cmd-stdio)")]
+    /// The endpoint kind or option is not supported by the Rust runtime.
+    #[error("endpoint kind '{0}' is not supported by the Rust connector")]
     Unsupported(&'static str),
-    /// Underlying I/O failure while dialing a socket or spawning a `cmd-stdio` child.
+    /// The endpoint configuration is invalid for the requested mode (for example a listener
+    /// without a token, or `listen:wss:`).
+    #[error("{0}")]
+    Invalid(String),
+    /// Underlying I/O failure while dialing, listening, handshaking, or spawning a child.
     #[error("connect failed: {0}")]
     Io(#[from] std::io::Error),
     /// Underlying WebSocket failure while dialing.
     #[error("websocket connect failed: {0}")]
     Ws(String),
+    /// The application's connection setup failed.
+    #[error("{0}")]
+    Setup(BoxError),
 }
 
 /// A resolved endpoint plus the final auth token (after applying precedence).
@@ -64,10 +73,11 @@ pub struct ResolvedConnection {
 ///
 /// Token precedence: `endpoint_token ?? token-from-URI ?? LINKRPC_TOKEN ?? ""`.
 pub fn resolve_connection(options: &ConnectOptions) -> Result<ResolvedConnection, ConnectError> {
+    let environment = HubEnvironment::read();
     let endpoint_str = options
         .endpoint
         .clone()
-        .or_else(|| env::var(LINKRPC_ENDPOINT_VAR).ok())
+        .or(environment.endpoint)
         .filter(|s| !s.is_empty())
         .ok_or(ConnectError::EndpointNotSet)?;
 
@@ -79,16 +89,13 @@ pub fn resolve_connection(options: &ConnectOptions) -> Result<ResolvedConnection
         }
         _ => None,
     };
-    let linkrpc_token = options
-        .linkrpc_token
-        .clone()
-        .or_else(|| env::var(LINKRPC_TOKEN_VAR).ok());
+    let environment_token = options.linkrpc_token.clone().or(environment.token);
 
     let token = options
         .endpoint_token
         .clone()
         .or(uri_token)
-        .or(linkrpc_token)
+        .or(environment_token)
         .unwrap_or_default();
 
     Ok(ResolvedConnection { endpoint, token })
@@ -97,7 +104,8 @@ pub fn resolve_connection(options: &ConnectOptions) -> Result<ResolvedConnection
 /// Resolve the endpoint, open the transport, and return a ready [`LinkRpcConnection`].
 ///
 /// The caller is responsible for driving the connection's run loop (e.g.
-/// `tokio::spawn(async move { conn.run().await })`) and registering interfaces.
+/// `tokio::spawn(async move { conn.run().await })`) and registering interfaces. For `cmd:` and
+/// `cmd-stdio:` endpoints the spawned child lives as long as the connection.
 pub async fn connect_to_hub(options: ConnectOptions) -> Result<LinkRpcConnection, ConnectError> {
     let ResolvedConnection { endpoint, token } = resolve_connection(&options)?;
 
@@ -112,11 +120,26 @@ pub async fn connect_to_hub(options: ConnectOptions) -> Result<LinkRpcConnection
                 .map_err(|e| ConnectError::Ws(e.to_string()))?;
             Ok(LinkRpcConnection::new(Box::new(transport)))
         }
-        ResolvedEndpoint::CmdStdio { command, env } => {
-            let transport = crate::stdio::ChildStdioTransport::spawn(&command, env.as_ref())?;
+        ResolvedEndpoint::CmdStdio { command, env, cwd } => {
+            let transport = crate::stdio::ChildStdioTransport::spawn_in(
+                &command,
+                env.as_ref(),
+                cwd.as_deref(),
+            )?;
             Ok(LinkRpcConnection::new(Box::new(transport)))
         }
-        ResolvedEndpoint::CmdEnv { .. } => Err(ConnectError::Unsupported("cmd-env")),
+        ResolvedEndpoint::CmdEnv {
+            provision_slot: Some(_),
+            ..
+        } => Err(ConnectError::Unsupported("cmd: with provisionSlot")),
+        ResolvedEndpoint::CmdEnv {
+            command, env, cwd, ..
+        } => {
+            let transport =
+                crate::cmd_env::CmdEnvTransport::spawn(&command, env.as_ref(), cwd.as_deref())
+                    .await?;
+            Ok(LinkRpcConnection::new(Box::new(transport)))
+        }
     }
 }
 
@@ -203,7 +226,7 @@ where
 }
 
 #[cfg(unix)]
-async fn connect_socket(
+pub(crate) async fn connect_socket(
     path: &str,
     token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
@@ -213,7 +236,7 @@ async fn connect_socket(
 }
 
 #[cfg(windows)]
-async fn connect_socket(
+pub(crate) async fn connect_socket(
     path: &str,
     token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
@@ -223,7 +246,7 @@ async fn connect_socket(
 }
 
 #[cfg(not(any(unix, windows)))]
-async fn connect_socket(
+pub(crate) async fn connect_socket(
     _path: &str,
     _token: &str,
 ) -> Result<crate::ndjson::NdjsonTransport, ConnectError> {
@@ -281,9 +304,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cmd_env_endpoints_are_unsupported() {
-        let result = connect_to_hub(opts("cmd:?command=run-hub", None, None)).await;
-        assert!(matches!(result, Err(ConnectError::Unsupported("cmd-env"))));
+    async fn cmd_env_with_a_provision_slot_is_unsupported() {
+        let result = connect_to_hub(opts("cmd:?command=run-hub&provisionSlot=s", None, None)).await;
+        assert!(matches!(
+            result,
+            Err(ConnectError::Unsupported("cmd: with provisionSlot"))
+        ));
     }
 
     #[tokio::test]

@@ -42,14 +42,16 @@ impl NamedPipeHubListener {
     }
 
     /// Accept the next connection. Run [`accept_initialize`](NdjsonTransport::accept_initialize) before serving RPC.
+    /// Cancel-safe: a cancelled accept leaves the pending instance in place.
     pub async fn accept(&mut self) -> io::Result<NdjsonTransport> {
-        let server = self
-            .pending
-            .take()
-            .expect("listener always holds a pending pipe instance");
-        server.connect().await?;
+        self.pending
+            .as_ref()
+            .expect("listener always holds a pending pipe instance")
+            .connect()
+            .await?;
         // Queue the next instance so a follow-up client can connect while this one is served.
-        self.pending = Some(ServerOptions::new().create(&self.addr)?);
+        let next = ServerOptions::new().create(&self.addr)?;
+        let server = self.pending.replace(next).expect("checked above");
         Ok(NdjsonTransport::from_stream(server))
     }
 }

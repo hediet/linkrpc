@@ -54,7 +54,7 @@ the canonical `hubrpc::initialize` spelling.
 
 ## 3. WebSocket binding
 
-Over a WebSocket, each message is one text frame containing the message's JSON text; framing is the WebSocket frame itself, with no `\n` delimiter. An attribution token, when present, MUST be sent in the `Authorization: Bearer <token>` request header of the opening handshake, never in the URL or a preamble.
+Over a WebSocket, each message is one text frame containing the message's JSON text; framing is the WebSocket frame itself, with no `\n` delimiter. The dialing node MUST perform the initialize handshake (§2.1) as the first message exchange, carrying the attribution token in band; the token is never sent in the URL. (Browsers cannot set request headers on the opening handshake.)
 
 ## 4. stdio binding
 
@@ -76,14 +76,14 @@ An **endpoint URI** names where a linkrpc node lives and how to reach or start i
 |---|---|---|
 | `unix:` | socket at the decoded path | `?token=` query |
 | `npipe:` | Windows named pipe (see §5.2) | `?token=` query |
-| `ws:` / `wss:` | WebSocket at the URL | `?token=` query → `Authorization` header |
+| `ws:` / `wss:` | WebSocket at the URL | `?token=` query → initialize handshake |
 | `cmd-stdio:` | spawn a child, speak stdio (§4) | — |
 | `cmd:` | spawn a child against a freshly-started local node, passing it `LINKRPC_ENDPOINT`/`LINKRPC_TOKEN` | — |
 
-- For `ws:`/`wss:`, a `token` query parameter MUST be removed from the URL and carried in the `Authorization` header (§3).
+- For `ws:`/`wss:`, a `token` query parameter MUST be removed from the URL and carried in the initialize handshake (§3).
 - For `unix:`, the socket path is the percent-decoded URI path.
 - For `npipe://<host>/<tail>`, the path is `\\<host>\<tail>` with `/` in `<tail>` replaced by `\`, and `<host>` defaulting to `.` when empty.
-- For `cmd-stdio:` and `cmd:`, the command is `?command=<verbatim line>` (split by the OS shell) **or** one-or-more repeated `?argv=<arg>` parameters (structure-preserving); one of the two MUST be present. Repeated `?env=KEY=VALUE` parameters inject environment variables.
+- For `cmd-stdio:` and `cmd:`, the command is `?command=<verbatim line>` (split by the OS shell) **or** one-or-more repeated `?argv=<arg>` parameters (structure-preserving); one of the two MUST be present. Repeated `?env=KEY=VALUE` parameters inject environment variables, and `?cwd=<path>` sets the child's working directory.
 
 ### 5.2 Bare (scheme-less) form
 
@@ -99,5 +99,25 @@ A node that starts from the environment reads its endpoint from `LINKRPC_ENDPOIN
 2. the `token` query parameter of the endpoint URI;
 3. `LINKRPC_TOKEN`;
 4. the empty string.
+
+### 5.4 Serving from the environment
+
+A process that serves (rather than calls) reads the same `LINKRPC_ENDPOINT`, which then selects how it accepts its peer:
+
+- `stdio` or `stdio:` — serve one connection over stdin/stdout (§4), without a handshake;
+- a `unix:`, `npipe:`, `ws:`, or `wss:` URI (or bare form) — dial it and serve the resulting connection;
+- `listen:` followed by a `unix:`, `npipe:`, or `ws:` URI — bind that address and accept any number of peers, each of which MUST pass the initialize handshake (§2.1) with the token. A listener MUST have a nonempty token, MUST NOT unlink an existing socket path, and reports its bound address without credentials (with the assigned port when the URI requests port `0`). `listen:wss:` is not supported; terminate TLS in front of the listener.
+
+`listen:` is a serving mode, not an endpoint scheme: the address after the prefix is an ordinary endpoint URI.
+
+### 5.4 Serving from the environment
+
+A process that serves (rather than calls) reads the same `LINKRPC_ENDPOINT`, which then selects how it accepts its peer:
+
+- `stdio` or `stdio:` — serve one connection over stdin/stdout (§4), without a handshake;
+- a `unix:`, `npipe:`, `ws:`, or `wss:` URI (or bare form) — dial it and serve the resulting connection;
+- `listen:` followed by a `unix:`, `npipe:`, or `ws:` URI — bind that address and accept any number of peers, each of which MUST pass the initialize handshake (§2.1) with the token. A listener MUST have a nonempty token, MUST NOT unlink an existing socket path, and reports its bound address without credentials (with the assigned port when the URI requests port `0`). `listen:wss:` is not supported; terminate TLS in front of the listener.
+
+`listen:` is a serving mode, not an endpoint scheme: the address after the prefix is an ordinary endpoint URI.
 
 > **Rationale.** The north-star deployment is exactly this: a node reads `LINKRPC_ENDPOINT` + `LINKRPC_TOKEN`, dials a `unix:` socket, performs the `hubrpc::initialize` handshake, and speaks NDJSON.

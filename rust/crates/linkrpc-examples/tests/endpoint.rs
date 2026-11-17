@@ -13,7 +13,9 @@ use std::process::Stdio;
 use linkrpc::prelude::*;
 use linkrpc_examples::calc::CalculatorClient;
 use linkrpc_examples::{demo_token, example_server_command, unique_endpoint_address};
-use linkrpc_tokio::{HubListener, LINKRPC_ENDPOINT_VAR, LINKRPC_TOKEN_VAR};
+use linkrpc_tokio::{
+    connect_to_hub, ConnectOptions, HubListener, LINKRPC_ENDPOINT_VAR, LINKRPC_TOKEN_VAR,
+};
 use tokio::process::Command;
 
 #[tokio::test]
@@ -86,4 +88,46 @@ async fn server_dials_into_consumer_hosted_endpoint_via_env() {
 
     child.kill().await.ok();
     let _ = std::fs::remove_file(&address);
+}
+
+/// `cmd:` does the above for the consumer: private socket, random token, spawn, accept.
+#[tokio::test]
+async fn connect_to_hub_spawns_cmd_children_and_accepts_their_dial_back() {
+    let program = example_server_command("calc_endpoint_server");
+    let endpoint = format_endpoint_uri(
+        &ResolvedEndpoint::CmdEnv {
+            command: EndpointCommand::Argv(vec![program.get_program().to_string_lossy().into()]),
+            provision_slot: None,
+            env: None,
+            cwd: None,
+        },
+        FormatEndpointOptions::default(),
+    );
+    let conn = connect_to_hub(ConnectOptions {
+        endpoint: Some(endpoint),
+        ..Default::default()
+    })
+    .await
+    .expect("spawn cmd endpoint");
+    let driver = conn.clone();
+    tokio::spawn(async move { driver.run().await });
+    assert_eq!(
+        CalculatorClient::new(conn).add(2, 40).await.expect("add"),
+        42
+    );
+}
+
+#[tokio::test]
+async fn cmd_children_exiting_before_they_connect_fail_the_connect() {
+    let error = connect_to_hub(ConnectOptions {
+        endpoint: Some("cmd:?command=exit%203".into()),
+        ..Default::default()
+    })
+    .await
+    .err()
+    .expect("child never dials back");
+    assert!(
+        error.to_string().contains("child exited"),
+        "unexpected error: {error}"
+    );
 }

@@ -1,6 +1,6 @@
 //! M6 connector integration: drive [`connect_to_hub`](linkrpc_tokio::connect_to_hub) end-to-end over
-//! both transports — a Unix-domain socket (with the `hubrpc::initialize` handshake) and a WebSocket (token in the
-//! `Authorization` header). Both wrap the same `LinkRpcConnection`, so a single helper serves the
+//! both transports — a Unix-domain socket and a WebSocket, each with the `hubrpc::initialize`
+//! handshake carrying the token. Both wrap the same `LinkRpcConnection`, so a single helper serves the
 //! pizza interface and both clients exercise the real request/response path.
 
 use std::sync::Arc;
@@ -152,36 +152,19 @@ async fn connect_to_hub_over_unix_socket_with_initialize() {
 }
 
 #[tokio::test]
-#[allow(clippy::result_large_err)]
-async fn connect_to_hub_over_websocket_with_authorization_header() {
+async fn connect_to_hub_over_websocket_with_initialize() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
 
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        // Capture the Authorization header during the handshake.
-        let seen_auth = Arc::new(std::sync::Mutex::new(None::<String>));
-        let captured = seen_auth.clone();
-        let ws = tokio_tungstenite::accept_hdr_async(
-            stream,
-            |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
-             resp: tokio_tungstenite::tungstenite::handshake::server::Response| {
-                if let Some(value) = req.headers().get("authorization") {
-                    *captured.lock().unwrap() =
-                        Some(value.to_str().unwrap_or_default().to_string());
-                }
-                Ok(resp)
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(
-            seen_auth.lock().unwrap().as_deref(),
-            Some(format!("Bearer {TOKEN}").as_str())
-        );
-
+        let ws = tokio_tungstenite::accept_async(stream).await.unwrap();
         let transport = WebSocketTransport::new(ws);
+        // The token travels in band, as browsers cannot set upgrade headers.
+        let token = linkrpc_tokio::initialize::accept_initialize(&transport, |_| true)
+            .await
+            .expect("initialize handshake");
+        assert_eq!(token.as_deref(), Some(TOKEN));
         let _conn = serve(Box::new(transport));
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     });
