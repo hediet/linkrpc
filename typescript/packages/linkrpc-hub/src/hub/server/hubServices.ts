@@ -10,7 +10,7 @@ import {
     LinkRpcConnection
 } from '@hediet/linkrpc';
 import type { ParticipantDescriptorSource } from '@hediet/linkrpc/inspection';
-import { normalizeServiceIdScopes, serviceIdMatchesScopes } from '@hediet/linkrpc/hub/common';
+import { isServiceIdUnder, normalizeServiceIdScopes, serviceIdMatchesScopes } from '@hediet/linkrpc/hub/common';
 import { HubInspector } from './hubInspector';
 import { registerHubServiceIdRegistry, type RegisterCallContext, withRequestIdContext } from './hubRegister';
 import type { Hub } from './routing/routingHub';
@@ -119,7 +119,9 @@ function registerHubReflection(
                 interfaceId: directoryInterface.info.id,
                 interfaceHash: directoryInterface.schemaHash,
                 ...(directoryInterface.info.tags === undefined ? {} : { tags: [...directoryInterface.info.tags] }),
-                reachableServiceIds: [{ prefix: hubServiceId }],
+                // Like the overlay root's referral: the global directory may list
+                // services outside the hub's subtree, e.g. its uplink's.
+                reachableServiceIds: [{ prefix: '' }],
             };
             const items = [referral]
                 .filter((it) => interfaceId === undefined || it.interfaceId === interfaceId)
@@ -177,6 +179,7 @@ function registerHubReflection(
                         timeoutMs ?? PARTICIPANT_ROOT_LIST_BUDGET_MS,
                     ),
                     requestTimeoutMs: PARTICIPANT_ROOT_LIST_TIMEOUT_MS,
+                    includeUplink: true,
                 },
             );
             if (roots.truncated) {
@@ -195,6 +198,17 @@ function registerHubReflection(
                     if (it.serviceId === '') continue;
                     items.push(it);
                 }
+            }
+            // A nested hub's parent: its root refers to the parent's global
+            // directory. Everything this hub does not route goes up the uplink,
+            // so that directory reaches every service id. A root list only
+            // refers and never fans out, so asking upward cannot loop; the
+            // walk dedupes the parent's referral back down to this hub.
+            const uplinkPage = roots.uplinkResult as { items?: Listing[]; } | null | undefined;
+            for (const it of uplinkPage?.items ?? []) {
+                if (it.serviceId === '' || it.interfaceId !== directoryInterface.info.id) continue;
+                if (isServiceIdUnder(it.serviceId, hubServiceId)) continue;
+                items.push({ ...it, reachableServiceIds: [{ prefix: '' }] });
             }
 
             const deduplicated = new Map<string, Listing>();

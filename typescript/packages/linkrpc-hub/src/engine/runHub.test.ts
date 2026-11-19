@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { describe, expect, it } from 'vitest';
 import { HubConfigSchema } from '../config';
 import { fetchFullDirectory } from '@hediet/linkrpc-infra/approval';
+import { walkHub } from '@hediet/linkrpc/hub/common';
 import { SocketServer } from '../hub/server/node';
 import { runHub, type RunningHub } from './runHub';
 
@@ -430,6 +431,37 @@ describe('runHub listener default route', () => {
             parentCaller = attachPeer(parent);
             await settles(() => echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'probe'), true, 'uplink again');
             await expect(echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'again')).resolves.toEqual({ value: 'parent-2:again' });
+        } finally {
+            parentCaller.dispose();
+            childCaller.dispose();
+            elsewhereEcho.dispose();
+            childEcho.dispose();
+            parent.dispose();
+            child.dispose();
+        }
+    });
+
+    it('lists the parent\'s services in the child\'s directory, and the child\'s in the parent\'s', async () => {
+        const socketPath = SocketServer.allocSocketPath();
+        const child = await runHub({ config: childConfig(socketPath), log: () => { } });
+        const childEcho = attachEcho(child, CHILD_ECHO_SERVICE_ID, 'child');
+        const childCaller = attachPeer(child);
+        const parent = await runHub({ config: parentConfig(socketPath), log: () => { } });
+        const elsewhereEcho = attachEcho(parent, ELSEWHERE_ECHO_SERVICE_ID, 'parent');
+        const parentCaller = attachPeer(parent);
+        const serviceIds = async (peer: { connection: LinkRpcConnection<unknown> }) =>
+            (await walkHub(peer.connection.channel)).map((it) => it.serviceId);
+        try {
+            await settles(() => echo(childCaller, ELSEWHERE_ECHO_SERVICE_ID, 'probe'), true, 'uplink');
+            // The walk crosses child → parent → child; each directory is listed once.
+            await expect(serviceIds(childCaller)).resolves.toEqual(expect.arrayContaining([
+                ELSEWHERE_ECHO_SERVICE_ID,
+                CHILD_ECHO_SERVICE_ID,
+            ]));
+            await expect(serviceIds(parentCaller)).resolves.toEqual(expect.arrayContaining([
+                ELSEWHERE_ECHO_SERVICE_ID,
+                CHILD_ECHO_SERVICE_ID,
+            ]));
         } finally {
             parentCaller.dispose();
             childCaller.dispose();
