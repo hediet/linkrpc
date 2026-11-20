@@ -115,6 +115,20 @@ const SHARED_COMMANDS: readonly SubcommandDef[] = [
             ],
         },
     {
+            name: 'grep',
+            description: 'Search the generated source of all interfaces.',
+            positionals: [{ name: 'pattern', type: 'free' }],
+            options: [
+                { name: '--fixed-strings', takesValue: false },
+                { name: '--context-lines', takesValue: true, valueType: 'free' },
+                { name: '--service', takesValue: true, valueType: 'serviceId' },
+                { name: '--interface', takesValue: true, valueType: 'interfaceId' },
+                { name: '--include-internal', takesValue: false },
+                { name: '--limit', takesValue: true, valueType: 'free' },
+                { name: '--json', takesValue: false },
+            ],
+        },
+    {
             name: 'defaults',
             description: 'Print the preset service / interface.',
             positionals: [],

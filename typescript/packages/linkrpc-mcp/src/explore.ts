@@ -164,7 +164,7 @@ export async function explore(
                 throw new Error('explore grep requires a non-empty `pattern`.');
             }
             const syntax = args.syntax ?? 'regex';
-            const matchesLine = _createLineMatcher(args.pattern, syntax);
+            const matchesLine = createGrepLineMatcher(args.pattern, syntax);
             const contextLines = _boundedInteger(args.contextLines ?? 1, 0, 5, 'contextLines');
             const loaded = await Promise.all(listings.map(async (listing) => {
                 try {
@@ -371,7 +371,8 @@ function _memberMap(lines: readonly string[], schema: LinkRpcInterfaceSchema): A
     return result;
 }
 
-function _createLineMatcher(
+/** The line predicate `explore` grep uses, so callers can mark matching lines in its results. */
+export function createGrepLineMatcher(
     pattern: string,
     syntax: 'regex' | 'literal',
 ): (line: string) => boolean {

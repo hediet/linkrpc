@@ -34,6 +34,7 @@ import { defaultsCommand } from './commands/defaults';
 import { hashCommand } from './commands/hash';
 import { internalCompleteCommand } from './commands/internalComplete';
 import { lsCommand, requestDirectoryAccess } from './commands/ls';
+import { grepCommand } from './commands/grep';
 import { topologyCommand, type TopologyFormat } from './commands/topology';
 import { pingCommand } from './commands/ping';
 import {
@@ -479,6 +480,39 @@ export async function main(
                 });
                 if (out.length > 0) process.stdout.write(out + '\n');
             }, { requestReflectionAccess: false, autoNegotiatePerCall: false });
+        });
+
+    program
+        .command('grep <pattern>')
+        .description(
+            'Search the generated TypeScript source (members, parameters, docs) of all reachable interfaces. '
+            + 'Case-insensitive regexp, one line at a time; exits with 1 when nothing matches.',
+        )
+        .option('-F, --fixed-strings', 'treat the pattern as a literal string')
+        .option('-C, --context-lines <n>', 'source lines shown around each match, 0-5 (default 1)',
+            (v) => parseNonNegativeInteger(v, '--context-lines'))
+        .option('--service <id>', 'search only this exact serviceId')
+        .option('--interface <id>', 'search only this exact interfaceId')
+        .option('--include-internal', 'also search reflection interfaces such as hubrpc.directory')
+        .option('--limit <n>', 'maximum number of matching interfaces (default: all)',
+            (v) => parsePositiveInteger(v, '--limit'))
+        .option('--json', 'raw JSON result, as returned by the MCP explore grep')
+        .action(async (pattern: string, opts) => {
+            await withChannel(endpoint, getPrincipalSpec(), async (channel) => {
+                const out = await grepCommand(channel, {
+                    pattern,
+                    literal: opts.fixedStrings === true,
+                    contextLines: opts.contextLines ?? 1,
+                    serviceId: opts.service,
+                    interfaceId: opts.interface,
+                    includeInternal: opts.includeInternal === true,
+                    limit: opts.limit,
+                    json: opts.json === true,
+                });
+                for (const warning of out.warnings) process.stderr.write(`linkrpc: ${warning}\n`);
+                if (out.stdout.length > 0) process.stdout.write(out.stdout + '\n');
+                if (!out.matched) process.exitCode = 1;
+            });
         });
 
     if (profile === 'hub') {

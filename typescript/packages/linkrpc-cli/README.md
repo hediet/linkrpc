@@ -662,6 +662,7 @@ LINKRPC_ENDPOINT=unix:/run/hub/hub.sock?token=abc linkrpc ls
 | Command                       | Purpose                                                                                              |
 | ----------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `ls`                          | Explore the directory referral graph and its services/interfaces. Supports exact and prefix filters, regexp `--search`, `--format pretty\|json\|jsonl`, `--watch`, `--dump <file>`, and `--dump-patches <file\|->`. |
+| `grep <pattern>`              | Search the generated `defineInterface` source (members, parameters, descriptions) of every reachable interface, like the MCP server's `explore({ kind: "grep" })`. Case-insensitive regexp per line; `-F` for literal text, `-C <n>` context lines (0-5, default 1), exact `--service`/`--interface` filters, `--include-internal`, `--limit <n>`, `--json`. Each hit is headed by its `service::interface::member` ref; exits with 1 when nothing matches. |
 | `defaults`                    | Print the preset service/interface (wraps `hubrpc.defaults::get`).                                   |
 | `contract export --output <file\|-> [--service <id>] [--max-depth <n>]` | Export a complete reusable static contract from live reflection. |
 | `schema show <interfaceId>[@hash]` | Print an interface schema (wraps `hubrpc.schemas::get`). `--method <name>`, `--json`.           |
