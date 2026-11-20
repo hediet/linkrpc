@@ -934,13 +934,13 @@ Each service and port shares one `tcpForward.multiplex` session (up to 10
 logical connections, 8 of them for pooled HTTP keep-alive), closed after five
 idle minutes.
 
-### Hub MCP aggregation
+### Hub MCP tools for agents
 
-`linkrpc hub mcp` is a lightweight stdio MCP server that discovers every MCP
-server published in the selected Hub and aggregates their tools: MCP services
-(`mcp.tools`) and forwarded servers (`mcp.forward`, or the legacy
-`vscode.mcp-forward`). No service IDs, filters, or principal overrides are
-required:
+`linkrpc hub mcp` is a lightweight stdio MCP server for agents. It serves the
+LinkRPC script tools of `@hediet/linkrpc-mcp` (`runLinkRpcScript`,
+`awaitLinkRpcTask`, `cancelLinkRpcTask`), which give scripted access to every
+hub service, and `setForwardedMcpServers`. No service IDs, filters, or
+principal overrides are required:
 
 ```json
 {
@@ -954,6 +954,16 @@ required:
 }
 ```
 
+It does not forward the tools of MCP servers on the hub by default. With
+`setForwardedMcpServers({ servers: [{ serviceId, mcpIdentity? }] })` the agent
+chooses the servers whose tools to forward as MCP tools of this server; the call
+replaces the previous choice (`[]` forwards nothing) and returns each server's
+status and new tool names. Forwardable are MCP services published with
+`mcp-publish --service --agent-tools` (`mcp.tools`) and forwarded servers
+(`mcp.forward`, or the legacy `vscode.mcp-forward`). Every other MCP service is
+still callable as a hub interface, e.g. from `runLinkRpcScript`.
+`--forward-server <serviceId>` (repeatable) forwards a server from the start.
+
 Endpoint/context/environment and identity selection follow the normal Hub CLI
 rules. An explicit endpoint can be supplied before `mcp`, for example
 `linkrpc hub --endpoint npipe://./pipe/my-hub mcp`. Signing and capability
@@ -965,19 +975,15 @@ stdout contains only MCP protocol frames.
 
 `--mcp-identity <serviceId>=<identity>` (repeatable) uses another account of a
 published MCP server than its default and lists only that account's tools.
-
-The same MCP server also serves the LinkRPC script tools (`runLinkRpcScript`,
-`awaitLinkRpcTask`, `cancelLinkRpcTask`) of `@hediet/linkrpc-mcp`, so one MCP
-entry gives both the hub's MCP tools and scripted access to every hub service.
-`--no-scripts` serves only the aggregated MCP tools and does not load the script
-sandbox.
+`--no-scripts` serves only `setForwardedMcpServers` and the forwarded tools and
+does not load the script sandbox.
 
 The command watches directory changes, refreshes changed tool lists (including
-paginated lists), and retries failed connections while they remain advertised.
+paginated lists), and retries chosen servers while they are unavailable.
 Tool names use a readable prefix and a stable hash of service ID plus tool name,
 remaining unique and MCP-safe even for long service paths. Descriptions identify
 the source service. Disconnecting stdio closes this client's forwarding sessions.
-This version aggregates tools, not resources, prompts, or sampling.
+This version forwards tools, not resources, prompts, or sampling.
 
 `mcp-export` serves the same over Streamable HTTP on a loopback port, so all
 agents of a machine share one process and one hub connection instead of
@@ -1002,8 +1008,10 @@ LINKRPC_MCP_EXPORT_TOKEN=<secret> linkrpc hub mcp-export --port 8124
 
 Clients must send the bearer token from the environment variable named by
 `--token-env` (default `LINKRPC_MCP_EXPORT_TOKEN`). Each MCP session has its own
-aggregator, forwarded sessions, and script state (`lastResultVal`, parked
-tasks); all sessions sign as the export's identity and share its grants.
+forwarded servers (chosen with `setForwardedMcpServers`, starting from
+`--forward-server`) and script state (`lastResultVal`, parked tasks); a client
+that reconnects starts a new session and chooses again. All sessions sign as the
+export's identity and share its grants.
 `--idle-timeout <minutes>` closes sessions without requests; a client then gets
 HTTP 404 and must initialize again. The export exits when its hub connection
 closes, so the daemon restarts it.
@@ -1016,7 +1024,7 @@ or `--header-env <header>=<ENV_VAR>` to read a secret from the environment),
 as `--mcp-config <file>`, or (forward only) as `--stdio`:
 
 ```sh
-linkrpc hub mcp-publish --service --forward --serviceId ./everything -- npx -y @modelcontextprotocol/server-everything
+linkrpc hub mcp-publish --service --agent-tools --forward --serviceId ./everything -- npx -y @modelcontextprotocol/server-everything
 ```
 
 `--serviceId ./<name>` is relative: it claims `<granted namespace>/<name>` for
@@ -1028,12 +1036,14 @@ with a non-zero exit code, when its hub connection closes.
 
 - `--service` publishes the MCP server as a LinkRPC service: every MCP tool is
   a method of a generated `mcp.tools.<name>` interface (`--name`, derived from
-  the service ID by default), and `mcp.tools::listTools`/`callTool` list and
-  call tools by name. All callers share one MCP session; a caller can open an
+  the service ID by default). All callers share one MCP session; a caller can open an
   exclusive one with `mcp.server::openSession`. Repeatable
   `--group <group>=<keyword,...>` moves tools whose name contains a keyword into
   `mcp.tools.<name>.<group>`, so capabilities can cover a whole group, e.g.
   `--group admin=delete,merge`.
+- `--agent-tools` (with `--service`) also publishes `mcp.tools::listTools`/`callTool`,
+  which list and call tools by name. `hub mcp` and `mcp-export` forward only such
+  services to agents; without it, the tools are only hub methods.
 - `--forward` relays MCP verbatim over `mcp.forward`. Each connection gets its
   own MCP session: a fresh child process, or a new HTTP session.
 - `--mcp-config <file>` reads the server from JSON: `transport`, optional

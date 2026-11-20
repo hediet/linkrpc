@@ -448,7 +448,7 @@ describe("LinkRpcMcpServer MCP integration", () => {
         expect(result.content[0].text).toContain("exceeds the 16-byte sandbox input limit");
     });
 
-    it("also lists and calls MCP tools published on the hub when hubTools is set", async () => {
+    it("forwards the MCP tools of hub servers the agent chooses when hubTools is set", async () => {
         const pair = new TransportPair();
         const hub = LinkRpcConnection.fromTransport(pair.a);
         hub.enableReflection();
@@ -456,6 +456,7 @@ describe("LinkRpcMcpServer MCP integration", () => {
             connection: hub,
             serviceId: "typed",
             interfaceId: "mcp.tools.typed",
+            agentTools: true,
             factory: {
                 open: async () => ({
                     listTools: async () => [{ name: "echo", inputSchema: { type: "object", properties: { text: { type: "string" } } } }],
@@ -484,10 +485,11 @@ describe("LinkRpcMcpServer MCP integration", () => {
         const client = new Client({ name: "test-client", version: "0.0.0" });
         await client.connect(clientTransport);
         try {
+            expect((await client.listTools()).tools.map((tool) => tool.name))
+                .toEqual(["runLinkRpcScript", "awaitLinkRpcTask", "cancelLinkRpcTask", "setForwardedMcpServers"]);
+            await client.callTool({ name: "setForwardedMcpServers", arguments: { servers: [{ serviceId: "typed" }] } });
             const { tools } = await client.listTools();
             const echo = tools.find((tool) => tool.description === "[typed] echo");
-            expect(tools.map((tool) => tool.name).slice(0, 3))
-                .toEqual(["runLinkRpcScript", "awaitLinkRpcTask", "cancelLinkRpcTask"]);
             expect(await client.callTool({ name: echo!.name, arguments: { text: "hi" } }))
                 .toEqual({ content: [{ type: "text", text: "hi" }] });
         } finally {

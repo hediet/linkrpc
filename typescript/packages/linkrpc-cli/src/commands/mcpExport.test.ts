@@ -12,7 +12,7 @@ import { runHub } from '@hediet/linkrpc-hub/engine/runHub';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
-it('serves the hub MCP tools to several HTTP clients from one mcp-export process', async () => {
+it('serves the script tools and the chosen hub MCP tools to several HTTP clients from one mcp-export process', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'linkrpc-mcp-export-'));
     const socket = process.platform === 'win32' ? `\\\\.\\pipe\\linkrpc-mcp-export-${randomUUID()}` : join(directory, 'hub.sock');
     const endpoint = process.platform === 'win32'
@@ -36,7 +36,7 @@ it('serves the hub MCP tools to several HTTP clients from one mcp-export process
     const token = randomUUID();
     const url = new URL(`http://127.0.0.1:${port}/mcp`);
 
-    const producer = spawn(process.execPath, [...args, 'mcp-publish', '--service', '--serviceId', './explorer',
+    const producer = spawn(process.execPath, [...args, 'mcp-publish', '--service', '--agent-tools', '--serviceId', './explorer',
         '--', process.execPath, serverScript], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
     const exporter = spawn(process.execPath, [...args, 'mcp-export', '--port', String(port), '--no-scripts'],
         { cwd, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, LINKRPC_MCP_EXPORT_TOKEN: token } });
@@ -59,16 +59,23 @@ it('serves the hub MCP tools to several HTTP clients from one mcp-export process
 
         await expect(connect('wrong')).rejects.toThrow();
 
-        // Two agents share the process; each has its own MCP session.
+        // Two agents share the process; each has its own MCP session and chooses
+        // its forwarded servers itself.
         for (const message of ['first', 'second']) {
             const client = await connect(token);
             clients.push(client);
-            let tools = await client.listTools();
+            expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(['setForwardedMcpServers']);
+            // A cold first producer can miss the aggregator's connect timeout; it retries while advertised.
             await vi.waitFor(async () => {
-                tools = await client.listTools();
-                expect(tools.tools.map(tool => tool.description)).toEqual(['[test/explorer] echo']);
+                const chosen = await client.callTool({
+                    name: 'setForwardedMcpServers',
+                    arguments: { servers: [{ serviceId: 'test/explorer' }] },
+                });
+                expect(chosen.structuredContent).toMatchObject({ servers: [{ serviceId: 'test/explorer', status: 'ready' }] });
             }, { timeout: 30_000, interval: 500 });
-            expect(await client.callTool({ name: tools.tools[0].name, arguments: { message } }))
+            const hubTools = (await client.listTools()).tools.filter(tool => tool.name !== 'setForwardedMcpServers');
+            expect(hubTools.map(tool => tool.description)).toEqual(['[test/explorer] echo']);
+            expect(await client.callTool({ name: hubTools[0].name, arguments: { message } }))
                 .toEqual({ content: [{ type: 'text', text: JSON.stringify({ message }) }] });
         }
 

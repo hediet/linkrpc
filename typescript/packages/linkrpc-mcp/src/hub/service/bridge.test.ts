@@ -95,12 +95,12 @@ function setup() {
 }
 
 describe("registerMcpToolBridge", () => {
-    it("reflects tools as typed methods and publishes a catalog", async () => {
+    it("reflects tools as typed methods and, with agentTools, publishes a catalog", async () => {
         const { server, client } = setup();
         const factory = new FakeFactory();
         factory.tools.push({ name: "write", inputSchema: { type: "object" } });
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory,
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", agentTools: true, factory,
         });
 
         const directory = await client.service("mcp/demo").get(directoryInterface).list({});
@@ -129,6 +129,20 @@ describe("registerMcpToolBridge", () => {
                 { name: "write", interfaceId: "mcp.tools.demo", method: "write" },
             ],
         });
+        await bridge.dispose();
+    });
+
+    it("publishes the tools only as hub methods without agentTools", async () => {
+        const { server, client } = setup();
+        const bridge = await registerMcpToolBridge({
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory: new FakeFactory(),
+        });
+
+        const directory = await client.service("mcp/demo").get(directoryInterface).list({});
+        expect(directory.items.map((item) => item.interfaceId).filter((id) => id.startsWith("mcp.")).sort())
+            .toEqual(["mcp.server", "mcp.tools.demo"]);
+        expect(await client.channel.sendRequest("mcp/demo::mcp.tools.demo::echo", { text: "hi" }))
+            .toMatchObject({ content: [{ type: "text" }] });
         await bridge.dispose();
     });
 
@@ -286,7 +300,7 @@ describe("registerMcpToolBridge", () => {
         const factory = new FakeFactory();
         const identities = new FakeIdentities([{ id: "work" }, { id: "home", default: true }]);
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities,
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", agentTools: true, factory, identities,
         });
         const service = client.service("mcp/demo");
         const echo = (params: Record<string, string>) =>
@@ -326,7 +340,7 @@ describe("registerMcpToolBridge", () => {
             : factory.tools;
         const identities = new FakeIdentities([{ id: "reader" }]);
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities,
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", agentTools: true, factory, identities,
         });
         const tools = client.service("mcp/demo").get(mcpToolsInterface);
         expect((await tools.listTools({})).tools.map((tool) => [tool.name, tool.identities])).toEqual([
@@ -355,7 +369,7 @@ describe("registerMcpToolBridge", () => {
         const identities = new FakeIdentities([{ id: "early" }, { id: "late" }]);
         identities.setAuthentication("late", { status: "authorization-required", authorizationUri: "https://sign.in" });
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities, log: () => {},
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", agentTools: true, factory, identities, log: () => {},
         });
         const tools = client.service("mcp/demo").get(mcpToolsInterface);
         expect((await tools.listTools({})).tools.map((tool) => tool.name)).toEqual(["echo"]);
@@ -377,7 +391,7 @@ describe("registerMcpToolBridge", () => {
         factory.failFor = new Set(["home"]);
         const lines: string[] = [];
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory, identities,
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", agentTools: true, factory, identities,
             log: (line) => lines.push(line),
         });
         expect((await client.service("mcp/demo").get(mcpToolsInterface).listTools({})).tools
@@ -448,7 +462,7 @@ describe("registerMcpToolBridge", () => {
         const { server, client } = setup();
         const factory = new FakeFactory();
         const bridge = await registerMcpToolBridge({
-            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", factory,
+            connection: server, serviceId: "mcp/demo", interfaceId: "mcp.tools.demo", agentTools: true, factory,
         });
         const tools = client.service("mcp/demo").get(mcpToolsInterface);
         expect(await tools.callTool({ name: "echo", arguments: { text: "generic" } }))

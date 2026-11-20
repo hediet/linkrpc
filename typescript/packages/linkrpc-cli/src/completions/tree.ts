@@ -548,22 +548,24 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
         },
     {
             name: 'mcp',
-            description: 'Aggregate discoverable Hub MCP tools on stdio.',
+            description: 'Serve the script tools and setForwardedMcpServers on stdio.',
             positionals: [],
             options: [
                 { name: '--no-scripts', takesValue: false },
                 { name: '--mcp-identity', takesValue: true, valueType: 'free' },
+                { name: '--forward-server', takesValue: true, valueType: 'serviceId' },
             ],
         },
     {
             name: 'mcp-export',
-            description: 'Serve the Hub MCP tools over loopback Streamable HTTP.',
+            description: 'Serve what `mcp` serves over loopback Streamable HTTP.',
             positionals: [],
             options: [
                 { name: '--port', takesValue: true, valueType: 'free' },
                 { name: '--token-env', takesValue: true, valueType: 'free' },
                 { name: '--no-scripts', takesValue: false },
                 { name: '--mcp-identity', takesValue: true, valueType: 'free' },
+                { name: '--forward-server', takesValue: true, valueType: 'serviceId' },
                 { name: '--idle-timeout', takesValue: true, valueType: 'free' },
             ],
         },
@@ -590,6 +592,7 @@ const HUB_ONLY_COMMANDS: readonly SubcommandDef[] = [
             options: [
                 { name: '--serviceId', takesValue: true, valueType: 'serviceId' },
                 { name: '--service', takesValue: false },
+                { name: '--agent-tools', takesValue: false },
                 { name: '--forward', takesValue: false },
                 { name: '--name', takesValue: true, valueType: 'free' },
                 { name: '--group', takesValue: true, valueType: 'free' },

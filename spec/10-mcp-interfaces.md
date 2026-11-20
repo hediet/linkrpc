@@ -2,7 +2,7 @@
 
 **Optional. Requires chapters 03, 04, 05.** This chapter specifies how a node publishes a [Model Context Protocol](https://modelcontextprotocol.io/specification) (MCP) server as a linkrpc service, so that consumers in any language can discover and use it. A published MCP server has one or more **MCP identities** (accounts, §5); each identity is one **upstream**: one MCP transport and its authentication. A **host** publishes the server under one service id in one or both modes:
 
-- **service**: every MCP tool is a member of a generated interface, and `mcp.tools` lists and calls tools by name; all calls of an MCP identity share one upstream MCP session unless a caller opens an exclusive one (§2–§5);
+- **service**: every MCP tool is a member of a generated interface; all calls of an MCP identity share one upstream MCP session unless a caller opens an exclusive one (§2, §4, §5). A host MAY also serve `mcp.tools`, which lists and calls tools by name and makes the server available for forwarding to agents (§3);
 - **forwarded**: each `connect` call carries one complete MCP session verbatim (§1).
 
 These are ordinary interfaces (chapter 04), specified here by member schema.
@@ -70,6 +70,8 @@ When an upstream reports a changed tool list, or identities appear or become usa
 
 ## 3. `mcp.tools`
 
+A service host MAY serve `mcp.tools` under the same service id as its generated interfaces. Serving it opts the server in to being presented to MCP clients by a consumer that forwards hub tools to agents; without it, the tools are reachable only as members of the generated interfaces.
+
 ```
 mcp.tools::listTools
   params: {}
@@ -100,7 +102,7 @@ mcp.tools::callTool
 
 `listTools` lists the tools of all identities in MCP form. `callTool` invokes the tool `name` with `arguments` exactly like its generated member (§2), in the session named by `sessionId` and `mcpIdentity` (§4, §5). The host MUST reject an unknown `name`, and `arguments` containing `sessionId` or `mcpIdentity`, with `invalidParams`.
 
-A consumer presenting the tools to an MCP client SHOULD invoke them through `method` of `interfaceId`, so that consent and capabilities name the tool's interface and member.
+A consumer presenting the tools to an MCP client SHOULD invoke them through `method` of `interfaceId`, so that consent and capabilities name the tool's interface and member. Such a consumer SHOULD present only servers that serve `mcp.tools` (or `mcp.forward`), and only those its user or agent chose.
 
 > **Note.** A permission for `mcp.tools::callTool` authorizes every tool. Narrow it with parameter matchers (chapter 07), e.g. `params: { name: { enum: ["list_notes"] }, arguments: { any: true } }`.
 

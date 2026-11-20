@@ -56,7 +56,7 @@ beforeAll(async () => {
     world = await createWorld();
 
     // The host publishes one MCP server in both modes. In production this is
-    // `linkrpc hub mcp-publish --service --forward --group danger=clear -- node notesServer.mjs`
+    // `linkrpc hub mcp-publish --service --agent-tools --forward --group danger=clear -- node notesServer.mjs`
     // or an entry in personal-bot's mcp-participant config.
     hosted = await hostMcpServer({
         connection: world.hostConnection,
@@ -66,8 +66,9 @@ beforeAll(async () => {
             description: "A notes MCP server",
             transport: { kind: "stdio", command: process.execPath, args: [notesServer] },
             // Tools whose name contains "clear" get their own interface, so a
-            // capability can cover `mcp.tools.notes` without them.
-            expose: { service: { groups: [{ name: "danger", keywords: ["clear"] }] }, forward: {} },
+            // capability can cover `mcp.tools.notes` without them. `agentTools`
+            // adds the generic `mcp.tools`, which agents need to forward the tools.
+            expose: { service: { groups: [{ name: "danger", keywords: ["clear"] }], agentTools: true }, forward: {} },
         }),
         log: () => {},
     });
@@ -275,13 +276,37 @@ describe("MCP servers on a LinkRPC hub", () => {
         ]);
 
         // `linkrpc hub mcp` = HubMcpAggregator + McpToolHost on stdio. Here it is
-        // served over an in-memory MCP transport.
+        // served over an in-memory MCP transport. It forwards nothing until the
+        // agent chooses servers with `setForwardedMcpServers`.
         const mcp = await aggregatedMcpClient(agent.sender);
+        expect((await mcp.listTools()).tools.map((tool) => tool.name)).toMatchInlineSnapshot(`
+          [
+            "setForwardedMcpServers",
+          ]
+        `);
+        expect((await mcp.callTool({
+            name: "setForwardedMcpServers",
+            arguments: { servers: [{ serviceId: "notes" }] },
+        })).structuredContent).toMatchInlineSnapshot(`
+          {
+            "servers": [
+              {
+                "serviceId": "notes",
+                "status": "ready",
+                "tools": [
+                  "add_note__qxb1Ya3UXzZs9M0AZ_UzZneVoL3pF1XeNqiO7OMKJ6I",
+                  "list_notes__exa-ImoXA-6P4ZRzn85JeZAjR4qrecs7NT0Y_B73MLk",
+                  "clear_notes__BaoCE40zxMBZ_otTwroEA_RHPh8sF8guoA5ohzv84Mc",
+                ],
+              },
+            ],
+          }
+        `);
         // All tools of the catalog are listed with their MCP annotations, including
         // tools the agent may not call yet: access can still be granted on demand.
         // Names are `<prefix>__<hash of service id and tool>`; the description
         // names the service.
-        const { tools } = await mcp.listTools();
+        const tools = (await mcp.listTools()).tools.filter((tool) => tool.name !== "setForwardedMcpServers");
         expect(tools.map((tool) => ({ description: tool.description, annotations: tool.annotations })))
             .toMatchInlineSnapshot(`
               [
@@ -414,7 +439,7 @@ describe("MCP servers on a LinkRPC hub", () => {
                     { id: "work", env: { NOTES_OWNER: "work" } },
                     { id: "home", default: true, env: { NOTES_OWNER: "home" } },
                 ],
-                expose: { service: {}, forward: {} },
+                expose: { service: { agentTools: true }, forward: {} },
             }),
             log: () => {},
         });
@@ -476,7 +501,8 @@ describe("MCP servers on a LinkRPC hub", () => {
           }
         `);
 
-        // `linkrpc hub mcp --mcp-identity journal=work` aggregates with that account.
+        // `linkrpc hub mcp --forward-server journal --mcp-identity journal=work`
+        // forwards the journal's tools from the start, with that account.
         const agent = await world.client("journal-agent", [
             reflection("hub"),
             reflection("journal"),
@@ -488,20 +514,24 @@ describe("MCP servers on a LinkRPC hub", () => {
         ]);
         const aggregator = new HubMcpAggregator(agent.sender, {
             log: () => {},
+            forwarded: [{ serviceId: "journal" }],
             mcpIdentityFor: (serviceId) => serviceId === "journal" ? "work" : undefined,
         });
         const server = new Server({ name: "hub-mcp", version: "1" }, { capabilities: { tools: { listChanged: true } } });
         new McpToolHost(server).addSource(aggregator);
         const mcp = await connectMcp(server, () => aggregator.dispose());
-        await until(async () => (await mcp.listTools()).tools.length > 0);
-        const listNotes = (await mcp.listTools()).tools.find((tool) => tool.description === "[journal] List all notes.")!;
+        const findListNotes = async () => (await mcp.listTools()).tools
+            .find((tool) => tool.description === "[journal] List all notes.");
+        await until(async () => (await findListNotes()) !== undefined);
+        const listNotes = (await findListNotes())!;
         expect(text(await mcp.callTool({ name: listNotes.name }))).toMatchInlineSnapshot(`"work: ["standup","review"]"`);
     });
 
     it("9. scripts: one MCP server with the script tools and the hub's MCP tools", async () => {
-        // `linkrpc hub mcp --scripts`: the three script tools, then the aggregated
-        // MCP tools. Scripts can call any hub service the principal may call,
-        // including the generated MCP tool methods.
+        // `linkrpc hub mcp --forward-server notes`: the three script tools,
+        // `setForwardedMcpServers`, then the forwarded MCP tools. Scripts can call
+        // any hub service the principal may call, including the generated MCP
+        // tool methods of servers that are not forwarded.
         const agent = await world.client("script-agent", [
             reflection("hub"),
             reflection("notes"),
@@ -510,7 +540,7 @@ describe("MCP servers on a LinkRPC hub", () => {
         ]);
         const server = new LinkRpcMcpServer({
             pool: singleConnectionPool(agent.sender, agent.sender, "demo"),
-            hubTools: { log: () => {} },
+            hubTools: { log: () => {}, forwarded: [{ serviceId: "notes" }] },
         });
         const mcp = await connectMcp(server, () => server.dispose());
 
@@ -520,6 +550,7 @@ describe("MCP servers on a LinkRPC hub", () => {
                 "Evaluate a JS function inside a QuickJS sandbox with \`con\` (",
                 "Wait up to \`timeoutMs\` for a background task started by \`run",
                 "Soft-abort a background task started by \`runLinkRpcScript\` a",
+                "Forward all tools of the given MCP servers on the hub as too",
                 "[notes] Add a note.",
                 "[notes] List all notes.",
                 "[notes] Delete all notes.",

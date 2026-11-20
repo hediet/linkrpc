@@ -1220,6 +1220,11 @@ Batch options:
         .option('--env <key=value>', 'env var for the spawned MCP server child (repeatable)', collectKeyValue);
     const mcpExposeOptions = (command: Command): Command => command
         .option('--service', 'publish the MCP server as a LinkRPC service')
+        .option(
+            '--agent-tools',
+            'with --service: also publish `mcp.tools` (listTools/callTool), so `hub mcp` and `mcp-export` ' +
+            'can forward the tools to agents; without it they are only hub methods',
+        )
         .option('--forward', 'relay MCP verbatim over mcp.forward')
         .option('--name <name>', 'generated interface name, `mcp.tools.<name>` (default: derived from the serviceId)')
         .option(
@@ -1239,6 +1244,7 @@ Batch options:
     };
     type McpExposeCliOptions = {
         service?: boolean;
+        agentTools?: boolean;
         forward?: boolean;
         name?: string;
         group?: Record<string, string>;
@@ -1249,15 +1255,19 @@ Batch options:
             process.stderr.write(`linkrpc: ${commandName} requires --service, --forward, or both.\n`);
             process.exit(2);
         }
-        if (cmdOpts.group && !cmdOpts.service) {
-            process.stderr.write(`linkrpc: ${commandName} --group requires --service.\n`);
-            process.exit(2);
+        for (const [flag, used] of [['--group', cmdOpts.group !== undefined], ['--agent-tools', cmdOpts.agentTools === true]] as const) {
+            if (used && !cmdOpts.service) {
+                process.stderr.write(`linkrpc: ${commandName} ${flag} requires --service.\n`);
+                process.exit(2);
+            }
         }
         if (!cmdOpts.service && !cmdOpts.forward) return undefined;
         const groups = Object.entries(cmdOpts.group ?? {})
             .map(([groupName, keywords]) => ({ name: groupName, keywords: keywords.split(',').filter(Boolean) }));
         return {
-            ...(cmdOpts.service ? { service: groups.length > 0 ? { groups } : {} } : {}),
+            ...(cmdOpts.service
+                ? { service: { ...(groups.length > 0 ? { groups } : {}), ...(cmdOpts.agentTools ? { agentTools: true } : {}) } }
+                : {}),
             ...(cmdOpts.forward ? { forward: { sharing: 'exclusive' as const } } : {}),
         };
     };
@@ -1398,20 +1408,23 @@ Batch options:
         program
             .command('mcp')
             .description(
-                'Expose the tools of all MCP servers published on the Hub (MCP services and ' +
-                'forwarded servers) as one stdio MCP server, together with the LinkRPC script tools ' +
-                '(runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask).',
+                'Serve the LinkRPC script tools (runLinkRpcScript, awaitLinkRpcTask, cancelLinkRpcTask) ' +
+                'and setForwardedMcpServers as one stdio MCP server. With setForwardedMcpServers the ' +
+                'agent chooses MCP servers on the Hub (published with --agent-tools, or forwarded) whose ' +
+                'tools to forward; nothing is forwarded until then.',
             )
-            .option('--no-scripts', 'serve only the aggregated MCP tools, without loading the script sandbox')
+            .option('--no-scripts', 'serve only setForwardedMcpServers and the forwarded tools, without loading the script sandbox')
             .option(
                 '--mcp-identity <serviceId=identity>',
                 'use this MCP identity (account) of a published MCP server instead of its default (repeatable)',
                 collectKeyValue,
             )
-            .action(async (cmdOpts: { scripts?: boolean; mcpIdentity?: Record<string, string>; }) => {
+            .option('--forward-server <serviceId>', 'forward the tools of this MCP server from the start (repeatable)', collectOption)
+            .action(async (cmdOpts: { scripts?: boolean; mcpIdentity?: Record<string, string>; forwardServer?: string[] }) => {
                 await withChannel(endpoint, getPrincipalSpec(), async (channel, session) => {
                     await mcpCommand(channel, {
                         ...(cmdOpts.mcpIdentity !== undefined ? { mcpIdentities: cmdOpts.mcpIdentity } : {}),
+                        ...(cmdOpts.forwardServer !== undefined ? { forwardedServers: cmdOpts.forwardServer } : {}),
                         requestDirectoryAccess: session === undefined ? undefined : serviceId =>
                             requestDirectoryAccess(session, serviceId, { watch: true }),
                         ...(cmdOpts.scripts !== false
@@ -1430,12 +1443,13 @@ Batch options:
             )
             .requiredOption('--port <n>', 'loopback port to listen on', value => parsePositiveInteger(value, '--port'))
             .option('--token-env <name>', 'environment variable holding the bearer token', 'LINKRPC_MCP_EXPORT_TOKEN')
-            .option('--no-scripts', 'serve only the aggregated MCP tools, without loading the script sandbox')
+            .option('--no-scripts', 'serve only setForwardedMcpServers and the forwarded tools, without loading the script sandbox')
             .option(
                 '--mcp-identity <serviceId=identity>',
                 'use this MCP identity (account) of a published MCP server instead of its default (repeatable)',
                 collectKeyValue,
             )
+            .option('--forward-server <serviceId>', 'forward the tools of this MCP server in every MCP session from the start (repeatable)', collectOption)
             .option(
                 '--idle-timeout <minutes>',
                 'close MCP sessions without requests for this long (clients must then initialize again)',
@@ -1443,7 +1457,7 @@ Batch options:
             )
             .action(async (cmdOpts: {
                 port: number; tokenEnv: string; scripts?: boolean;
-                mcpIdentity?: Record<string, string>; idleTimeout?: number;
+                mcpIdentity?: Record<string, string>; forwardServer?: string[]; idleTimeout?: number;
             }) => {
                 const token = process.env[cmdOpts.tokenEnv];
                 if (!token) throw new Error(`mcp-export: set the bearer token in $${cmdOpts.tokenEnv}`);
@@ -1453,6 +1467,7 @@ Batch options:
                         authorizationToken: token,
                         scripts: cmdOpts.scripts !== false,
                         ...(cmdOpts.mcpIdentity !== undefined ? { mcpIdentities: cmdOpts.mcpIdentity } : {}),
+                        ...(cmdOpts.forwardServer !== undefined ? { forwardedServers: cmdOpts.forwardServer } : {}),
                         ...(cmdOpts.idleTimeout !== undefined ? { idleSessionTimeoutMs: cmdOpts.idleTimeout * 60_000 } : {}),
                         requestDirectoryAccess: session === undefined ? undefined : serviceId =>
                             requestDirectoryAccess(session, serviceId, { watch: true }),
@@ -1873,8 +1888,10 @@ Batch options:
         .description(
             'Publish an MCP server through the hub (--endpoint*). --service publishes it as a LinkRPC ' +
             'service: one method per tool on generated `mcp.tools.<name>` interfaces (split with ' +
-            '--group), generic `mcp.tools::listTools`/`callTool`, and `mcp.server`; callers share ' +
-            'one MCP session. --forward relays verbatim MCP over `mcp.forward`. Pass one or both. ' +
+            '--group), `mcp.server`, and `mcp.identities`; callers share one MCP session. With ' +
+            '--agent-tools it also publishes `mcp.tools::listTools`/`callTool`, which agents need to ' +
+            'forward its tools (`hub mcp`, `mcp-export`). --forward relays verbatim MCP over `mcp.forward`. ' +
+            'Pass --service, --forward, or both. ' +
             'The MCP server is a command after `--`, --url, or (forward only) --stdio. Runs until Ctrl-C.',
         )))
         .action(async (mcpCommand: string[] | undefined, cmdOpts: McpUpstreamCliOptions & McpExposeCliOptions) => {
