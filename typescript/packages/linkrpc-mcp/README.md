@@ -107,7 +107,7 @@ Publish an MCP server with `hostMcpServer` in one or both modes:
 
 | Mode | MCP sessions | On the hub | Capabilities | MCP features |
 | --- | --- | --- | --- | --- |
-| service | one shared session; exclusive sessions on request | one method per tool on `mcp.tools.<name>[.<group>]`, plus `mcp.tools` (`listTools`, `callTool`) and `mcp.server` | per tool or group | tools |
+| service | one shared session; exclusive sessions on request | one method per tool on `mcp.tools.<name>[.<group>]`, plus `mcp.server`; with `agentTools`, also `mcp.tools` (`listTools`, `callTool`) | per tool or group | tools |
 | forward | one upstream session per `connect` | `mcp.forward` (and the legacy `vscode.mcp-forward`) | per server | all, relayed verbatim |
 
 ```ts
@@ -129,8 +129,10 @@ const hosted = await hostMcpServer({
 Groups are matched in order; a tool joins the first group listing its name
 (`tools`), a prefix of it (`prefixes`), or a case-insensitive substring of it
 (`keywords`). A capability for the exact interface `mcp.tools.github` then excludes
-the `admin` tools. `mcp.tools::callTool` calls any tool by name; narrow a
-capability for it with a `name` parameter matcher.
+the `admin` tools. `service: { agentTools: true }` also publishes `mcp.tools`,
+which agents need to forward the server's tools (see `HubMcpAggregator` below);
+its `callTool` calls any tool by name, so narrow a capability for it with a
+`name` parameter matcher.
 
 The building blocks are also exported individually: `registerMcpToolBridge`
 (service), `serveMcpForward` (forward), `serveMcpForwardInstance` (forwards one
@@ -182,13 +184,14 @@ matcher `mcpIdentity: { exact: "work" }` allows only that account. Matchers
 name every parameter of a call, so a permission for a tool method also lists the
 tool's own parameters with `{ any: true }`.
 
-`HubMcpAggregator` discovers every MCP service and forwarded server visible
-through a signed channel and is an `McpToolSource`; `McpToolHost` serves tool
-sources on an MCP SDK `Server`. Service tools are called through their generated
-methods, so the
-hub's per-tool capabilities and consent apply; `mcpIdentityFor` selects an
-account per service. `linkrpc hub mcp` and the `hubTools` option are built from
-these.
+`HubMcpAggregator` is an `McpToolSource` that serves `setForwardedMcpServers`
+and the tools of the MCP servers chosen with it (or with the `forwarded`
+option): MCP services that publish `mcp.tools`, and forwarded servers. It
+forwards nothing until servers are chosen; the choice lasts as long as the
+aggregator. `McpToolHost` serves tool sources on an MCP SDK `Server`. Service
+tools are called through their generated methods, so the hub's per-tool
+capabilities and consent apply; `mcpIdentityFor` selects an account per
+service. `linkrpc hub mcp` and the `hubTools` option are built from these.
 
 `DelegatedHubSender` signs calls as a delegated principal over a channel it does
 not own, for services that act for many users, chats, or OAuth grants over one

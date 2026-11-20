@@ -23,15 +23,21 @@ export const mcpToolGroupConfigSchema = z.object({
 
 export const mcpExposeConfigSchema = z.object({
     /**
-     * Publish the MCP server as a LinkRPC service: one method per tool, generic
-     * `mcp.tools::listTools`/`callTool`, and `mcp.server`. One shared MCP session
-     * for all callers, plus exclusive sessions on request.
+     * Publish the MCP server as a LinkRPC service: one method per tool,
+     * `mcp.server`, and `mcp.identities`. One shared MCP session for all
+     * callers, plus exclusive sessions on request.
      */
     service: z.object({
         /** Base generated interface id; defaults to `mcp.tools.<server id>`. */
         interfaceId: z.string().regex(/^mcp\.tools\.[a-z0-9][a-z0-9.-]*$/).optional(),
         /** Tools matching a group go to `<interfaceId>.<group name>` (first match wins). */
         groups: z.array(mcpToolGroupConfigSchema).optional(),
+        /**
+         * Also publish `mcp.tools` (`listTools`/`callTool`), so `hub mcp` and
+         * `mcp-export` can forward the tools to agents. Without it, the tools are
+         * only hub methods.
+         */
+        agentTools: z.boolean().optional(),
         session: z.object({
             idleTimeoutMs: z.number().int().positive().optional(),
             maxLifetimeMs: z.number().int().positive().optional(),
@@ -115,6 +121,7 @@ export async function hostMcpServer(options: HostMcpServerOptions): Promise<Host
                 serviceId: options.serviceId,
                 interfaceId: server.expose.service.interfaceId ?? `mcp.tools.${server.id}`,
                 groups: server.expose.service.groups,
+                agentTools: server.expose.service.agentTools,
                 serviceDescription: server.description,
                 factory: identitySessionFactory(identities, { clientInfo: options.clientInfo }),
                 identities,

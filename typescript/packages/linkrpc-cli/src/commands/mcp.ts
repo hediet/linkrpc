@@ -19,6 +19,8 @@ export interface McpOptions {
     readonly scripts?: boolean;
     /** MCP identity (account) per service id; other services use their default identity. */
     readonly mcpIdentities?: Readonly<Record<string, string>>;
+    /** Hub service ids whose MCP tools are forwarded from the start. */
+    readonly forwardedServers?: readonly string[];
     readonly access?: {
         listGrants(): readonly SignedCapability[];
         requestAccess(request: HubAccessRequest): Promise<HubAccessResult>;
@@ -28,8 +30,8 @@ export interface McpOptions {
 const clientInfo = { name: 'linkrpc-hub-mcp', version: '1.0.0' };
 
 /**
- * Serve the tools of every MCP server published on the hub (MCP services and
- * forwarded servers) as one stdio MCP server, optionally with the script tools.
+ * Serve `setForwardedMcpServers`, which forwards the tools of chosen MCP servers
+ * on the hub, as one stdio MCP server, optionally with the script tools.
  */
 export async function mcpCommand(channel: CliChannel, options: McpOptions = {}): Promise<void> {
     const log = options.log ?? (message => { process.stderr.write(`linkrpc mcp: ${message}\n`); });
@@ -40,6 +42,7 @@ export async function mcpCommand(channel: CliChannel, options: McpOptions = {}):
         ...(options.mcpIdentities !== undefined
             ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
             : {}),
+        ...forwardedOption(options.forwardedServers),
     };
     const transport = new StdioServerTransport(options.input ?? process.stdin, options.output ?? process.stdout);
     const input = options.input ?? process.stdin;
@@ -99,6 +102,8 @@ export interface McpExportOptions {
     readonly authorizationToken: string;
     readonly scripts?: boolean;
     readonly mcpIdentities?: Readonly<Record<string, string>>;
+    /** Hub service ids whose MCP tools every MCP session forwards from the start. */
+    readonly forwardedServers?: readonly string[];
     readonly requestDirectoryAccess?: (serviceId: string) => Promise<boolean>;
     readonly access?: McpOptions['access'];
     readonly idleSessionTimeoutMs?: number;
@@ -133,6 +138,7 @@ export async function mcpExportCommand(channel: CliChannel, options: McpExportOp
                     ...(options.mcpIdentities !== undefined
                         ? { mcpIdentityFor: (serviceId: string) => options.mcpIdentities?.[serviceId] }
                         : {}),
+                    ...forwardedOption(options.forwardedServers),
                 },
             },
         }),
@@ -144,4 +150,8 @@ export async function mcpExportCommand(channel: CliChannel, options: McpExportOp
     } finally {
         host.dispose();
     }
+}
+
+function forwardedOption(serviceIds: readonly string[] | undefined): Pick<HubMcpAggregatorOptions, 'forwarded'> {
+    return serviceIds === undefined ? {} : { forwarded: serviceIds.map(serviceId => ({ serviceId })) };
 }

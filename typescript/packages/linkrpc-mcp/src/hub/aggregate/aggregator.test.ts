@@ -58,7 +58,7 @@ describe("HubMcpAggregator", () => {
             },
         }, { serviceId: "slow" });
         const local = connectViaTransport(pair.b);
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["slow"]);
         try {
             await vi.waitFor(() => expect(started).toBe(true));
             await f.close();
@@ -72,12 +72,14 @@ describe("HubMcpAggregator", () => {
         hub.enableReflection();
         const first = forwarded(hub, "machine/very-long-service-path/" + "a".repeat(100), [tool("screenshot"), tool("other")]);
         const second = forwarded(hub, "machine/second", [tool("screenshot")]);
+        // A forwarded server that is published only later is attached once it appears.
+        const services = [first.serviceId, second.serviceId, "machine/new-dynamic-id"];
         const local = connectViaTransport(pair.b);
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, services);
         const changed = vi.fn();
         f.client.setNotificationHandler(ToolListChangedNotificationSchema, changed);
         try {
-            const initial = await f.client.listTools();
+            const initial = { tools: await f.tools() };
             expect(initial.tools).toHaveLength(3);
             expect(new Set(initial.tools.map(t => t.name)).size).toBe(3);
             for (const t of initial.tools) {
@@ -93,20 +95,20 @@ describe("HubMcpAggregator", () => {
             second.tools = [tool("replacement")];
             await second.servers[0].sendToolListChanged();
             await vi.waitFor(async () => {
-                expect((await f.client.listTools()).tools.some(t => t.name.startsWith("replacement__"))).toBe(true);
+                expect((await f.tools()).some(t => t.name.startsWith("replacement__"))).toBe(true);
             });
             expect(changed).toHaveBeenCalled();
             first.registration.dispose();
-            await vi.waitFor(async () => { expect((await f.client.listTools()).tools).toHaveLength(1); });
+            await vi.waitFor(async () => { expect((await f.tools())).toHaveLength(1); });
             const third = forwarded(hub, "machine/new-dynamic-id", [tool("screenshot")]);
-            await vi.waitFor(async () => { expect((await f.client.listTools()).tools).toHaveLength(2); });
+            await vi.waitFor(async () => { expect((await f.tools())).toHaveLength(2); });
             await f.close();
             await vi.waitFor(() => {
                 expect([first.active, second.active, third.active]).toEqual([0, 0, 0]);
             });
-            const next = await consumer(local.channel);
+            const next = await consumer(local.channel, services);
             try {
-                expect((await next.client.listTools()).tools).toHaveLength(2);
+                expect((await next.tools())).toHaveLength(2);
             } finally { await next.close(); }
         } finally {
             await f.close();
@@ -121,9 +123,9 @@ describe("HubMcpAggregator", () => {
         hub.enableReflection();
         forwarded(hub, "old-producer", [tool("legacy")], legacyMcpForwardInterface);
         const local = connectViaTransport(pair.b);
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["old-producer"]);
         try {
-            const tools = (await f.client.listTools()).tools;
+            const tools = (await f.tools());
             expect(tools.map(t => t.description)).toEqual(["[old-producer] legacy"]);
             expect((await f.client.callTool({ name: tools[0].name })).isError).not.toBe(true);
         } finally { await f.close(); local.close(); hub.close(); }
@@ -136,9 +138,9 @@ describe("HubMcpAggregator", () => {
         forwarded(hub, "healthy", [tool("ok")]);
         hub.register(mcpForwardInterface, { connect: () => { throw new Error("Producer unavailable"); } }, { serviceId: "broken" });
         const local = connectViaTransport(pair.b);
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["healthy", "broken"]);
         try {
-            expect((await f.client.listTools()).tools.map(t => t.description)).toEqual(["[healthy] ok"]);
+            expect((await f.tools()).map(t => t.description)).toEqual(["[healthy] ok"]);
             expect(f.logs.join("\n")).toContain("Producer unavailable");
         } finally {
             await f.close(); local.close(); hub.close();
@@ -158,9 +160,9 @@ describe("HubMcpAggregator", () => {
         const local = connectViaTransport(pair.b);
         local.signing.principal = principal;
         await principal.capBag.add(await grant(root, principal, "private", mcpForwardInterface.info.id, ["connect"]));
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["private"]);
         try {
-            const tools = (await f.client.listTools()).tools;
+            const tools = (await f.tools());
             expect(tools.map(t => t.description)).toEqual(["[private] signed"]);
             expect((await f.client.callTool({ name: tools[0].name })).isError).not.toBe(true);
         } finally {
@@ -174,14 +176,14 @@ describe("HubMcpAggregator", () => {
         hub.enableReflection();
         const producer = forwarded(hub, "stable-producer", [tool("before")]);
         const local = connectViaTransport(pair.b);
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["stable-producer"]);
         try {
-            await f.client.listTools();
+            await f.tools();
             await producer.servers[0].close();
-            await vi.waitFor(async () => { expect((await f.client.listTools()).tools).toHaveLength(0); });
+            await vi.waitFor(async () => { expect((await f.tools())).toHaveLength(0); });
             producer.tools = [tool("after")];
             await vi.waitFor(async () => {
-                expect((await f.client.listTools()).tools.map(t => t.description)).toEqual(["[stable-producer] after"]);
+                expect((await f.tools()).map(t => t.description)).toEqual(["[stable-producer] after"]);
             }, { timeout: 3_000 });
             expect(producer.servers).toHaveLength(2);
         } finally {
@@ -201,13 +203,53 @@ describe("HubMcpAggregator", () => {
         const producer = forwarded(hub, "private", [tool("secret")]);
         const local = connectViaTransport(pair.b);
         local.signing.principal = principal;
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["private"]);
         try {
-            expect(await f.client.listTools()).toEqual({ tools: [] });
+            expect(await f.tools()).toEqual([]);
             expect(producer.active).toBe(0);
             expect(f.logs.join("\n")).toContain("Cannot connect to private");
         } finally {
             await f.close(); local.close(); hub.close();
+        }
+    });
+
+    it("forwards only the servers chosen with setForwardedMcpServers", async () => {
+        const pair = new TransportPair();
+        const hub = LinkRpcConnection.fromTransport(pair.a);
+        hub.enableReflection();
+        const a = forwarded(hub, "a", [tool("x")]);
+        forwarded(hub, "b", [tool("y")]);
+        const hubOnly = await registerMcpToolBridge({
+            connection: hub, serviceId: "hub-only", interfaceId: "mcp.tools.hub-only", factory: typedFactory([tool("z")]),
+        });
+        const local = connectViaTransport(pair.b);
+        const f = await consumer(local.channel, []);
+        const changed = vi.fn();
+        f.client.setNotificationHandler(ToolListChangedNotificationSchema, changed);
+        const choose = async (...serviceIds: string[]) => (await f.client.callTool({
+            name: "setForwardedMcpServers",
+            arguments: { servers: serviceIds.map(serviceId => ({ serviceId })) },
+        })).structuredContent;
+        try {
+            expect(await f.tools()).toEqual([]);
+            expect(await choose("a", "hub-only", "missing")).toEqual({
+                servers: [
+                    { serviceId: "a", status: "ready", tools: [expect.stringMatching(/^x__/)] },
+                    { serviceId: "hub-only", status: "error", error: expect.stringContaining("--agent-tools") },
+                    { serviceId: "missing", status: "error", error: expect.stringContaining("--agent-tools") },
+                ],
+            });
+            expect((await f.tools()).map(t => t.description)).toEqual(["[a] x"]);
+            expect(changed).toHaveBeenCalled();
+
+            await choose("b");
+            expect((await f.tools()).map(t => t.description)).toEqual(["[b] y"]);
+            await vi.waitFor(() => expect(a.active).toBe(0));
+
+            expect(await choose()).toEqual({ servers: [] });
+            expect(await f.tools()).toEqual([]);
+        } finally {
+            await f.close(); await hubOnly.dispose(); local.close(); hub.close();
         }
     });
 
@@ -226,15 +268,15 @@ describe("HubMcpAggregator", () => {
             { name: "delete", inputSchema: { type: "object" } },
         ]);
         const bridge = await registerMcpToolBridge({
-            connection: hub, serviceId: "typed", interfaceId: "mcp.tools.typed", factory,
+            connection: hub, serviceId: "typed", interfaceId: "mcp.tools.typed", agentTools: true, factory,
         });
         const local = connectViaTransport(pair.b);
         local.signing.principal = principal;
         await principal.capBag.add(await grant(root, principal, "typed", mcpToolsInterface.info.id, ["listTools"]));
         await principal.capBag.add(await grant(root, principal, "typed", "mcp.tools.typed", ["read"]));
-        const f = await consumer(local.channel);
+        const f = await consumer(local.channel, ["typed"]);
         try {
-            const tools = (await f.client.listTools()).tools;
+            const tools = (await f.tools());
             expect(tools.map(t => t.description)).toEqual(["[typed] read", "[typed] delete"]);
             expect(await f.client.callTool({ name: tools[0].name, arguments: { path: "a.txt" } })).toEqual({
                 content: [{ type: "text", text: "read:{\"path\":\"a.txt\"}" }],
@@ -248,9 +290,13 @@ describe("HubMcpAggregator", () => {
     });
 });
 
-async function consumer(channel: ConstructorParameters<typeof HubMcpAggregator>[0]) {
+async function consumer(channel: ConstructorParameters<typeof HubMcpAggregator>[0], forwarded: readonly string[]) {
     const logs: string[] = [];
-    const aggregator = new HubMcpAggregator(channel, { log: line => logs.push(line), retryIntervalMs: 200 });
+    const aggregator = new HubMcpAggregator(channel, {
+        log: line => logs.push(line),
+        retryIntervalMs: 200,
+        forwarded: forwarded.map(serviceId => ({ serviceId })),
+    });
     const server = new Server({ name: "hub-mcp-test", version: "1" }, { capabilities: { tools: { listChanged: true } } });
     new McpToolHost(server).addSource(aggregator);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -259,7 +305,9 @@ async function consumer(channel: ConstructorParameters<typeof HubMcpAggregator>[
     await client.connect(clientTransport);
     let closed = false;
     return {
-        client, logs,
+        client, logs, aggregator,
+        /** The forwarded tools, without `setForwardedMcpServers`. */
+        tools: async () => (await client.listTools()).tools.filter(t => t.name !== "setForwardedMcpServers"),
         close: async () => {
             if (closed) return;
             closed = true;
@@ -312,7 +360,7 @@ function forwarded(
             return {};
         },
     }, { serviceId });
-    return Object.assign(state, { registration });
+    return Object.assign(state, { registration, serviceId });
 }
 
 function typedFactory(tools: McpToolDefinition[]): McpSessionFactory & { calls: string[] } {

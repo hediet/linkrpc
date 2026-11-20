@@ -21,14 +21,15 @@ type Case = {
 };
 
 const scriptTools = ['runLinkRpcScript', 'awaitLinkRpcTask', 'cancelLinkRpcTask'];
+const forwardExplorer = ['--forward-server', 'test/explorer'];
 
 it.each<Case>([
-    { command: ['mcp-forward'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
+    { command: ['mcp-forward'], consumer: ['mcp', '--no-scripts', ...forwardExplorer], scriptTools: [] },
     // The MCP server runs on its own; the producer forwards it over its own stdin/stdout.
-    { command: ['mcp-forward', '--stdio'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
-    { command: ['mcp-publish', '--service'], consumer: ['mcp', '--no-scripts'], scriptTools: [] },
+    { command: ['mcp-forward', '--stdio'], consumer: ['mcp', '--no-scripts', ...forwardExplorer], scriptTools: [] },
+    { command: ['mcp-publish', '--service', '--agent-tools'], consumer: ['mcp', '--no-scripts', ...forwardExplorer], scriptTools: [] },
     // The script tools are on by default.
-    { command: ['mcp-publish', '--service', '--forward'], consumer: ['mcp'], scriptTools },
+    { command: ['mcp-publish', '--service', '--agent-tools', '--forward'], consumer: ['mcp', ...forwardExplorer], scriptTools },
     // Two accounts in a config file; the consumer selects the non-default one.
     {
         command: ['mcp-publish'],
@@ -38,9 +39,9 @@ it.each<Case>([
                 { id: 'work', env: { MCP_TEST_ACCOUNT: 'work' } },
                 { id: 'home', default: true, env: { MCP_TEST_ACCOUNT: 'home' } },
             ],
-            expose: { service: {} },
+            expose: { service: { agentTools: true } },
         }),
-        consumer: ['mcp', '--no-scripts', '--mcp-identity', 'test/explorer=work'],
+        consumer: ['mcp', '--no-scripts', ...forwardExplorer, '--mcp-identity', 'test/explorer=work'],
         scriptTools: [],
         expectedText: '{"message":"from the agent","account":"work"}',
     },
@@ -97,10 +98,11 @@ it.each<Case>([
         let tools = await client.listTools();
         await vi.waitFor(async () => {
             tools = await client.listTools();
-            expect(tools.tools).toHaveLength(scriptTools.length + 1);
+            expect(tools.tools).toHaveLength(scriptTools.length + 2);
         }, { timeout: 30_000, interval: 500 });
-        expect(tools.tools.slice(0, scriptTools.length).map(tool => tool.name)).toEqual(scriptTools);
-        const hubTools = tools.tools.slice(scriptTools.length);
+        expect(tools.tools.slice(0, scriptTools.length + 1).map(tool => tool.name))
+            .toEqual([...scriptTools, 'setForwardedMcpServers']);
+        const hubTools = tools.tools.slice(scriptTools.length + 1);
         expect(hubTools.map(tool => tool.description)).toEqual(['[test/explorer] echo']);
         expect(await client.callTool({ name: hubTools[0].name, arguments: { message: 'from the agent' } }))
             .toEqual({ content: [{ type: 'text', text: expectedText ?? '{"message":"from the agent"}' }] });

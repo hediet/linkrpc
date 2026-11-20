@@ -38,6 +38,11 @@ export interface RegisterMcpToolBridgeOptions extends McpSessionManagerOptions {
     /** Split tools into further interfaces `<interfaceId>.<group>`. */
     readonly groups?: readonly McpToolGroup[];
     readonly serviceDescription?: string;
+    /**
+     * Also register `mcp.tools` (tool catalog and generic `callTool`), which
+     * `hub mcp` and `mcp-export` need to forward the tools to agents. Defaults to `false`.
+     */
+    readonly agentTools?: boolean;
     /** Register reflection for `serviceId`. Defaults to `true`. */
     readonly enableReflection?: boolean;
     /**
@@ -81,7 +86,7 @@ const fixedIdentities: McpIdentities = {
  * - `<interfaceId>` (`mcp.tools.<name>`) and `<interfaceId>.<group>`: one
  *   method per tool, re-registered when the server reports
  *   `tools/list_changed`. Capabilities can therefore apply per tool or group.
- * - `mcp.tools`: the tool catalog and generic `callTool`.
+ * - `mcp.tools` (with `agentTools`): the tool catalog and generic `callTool`.
  * - `mcp.server`: state, plus exclusive sessions.
  *
  * Calls select an MCP identity (account) with `mcpIdentity`, or use the
@@ -362,7 +367,7 @@ export async function registerMcpToolBridge(
         return result;
     }
 
-    staticRegistrations.push(options.connection.register(mcpToolsInterface, {
+    if (options.agentTools === true) staticRegistrations.push(options.connection.register(mcpToolsInterface, {
         listTools: async (): Promise<McpToolCatalog> => {
             await refreshChain;
             const fallback = defaultMcpIdentity(identities.list());

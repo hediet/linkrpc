@@ -50,7 +50,9 @@ describe("hosted MCP servers", () => {
         const hosted = await hostMcpServer({
             connection: server,
             serviceId: "mcp/both",
-            server: mcpServerConfigSchema.parse({ id: "both", transport: stdioTransport, expose: { service: {}, forward: {} } }),
+            server: mcpServerConfigSchema.parse({
+                id: "both", transport: stdioTransport, expose: { service: { agentTools: true }, forward: {} },
+            }),
         });
         try {
             const catalog = await client.service("mcp/both").get(mcpToolsInterface).listTools({});

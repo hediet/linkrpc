@@ -65,8 +65,9 @@ export interface LinkRpcMcpServerOptions {
      */
     readonly maxHubResultBytes?: number;
     /**
-     * Also list the tools of MCP servers published on the default connection's
-     * hub (MCP services and forwarded servers), next to the script tools.
+     * Also serve `setForwardedMcpServers`, with which the agent chooses MCP
+     * servers on the default connection's hub whose tools to forward next to
+     * the script tools (`forwarded` presets that choice).
      */
     readonly hubTools?: boolean | Omit<HubMcpAggregatorOptions, "clientInfo">;
     /** Serve the script tools (`runLinkRpcScript`, ...). Defaults to `true`. */
