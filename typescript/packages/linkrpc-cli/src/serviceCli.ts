@@ -125,8 +125,10 @@ export interface ServiceAppOptions {
     readonly setup: (context: ServiceAppSetupContext) => ServiceAppCleanup | Promise<ServiceAppCleanup>;
     /** Extra local subcommands (e.g. a TUI like `watch-run`). Works in both direct and remote mode. */
     readonly extraCommands?: Readonly<Record<string, (args: readonly string[], ctx: ServiceCliContext) => Promise<void>>>;
-    /** Options forwarded to `hostParticipant` in serve mode (`registrationMode` defaults to `'grantedServiceId'`). */
-    readonly hostOptions?: ServiceAppHostOptions;
+    /** Options forwarded to `hostParticipant` in serve mode (`registrationMode` defaults to `'all'`). */
+    readonly hostOptions?: ServiceAppHostOptions | ((argv: readonly string[]) => ServiceAppHostOptions);
+    /** Called once `hostParticipant` is bound in serve mode (useful for logging or tests). */
+    readonly onServeReady?: (handle: { readonly endpoint: string; dispose(): Promise<void> }) => void;
     /** Override hub hosting in serve mode (mainly for tests). */
     readonly serve?: (argv: readonly string[]) => Promise<void>;
     /** Override remote connection in `--remote-service` / `--endpoint` mode (mainly for tests). */
@@ -139,9 +141,9 @@ export interface ServiceAppOptions {
 }
 
 /**
- * Unified entry point for a LinkRPC service and its CLI:
- * - **Serve mode** when `argv[0] === 'serve'`, or when `LINKRPC_ENDPOINT` is set (unless `--cli`,
- *   `--remote-service`, or `--endpoint` is passed).
+ * Unified entry point for a LinkRPC service, CLI, and stdio MCP server:
+ * - **Serve mode** when `argv[0] === 'serve'` (supports `LINKRPC_ENDPOINT` or `--listen <ws://...> --token <secret>`).
+ * - **MCP stdio mode** when `argv[0] === 'mcp'` (or `--remote-service <id> mcp`).
  * - **Remote CLI mode** when `--remote-service <id>`, `LINKRPC_REMOTE_SERVICE`, or `--endpoint <uri>`
  *   is provided: skips `setup` and calls the remote service over LinkRPC.
  * - **Direct CLI mode (default)** otherwise: runs `setup` in-process over a `TransportPair`,
@@ -157,17 +159,11 @@ export async function runServiceApp(
     const isTty = options.isTty ?? (stdout === process.stdout && process.stdout.isTTY === true);
 
     if (argv[0] === 'serve') {
-        await _runServe(options, argv.slice(1));
+        await _runServe(options, argv.slice(1), stderr);
         return;
     }
 
-    const forceCli = argv[0] === '--cli';
-    const cliArgv = forceCli ? argv.slice(1) : argv;
-    if (!forceCli && !_hasRemoteFlag(cliArgv) && env.LINKRPC_ENDPOINT !== undefined && env.LINKRPC_ENDPOINT.trim() !== '') {
-        await _runServe(options, argv);
-        return;
-    }
-
+    const cliArgv = argv[0] === '--cli' ? argv.slice(1) : argv;
     const parsed = _parseTopLevel(cliArgv, options, env);
     if (parsed.kind === 'help') {
         stdout.write(parsed.text);
@@ -247,18 +243,33 @@ export async function runServiceApp(
 // Serve, direct in-process, and remote connections
 // ---------------------------------------------------------------------------
 
-async function _runServe(options: ServiceAppOptions, serveArgv: readonly string[]): Promise<void> {
+async function _runServe(
+    options: ServiceAppOptions,
+    serveArgv: readonly string[],
+    stderr: NodeJS.WritableStream,
+): Promise<void> {
     if (options.serve !== undefined) {
         await options.serve(serveArgv);
         return;
     }
+    const { rest, listen, token } = _extractServeFlags(serveArgv);
+    const resolvedHostOptions = typeof options.hostOptions === 'function'
+        ? options.hostOptions(rest)
+        : options.hostOptions;
+    const listenEndpoint = listen !== undefined
+        ? {
+            endpoint: listen.startsWith('listen:') ? listen : `listen:${listen}`,
+            ...(token !== undefined ? { token } : {}),
+        }
+        : undefined;
     const host = await hostParticipant({
-        registrationMode: 'grantedServiceId',
-        ...options.hostOptions,
+        registrationMode: 'all',
+        ...resolvedHostOptions,
+        ...(listenEndpoint !== undefined ? { endpoint: listenEndpoint } : {}),
         setup: async hostCtx => {
             const cleanup = await options.setup({
                 mode: 'serve',
-                argv: serveArgv,
+                argv: rest,
                 connection: hostCtx.connection,
                 services: hostCtx.services,
                 serviceId: hostCtx.serviceId,
@@ -272,7 +283,32 @@ async function _runServe(options: ServiceAppOptions, serveArgv: readonly string[
             return cleanup;
         },
     });
+    if (listen !== undefined) {
+        stderr.write(`${options.name}: listening on ${host.endpoint}\n`);
+    }
+    options.onServeReady?.(host);
     await host.done;
+}
+
+function _extractServeFlags(argv: readonly string[]): {
+    readonly rest: string[];
+    readonly listen?: string;
+    readonly token?: string;
+} {
+    let listen: string | undefined;
+    let token: string | undefined;
+    const rest: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+        const valueFlag = _readValueFlag(argv, i, ['--listen', '--token']);
+        if (valueFlag !== undefined) {
+            if (valueFlag.flag === '--listen') listen = valueFlag.value;
+            else if (valueFlag.flag === '--token') token = valueFlag.value;
+            i = valueFlag.nextIndex;
+            continue;
+        }
+        rest.push(argv[i]!);
+    }
+    return { rest, listen, token };
 }
 
 async function _withTargetConnection<T>(
@@ -357,19 +393,6 @@ async function _connectRemote(opts: ServiceCliConnectOptions): Promise<ServiceCl
 function _writeStreamChunk(stderr: NodeJS.WritableStream, payload: JsonValue): void {
     const text = typeof payload === 'string' ? payload : JSON.stringify(payload);
     stderr.write(`${text}\n`);
-}
-
-function _hasRemoteFlag(argv: readonly string[]): boolean {
-    for (const tok of argv) {
-        if (tok === '--') return false;
-        if (
-            tok === '--remote-service' || tok.startsWith('--remote-service=')
-            || tok === '--endpoint' || tok.startsWith('--endpoint=')
-        ) {
-            return true;
-        }
-    }
-    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -686,7 +709,6 @@ function _renderRootHelp(options: ServiceAppOptions, flatSingle: boolean): strin
         ['--principal <spec>', 'Signing principal override for remote calls'],
         ['--json', 'Print raw JSON output'],
         ['--params <json|->', 'Base JSON params object (or "-" for stdin)'],
-        ['--cli', 'Force CLI mode even when LINKRPC_ENDPOINT is set'],
         ['-h, --help', 'Show help'],
     ]));
     return `${lines.join('\n')}\n`;
