@@ -330,4 +330,38 @@ describe('runServiceApp', () => {
             expect(hRemote.setup).not.toHaveBeenCalled();
         } finally { hRemote.dispose(); }
     });
+
+    it('exposes every interface method as an MCP tool over stdio (`mcp` mode)', async () => {
+        const stdin = new PassThrough();
+        const h = makeHarness({ stdin });
+        try {
+            const run = runServiceApp(h.options, ['mcp']);
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'pipelines_listRuns', arguments: { pipelineId: 421 } } }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'pipelines_listRuns', arguments: {} } }) + '\n');
+            stdin.end();
+            await run;
+
+            const responses = h.stdout.text().trim().split('\n').map(l => JSON.parse(l));
+            expect(responses).toHaveLength(4);
+            expect(responses[0].result.serverInfo.name).toBe('demo-cli');
+
+            const toolList = responses[1].result.tools as { name: string; annotations?: Record<string, boolean> }[];
+            expect(toolList.map(t => t.name)).toEqual(['pipelines_listRuns', 'pipelines_queueRun', 'status_ping']);
+            expect(toolList.find(t => t.name === 'pipelines_listRuns')?.annotations).toEqual({
+                readOnlyHint: true, destructiveHint: false, idempotentHint: true,
+            });
+            expect(toolList.find(t => t.name === 'pipelines_queueRun')?.annotations).toEqual({
+                destructiveHint: true,
+            });
+
+            expect(responses[2].result.structuredContent).toEqual({ runs: [{ id: 101, status: 'completed' }] });
+            expect(h.directCalls[0]).toEqual({ method: 'listRuns', params: { repository: 'acme/app', pipelineId: 421 } });
+            expect(responses[3].result.isError).toBe(true);
+            expect(responses[3].result.content[0].text).toContain('Parameter validation failed:');
+            expect(h.disposed).toHaveBeenCalledTimes(1);
+        } finally { h.dispose(); }
+    });
 });

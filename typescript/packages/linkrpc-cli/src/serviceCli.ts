@@ -1,3 +1,4 @@
+import { createInterface } from 'node:readline';
 import {
     LinkRpcConnection,
     RpcError,
@@ -131,6 +132,7 @@ export interface ServiceAppOptions {
     /** Override remote connection in `--remote-service` / `--endpoint` mode (mainly for tests). */
     readonly connect?: (opts: ServiceCliConnectOptions) => Promise<ServiceCliConnection>;
     readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly stdin?: NodeJS.ReadableStream;
     readonly stdout?: NodeJS.WritableStream;
     readonly stderr?: NodeJS.WritableStream;
     readonly isTty?: boolean;
@@ -169,6 +171,10 @@ export async function runServiceApp(
     const parsed = _parseTopLevel(cliArgv, options, env);
     if (parsed.kind === 'help') {
         stdout.write(parsed.text);
+        return;
+    }
+    if (parsed.kind === 'mcp') {
+        await _runMcpStdio(options, parsed.connOpts, options.stdin ?? process.stdin, stdout);
         return;
     }
     if (parsed.kind === 'extra') {
@@ -372,6 +378,7 @@ function _hasRemoteFlag(argv: readonly string[]): boolean {
 
 type ParsedInvocation =
     | { readonly kind: 'help'; readonly text: string }
+    | { readonly kind: 'mcp'; readonly connOpts: ServiceCliConnectOptions }
     | {
         readonly kind: 'extra';
         readonly handler: (args: readonly string[], ctx: ServiceCliContext) => Promise<void>;
@@ -404,6 +411,9 @@ function _parseTopLevel(
     }
 
     const first = rest[0]!;
+    if (first === 'mcp') {
+        return { kind: 'mcp', connOpts };
+    }
     const extraHandler = options.extraCommands?.[first];
     if (extraHandler !== undefined) {
         return { kind: 'extra', handler: extraHandler, args: rest.slice(1), json, connOpts };
@@ -645,6 +655,7 @@ function _renderRootHelp(options: ServiceAppOptions, flatSingle: boolean): strin
         ? `  ${options.name} <command> [options]`
         : `  ${options.name} <group> <command> [options]`);
     lines.push(`  ${options.name} serve [serve-options]`);
+    lines.push(`  ${options.name} mcp`);
     lines.push('');
 
     if (flatSingle) {
@@ -869,4 +880,229 @@ function _levenshtein(a: string, b: string): number {
         prev = cur;
     }
     return prev[b.length]!;
+}
+
+// ---------------------------------------------------------------------------
+// Stdio MCP server (`<app> mcp`)
+// ---------------------------------------------------------------------------
+
+interface McpToolEntry {
+    readonly name: string;
+    readonly description?: string;
+    readonly inputSchema: Record<string, unknown>;
+    readonly annotations?: {
+        readonly readOnlyHint?: boolean;
+        readonly destructiveHint?: boolean;
+        readonly idempotentHint?: boolean;
+    };
+    readonly spec: ServiceCliInterface;
+    readonly schema: LinkRpcInterfaceSchema;
+    readonly methodName: string;
+    readonly methodSchema: MethodSchema;
+}
+
+function _buildMcpTools(options: ServiceAppOptions): Map<string, McpToolEntry> {
+    const flatSingle = options.interfaces.length === 1 && options.interfaces[0]!.command === undefined;
+    const tools = new Map<string, McpToolEntry>();
+    for (const spec of options.interfaces) {
+        const schema = spec.interface.toSchema();
+        const prefix = flatSingle ? '' : `${_groupName(spec)}_`;
+        const components = schema.components?.schemas ?? {};
+        for (const [methodName, methodSchema] of Object.entries(schema.methods)) {
+            if (methodSchema.result === undefined) continue;
+            const name = `${prefix}${methodName}`;
+            const inputSchema = _toMcpInputSchema(methodSchema.params, components);
+            const a = methodSchema.annotations;
+            const annotations = a !== undefined ? {
+                ...(a.readOnly !== undefined ? { readOnlyHint: a.readOnly } : {}),
+                ...(a.dangerous !== undefined ? { destructiveHint: a.dangerous } : a.readOnly ? { destructiveHint: false } : {}),
+                ...(a.idempotent !== undefined ? { idempotentHint: a.idempotent } : a.readOnly ? { idempotentHint: true } : {}),
+            } : undefined;
+            tools.set(name, {
+                name,
+                ...(methodSchema.description !== undefined ? { description: methodSchema.description } : {}),
+                inputSchema,
+                ...(annotations !== undefined && Object.keys(annotations).length > 0 ? { annotations } : {}),
+                spec,
+                schema,
+                methodName,
+                methodSchema,
+            });
+        }
+    }
+    return tools;
+}
+
+function _toMcpInputSchema(
+    paramsSchema: LinkRpcJsonSchema,
+    components: Record<string, LinkRpcJsonSchema>,
+): Record<string, unknown> {
+    const resolved = _inlineRefs(paramsSchema, components, new Set());
+    if (typeof resolved === 'object' && resolved !== null && (resolved as { type?: unknown }).type === 'object') {
+        return resolved as Record<string, unknown>;
+    }
+    return { type: 'object', properties: {} };
+}
+
+function _inlineRefs(
+    node: unknown,
+    components: Record<string, LinkRpcJsonSchema>,
+    seen: ReadonlySet<string>,
+): unknown {
+    if (Array.isArray(node)) {
+        return node.map(item => _inlineRefs(item, components, seen));
+    }
+    if (typeof node !== 'object' || node === null) return node;
+    const obj = node as Record<string, unknown>;
+    if (typeof obj.$ref === 'string') {
+        const m = /^#\/components\/schemas\/(.+)$/.exec(obj.$ref);
+        if (m && components[m[1]!] !== undefined && !seen.has(m[1]!)) {
+            const nextSeen = new Set(seen);
+            nextSeen.add(m[1]!);
+            return _inlineRefs(components[m[1]!], components, nextSeen);
+        }
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+        out[k] = _inlineRefs(v, components, seen);
+    }
+    return out;
+}
+
+async function _runMcpStdio(
+    options: ServiceAppOptions,
+    connOpts: ServiceCliConnectOptions,
+    stdin: NodeJS.ReadableStream,
+    stdout: NodeJS.WritableStream,
+): Promise<void> {
+    const tools = _buildMcpTools(options);
+    const writeMsg = (msg: Record<string, unknown>) => {
+        stdout.write(`${JSON.stringify(msg)}\n`);
+    };
+
+    await _withTargetConnection(options, connOpts, async conn => {
+        const rl = createInterface({ input: stdin, crlfDelay: Infinity });
+        try {
+            for await (const rawLine of rl) {
+                const line = rawLine.trim();
+                if (line === '') continue;
+                let req: { jsonrpc?: string; id?: unknown; method?: string; params?: Record<string, unknown> };
+                try {
+                    req = JSON.parse(line) as typeof req;
+                } catch {
+                    writeMsg({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } });
+                    continue;
+                }
+                const hasId = req.id !== undefined;
+                if (req.method === 'notifications/initialized' || req.method === 'notifications/cancelled') {
+                    continue;
+                }
+                if (req.method === 'initialize') {
+                    if (hasId) {
+                        writeMsg({
+                            jsonrpc: '2.0',
+                            id: req.id,
+                            result: {
+                                protocolVersion: typeof req.params?.protocolVersion === 'string'
+                                    ? req.params.protocolVersion
+                                    : '2025-03-26',
+                                capabilities: { tools: {} },
+                                serverInfo: { name: options.name, version: '0.1.0' },
+                            },
+                        });
+                    }
+                    continue;
+                }
+                if (req.method === 'ping') {
+                    if (hasId) writeMsg({ jsonrpc: '2.0', id: req.id, result: {} });
+                    continue;
+                }
+                if (req.method === 'tools/list') {
+                    if (hasId) {
+                        writeMsg({
+                            jsonrpc: '2.0',
+                            id: req.id,
+                            result: {
+                                tools: [...tools.values()].map(t => ({
+                                    name: t.name,
+                                    ...(t.description !== undefined ? { description: t.description } : {}),
+                                    inputSchema: t.inputSchema,
+                                    ...(t.annotations !== undefined ? { annotations: t.annotations } : {}),
+                                })),
+                            },
+                        });
+                    }
+                    continue;
+                }
+                if (req.method === 'tools/call') {
+                    const toolName = typeof req.params?.name === 'string' ? req.params.name : '';
+                    const entry = tools.get(toolName);
+                    if (entry === undefined) {
+                        if (hasId) {
+                            writeMsg({
+                                jsonrpc: '2.0',
+                                id: req.id,
+                                result: { isError: true, content: [{ type: 'text', text: `Unknown tool "${toolName}".` }] },
+                            });
+                        }
+                        continue;
+                    }
+                    try {
+                        let args: unknown = req.params?.arguments ?? {};
+                        const { paramNames } = _inspectParams(entry.methodSchema, entry.schema);
+                        if (entry.spec.fillParams !== undefined && _isPlainObject(args)) {
+                            args = await entry.spec.fillParams({ ...args }, { method: entry.methodName, paramNames });
+                        }
+                        const issues = explainValidation(args, entry.methodSchema.params, entry.schema.components?.schemas ?? {});
+                        if (issues.length > 0) {
+                            const msg = ['Parameter validation failed:', ...issues.map(i => `  ${i.path || '(root)'}: ${i.reason}`)].join('\n');
+                            if (hasId) {
+                                writeMsg({
+                                    jsonrpc: '2.0',
+                                    id: req.id,
+                                    result: { isError: true, content: [{ type: 'text', text: msg }] },
+                                });
+                            }
+                            continue;
+                        }
+                        const wireMethod = connOpts.remoteServiceId !== undefined
+                            ? `${connOpts.remoteServiceId}::${entry.schema.id}::${entry.methodName}`
+                            : `${entry.schema.id}::${entry.methodName}`;
+                        const result = await conn.channel.sendRequestWithStream(wireMethod, args as never, {
+                            ...(conn.signed === true ? { interfaceHash: entry.schema.hash } : {}),
+                        }).result;
+                        if (hasId) {
+                            writeMsg({
+                                jsonrpc: '2.0',
+                                id: req.id,
+                                result: {
+                                    content: [{ type: 'text', text: formatJson(result) }],
+                                    ...(_isPlainObject(result) ? { structuredContent: result } : {}),
+                                },
+                            });
+                        }
+                    } catch (err) {
+                        if (hasId) {
+                            const msg = err instanceof Error ? err.message : String(err);
+                            writeMsg({
+                                jsonrpc: '2.0',
+                                id: req.id,
+                                result: { isError: true, content: [{ type: 'text', text: msg }] },
+                            });
+                        }
+                    }
+                    continue;
+                }
+                if (hasId) {
+                    writeMsg({
+                        jsonrpc: '2.0',
+                        id: req.id,
+                        error: { code: -32601, message: `Method not found: ${req.method}` },
+                    });
+                }
+            }
+        } finally {
+            rl.close();
+        }
+    });
 }
