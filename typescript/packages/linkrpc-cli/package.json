@@ -4,6 +4,16 @@
     "type": "module",
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "import": "./dist/index.js",
+            "types": "./dist/index.d.ts"
+        },
+        "./service-cli": {
+            "import": "./dist/service-cli.js",
+            "types": "./dist/service-cli.d.ts"
+        }
+    },
     "bin": {
         "linkrpc": "./dist/linkrpc.js",
         "rpc": "./dist/rpc.js",

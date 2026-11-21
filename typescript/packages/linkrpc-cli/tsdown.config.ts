@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 export default defineConfig([{
     entry: {
         index: 'src/index.ts',
+        'service-cli': 'src/serviceCli.ts',
         linkrpc: 'src/linkrpc.ts',
         rpc: 'src/rpc.ts',
         hub: 'src/hub.ts',
