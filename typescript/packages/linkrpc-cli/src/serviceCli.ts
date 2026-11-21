@@ -1,15 +1,24 @@
 import {
+    LinkRpcConnection,
     RpcError,
+    TransportPair,
     type InterfaceDefinition,
     type JsonValue,
     type LinkRpcInterfaceSchema,
     type LinkRpcJsonSchema,
     type MemberMap,
     type MethodSchema,
+    type PrincipalWithStore,
 } from '@hediet/linkrpc';
 import { isHubEndpoint, parseEndpointUri } from '@hediet/linkrpc/node';
 import {
+    hostParticipant,
+    ParticipantServices,
+    type ParticipantHostOptions,
+} from '@hediet/linkrpc-hub/participant-host';
+import {
     connect as connectEndpoint,
+    connectViaTransport,
     parsePrincipalSpec,
     setupSigning,
     type ResolvedEndpoint,
@@ -64,7 +73,8 @@ export interface ServiceCliChannel {
 }
 
 export interface ServiceCliContext {
-    readonly serviceId: string;
+    /** Remote service ID when running against a hub (`--remote-service`), or `undefined` in direct mode. */
+    readonly remoteServiceId: string | undefined;
     readonly channel: ServiceCliChannel;
     readonly json: boolean;
     readonly stdout: NodeJS.WritableStream;
@@ -74,26 +84,51 @@ export interface ServiceCliContext {
 export interface ServiceCliConnection {
     readonly channel: ServiceCliChannel;
     readonly signed?: boolean;
-    close(): void;
+    close(): void | Promise<void>;
 }
 
 export interface ServiceCliConnectOptions {
+    readonly remoteServiceId?: string;
     readonly endpoint?: string;
     readonly principal?: string;
     readonly sign: boolean;
 }
 
+export interface ServiceAppSetupContext {
+    /** `'direct'` for an in-process CLI invocation; `'serve'` when hosted as a LinkRPC participant. */
+    readonly mode: 'direct' | 'serve';
+    /** Remaining CLI arguments passed to `serve` (empty in direct mode). */
+    readonly argv: readonly string[];
+    readonly connection: LinkRpcConnection;
+    readonly services: ParticipantServices;
+    readonly serviceId: string | undefined;
+    readonly principal: PrincipalWithStore | undefined;
+    readonly signal: AbortSignal;
+}
+
+export type ServiceAppCleanup = void | { dispose(): void } | AsyncDisposable;
+
+export interface ServiceAppHostOptions
+    extends Omit<ParticipantHostOptions, 'setup' | 'registrationMode'> {
+    readonly registrationMode?: ParticipantHostOptions['registrationMode'];
+}
+
 export interface ServiceAppOptions {
     readonly name: string;
     readonly description?: string;
-    /** Default hub service ID for CLI mode (overridable via `--service` or `LINKRPC_SERVICE_ID`). */
-    readonly defaultServiceId: string;
     readonly interfaces: readonly ServiceCliInterface[];
-    /** Extra local-only subcommands (e.g. a TUI like `watch-run`). */
+    /**
+     * Registers handlers for the app's interfaces. Called in direct CLI mode and in serve mode;
+     * NOT called for `--help` or remote mode (`--remote-service` / `--endpoint`).
+     */
+    readonly setup: (context: ServiceAppSetupContext) => ServiceAppCleanup | Promise<ServiceAppCleanup>;
+    /** Extra local subcommands (e.g. a TUI like `watch-run`). Works in both direct and remote mode. */
     readonly extraCommands?: Readonly<Record<string, (args: readonly string[], ctx: ServiceCliContext) => Promise<void>>>;
-    /** Runs in serve mode (when `serve` is passed or `LINKRPC_ENDPOINT` is set). */
-    readonly serve: (argv: readonly string[]) => Promise<void>;
-    /** Override hub connection (mainly for tests). */
+    /** Options forwarded to `hostParticipant` in serve mode (`registrationMode` defaults to `'grantedServiceId'`). */
+    readonly hostOptions?: ServiceAppHostOptions;
+    /** Override hub hosting in serve mode (mainly for tests). */
+    readonly serve?: (argv: readonly string[]) => Promise<void>;
+    /** Override remote connection in `--remote-service` / `--endpoint` mode (mainly for tests). */
     readonly connect?: (opts: ServiceCliConnectOptions) => Promise<ServiceCliConnection>;
     readonly env?: Readonly<Record<string, string | undefined>>;
     readonly stdout?: NodeJS.WritableStream;
@@ -102,10 +137,13 @@ export interface ServiceAppOptions {
 }
 
 /**
- * Unified entry point for a LinkRPC service and its human-friendly CLI:
- * - **Serve mode** when `argv[0] === 'serve'` or `LINKRPC_ENDPOINT` is set (unless `--cli` is passed).
- * - **CLI mode** otherwise: parses `<group?> <method> [--flag value]`, runs `fillParams`, validates
- *   locally against the interface schema, calls the hub service, and formats the result.
+ * Unified entry point for a LinkRPC service and its CLI:
+ * - **Serve mode** when `argv[0] === 'serve'`, or when `LINKRPC_ENDPOINT` is set (unless `--cli`,
+ *   `--remote-service`, or `--endpoint` is passed).
+ * - **Remote CLI mode** when `--remote-service <id>`, `LINKRPC_REMOTE_SERVICE`, or `--endpoint <uri>`
+ *   is provided: skips `setup` and calls the remote service over LinkRPC.
+ * - **Direct CLI mode (default)** otherwise: runs `setup` in-process over a `TransportPair`,
+ *   validates parameters locally, invokes the handler, and disposes cleanup on exit.
  */
 export async function runServiceApp(
     options: ServiceAppOptions,
@@ -117,13 +155,14 @@ export async function runServiceApp(
     const isTty = options.isTty ?? (stdout === process.stdout && process.stdout.isTTY === true);
 
     if (argv[0] === 'serve') {
-        await options.serve(argv.slice(1));
+        await _runServe(options, argv.slice(1));
         return;
     }
+
     const forceCli = argv[0] === '--cli';
     const cliArgv = forceCli ? argv.slice(1) : argv;
-    if (!forceCli && env.LINKRPC_ENDPOINT !== undefined && env.LINKRPC_ENDPOINT.trim() !== '') {
-        await options.serve(argv);
+    if (!forceCli && !_hasRemoteFlag(cliArgv) && env.LINKRPC_ENDPOINT !== undefined && env.LINKRPC_ENDPOINT.trim() !== '') {
+        await _runServe(options, argv);
         return;
     }
 
@@ -133,9 +172,9 @@ export async function runServiceApp(
         return;
     }
     if (parsed.kind === 'extra') {
-        await _withConnection(options, parsed.connOpts, async conn => {
+        await _withTargetConnection(options, parsed.connOpts, async conn => {
             await parsed.handler(parsed.args, {
-                serviceId: parsed.serviceId,
+                remoteServiceId: parsed.connOpts.remoteServiceId,
                 channel: conn.channel,
                 json: parsed.json,
                 stdout,
@@ -145,7 +184,7 @@ export async function runServiceApp(
         return;
     }
 
-    const { spec, schema, methodName, methodSchema, rawMethodArgs, serviceId, json, connOpts } = parsed;
+    const { spec, schema, methodName, methodSchema, rawMethodArgs, json, connOpts } = parsed;
     if (rawMethodArgs.includes('--help') || rawMethodArgs.includes('-h')) {
         stdout.write(_renderMethodHelp(options.name, spec, schema, methodName, methodSchema));
         return;
@@ -168,8 +207,11 @@ export async function runServiceApp(
         throw new Error(lines.join('\n'));
     }
 
-    const wireMethod = `${serviceId}::${schema.id}::${methodName}`;
-    await _withConnection(options, connOpts, async conn => {
+    const wireMethod = connOpts.remoteServiceId !== undefined
+        ? `${connOpts.remoteServiceId}::${schema.id}::${methodName}`
+        : `${schema.id}::${methodName}`;
+
+    await _withTargetConnection(options, connOpts, async conn => {
         try {
             if (methodSchema.result === undefined) {
                 await conn.channel.sendNotification(wireMethod, params as never);
@@ -196,25 +238,96 @@ export async function runServiceApp(
 }
 
 // ---------------------------------------------------------------------------
-// Connection
+// Serve, direct in-process, and remote connections
 // ---------------------------------------------------------------------------
 
-async function _withConnection<T>(
+async function _runServe(options: ServiceAppOptions, serveArgv: readonly string[]): Promise<void> {
+    if (options.serve !== undefined) {
+        await options.serve(serveArgv);
+        return;
+    }
+    const host = await hostParticipant({
+        registrationMode: 'grantedServiceId',
+        ...options.hostOptions,
+        setup: async hostCtx => {
+            const cleanup = await options.setup({
+                mode: 'serve',
+                argv: serveArgv,
+                connection: hostCtx.connection,
+                services: hostCtx.services,
+                serviceId: hostCtx.serviceId,
+                principal: hostCtx.principal,
+                signal: hostCtx.signal,
+            });
+            hostCtx.connection.enableReflection();
+            if (hostCtx.serviceId !== undefined) {
+                hostCtx.connection.enableReflection({ serviceId: hostCtx.serviceId });
+            }
+            return cleanup;
+        },
+    });
+    await host.done;
+}
+
+async function _withTargetConnection<T>(
     options: ServiceAppOptions,
     connOpts: ServiceCliConnectOptions,
     fn: (conn: ServiceCliConnection) => Promise<T>,
 ): Promise<T> {
-    const conn = options.connect !== undefined
-        ? await options.connect(connOpts)
-        : await _defaultConnect(connOpts);
+    const isRemote = connOpts.remoteServiceId !== undefined || connOpts.endpoint !== undefined;
+    const conn = isRemote
+        ? (options.connect !== undefined ? await options.connect(connOpts) : await _connectRemote(connOpts))
+        : await _connectDirect(options);
     try {
         return await fn(conn);
     } finally {
-        conn.close();
+        await conn.close();
     }
 }
 
-async function _defaultConnect(opts: ServiceCliConnectOptions): Promise<ServiceCliConnection> {
+async function _connectDirect(options: ServiceAppOptions): Promise<ServiceCliConnection> {
+    const pair = new TransportPair();
+    const server = LinkRpcConnection.fromTransport(pair.b);
+    const services = new ParticipantServices(server, 'root', undefined);
+    const abort = new AbortController();
+    let cleanup: ServiceAppCleanup = undefined;
+    let client: ReturnType<typeof connectViaTransport> | undefined;
+
+    const closeAll = async () => {
+        abort.abort();
+        client?.close();
+        try {
+            if (cleanup && Symbol.asyncDispose in cleanup) {
+                await cleanup[Symbol.asyncDispose]();
+            } else if (cleanup) {
+                cleanup.dispose();
+            }
+        } finally {
+            services.dispose();
+            server.close();
+        }
+    };
+
+    try {
+        cleanup = await options.setup({
+            mode: 'direct',
+            argv: [],
+            connection: server,
+            services,
+            serviceId: undefined,
+            principal: undefined,
+            signal: abort.signal,
+        });
+        server.enableReflection();
+        client = connectViaTransport(pair.a);
+        return { channel: client.channel, close: closeAll };
+    } catch (err) {
+        await closeAll();
+        throw err;
+    }
+}
+
+async function _connectRemote(opts: ServiceCliConnectOptions): Promise<ServiceCliConnection> {
     const endpoint: ResolvedEndpoint = opts.endpoint !== undefined
         ? parseEndpointUri(opts.endpoint)
         : resolveLocalEndpoint();
@@ -240,6 +353,19 @@ function _writeStreamChunk(stderr: NodeJS.WritableStream, payload: JsonValue): v
     stderr.write(`${text}\n`);
 }
 
+function _hasRemoteFlag(argv: readonly string[]): boolean {
+    for (const tok of argv) {
+        if (tok === '--') return false;
+        if (
+            tok === '--remote-service' || tok.startsWith('--remote-service=')
+            || tok === '--endpoint' || tok.startsWith('--endpoint=')
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // Command routing & flag parsing
 // ---------------------------------------------------------------------------
@@ -250,7 +376,6 @@ type ParsedInvocation =
         readonly kind: 'extra';
         readonly handler: (args: readonly string[], ctx: ServiceCliContext) => Promise<void>;
         readonly args: readonly string[];
-        readonly serviceId: string;
         readonly json: boolean;
         readonly connOpts: ServiceCliConnectOptions;
     }
@@ -261,7 +386,6 @@ type ParsedInvocation =
         readonly methodName: string;
         readonly methodSchema: MethodSchema;
         readonly rawMethodArgs: readonly string[];
-        readonly serviceId: string;
         readonly json: boolean;
         readonly connOpts: ServiceCliConnectOptions;
     };
@@ -271,8 +395,8 @@ function _parseTopLevel(
     options: ServiceAppOptions,
     env: Readonly<Record<string, string | undefined>>,
 ): ParsedInvocation {
-    const { rest, serviceId, json, endpoint, principal, sign } = _extractGlobalFlags(argv, options, env);
-    const connOpts: ServiceCliConnectOptions = { endpoint, principal, sign };
+    const { rest, remoteServiceId, json, endpoint, principal, sign } = _extractGlobalFlags(argv, env);
+    const connOpts: ServiceCliConnectOptions = { remoteServiceId, endpoint, principal, sign };
     const flatSingle = options.interfaces.length === 1 && options.interfaces[0]!.command === undefined;
 
     if (rest.length === 0 || rest[0] === '--help' || rest[0] === '-h') {
@@ -282,7 +406,7 @@ function _parseTopLevel(
     const first = rest[0]!;
     const extraHandler = options.extraCommands?.[first];
     if (extraHandler !== undefined) {
-        return { kind: 'extra', handler: extraHandler, args: rest.slice(1), serviceId, json, connOpts };
+        return { kind: 'extra', handler: extraHandler, args: rest.slice(1), json, connOpts };
     }
 
     if (flatSingle) {
@@ -296,7 +420,6 @@ function _parseTopLevel(
             methodName,
             methodSchema: schema.methods[methodName]!,
             rawMethodArgs: rest.slice(1),
-            serviceId,
             json,
             connOpts,
         };
@@ -317,7 +440,6 @@ function _parseTopLevel(
         methodName,
         methodSchema: schema.methods[methodName]!,
         rawMethodArgs: afterGroup.slice(1),
-        serviceId,
         json,
         connOpts,
     };
@@ -325,17 +447,16 @@ function _parseTopLevel(
 
 function _extractGlobalFlags(
     argv: readonly string[],
-    options: ServiceAppOptions,
     env: Readonly<Record<string, string | undefined>>,
 ): {
     readonly rest: string[];
-    readonly serviceId: string;
+    readonly remoteServiceId?: string;
     readonly json: boolean;
     readonly endpoint?: string;
     readonly principal?: string;
     readonly sign: boolean;
 } {
-    let serviceId = env.LINKRPC_SERVICE_ID?.trim() || options.defaultServiceId;
+    let remoteServiceId: string | undefined = env.LINKRPC_REMOTE_SERVICE?.trim() || undefined;
     let json = false;
     let endpoint: string | undefined;
     let principal: string | undefined;
@@ -356,9 +477,9 @@ function _extractGlobalFlags(
             sign = false;
             continue;
         }
-        const valueFlag = _readValueFlag(argv, i, ['--service', '--endpoint', '--principal']);
+        const valueFlag = _readValueFlag(argv, i, ['--remote-service', '--endpoint', '--principal']);
         if (valueFlag !== undefined) {
-            if (valueFlag.flag === '--service') serviceId = valueFlag.value;
+            if (valueFlag.flag === '--remote-service') remoteServiceId = valueFlag.value;
             else if (valueFlag.flag === '--endpoint') endpoint = valueFlag.value;
             else if (valueFlag.flag === '--principal') principal = valueFlag.value;
             i = valueFlag.nextIndex;
@@ -366,7 +487,7 @@ function _extractGlobalFlags(
         }
         rest.push(tok);
     }
-    return { rest, serviceId, json, endpoint, principal, sign };
+    return { rest, remoteServiceId, json, endpoint, principal, sign };
 }
 
 function _readValueFlag(
@@ -549,11 +670,11 @@ function _renderRootHelp(options: ServiceAppOptions, flatSingle: boolean): strin
     lines.push('');
     lines.push('GLOBAL OPTIONS');
     lines.push(..._formatTwoCol([
-        ['--service <id>', `Hub service ID (default: ${options.defaultServiceId})`],
+        ['--remote-service <id>', 'Call a remote hub service instead of running locally (env: LINKRPC_REMOTE_SERVICE)'],
+        ['--endpoint <uri>', 'Remote LinkRPC endpoint URI (implies remote mode)'],
+        ['--principal <spec>', 'Signing principal override for remote calls'],
         ['--json', 'Print raw JSON output'],
         ['--params <json|->', 'Base JSON params object (or "-" for stdin)'],
-        ['--endpoint <uri>', 'Hub endpoint URI (default: local hub)'],
-        ['--principal <spec>', 'Signing principal override'],
         ['--cli', 'Force CLI mode even when LINKRPC_ENDPOINT is set'],
         ['-h, --help', 'Show help'],
     ]));

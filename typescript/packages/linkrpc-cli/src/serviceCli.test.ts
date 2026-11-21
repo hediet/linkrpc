@@ -59,32 +59,57 @@ function captureStream() {
 }
 
 function makeHarness(overrides: Partial<ServiceAppOptions> = {}) {
-    const receivedCalls: { method: string; params: unknown }[] = [];
+    const directCalls: { method: string; params: unknown }[] = [];
+    const remoteCalls: { method: string; params: unknown }[] = [];
     const servers: LinkRpcConnection[] = [];
+    const disposed = vi.fn();
 
     const stdout = captureStream();
     const stderr = captureStream();
     const serve = vi.fn(async () => {});
-    const connect = vi.fn(async () => {
-        const pair = new TransportPair();
-        const server = LinkRpcConnection.fromTransport(pair.b);
-        server.register(pipelinesInterface, {
+
+    const setup = vi.fn<ServiceAppOptions['setup']>(({ services }) => {
+        services.register(pipelinesInterface, {
             listRuns: async params => {
-                receivedCalls.push({ method: 'listRuns', params });
+                directCalls.push({ method: 'listRuns', params });
                 return { runs: [{ id: 101, status: 'completed' }] };
             },
             queueRun: async (params, _ctx, stream) => {
-                receivedCalls.push({ method: 'queueRun', params });
+                directCalls.push({ method: 'queueRun', params });
                 await stream.send({ progress: 'queued' });
                 return { id: 202 };
             },
-        }, { serviceId: 'demo/svc' });
-        server.register(statusInterface, {
+        });
+        services.register(statusInterface, {
             ping: async params => {
-                receivedCalls.push({ method: 'ping', params });
+                directCalls.push({ method: 'ping', params });
                 return { ok: true };
             },
-        }, { serviceId: 'demo/svc' });
+        });
+        return { dispose: disposed };
+    });
+
+    const connect = vi.fn<NonNullable<ServiceAppOptions['connect']>>(async opts => {
+        const pair = new TransportPair();
+        const server = LinkRpcConnection.fromTransport(pair.b);
+        const regOpts = opts.remoteServiceId !== undefined ? { serviceId: opts.remoteServiceId } : {};
+        server.register(pipelinesInterface, {
+            listRuns: async params => {
+                remoteCalls.push({ method: 'listRuns', params });
+                return { runs: [{ id: 999, status: 'remote' }] };
+            },
+            queueRun: async (params, _ctx, stream) => {
+                remoteCalls.push({ method: 'queueRun', params });
+                await stream.send({ progress: 'remote-queued' });
+                return { id: 888 };
+            },
+        }, regOpts);
+        server.register(statusInterface, {
+            ping: async params => {
+                remoteCalls.push({ method: 'ping', params });
+                return { ok: true };
+            },
+        }, regOpts);
         servers.push(server);
         const conn = connectViaTransport(pair.a);
         return { channel: conn.channel, close: () => { conn.close(); server.close(); } };
@@ -93,7 +118,6 @@ function makeHarness(overrides: Partial<ServiceAppOptions> = {}) {
     const baseOptions: ServiceAppOptions = {
         name: 'demo-cli',
         description: 'Demo service and CLI',
-        defaultServiceId: 'demo/svc',
         interfaces: [
             defineServiceCliInterface({
                 interface: pipelinesInterface,
@@ -113,6 +137,7 @@ function makeHarness(overrides: Partial<ServiceAppOptions> = {}) {
                 command: 'status',
             }),
         ],
+        setup,
         serve,
         connect,
         env: {},
@@ -124,7 +149,10 @@ function makeHarness(overrides: Partial<ServiceAppOptions> = {}) {
 
     return {
         options: baseOptions,
-        receivedCalls,
+        directCalls,
+        remoteCalls,
+        disposed,
+        setup,
         serve,
         connect,
         stdout,
@@ -134,7 +162,67 @@ function makeHarness(overrides: Partial<ServiceAppOptions> = {}) {
 }
 
 describe('runServiceApp', () => {
-    it('routes serve subcommand and LINKRPC_ENDPOINT to serve(), while --cli overrides env', async () => {
+    it('runs directly in-process by default, streams output, and disposes cleanup', async () => {
+        const h = makeHarness();
+        try {
+            await runServiceApp(h.options, [
+                'pipelines', 'list-runs',
+                '--pipeline-id', '421',
+                '--failed-only',
+                '--grep.pattern', 'ERR',
+                '--grep.ignore-case',
+            ]);
+            expect(h.setup).toHaveBeenCalledTimes(1);
+            expect(h.setup.mock.calls[0]![0].mode).toBe('direct');
+            expect(h.connect).not.toHaveBeenCalled();
+            expect(h.disposed).toHaveBeenCalledTimes(1);
+            expect(h.directCalls).toEqual([{
+                method: 'listRuns',
+                params: {
+                    repository: 'acme/app',
+                    pipelineId: 421,
+                    failedOnly: true,
+                    grep: { pattern: 'ERR', ignoreCase: true },
+                },
+            }]);
+
+            // queueRun has no `repository` param, so fillParams does not inject it.
+            await runServiceApp(h.options, ['pipelines', 'queue-run', '--pipeline-id', '421']);
+            expect(h.directCalls[1]).toEqual({
+                method: 'queueRun',
+                params: { pipelineId: 421 },
+            });
+            expect(h.stderr.text()).toContain('{"progress":"queued"}');
+            expect(h.disposed).toHaveBeenCalledTimes(2);
+        } finally { h.dispose(); }
+    });
+
+    it('routes --remote-service, LINKRPC_REMOTE_SERVICE, and --endpoint to remote mode without calling setup', async () => {
+        const h1 = makeHarness();
+        try {
+            await runServiceApp(h1.options, ['--remote-service', 'hediet/devbox/demo', 'pipelines', 'list-runs', '--pipeline-id', '421']);
+            expect(h1.setup).not.toHaveBeenCalled();
+            expect(h1.connect).toHaveBeenCalledWith(expect.objectContaining({ remoteServiceId: 'hediet/devbox/demo' }));
+            expect(JSON.parse(h1.stdout.text())).toEqual({ runs: [{ id: 999, status: 'remote' }] });
+        } finally { h1.dispose(); }
+
+        const h2 = makeHarness({ env: { LINKRPC_REMOTE_SERVICE: 'hediet/devbox/demo' } });
+        try {
+            await runServiceApp(h2.options, ['status', 'ping']);
+            expect(h2.setup).not.toHaveBeenCalled();
+            expect(h2.remoteCalls).toEqual([{ method: 'ping', params: {} }]);
+        } finally { h2.dispose(); }
+
+        const h3 = makeHarness();
+        try {
+            await runServiceApp(h3.options, ['--endpoint', 'ws://127.0.0.1:9999', 'status', 'ping']);
+            expect(h3.setup).not.toHaveBeenCalled();
+            expect(h3.connect).toHaveBeenCalledWith(expect.objectContaining({ endpoint: 'ws://127.0.0.1:9999', remoteServiceId: undefined }));
+            expect(h3.remoteCalls).toEqual([{ method: 'ping', params: {} }]);
+        } finally { h3.dispose(); }
+    });
+
+    it('routes serve subcommand and LINKRPC_ENDPOINT to serve(), while --cli and --remote-service override env', async () => {
         const h1 = makeHarness();
         try {
             await runServiceApp(h1.options, ['serve', '--az', '/bin/az']);
@@ -155,15 +243,25 @@ describe('runServiceApp', () => {
             expect(h3.serve).not.toHaveBeenCalled();
             expect(JSON.parse(h3.stdout.text())).toEqual({ ok: true });
         } finally { h3.dispose(); }
+
+        const h4 = makeHarness({ env: { LINKRPC_ENDPOINT: 'npipe://./pipe/test' } });
+        try {
+            await runServiceApp(h4.options, ['--remote-service', 'hediet/devbox/demo', 'status', 'ping']);
+            expect(h4.serve).not.toHaveBeenCalled();
+            expect(h4.setup).not.toHaveBeenCalled();
+            expect(h4.remoteCalls).toEqual([{ method: 'ping', params: {} }]);
+        } finally { h4.dispose(); }
     });
 
-    it('renders offline root, group, and method help with annotations without connecting', async () => {
+    it('renders offline root, group, and method help with annotations without calling setup or connect', async () => {
         const h = makeHarness();
         try {
             await runServiceApp(h.options, ['--help']);
             expect(h.stdout.text()).toContain('demo-cli — Demo service and CLI');
+            expect(h.stdout.text()).toContain('--remote-service <id>');
             expect(h.stdout.text()).toContain('pipelines');
             expect(h.stdout.text()).toContain('status');
+            expect(h.setup).not.toHaveBeenCalled();
             expect(h.connect).not.toHaveBeenCalled();
 
             const gOut = captureStream();
@@ -178,37 +276,8 @@ describe('runServiceApp', () => {
             expect(mOut.text()).toContain('--pipeline-id <integer>');
             expect(mOut.text()).toContain('required');
             expect(mOut.text()).toContain('--repository <string>');
+            expect(h.setup).not.toHaveBeenCalled();
             expect(h.connect).not.toHaveBeenCalled();
-        } finally { h.dispose(); }
-    });
-
-    it('parses kebab-case, nested dot-paths, boolean shortcuts, and applies schema-aware fillParams', async () => {
-        const h = makeHarness();
-        try {
-            await runServiceApp(h.options, [
-                'pipelines', 'list-runs',
-                '--pipeline-id', '421',
-                '--failed-only',
-                '--grep.pattern', 'ERR',
-                '--grep.ignore-case',
-            ]);
-            expect(h.receivedCalls).toEqual([{
-                method: 'listRuns',
-                params: {
-                    repository: 'acme/app',
-                    pipelineId: 421,
-                    failedOnly: true,
-                    grep: { pattern: 'ERR', ignoreCase: true },
-                },
-            }]);
-
-            // queueRun has no `repository` param, so fillParams does not inject it.
-            await runServiceApp(h.options, ['pipelines', 'queue-run', '--pipeline-id', '421']);
-            expect(h.receivedCalls[1]).toEqual({
-                method: 'queueRun',
-                params: { pipelineId: 421 },
-            });
-            expect(h.stderr.text()).toContain('{"progress":"queued"}');
         } finally { h.dispose(); }
     });
 
@@ -235,21 +304,30 @@ describe('runServiceApp', () => {
                 .rejects.toThrow('Did you mean --pipeline-id?');
             await expect(runServiceApp(h.options, ['list-runs']))
                 .rejects.toThrow('Parameter validation failed:');
+            expect(h.setup).not.toHaveBeenCalled();
             expect(h.connect).not.toHaveBeenCalled();
 
             await runServiceApp(h.options, ['list-runs', '--pipeline-id', '7']);
-            expect(h.receivedCalls).toEqual([{ method: 'listRuns', params: { pipelineId: 7 } }]);
+            expect(h.directCalls).toEqual([{ method: 'listRuns', params: { pipelineId: 7 } }]);
         } finally { h.dispose(); }
     });
 
-    it('dispatches extraCommands with connected context', async () => {
+    it('dispatches extraCommands in both direct and remote mode', async () => {
         const extra = vi.fn(async (args, ctx) => {
-            ctx.stdout.write(`extra:${ctx.serviceId}:${args.join(',')}\n`);
+            ctx.stdout.write(`extra:${ctx.remoteServiceId ?? 'direct'}:${args.join(',')}\n`);
         });
-        const h = makeHarness({ extraCommands: { watch: extra } });
+        const hDirect = makeHarness({ extraCommands: { watch: extra } });
         try {
-            await runServiceApp(h.options, ['--service', 'custom/svc', 'watch', '123']);
-            expect(h.stdout.text()).toBe('extra:custom/svc:123\n');
-        } finally { h.dispose(); }
+            await runServiceApp(hDirect.options, ['watch', '123']);
+            expect(hDirect.stdout.text()).toBe('extra:direct:123\n');
+            expect(hDirect.setup).toHaveBeenCalledTimes(1);
+        } finally { hDirect.dispose(); }
+
+        const hRemote = makeHarness({ extraCommands: { watch: extra } });
+        try {
+            await runServiceApp(hRemote.options, ['--remote-service', 'custom/svc', 'watch', '123']);
+            expect(hRemote.stdout.text()).toBe('extra:custom/svc:123\n');
+            expect(hRemote.setup).not.toHaveBeenCalled();
+        } finally { hRemote.dispose(); }
     });
 });
