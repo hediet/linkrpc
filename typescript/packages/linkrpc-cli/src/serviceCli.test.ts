@@ -222,7 +222,7 @@ describe('runServiceApp', () => {
         } finally { h3.dispose(); }
     });
 
-    it('routes serve subcommand and LINKRPC_ENDPOINT to serve(), while --cli and --remote-service override env', async () => {
+    it('requires explicit serve subcommand and ignores LINKRPC_ENDPOINT in CLI mode', async () => {
         const h1 = makeHarness();
         try {
             await runServiceApp(h1.options, ['serve', '--az', '/bin/az']);
@@ -232,25 +232,46 @@ describe('runServiceApp', () => {
 
         const h2 = makeHarness({ env: { LINKRPC_ENDPOINT: 'npipe://./pipe/test' } });
         try {
-            await runServiceApp(h2.options, ['--az', '/bin/az']);
-            expect(h2.serve).toHaveBeenCalledWith(['--az', '/bin/az']);
-            expect(h2.connect).not.toHaveBeenCalled();
+            await runServiceApp(h2.options, ['status', 'ping']);
+            expect(h2.serve).not.toHaveBeenCalled();
+            expect(JSON.parse(h2.stdout.text())).toEqual({ ok: true });
         } finally { h2.dispose(); }
 
         const h3 = makeHarness({ env: { LINKRPC_ENDPOINT: 'npipe://./pipe/test' } });
         try {
-            await runServiceApp(h3.options, ['--cli', 'status', 'ping']);
+            await runServiceApp(h3.options, ['--remote-service', 'hediet/devbox/demo', 'status', 'ping']);
             expect(h3.serve).not.toHaveBeenCalled();
-            expect(JSON.parse(h3.stdout.text())).toEqual({ ok: true });
+            expect(h3.setup).not.toHaveBeenCalled();
+            expect(h3.remoteCalls).toEqual([{ method: 'ping', params: {} }]);
         } finally { h3.dispose(); }
+    });
 
-        const h4 = makeHarness({ env: { LINKRPC_ENDPOINT: 'npipe://./pipe/test' } });
+    it('serves on a WebSocket listener (`serve --listen ws://`) and handles remote `--endpoint` calls', async () => {
+        const h = makeHarness({ serve: undefined, connect: undefined });
+        let handle: { readonly endpoint: string; dispose(): Promise<void> } | undefined;
+        const ready = new Promise<string>(resolve => {
+            h.options = {
+                ...h.options,
+                onServeReady: srv => { handle = srv; resolve(srv.endpoint); },
+            };
+        });
+        const servePromise = runServiceApp(h.options, ['serve', '--listen', 'ws://127.0.0.1:0', '--token', 'ws-secret']);
         try {
-            await runServiceApp(h4.options, ['--remote-service', 'hediet/devbox/demo', 'status', 'ping']);
-            expect(h4.serve).not.toHaveBeenCalled();
-            expect(h4.setup).not.toHaveBeenCalled();
-            expect(h4.remoteCalls).toEqual([{ method: 'ping', params: {} }]);
-        } finally { h4.dispose(); }
+            const wsUrl = await ready;
+            expect(wsUrl).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/?$/);
+            expect(h.stderr.text()).toContain(`listening on ${wsUrl}`);
+
+            const clientOut = captureStream();
+            await runServiceApp(
+                { ...h.options, stdout: clientOut.stream },
+                ['--endpoint', `${wsUrl}?token=ws-secret`, '--no-sign', 'pipelines', 'list-runs', '--pipeline-id', '421'],
+            );
+            expect(JSON.parse(clientOut.text())).toEqual({ runs: [{ id: 101, status: 'completed' }] });
+        } finally {
+            await handle?.dispose();
+            await servePromise;
+            h.dispose();
+        }
     });
 
     it('renders offline root, group, and method help with annotations without calling setup or connect', async () => {
@@ -329,5 +350,39 @@ describe('runServiceApp', () => {
             expect(hRemote.stdout.text()).toBe('extra:custom/svc:123\n');
             expect(hRemote.setup).not.toHaveBeenCalled();
         } finally { hRemote.dispose(); }
+    });
+
+    it('exposes every interface method as an MCP tool over stdio (`mcp` mode)', async () => {
+        const stdin = new PassThrough();
+        const h = makeHarness({ stdin });
+        try {
+            const run = runServiceApp(h.options, ['mcp']);
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26' } }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'pipelines_listRuns', arguments: { pipelineId: 421 } } }) + '\n');
+            stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'pipelines_listRuns', arguments: {} } }) + '\n');
+            stdin.end();
+            await run;
+
+            const responses = h.stdout.text().trim().split('\n').map(l => JSON.parse(l));
+            expect(responses).toHaveLength(4);
+            expect(responses[0].result.serverInfo.name).toBe('demo-cli');
+
+            const toolList = responses[1].result.tools as { name: string; annotations?: Record<string, boolean> }[];
+            expect(toolList.map(t => t.name)).toEqual(['pipelines_listRuns', 'pipelines_queueRun', 'status_ping']);
+            expect(toolList.find(t => t.name === 'pipelines_listRuns')?.annotations).toEqual({
+                readOnlyHint: true, destructiveHint: false, idempotentHint: true,
+            });
+            expect(toolList.find(t => t.name === 'pipelines_queueRun')?.annotations).toEqual({
+                destructiveHint: true,
+            });
+
+            expect(responses[2].result.structuredContent).toEqual({ runs: [{ id: 101, status: 'completed' }] });
+            expect(h.directCalls[0]).toEqual({ method: 'listRuns', params: { repository: 'acme/app', pipelineId: 421 } });
+            expect(responses[3].result.isError).toBe(true);
+            expect(responses[3].result.content[0].text).toContain('Parameter validation failed:');
+            expect(h.disposed).toHaveBeenCalledTimes(1);
+        } finally { h.dispose(); }
     });
 });
