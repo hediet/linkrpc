@@ -34,6 +34,12 @@ export interface ParticipantRootsQueryOptions {
     readonly budgetMs: number;
     /** Hard per-participant deadline; an unanswered request is cancelled then. */
     readonly requestTimeoutMs: number;
+    /**
+     * Also ask the uplink (the default route), reported separately as
+     * {@link ParticipantRootsAnswer.uplinkResult}. A root list only refers, it
+     * never fans out, so asking upward cannot loop.
+     */
+    readonly includeUplink?: boolean;
 }
 
 /**
@@ -42,8 +48,10 @@ export interface ParticipantRootsQueryOptions {
  * and keeps running in the background until its hard deadline.
  */
 export interface ParticipantRootsAnswer {
-    /** Successful answers that arrived within the budget. */
+    /** Successful answers of downstream participants that arrived within the budget. */
     readonly results: JsonValue[];
+    /** The uplink's answer, if it was asked and answered within the budget. */
+    readonly uplinkResult?: JsonValue;
     /** Whether some participant had not settled when the budget elapsed. */
     readonly truncated: boolean;
     /**
@@ -63,7 +71,10 @@ export class ParticipantRoots {
         params: JsonValue,
         options: ParticipantRootsQueryOptions,
     ): Promise<ParticipantRootsAnswer> {
-        const requests = [...this._participantLinks(options.excludePrefix)].map((link) => {
+        const links = [...this._participantLinks(options.excludePrefix)];
+        const uplink = options.includeUplink ? this._options.uplink() : undefined;
+        if (uplink !== undefined) links.push(uplink);
+        const requests = links.map((link) => {
             const outcome: { settled: boolean; result?: JsonValue } = { settled: false };
             const done = this._options
                 .requestOnLink(link, method, params, options.requestTimeoutMs)
@@ -76,7 +87,7 @@ export class ParticipantRoots {
                         outcome.settled = true;
                     },
                 );
-            return { outcome, done };
+            return { link, outcome, done };
         });
 
         let budgetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -87,9 +98,11 @@ export class ParticipantRoots {
         clearTimeout(budgetTimer);
 
         const late = requests.filter((request) => !request.outcome.settled);
+        const uplinkResult = requests.find((request) => request.link === uplink)?.outcome.result;
         return {
-            results: requests.flatMap(({ outcome }) =>
-                outcome.result === undefined ? [] : [outcome.result]),
+            results: requests.flatMap(({ link, outcome }) =>
+                link === uplink || outcome.result === undefined ? [] : [outcome.result]),
+            ...(uplinkResult === undefined ? {} : { uplinkResult }),
             truncated: late.length > 0,
             lateAnswers: Promise.all(late.map((request) => request.done))
                 .then(() => late.some((request) => request.outcome.result !== undefined)),
