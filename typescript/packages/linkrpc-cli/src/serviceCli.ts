@@ -142,7 +142,7 @@ export interface ServiceAppOptions {
 
 /**
  * Unified entry point for a LinkRPC service, CLI, and stdio MCP server:
- * - **Serve mode** when `argv[0] === 'serve'` (supports `LINKRPC_ENDPOINT` or `--listen <ws://...> --token <secret>`).
+ * - **Serve mode** when `argv[0] === 'serve'` (uses `LINKRPC_ENDPOINT` or `--endpoint <uri>`, e.g. `listen:ws://127.0.0.1:8080?token=...`).
  * - **MCP stdio mode** when `argv[0] === 'mcp'` (or `--remote-service <id> mcp`).
  * - **Remote CLI mode** when `--remote-service <id>`, `LINKRPC_REMOTE_SERVICE`, or `--endpoint <uri>`
  *   is provided: skips `setup` and calls the remote service over LinkRPC.
@@ -252,20 +252,20 @@ async function _runServe(
         await options.serve(serveArgv);
         return;
     }
-    const { rest, listen, token } = _extractServeFlags(serveArgv);
+    const { rest, endpoint, token } = _extractServeFlags(serveArgv);
     const resolvedHostOptions = typeof options.hostOptions === 'function'
         ? options.hostOptions(rest)
         : options.hostOptions;
-    const listenEndpoint = listen !== undefined
+    const explicitEndpoint = endpoint !== undefined
         ? {
-            endpoint: listen.startsWith('listen:') ? listen : `listen:${listen}`,
+            endpoint,
             ...(token !== undefined ? { token } : {}),
         }
         : undefined;
     const host = await hostParticipant({
         registrationMode: 'all',
         ...resolvedHostOptions,
-        ...(listenEndpoint !== undefined ? { endpoint: listenEndpoint } : {}),
+        ...(explicitEndpoint !== undefined ? { endpoint: explicitEndpoint } : {}),
         setup: async hostCtx => {
             const cleanup = await options.setup({
                 mode: 'serve',
@@ -283,7 +283,7 @@ async function _runServe(
             return cleanup;
         },
     });
-    if (listen !== undefined) {
+    if (endpoint?.startsWith('listen:')) {
         stderr.write(`${options.name}: listening on ${host.endpoint}\n`);
     }
     options.onServeReady?.(host);
@@ -292,23 +292,23 @@ async function _runServe(
 
 function _extractServeFlags(argv: readonly string[]): {
     readonly rest: string[];
-    readonly listen?: string;
+    readonly endpoint?: string;
     readonly token?: string;
 } {
-    let listen: string | undefined;
+    let endpoint: string | undefined;
     let token: string | undefined;
     const rest: string[] = [];
     for (let i = 0; i < argv.length; i++) {
-        const valueFlag = _readValueFlag(argv, i, ['--listen', '--token']);
+        const valueFlag = _readValueFlag(argv, i, ['--endpoint', '--token']);
         if (valueFlag !== undefined) {
-            if (valueFlag.flag === '--listen') listen = valueFlag.value;
+            if (valueFlag.flag === '--endpoint') endpoint = valueFlag.value;
             else if (valueFlag.flag === '--token') token = valueFlag.value;
             i = valueFlag.nextIndex;
             continue;
         }
         rest.push(argv[i]!);
     }
-    return { rest, listen, token };
+    return { rest, endpoint, token };
 }
 
 async function _withTargetConnection<T>(
@@ -519,6 +519,9 @@ function _extractGlobalFlags(
             continue;
         }
         rest.push(tok);
+    }
+    if (remoteServiceId !== undefined && endpoint === undefined) {
+        endpoint = env.LINKRPC_ENDPOINT?.trim() || undefined;
     }
     return { rest, remoteServiceId, json, endpoint, principal, sign };
 }

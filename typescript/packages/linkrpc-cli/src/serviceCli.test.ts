@@ -242,11 +242,15 @@ describe('runServiceApp', () => {
             await runServiceApp(h3.options, ['--remote-service', 'hediet/devbox/demo', 'status', 'ping']);
             expect(h3.serve).not.toHaveBeenCalled();
             expect(h3.setup).not.toHaveBeenCalled();
+            expect(h3.connect).toHaveBeenCalledWith(expect.objectContaining({
+                remoteServiceId: 'hediet/devbox/demo',
+                endpoint: 'npipe://./pipe/test',
+            }));
             expect(h3.remoteCalls).toEqual([{ method: 'ping', params: {} }]);
         } finally { h3.dispose(); }
     });
 
-    it('serves on a WebSocket listener (`serve --listen ws://`) and handles remote `--endpoint` calls', async () => {
+    it('serves on a WebSocket listener (`serve --endpoint listen:ws://`) and handles remote `--endpoint` calls', async () => {
         const h = makeHarness({ serve: undefined, connect: undefined });
         let handle: { readonly endpoint: string; dispose(): Promise<void> } | undefined;
         const ready = new Promise<string>(resolve => {
@@ -255,7 +259,7 @@ describe('runServiceApp', () => {
                 onServeReady: srv => { handle = srv; resolve(srv.endpoint); },
             };
         });
-        const servePromise = runServiceApp(h.options, ['serve', '--listen', 'ws://127.0.0.1:0', '--token', 'ws-secret']);
+        const servePromise = runServiceApp(h.options, ['serve', '--endpoint', 'listen:ws://127.0.0.1:0?token=ws-secret']);
         try {
             const wsUrl = await ready;
             expect(wsUrl).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/?$/);
