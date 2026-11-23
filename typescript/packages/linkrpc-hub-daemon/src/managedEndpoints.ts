@@ -39,9 +39,11 @@ interface Entry {
 
 export interface ManagedEndpointsOptions {
     readonly file: string;
-    /** Published endpoint service IDs: `<servicePrefix>/<sha256(namespace)>/<id>`. */
+    /** Default published endpoint service IDs: `<servicePrefix>/<sha256(namespace)>/<id>`. */
     readonly servicePrefix: string;
     readonly host: ServiceHost;
+    /** Returns true when `serviceId` is already claimed outside managed endpoints (e.g. static config). */
+    readonly isServiceIdTaken?: (serviceId: string) => boolean;
 }
 
 export class ManagedEndpoints {
@@ -177,7 +179,17 @@ export class ManagedEndpoints {
         definition: EndpointDefinition,
         options: { readonly owned: boolean; readonly replace: boolean; readonly size?: ConsoleSize },
     ): Promise<Entry> {
-        const existing = this._entries.get(key(definition));
+        const entryKey = key(definition);
+        const targetServiceId = this._serviceIdFor(definition);
+        for (const [otherKey, other] of this._entries) {
+            if (otherKey !== entryKey && other.supervisor.service.serviceId === targetServiceId) {
+                throw new Error(`Service ID "${targetServiceId}" is already in use by endpoint "${other.definition.id}" in ${other.definition.namespace}`);
+            }
+        }
+        if (this._options.isServiceIdTaken?.(targetServiceId)) {
+            throw new Error(`Service ID "${targetServiceId}" is already in use by a configured service`);
+        }
+        const existing = this._entries.get(entryKey);
         if (existing) {
             if (!options.replace) throw new Error(`Endpoint "${definition.id}" already exists in ${definition.namespace}`);
             existing.console?.notice('Replaced by a new launch of the same endpoint.');
@@ -219,10 +231,16 @@ export class ManagedEndpoints {
         }
     }
 
+    private _serviceIdFor(definition: EndpointDefinition): string {
+        if (definition.serviceId !== undefined) return definition.serviceId;
+        const digest = createHash('sha256').update(definition.namespace).digest('hex');
+        return `${this._options.servicePrefix}/${digest}/${definition.id}`;
+    }
+
     private _add(definition: EndpointDefinition, desired: boolean, options: { readonly owned: boolean; readonly size?: ConsoleSize }): Entry {
         const digest = createHash('sha256').update(definition.namespace).digest('hex');
         const name = `${digest.slice(0, 16)}-${definition.id}`;
-        const serviceId = `${this._options.servicePrefix}/${digest}/${definition.id}`;
+        const serviceId = this._serviceIdFor(definition);
         const source = definition.source;
         const service: ManagedService = {
             ...ManagedServiceSchema.parse({

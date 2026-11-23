@@ -335,4 +335,45 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         await client.stop(address);
         expect(await client.list({ namespace: 'test' })).toEqual([]);
     });
+
+    it('supports explicit serviceId, persists it across restart, and rejects collisions', async () => {
+        const f = await fixture();
+        let client = await f.connect();
+        const created = await client.create({
+            ...defaults,
+            id: 'slack',
+            serviceId: 'hub/slack',
+            persistent: true,
+            restart: 'always',
+            source: processSource(),
+        });
+        expect(created.serviceId).toBe('hub/slack');
+        await status(client, 'slack', 'running');
+
+        // A different endpoint cannot claim the same serviceId.
+        await expect(client.create({
+            ...defaults,
+            id: 'other',
+            serviceId: 'hub/slack',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "hub/slack" is already in use');
+
+        // Replacing the same endpoint with the same serviceId succeeds.
+        const replaced = await client.create({
+            ...defaults,
+            id: 'slack',
+            serviceId: 'hub/slack',
+            persistent: true,
+            restart: 'always',
+            replace: true,
+            source: processSource(),
+        });
+        expect(replaced.serviceId).toBe('hub/slack');
+        await status(client, 'slack', 'running');
+
+        // Persists explicit serviceId across daemon restart.
+        client = await f.restart();
+        const restored = await status(client, 'slack', 'running');
+        expect(restored.serviceId).toBe('hub/slack');
+    });
 });

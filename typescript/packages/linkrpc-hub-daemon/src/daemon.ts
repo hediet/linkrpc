@@ -245,6 +245,7 @@ export class HubDaemon {
                     file: path.join(this.home.stateDir, 'endpoints.json'),
                     servicePrefix: `${config.hub.hubServiceId}/services`,
                     host: this._serviceHost,
+                    isServiceIdTaken: serviceId => [...this._services.values()].some(s => s.service.serviceId === serviceId),
                 });
                 await this._endpoints.restore(endpointSnapshot);
                 for (const connection of this._endpointRegistrations.keys()) {
