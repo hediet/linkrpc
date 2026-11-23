@@ -350,6 +350,26 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         expect(created.serviceId).toBe('hub/slack');
         await status(client, 'slack', 'running');
 
+        // Rejects explicit serviceId outside hubServiceId or with invalid path segments.
+        await expect(client.create({
+            ...defaults,
+            id: 'foreign',
+            serviceId: 'other-hub/slack',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "other-hub/slack" must be under "hub/"');
+        await expect(client.create({
+            ...defaults,
+            id: 'root',
+            serviceId: 'hub',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "hub" must be under "hub/"');
+        await expect(client.create({
+            ...defaults,
+            id: 'traversal',
+            serviceId: 'hub/../other',
+            source: processSource(),
+        })).rejects.toThrow('Invalid service ID');
+
         // A different endpoint cannot claim the same serviceId.
         await expect(client.create({
             ...defaults,
@@ -357,6 +377,18 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
             serviceId: 'hub/slack',
             source: processSource(),
         })).rejects.toThrow('Service ID "hub/slack" is already in use');
+
+        // Rejects collisions with static config.json services.
+        fs.writeFileSync(f.home.configFile, JSON.stringify({
+            services: { staticSvc: { command: processSource().command } },
+        }));
+        await f.daemon.reload();
+        await expect(client.create({
+            ...defaults,
+            id: 'clash',
+            serviceId: 'hub/staticSvc',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "hub/staticSvc" is already in use by a configured service');
 
         // Replacing the same endpoint with the same serviceId succeeds.
         const replaced = await client.create({

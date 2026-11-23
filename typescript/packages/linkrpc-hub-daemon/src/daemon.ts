@@ -244,6 +244,7 @@ export class HubDaemon {
                 this._endpoints = new ManagedEndpoints({
                     file: path.join(this.home.stateDir, 'endpoints.json'),
                     servicePrefix: `${config.hub.hubServiceId}/services`,
+                    hubServiceId: config.hub.hubServiceId,
                     host: this._serviceHost,
                     isServiceIdTaken: serviceId => [...this._services.values()].some(s => s.service.serviceId === serviceId),
                 });

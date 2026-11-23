@@ -41,6 +41,8 @@ export interface ManagedEndpointsOptions {
     readonly file: string;
     /** Default published endpoint service IDs: `<servicePrefix>/<sha256(namespace)>/<id>`. */
     readonly servicePrefix: string;
+    /** Hub namespace root; explicit `serviceId` values must be strictly under `<hubServiceId>/`. */
+    readonly hubServiceId?: string;
     readonly host: ServiceHost;
     /** Returns true when `serviceId` is already claimed outside managed endpoints (e.g. static config). */
     readonly isServiceIdTaken?: (serviceId: string) => boolean;
@@ -232,7 +234,18 @@ export class ManagedEndpoints {
     }
 
     private _serviceIdFor(definition: EndpointDefinition): string {
-        if (definition.serviceId !== undefined) return definition.serviceId;
+        if (definition.serviceId !== undefined) {
+            const explicit = definition.serviceId;
+            const segments = explicit.split('/');
+            if (segments.some(segment => segment.length === 0 || segment === '.' || segment === '..')) {
+                throw new Error(`Invalid service ID "${explicit}"`);
+            }
+            const root = this._options.hubServiceId;
+            if (root !== undefined && !explicit.startsWith(`${root}/`)) {
+                throw new Error(`Service ID "${explicit}" must be under "${root}/"`);
+            }
+            return explicit;
+        }
         const digest = createHash('sha256').update(definition.namespace).digest('hex');
         return `${this._options.servicePrefix}/${digest}/${definition.id}`;
     }
