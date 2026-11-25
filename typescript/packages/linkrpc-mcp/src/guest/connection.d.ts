@@ -13,7 +13,7 @@
 //                           { message: "hello" })
 //
 // The sandbox is isolated: no `require`, no `process`, no host globals
-// other than the ones declared here. Memory is capped (~32 MB) and execution
+// other than the ones declared here. Memory is capped (~200 MB) and execution
 // is interrupted after ~5 s.
 
 interface RunSvcContext {

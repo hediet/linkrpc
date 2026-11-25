@@ -143,7 +143,7 @@ export interface ParkedTask {
 
 const DEFAULT_FOREGROUND_MS = 5_000;
 const DEFAULT_MAX_LIFETIME_MS = 120_000;
-const DEFAULT_MEMORY_LIMIT_BYTES = 32 * 1024 * 1024;
+const DEFAULT_MEMORY_LIMIT_BYTES = 200 * 1024 * 1024;
 /**
  * Grace window granted to the guest after a soft abort (cancel / max
  * lifetime) so it can run `catch`/`finally` and return a partial result

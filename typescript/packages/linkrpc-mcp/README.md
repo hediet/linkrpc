@@ -6,7 +6,7 @@ Stdio MCP server that lets an LLM drive a [linkrpc](../linkrpc) hub.
 
 ### `runLinkRpcScript`
 
-Evaluates a JS function inside a [QuickJS](https://github.com/justjake/quickjs-emscripten) sandbox (~5 s CPU, ~32 MB memory) with these globals in scope:
+Evaluates a JS function inside a [QuickJS](https://github.com/justjake/quickjs-emscripten) sandbox (~5 s CPU, ~200 MB memory) with these globals in scope:
 
 | Name                     | Description                                                                                                                                                                                         |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
