@@ -293,13 +293,29 @@ export const computeNodePowerInterface = defineInterface(
     },
 );
 
+const sessionStateSchema = z.object({
+    /**
+     * True while nobody can use the desktop session of the node's user: its screen is locked, or the
+     * session is not the active one on its display (a disconnected remote desktop, a switched-away user).
+     */
+    locked: z.boolean(),
+    /** The platform mechanism that reported the state: `WTSSessionInfoEx`, `CGSessionCopyCurrentDictionary`, or `loginctl`. */
+    mechanism: z.string(),
+});
+
 export const computeNodeSessionInterface = defineInterface(
     {
         id: 'linkrpc.computeNode.session',
-        description: '`lock` locks the interactive desktop session of the OS user running the compute node.',
+        description: [
+            '`lock` locks the interactive desktop session of the OS user running the compute node.',
+            '`getState` reports whether that session is locked; `watchState` reports the current state and then every change',
+            'until the call is cancelled. The state is checked every 2 seconds.',
+        ].join(' '),
     },
     {
         lock: requestType(empty, systemActionResultSchema),
+        getState: requestType(empty, sessionStateSchema),
+        watchState: requestType(empty, z.object({ reason: z.literal('cancelled') })).withStream({ server: sessionStateSchema }),
     },
 );
 
@@ -329,3 +345,4 @@ export type ComputeNodeListeningPort = z.infer<typeof listeningPortSchema>;
 export type ComputeNodeKeepAwakeParams = z.infer<typeof keepAwakeParamsSchema>;
 export type ComputeNodeKeepAwakeEvent = z.infer<typeof keepAwakeEventSchema>;
 export type ComputeNodeKeepAwakeResult = z.infer<typeof keepAwakeResultSchema>;
+export type ComputeNodeSessionState = z.infer<typeof sessionStateSchema>;
