@@ -10,6 +10,7 @@ describe('daemon config', () => {
         expect({ forwardChecking: config.hub.forwardChecking, echo: config.services.echo }).toMatchInlineSnapshot(`
           {
             "echo": {
+              "claimServiceIds": [],
               "command": [
                 "node",
                 "echo.js",
@@ -50,6 +51,15 @@ describe('daemon config', () => {
             "a": { "command": ["x"], "serviceId": "shared" },
             "b": { "command": ["x"], "serviceId": "shared" } } }`))
             .toThrowErrorMatchingInlineSnapshot(`[Error: services 'a' and 'b' both claim serviceId 'shared']`);
+    });
+
+    it('accepts claimServiceIds only on endpoint services', () => {
+        const claims = '[{ "serviceId": "hediet/tablet", "as": "user:hubrpc-cli" }]';
+        expect(parseDaemonConfigText(`{ "services": { "cloud": {
+            "endpoint": "wss://hub.example.test", "serviceId": "de.hediet", "claimServiceIds": ${claims}
+        } } }`).services.cloud!.claimServiceIds).toEqual([{ serviceId: 'hediet/tablet', as: 'user:hubrpc-cli' }]);
+        expect(() => parseDaemonConfigText(`{ "services": { "a": { "command": ["x"], "claimServiceIds": ${claims} } } }`))
+            .toThrow('only applies to "endpoint" services');
     });
 
     it('ignores editor metadata when comparing hub settings', () => {
