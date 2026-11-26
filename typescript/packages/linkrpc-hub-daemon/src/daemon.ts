@@ -244,7 +244,9 @@ export class HubDaemon {
                 this._endpoints = new ManagedEndpoints({
                     file: path.join(this.home.stateDir, 'endpoints.json'),
                     servicePrefix: `${config.hub.hubServiceId}/services`,
+                    hubServiceId: config.hub.hubServiceId,
                     host: this._serviceHost,
+                    isServiceIdTaken: serviceId => [...this._services.values()].some(s => s.service.serviceId === serviceId),
                 });
                 await this._endpoints.restore(endpointSnapshot);
                 for (const connection of this._endpointRegistrations.keys()) {
@@ -344,7 +346,7 @@ export class HubDaemon {
             path: this.home.allocEndpoint(`service-${name}`),
             provision: {
                 grantedServiceId: service.serviceId,
-                managedIdentity: service.managedIdentity ? { slot: `service:${name}` } : undefined,
+                managedIdentity: service.managedIdentity ? { slot: service.identitySlot ?? `service:${name}` } : undefined,
             },
             descriptor,
             onConnectionCountChanged,

@@ -335,4 +335,91 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         await client.stop(address);
         expect(await client.list({ namespace: 'test' })).toEqual([]);
     });
+
+    it('supports explicit serviceId, persists it across restart, and rejects collisions', async () => {
+        const f = await fixture();
+        let client = await f.connect();
+        const created = await client.create({
+            ...defaults,
+            id: 'slack',
+            serviceId: 'hub/slack',
+            persistent: true,
+            restart: 'always',
+            source: processSource(),
+        });
+        expect(created.serviceId).toBe('hub/slack');
+        await status(client, 'slack', 'running');
+
+        // Rejects explicit serviceId outside hubServiceId or with invalid path segments.
+        await expect(client.create({
+            ...defaults,
+            id: 'foreign',
+            serviceId: 'other-hub/slack',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "other-hub/slack" must be under "hub/"');
+        await expect(client.create({
+            ...defaults,
+            id: 'root',
+            serviceId: 'hub',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "hub" must be under "hub/"');
+        await expect(client.create({
+            ...defaults,
+            id: 'traversal',
+            serviceId: 'hub/../other',
+            source: processSource(),
+        })).rejects.toThrow('Invalid service ID');
+
+        // A different endpoint cannot claim the same serviceId.
+        await expect(client.create({
+            ...defaults,
+            id: 'other',
+            serviceId: 'hub/slack',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "hub/slack" is already in use');
+
+        // Rejects collisions with static config.json services.
+        fs.writeFileSync(f.home.configFile, JSON.stringify({
+            services: { staticSvc: { command: processSource().command } },
+        }));
+        await f.daemon.reload();
+        await expect(client.create({
+            ...defaults,
+            id: 'clash',
+            serviceId: 'hub/staticSvc',
+            source: processSource(),
+        })).rejects.toThrow('Service ID "hub/staticSvc" is already in use by a configured service');
+
+        // Replacing the same endpoint with the same serviceId succeeds.
+        const replaced = await client.create({
+            ...defaults,
+            id: 'slack',
+            serviceId: 'hub/slack',
+            persistent: true,
+            restart: 'always',
+            replace: true,
+            source: processSource(),
+        });
+        expect(replaced.serviceId).toBe('hub/slack');
+        await status(client, 'slack', 'running');
+
+        // Persists explicit serviceId across daemon restart.
+        client = await f.restart();
+        const restored = await status(client, 'slack', 'running');
+        expect(restored.serviceId).toBe('hub/slack');
+
+        // Supports explicit identitySlot and persists it in endpoints.json.
+        await client.create({
+            ...defaults,
+            id: 'docdb',
+            serviceId: 'hub/doc-db',
+            identitySlot: 'service:doc-db',
+            persistent: true,
+            restart: 'always',
+            source: processSource(),
+        });
+        await status(client, 'docdb', 'running');
+        const stored = JSON.parse(fs.readFileSync(path.join(f.home.stateDir, 'endpoints.json'), 'utf8'));
+        expect(stored.find((entry: { definition: { id: string } }) => entry.definition.id === 'docdb')?.definition.identitySlot).toBe('service:doc-db');
+    });
 });
