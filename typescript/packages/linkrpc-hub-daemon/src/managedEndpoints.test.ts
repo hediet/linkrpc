@@ -421,5 +421,17 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         await status(client, 'docdb', 'running');
         const stored = JSON.parse(fs.readFileSync(path.join(f.home.stateDir, 'endpoints.json'), 'utf8'));
         expect(stored.find((entry: { definition: { id: string } }) => entry.definition.id === 'docdb')?.definition.identitySlot).toBe('service:doc-db');
+
+        // Allows ancestor namespace prefix (e.g. "hediet" for hubServiceId "hediet/devbox", used by devtunnel).
+        fs.writeFileSync(f.home.configFile, JSON.stringify({ hubServiceId: 'org/box' }));
+        client = await f.restart();
+        const ancestor = await client.create({
+            ...defaults,
+            id: 'uplink',
+            serviceId: 'org',
+            source: processSource(),
+        });
+        expect(ancestor.serviceId).toBe('org');
+        await client.stop({ ...defaults, id: 'uplink' });
     });
 });
