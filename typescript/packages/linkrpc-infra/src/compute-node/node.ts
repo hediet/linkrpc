@@ -29,6 +29,7 @@ import {
     type ComputeNodeKeepAwakeResult,
     type ComputeNodeMultiplexedTcpClientFrame,
     type ComputeNodeMultiplexedTcpServerFrame,
+    type ComputeNodeSessionState,
     type ComputeNodeStatus,
     computeNodeCommandInterface,
     computeNodeFileSystemInterface,
@@ -43,9 +44,11 @@ import {
 } from './index';
 import { holdSleepInhibitor, type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
 import { readListeningPorts } from './listeningPorts';
+import { type SessionStateMonitorCommand, sessionStateMonitorCommand, watchSessionState } from './sessionState';
 import { runSystemActionCommand, type SystemAction, type SystemActionCommand, systemActionCommand } from './systemActions';
 
 export { type SleepInhibitorCommand, sleepInhibitorCommand, type SleepInhibitorOptions } from './keepAwake';
+export { type SessionStateMonitorCommand, sessionStateMonitorCommand } from './sessionState';
 export { type SystemAction, type SystemActionCommand, systemActionCommand } from './systemActions';
 
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
@@ -67,6 +70,8 @@ export interface ComputeNodeOptions {
     readonly sleepInhibitor?: (options: SleepInhibitorOptions) => SleepInhibitorCommand;
     /** Chooses the command that performs a lock or power action. Defaults to the current platform's {@link systemActionCommand}. */
     readonly systemAction?: (action: SystemAction) => SystemActionCommand;
+    /** Chooses the helper that reports the session lock state. Defaults to the current platform's {@link sessionStateMonitorCommand}. */
+    readonly sessionStateMonitor?: () => SessionStateMonitorCommand;
 }
 
 export class ComputeNode {
@@ -420,6 +425,22 @@ export class ComputeNode {
         await runSystemActionCommand(command);
         return { mechanism: command.mechanism };
     }
+
+    /** Reports the lock state of the session once. */
+    async getSessionState(): Promise<ComputeNodeSessionState> {
+        const controller = new AbortController();
+        let state: ComputeNodeSessionState | undefined;
+        await this.watchSessionState(controller.signal, current => {
+            state = current;
+            controller.abort();
+        });
+        return state!;
+    }
+
+    /** Reports the lock state of the session, then every change, until `signal` aborts. */
+    watchSessionState(signal: AbortSignal, onState: (state: ComputeNodeSessionState) => void): Promise<{ reason: 'cancelled'; }> {
+        return watchSessionState((this._options.sessionStateMonitor ?? sessionStateMonitorCommand)(), signal, onState);
+    }
 }
 
 /** Anything that registers interface handlers, e.g. a connection or `ParticipantServices`. */
@@ -461,7 +482,13 @@ export function registerComputeNode(registrar: InterfaceRegistrar, node: Compute
             restart: () => node.performSystemAction('restart'),
             shutdown: () => node.performSystemAction('shutdown'),
         }),
-        registrar.register(computeNodeSessionInterface, { lock: () => node.performSystemAction('lock') }),
+        registrar.register(computeNodeSessionInterface, {
+            lock: () => node.performSystemAction('lock'),
+            getState: () => node.getSessionState(),
+            watchState: (_params, _ctx, stream) => node.watchSessionState(stream.signal, state => {
+                stream.send(state).catch(() => { /* the caller went away */ });
+            }),
+        }),
     ];
     return { dispose: () => { for (const registration of registrations) registration.dispose(); } };
 }

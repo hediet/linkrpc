@@ -99,5 +99,27 @@ The machine can go down before the reply arrives, so a dropped connection after
 `sleep`, `restart`, or `shutdown` is expected. Use `keepAwake` leases to prevent
 *idle* sleep; they do not prevent an explicit `sleep`.
 
+## Lock state
+
+`linkrpc.computeNode.session::getState` returns whether the desktop session of
+the node's user is `locked`, with the `mechanism` that reported it.
+`::watchState` streams the current state and then every change until the call
+is cancelled, e.g. to stop unattended work while the user is away:
+
+```sh
+linkrpc hub call '<hubServiceId>/compute::linkrpc.computeNode.session::getState'
+```
+
+| Platform | Mechanism | Counts as locked |
+| --- | --- | --- |
+| macOS | `CGSessionCopyCurrentDictionary` via JXA | screen locked, or the session is not on the console (another user switched in) |
+| Windows | `WTSQuerySessionInformation(WTSSessionInfoEx)` for the node's session | screen locked, or the session is not `WTSActive` (e.g. a disconnected remote desktop) |
+| Linux | `loginctl show-session auto` | `LockedHint=yes`, or `Active=no` |
+
+The state is checked every 2 seconds by a helper process per call, which exits
+when the call ends or the node exits. Like `lock`, it needs the node to run in
+the user's desktop session: a node outside it (a system service, a macOS
+LaunchDaemon) reports `locked`.
+
 ## In-process
 `hostComputeNode()` (the package entry) starts the same service in-process.
