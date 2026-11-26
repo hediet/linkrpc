@@ -241,8 +241,8 @@ export class ManagedEndpoints {
                 throw new Error(`Invalid service ID "${explicit}"`);
             }
             const root = this._options.hubServiceId;
-            if (root !== undefined && !explicit.startsWith(`${root}/`)) {
-                throw new Error(`Service ID "${explicit}" must be under "${root}/"`);
+            if (root !== undefined && !explicit.startsWith(`${root}/`) && !root.startsWith(`${explicit}/`)) {
+                throw new Error(`Service ID "${explicit}" must be under "${root}/" or an ancestor of "${root}"`);
             }
             return explicit;
         }
