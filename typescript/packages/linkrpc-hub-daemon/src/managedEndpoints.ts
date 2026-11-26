@@ -143,10 +143,14 @@ export class ManagedEndpoints {
             .map(entry => this._status(entry));
     }
 
-    async dispose(): Promise<void> {
+    async dispose(options: { readonly preserveServices?: boolean } = {}): Promise<void> {
         this._closing = true;
         await this._ops;
-        await Promise.all([...this._entries.values()].map(entry => entry.supervisor.dispose()));
+        await Promise.all([...this._entries.values()].map(entry =>
+            options.preserveServices && entry.supervisor instanceof ServiceSupervisor
+                ? entry.supervisor.detach()
+                : entry.supervisor.dispose(),
+        ));
         for (const entry of this._entries.values()) entry.console?.close();
     }
 
@@ -277,6 +281,7 @@ export class ManagedEndpoints {
             notice: (_name, text) => entry.console?.notice(text),
             processStarted: (_name, pid) => entry.console?.started(pid),
             processExited: (_name, exit) => entry.console?.exited(exit),
+            ...(this._options.host.spawnPipe ? { spawnPipe: this._options.host.spawnPipe } : {}),
         };
         let supervisor: ServiceSupervisor | ConnectionSupervisor;
         let console: Entry['console'];

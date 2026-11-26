@@ -5,6 +5,7 @@ members = [
     "crates/linkrpc-macros",
     "crates/linkrpc-tokio",
     "crates/linkrpc-examples",
+    "crates/linkrpc-proc-host",
 ]
 exclude = ["crates/linkrpc/tests/compile_fail"]
 

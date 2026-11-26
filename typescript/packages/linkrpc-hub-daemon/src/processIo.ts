@@ -22,6 +22,8 @@ export interface ServiceProcess {
     signal(signal: ConsoleSignal): void;
     /** Forcefully end the process tree. */
     kill(): Promise<void>;
+    /** Detach local listeners without stopping the underlying process (out-of-process proc-host handover). */
+    detach?(): void;
 }
 
 export interface SpawnServiceOptions {

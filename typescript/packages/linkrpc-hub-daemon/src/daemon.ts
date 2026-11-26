@@ -19,11 +19,19 @@ import * as path from 'node:path';
 import { ManagedEndpoints } from './managedEndpoints';
 import { serviceDescriptor } from './participantDescriptors';
 import type { ParticipantDescriptor } from '@hediet/linkrpc/inspection';
+import { findProcHostBinary, ProcHostClient } from './procHost';
 
 export interface StartHubDaemonOptions {
     readonly home?: HubHome;
     /** Also write the log to stderr. */
     readonly echoLog?: boolean;
+    /** Path to `linkrpc-proc-host` binary, `true` to auto-detect, or `false` to disable. */
+    readonly procHost?: boolean | string;
+}
+
+export interface ShutdownHubDaemonOptions {
+    /** Leave out-of-process managed services running for the next daemon instance to adopt. */
+    readonly preserveServices?: boolean;
 }
 
 interface LocalEndpoint {
@@ -47,7 +55,7 @@ export class HubDaemon {
         _ensurePrivateDirs(home);
         const lock = await SingleInstanceLock.acquire(home.lockEndpoint);
         const log = DaemonLog.open(home.logFile, { echo: options.echoLog ?? false });
-        const daemon = new HubDaemon(home, lock, log);
+        const daemon = new HubDaemon(home, lock, log, options.procHost);
         try {
             await daemon._start();
             return daemon;
@@ -91,12 +99,16 @@ export class HubDaemon {
     private _restartingHub = false;
     private _shutdown: Promise<void> | undefined;
     private _resolveDone!: () => void;
+    private _procHost: ProcHostClient | undefined;
+    private readonly _procHostOption: boolean | string | undefined;
 
     private constructor(
         public readonly home: HubHome,
         private readonly _lock: SingleInstanceLock,
         private readonly _log: DaemonLog,
+        procHostOption?: boolean | string,
     ) {
+        this._procHostOption = procHostOption;
         this.done = new Promise(resolve => { this._resolveDone = resolve; });
         this._configFile = new ConfigFile(home.configFile, home.configSchemaFile);
         this._callLog = new CallLog(home.callLogDir, this.startedAt, level => this.setCallLogLevel(level));
@@ -106,6 +118,10 @@ export class HubDaemon {
             openSocket: (name, service, onConnectionCountChanged, descriptor) =>
                 this._openServiceSocket(name, service, onConnectionCountChanged, descriptor ?? serviceDescriptor(name, service.serviceId)),
             log: (name, line) => this._log.line(`[${name}] ${line}`),
+            spawnPipe: (name, options) => {
+                if (this._procHost) return this._procHost.spawnOrAdopt(name, options);
+                throw new Error('proc-host is not active');
+            },
         };
     }
 
@@ -168,13 +184,28 @@ export class HubDaemon {
         return revision;
     }
 
-    public shutdown(): Promise<void> {
-        this._shutdown ??= this._doShutdown();
+    public shutdown(options: ShutdownHubDaemonOptions = {}): Promise<void> {
+        this._shutdown ??= this._doShutdown(options);
         return this._shutdown;
     }
 
     private async _start(): Promise<void> {
         this._log.line(`starting LinkRPC hub daemon ${this.version} (pid ${process.pid})`);
+        const procHostBin = typeof this._procHostOption === 'string'
+            ? this._procHostOption
+            : this._procHostOption === false || process.env.LINKRPC_DISABLE_PROC_HOST === '1'
+                ? undefined
+                : findProcHostBinary();
+        if (procHostBin) {
+            try {
+                this._procHost = await ProcHostClient.connectOrStart(this.home, procHostBin, line => this._log.line(line));
+            } catch (error) {
+                this._log.line(`[proc-host] unavailable, falling back to direct spawn: ${_message(error)}`);
+            }
+        }
+        if (!this._procHost) {
+            delete (this._serviceHost as { spawnPipe?: ServiceHost['spawnPipe'] }).spawnPipe;
+        }
         this._configFile.ensureExists();
         const document = this._configFile.read();
         this._seenRevision = document.revision;
@@ -307,10 +338,14 @@ export class HubDaemon {
         await supervisor.dispose();
     }
 
-    private async _disposeAllServices(): Promise<void> {
+    private async _disposeAllServices(preserveServices = false): Promise<void> {
         const services = [...this._services.values()];
         this._services.clear();
-        await Promise.all(services.map(service => service.dispose()));
+        await Promise.all(services.map(service =>
+            preserveServices && service instanceof ServiceSupervisor
+                ? service.detach()
+                : service.dispose(),
+        ));
         this._changed();
     }
 
@@ -426,8 +461,8 @@ export class HubDaemon {
                 }
                 return {};
             },
-            shutdown: () => {
-                setTimeout(() => void this.shutdown(), 0);
+            shutdown: params => {
+                setTimeout(() => void this.shutdown({ preserveServices: params.preserveServices }), 0);
                 return {};
             },
         });
@@ -467,16 +502,25 @@ export class HubDaemon {
         });
     }
 
-    private async _doShutdown(): Promise<void> {
+    private async _doShutdown(options: ShutdownHubDaemonOptions = {}): Promise<void> {
+        const preserveServices = options.preserveServices === true && this._procHost !== undefined;
         this._stopping = true;
-        this._log.line('shutting down');
+        this._log.line(preserveServices ? 'shutting down (preserving services via proc-host)' : 'shutting down');
         this._watcher?.dispose();
         await this._reconcile;
         for (const file of [this.home.discoveryFile, this.home.managementFile]) {
             if (readEndpointDiscovery(file)?.pid === process.pid) fs.rmSync(file, { force: true });
         }
-        await this._disposeAllServices();
-        await this._endpoints?.dispose();
+        await this._disposeAllServices(preserveServices);
+        await this._endpoints?.dispose({ preserveServices });
+        if (this._procHost) {
+            if (preserveServices) {
+                this._procHost.disconnect();
+            } else {
+                await this._procHost.shutdownHost(true).catch(() => {});
+            }
+            this._procHost = undefined;
+        }
         this._managementLink?.dispose();
         this._callLogAttachment?.dispose();
         this._hub?.dispose();

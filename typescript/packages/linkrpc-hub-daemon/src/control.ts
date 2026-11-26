@@ -45,7 +45,11 @@ export async function startDaemon(options: StartDaemonOptions): Promise<'started
 }
 
 /** Ask the daemon to stop all services and exit, and wait until its process is gone. */
-export async function stopDaemon(home: HubHome, timeoutMs = 30_000): Promise<'stopped' | 'not-running'> {
+export async function stopDaemon(
+    home: HubHome,
+    timeoutMs = 30_000,
+    options: { readonly preserveServices?: boolean } = {},
+): Promise<'stopped' | 'not-running'> {
     const pid = readEndpointDiscovery(home.managementFile)?.pid;
     let connection: Awaited<ReturnType<typeof connectToHubManagement>>;
     try {
@@ -58,7 +62,7 @@ export async function stopDaemon(home: HubHome, timeoutMs = 30_000): Promise<'st
         throw error;
     }
     try {
-        await connection.management.shutdown({});
+        await connection.management.shutdown(options.preserveServices ? { preserveServices: true } : {});
     } finally {
         connection.close();
     }
