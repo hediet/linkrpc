@@ -1,5 +1,6 @@
 export * from './client';
 export * from './bridgeInterface';
+export * from './contentLength';
 export * from './factory';
 export * from './interface';
 export * from './jsonRpcPeer';

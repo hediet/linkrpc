@@ -16,6 +16,8 @@ export default defineConfig({
         'json-rpc/protocol': 'src/json-rpc/protocol.ts',
         'json-rpc/node': 'src/json-rpc/node.ts',
         'logging/index': 'src/logging/index.ts',
+        'lsp/index': 'src/lsp/index.ts',
+        'lsp/node': 'src/lsp/node.ts',
         'observable-value/index': 'src/observable-value/index.ts',
         'observable-query/index': 'src/observable-query/index.ts',
         'observable-log/index': 'src/observable-log/index.ts',
