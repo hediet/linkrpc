@@ -2,7 +2,7 @@ import * as os from 'node:os';
 import { StringDecoder } from 'node:string_decoder';
 import crossSpawn from 'cross-spawn';
 import type { ConsoleSignal, ConsoleSize } from '@hediet/linkrpc-infra/console';
-import { killProcessTree, signalProcessGroup, SPAWN_DETACHED } from './processTree';
+import { killProcessTree, releaseProcessTree, signalProcessGroup, SPAWN_DETACHED, trackProcessTree } from './processTree';
 
 export interface ExitInfo {
     readonly code: number | null;
@@ -50,6 +50,15 @@ export function spawnPipeProcess(options: SpawnServiceOptions): ServiceProcess {
         windowsHide: true,
         detached: SPAWN_DETACHED,
     });
+    const trackedPid = child.pid;
+    if (trackedPid !== undefined) trackProcessTree(trackedPid);
+    const spawned = new Promise<void>(resolve => child.once('spawn', () => {
+        if (trackedPid === undefined && child.pid !== undefined) trackProcessTree(child.pid);
+        resolve();
+    }));
+    child.once('exit', () => {
+        if (child.pid !== undefined) releaseProcessTree(child.pid);
+    });
     const exited = new Promise<ExitInfo>(resolve => {
         child.once('close', (code, signal) => resolve({ code, signal }));
         child.once('error', error => {
@@ -63,7 +72,7 @@ export function spawnPipeProcess(options: SpawnServiceOptions): ServiceProcess {
     child.stdin?.on('error', error => options.onError(`stdin failed: ${error.message}`));
     return {
         get pid() { return child.pid; },
-        spawned: new Promise(resolve => child.once('spawn', () => resolve())),
+        spawned,
         exited,
         write: data => {
             if (!child.stdin?.writable) throw new Error('The process stdin is closed');
@@ -95,15 +104,23 @@ export async function spawnPtyProcess(options: SpawnServiceOptions & { readonly 
     const decoder = new StringDecoder('utf8');
     // ConPTY assigns the process ID asynchronously; node-pty reports 0 until then.
     const pid = () => terminal.pid > 0 ? terminal.pid : undefined;
+    let trackedPtyPid: number | undefined;
+    const spawned = waitFor(() => pid() !== undefined, exited).then(() => {
+        trackedPtyPid = pid();
+        if (trackedPtyPid !== undefined) trackProcessTree(trackedPtyPid);
+    });
+    void exited.then(() => {
+        if (trackedPtyPid !== undefined) releaseProcessTree(trackedPtyPid);
+    });
     const kill = async () => {
-        const current = pid();
+        const current = pid() ?? trackedPtyPid;
         if (current !== undefined) await killProcessTree(current);
         // Closing the pseudoconsole reports the exit promptly.
         try { terminal.kill(); } catch { /* already closed */ }
     };
     return {
         get pid() { return pid(); },
-        spawned: waitFor(() => pid() !== undefined, exited),
+        spawned,
         exited,
         write: data => {
             const text = decoder.write(Buffer.from(data));
