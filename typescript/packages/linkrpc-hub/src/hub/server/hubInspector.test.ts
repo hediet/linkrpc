@@ -13,7 +13,7 @@ import {
     TransportPair,
 } from '@hediet/linkrpc';
 import { TopologyClient, TrafficClient } from '@hediet/linkrpc-infra/inspection';
-import { topologyInterface, type TrafficTransitEvent } from '@hediet/linkrpc/inspection';
+import { topologyInterface, type TopologyGraph, type TrafficTransitEvent } from '@hediet/linkrpc/inspection';
 import { createHubServiceInterfaces } from './hubServices';
 import { HubInspector } from './hubInspector';
 import { Hub } from './routing/routingHub';
@@ -413,6 +413,52 @@ describe('HubInspector', () => {
         inspector.dispose();
         connection.close();
         callerLink.dispose();
+    });
+
+    it('builds the graph at most once per coalesced change while 2,000 links attach, identify and detach', async () => {
+        const hub = new Hub({ nodeId: 'hub' });
+        const topology = (hub as unknown as { _topology: { _buildGraph(): TopologyGraph; }; })._topology;
+        const buildFresh = topology._buildGraph.bind(topology);
+        let builds = 0;
+        topology._buildGraph = () => {
+            builds++;
+            return buildFresh();
+        };
+        const inspector = new HubInspector(hub);
+        let flushes = 0;
+        let observed = inspector.host.getGraph('');
+        hub.onDidChangeTopology(() => {
+            flushes++;
+            observed = inspector.host.getGraph('');
+        });
+        const start = performance.now();
+
+        const links = Array.from({ length: 2_000 }, (_, i) => {
+            const link = hub.attachOut();
+            link.transport.setListener((message) => {
+                if (!isRequest(message)) return;
+                void link.transport.send({
+                    jsonrpc: '2.0', id: message.id, result: { nodeId: `peer-${i}`, portId: 'port' },
+                });
+            });
+            return link;
+        });
+        await Promise.resolve();
+        expect({ builds, flushes, links: observed.links.length }).toEqual({ builds: 2, flushes: 1, links: 2_000 });
+
+        await waitFor(() => observed.links.every((link) => link.peerState === 'identified'), 10_000);
+        // One initial build for the inspection source, then at most one per notification.
+        expect(builds).toBeLessThanOrEqual(flushes + 1);
+        expect(hub.getTopologyGraph('')).toEqual(buildFresh());
+
+        const before = { builds, flushes };
+        for (const link of links) link.dispose();
+        await waitFor(() => observed.links.length === 0);
+        expect({ builds: builds - before.builds, flushes: flushes - before.flushes })
+            .toEqual({ builds: 1, flushes: 1 });
+        expect(hub.getTopologyGraph('')).toEqual(buildFresh());
+        expect(performance.now() - start).toBeLessThan(5_000);
+        inspector.dispose();
     });
 });
 

@@ -127,6 +127,9 @@ export interface HubOptions {
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000;
 
+/** Minimum time between topology notifications; bounds graph rebuilds during change storms. */
+const TOPOLOGY_NOTIFICATION_INTERVAL_MS = 100;
+
 /** Minimal disposable handle; calling `dispose` detaches the link. */
 export interface IDisposable {
     dispose(): void;
@@ -238,6 +241,9 @@ export class Hub {
      */
     private readonly _routingListeners = new Set<() => void>();
     private readonly _topologyListeners = new Set<() => void>();
+    private readonly _pendingTopologyListeners = new Set<() => void>();
+    private _topologyNotificationScheduled = false;
+    private _lastTopologyNotificationMs = -Infinity;
 
     /** Stable inspection label per link; assigned lazily / by prefix claim. */
     private readonly _edgeIds = new WeakMap<IMessageTransport, string>();
@@ -268,7 +274,7 @@ export class Hub {
             isAttached: (link) => this._links.has(link),
             requestOnLink: (link, method, params, timeoutMs) =>
                 this._requestOnLink(link, method, params, timeoutMs),
-            onDidChange: () => this._fireTopologyChanged(),
+            onDidChange: () => this._scheduleTopologyChanged(),
         });
         this._participantRoots = new ParticipantRoots({
             forwardingEntries: () => this._table.entries(),
@@ -301,7 +307,13 @@ export class Hub {
     private _labelEdge(link: IMessageTransport, label: string): void {
         const cur = this._edgeIds.get(link);
         // Don't clobber a meaningful label with a later, less specific one.
-        if (cur === undefined || /^e\d+$/.test(cur)) this._edgeIds.set(link, label);
+        if (cur === undefined || /^e\d+$/.test(cur)) this._setEdgeId(link, label);
+    }
+
+    private _setEdgeId(link: IMessageTransport, label: string): void {
+        if (this._edgeIds.get(link) === label) return;
+        this._edgeIds.set(link, label);
+        this._topology.invalidate();
     }
 
     /** Emit a pre-built node transit. Callers guard construction by observer count. */
@@ -378,7 +390,11 @@ export class Hub {
         };
     }
 
-    /** Subscribe to topology changes, including routing and background peer discovery. */
+    /**
+     * Subscribe to topology changes, including routing and background peer discovery.
+     * Notifications are coalesced and may trail a change by up to
+     * {@link TOPOLOGY_NOTIFICATION_INTERVAL_MS}; {@link getTopologyGraph} is always current.
+     */
     public onDidChangeTopology(listener: () => void): () => void {
         this._topologyListeners.add(listener);
         return () => { this._topologyListeners.delete(listener); };
@@ -395,15 +411,39 @@ export class Hub {
 
     /** Fire all routing-change listeners. Best-effort; one throwing listener does not block the rest. */
     private _fireRoutingChanged(): void {
+        this._topology.invalidate();
         this._notifyListeners(this._routingListeners);
-        this._fireTopologyChanged();
     }
 
-    private _fireTopologyChanged(): void {
-        this._notifyListeners(this._topologyListeners);
+    /**
+     * Topology listeners are notified once per microtask, so a burst of changes
+     * (e.g. many links detaching in one dispose loop) costs one graph rebuild per
+     * listener instead of one per change. Changes spread over many tasks (e.g.
+     * thousands of peers answering identification one by one) are additionally
+     * throttled to one notification per {@link TOPOLOGY_NOTIFICATION_INTERVAL_MS}.
+     * Each listener subscribed at the time of any change is notified after the last one.
+     */
+    private _scheduleTopologyChanged(): void {
+        for (const listener of this._topologyListeners) this._pendingTopologyListeners.add(listener);
+        if (this._topologyNotificationScheduled || this._pendingTopologyListeners.size === 0) return;
+        this._topologyNotificationScheduled = true;
+        const flush = () => {
+            this._topologyNotificationScheduled = false;
+            this._lastTopologyNotificationMs = Date.now();
+            const pending = [...this._pendingTopologyListeners];
+            this._pendingTopologyListeners.clear();
+            this._notifyListeners(pending.filter((listener) => this._topologyListeners.has(listener)));
+        };
+        // Clamped so that a wall-clock jump backwards cannot stall notifications.
+        const delayMs = Math.min(
+            TOPOLOGY_NOTIFICATION_INTERVAL_MS,
+            this._lastTopologyNotificationMs + TOPOLOGY_NOTIFICATION_INTERVAL_MS - Date.now(),
+        );
+        if (delayMs <= 0) queueMicrotask(flush);
+        else setTimeout(flush, delayMs).unref();
     }
 
-    private _notifyListeners(listeners: ReadonlySet<() => void>): void {
+    private _notifyListeners(listeners: Iterable<() => void>): void {
         for (const listener of [...listeners]) {
             try {
                 listener();
@@ -471,8 +511,11 @@ export class Hub {
         if (opts?.exclusiveHubRootHandler === true && this._loopback !== undefined && this._loopback !== link) {
             throw new Error('exclusiveHubRootHandler: another link is already the hub-root handler');
         }
-        if (opts?.edgeId !== undefined) this._edgeIds.set(link, opts.edgeId);
-        if (opts?.transport !== undefined) this._transportInfo.set(link, opts.transport);
+        if (opts?.edgeId !== undefined) this._setEdgeId(link, opts.edgeId);
+        if (opts?.transport !== undefined && this._transportInfo.get(link) !== opts.transport) {
+            this._transportInfo.set(link, opts.transport);
+            this._topology.invalidate();
+        }
         let disposed = false;
         const handle: AttachedLink = {
             dispose: () => {

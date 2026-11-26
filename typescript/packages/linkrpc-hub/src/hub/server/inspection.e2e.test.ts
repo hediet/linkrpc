@@ -304,7 +304,7 @@ describe('federated Hub inspection', () => {
                           "out": {
                             "edgeId": "hub-b",
                             "portId": "hub-a-port-3",
-                            "requestId": 12,
+                            "requestId": 11,
                           },
                         },
                         {
@@ -312,7 +312,7 @@ describe('federated Hub inspection', () => {
                           "in": {
                             "edgeId": "hub-b",
                             "portId": "hub-a-port-3",
-                            "requestId": 12,
+                            "requestId": 11,
                           },
                           "kind": "response",
                           "method": "beta::test.echo::echo",
@@ -334,7 +334,7 @@ describe('federated Hub inspection', () => {
                           "in": {
                             "edgeId": "uplink",
                             "portId": "hub-b-port-3",
-                            "requestId": 12,
+                            "requestId": 11,
                           },
                           "kind": "request",
                           "method": "beta::test.echo::echo",
@@ -342,7 +342,7 @@ describe('federated Hub inspection', () => {
                           "out": {
                             "edgeId": "beta",
                             "portId": "hub-b-port-4",
-                            "requestId": 22,
+                            "requestId": 18,
                           },
                         },
                         {
@@ -350,7 +350,7 @@ describe('federated Hub inspection', () => {
                           "in": {
                             "edgeId": "beta",
                             "portId": "hub-b-port-4",
-                            "requestId": 22,
+                            "requestId": 18,
                           },
                           "kind": "response",
                           "method": "beta::test.echo::echo",
@@ -358,7 +358,7 @@ describe('federated Hub inspection', () => {
                           "out": {
                             "edgeId": "uplink",
                             "portId": "hub-b-port-3",
-                            "requestId": 12,
+                            "requestId": 11,
                           },
                         },
                       ],
@@ -415,7 +415,7 @@ describe('federated Hub inspection', () => {
                       "in": {
                         "edgeId": "beta-port-2",
                         "portId": "beta-port-2",
-                        "requestId": 22,
+                        "requestId": 18,
                       },
                       "kind": "request",
                       "method": "beta::test.echo::echo",
@@ -433,7 +433,7 @@ describe('federated Hub inspection', () => {
                       "out": {
                         "edgeId": "beta-port-2",
                         "portId": "beta-port-2",
-                        "requestId": 22,
+                        "requestId": 18,
                       },
                       "payload": "{"value":"be",
                     },
