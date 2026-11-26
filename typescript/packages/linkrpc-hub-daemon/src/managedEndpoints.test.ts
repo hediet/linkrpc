@@ -407,5 +407,19 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         client = await f.restart();
         const restored = await status(client, 'slack', 'running');
         expect(restored.serviceId).toBe('hub/slack');
+
+        // Supports explicit identitySlot and persists it in endpoints.json.
+        await client.create({
+            ...defaults,
+            id: 'docdb',
+            serviceId: 'hub/doc-db',
+            identitySlot: 'service:doc-db',
+            persistent: true,
+            restart: 'always',
+            source: processSource(),
+        });
+        await status(client, 'docdb', 'running');
+        const stored = JSON.parse(fs.readFileSync(path.join(f.home.stateDir, 'endpoints.json'), 'utf8'));
+        expect(stored.find((entry: { definition: { id: string } }) => entry.definition.id === 'docdb')?.definition.identitySlot).toBe('service:doc-db');
     });
 });

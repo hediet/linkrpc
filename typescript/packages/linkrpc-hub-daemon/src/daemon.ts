@@ -346,7 +346,7 @@ export class HubDaemon {
             path: this.home.allocEndpoint(`service-${name}`),
             provision: {
                 grantedServiceId: service.serviceId,
-                managedIdentity: service.managedIdentity ? { slot: `service:${name}` } : undefined,
+                managedIdentity: service.managedIdentity ? { slot: service.identitySlot ?? `service:${name}` } : undefined,
             },
             descriptor,
             onConnectionCountChanged,

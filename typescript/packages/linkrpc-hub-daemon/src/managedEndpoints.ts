@@ -262,6 +262,7 @@ export class ManagedEndpoints {
                     readiness: source.readiness, rpc: source.rpc, tty: source.tty,
                 } : { endpoint: source.endpoint }),
                 enabled: desired, restart: definition.restart, serviceId,
+                ...(definition.identitySlot !== undefined ? { identitySlot: definition.identitySlot } : {}),
             }),
             serviceId,
         };

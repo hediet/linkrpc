@@ -33,6 +33,8 @@ export const endpointDefinition = endpointAddress.extend({
     restart: z.enum(['never', 'on-failure', 'always']).default('never'),
     serviceId: z.string().min(1).optional()
         .describe('Explicit hub service ID to publish under; defaults to `<servicePrefix>/<sha256(namespace)>/<id>`.'),
+    identitySlot: z.string().min(1).optional()
+        .describe('Explicit managed identity slot (e.g. `service:doc-db`); defaults to `service:<hash>-<id>`.'),
 });
 export type EndpointDefinition = z.infer<typeof endpointDefinition>;
 export type EndpointAddress = z.infer<typeof endpointAddress>;

@@ -41,8 +41,10 @@ export const ManagedServiceSchema = z.object({
      * `<hubServiceId>/<name>`, so one prefix addresses the whole hub.
      */
     serviceId: z.string().min(1).optional(),
-    /** Provision a persistent managed identity (slot `service:<name>`). */
+    /** Provision a persistent managed identity (slot `service:<name>` unless `identitySlot` is set). */
     managedIdentity: z.boolean().default(true),
+    /** Override the persistent managed identity slot (defaults to `service:<name>`). */
+    identitySlot: z.string().min(1).optional(),
     /** A `connected` service that does not connect in time is restarted. */
     startTimeoutMs: z.number().int().positive().default(30_000),
     /** Grace period after disconnecting (and SIGTERM on POSIX) before killing the process tree. */
