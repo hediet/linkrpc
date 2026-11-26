@@ -1,0 +1,16 @@
+[package]
+name = "linkrpc-proc-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Tiny out-of-process supervisor owning LinkRPC managed service process trees and Job Objects across daemon restarts."
+
+[[bin]]
+name = "linkrpc-proc-host"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["process", "signal"] }

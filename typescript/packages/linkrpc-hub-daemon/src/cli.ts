@@ -73,16 +73,18 @@ program.command('start')
 
 program.command('stop')
     .description('stop all services and the daemon')
-    .action(async () => {
-        const result = await stopDaemon(home());
+    .option('--preserve-services', 'leave out-of-process services running for the next daemon to adopt', false)
+    .action(async (opts: { preserveServices: boolean }) => {
+        const result = await stopDaemon(home(), undefined, { preserveServices: opts.preserveServices });
         console.log(result === 'stopped' ? 'The hub stopped.' : 'The hub is not running.');
     });
 
 program.command('restart')
     .description('stop and start the daemon')
-    .action(async () => {
+    .option('--preserve-services', 'keep out-of-process services running across the daemon restart', false)
+    .action(async (opts: { preserveServices: boolean }) => {
         const hubHome = home();
-        await stopDaemon(hubHome);
+        await stopDaemon(hubHome, undefined, { preserveServices: opts.preserveServices });
         await startDaemon({ home: hubHome, launch: nodeDaemonLaunch(hubHome), autostart: await createAutostartManager({ home: hubHome }) });
         console.log('The hub is running.');
     });

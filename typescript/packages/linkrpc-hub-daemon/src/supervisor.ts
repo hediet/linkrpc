@@ -4,7 +4,7 @@ import type { ParticipantDescriptor } from '@hediet/linkrpc/inspection';
 import type { ManagedService } from './config';
 import { LogBuffer } from './logBuffer';
 import type { LogLine, ServiceState, ServiceStatus } from './managementInterface';
-import { spawnPipeProcess, spawnPtyProcess, type ExitInfo, type ServiceProcess } from './processIo';
+import { spawnPipeProcess, spawnPtyProcess, type ExitInfo, type ServiceProcess, type SpawnServiceOptions } from './processIo';
 import { terminateProcessTree } from './processTree';
 
 const MIN_BACKOFF_MS = 500;
@@ -31,6 +31,8 @@ export interface ServiceHost {
     notice?(name: string, text: string): void;
     processStarted?(name: string, pid: number | undefined): void;
     processExited?(name: string, exit: { code: number | null; signal: string | null }): void;
+    /** Optional out-of-process spawner (e.g. `linkrpc-proc-host`) that survives daemon restarts. */
+    spawnPipe?(name: string, options: SpawnServiceOptions): ServiceProcess;
 }
 
 export interface ServiceSocket {
@@ -151,6 +153,23 @@ export class ServiceSupervisor {
         return this._enqueue(() => this._stop('stopped'), { evenIfDisposed: true });
     }
 
+    /** Detach from a running out-of-process service without stopping it (for daemon upgrades). */
+    public detach(): Promise<void> {
+        this._disposed = true;
+        return this._enqueue(async () => {
+            clearTimeout(this._backoffTimer);
+            this._backoffTimer = undefined;
+            this._clearProcessTimers();
+            if (this._process?.detach) {
+                this._process.detach();
+                this._process = undefined;
+                this._releaseSocket();
+                return;
+            }
+            await this._stop('stopped');
+        }, { evenIfDisposed: true });
+    }
+
     private _enqueue(op: () => Promise<void>, options: { evenIfDisposed?: boolean; } = {}): Promise<void> {
         const run = this._ops.then(() => (this._disposed && !options.evenIfDisposed ? undefined : op()));
         this._ops = run.catch(error => this._logDaemon(`error: ${_message(error)}`));
@@ -190,7 +209,11 @@ export class ServiceSupervisor {
         };
         let spawned: ServiceProcess;
         try {
-            spawned = service.tty ? await spawnPtyProcess({ ...options, size: this._size }) : spawnPipeProcess(options);
+            spawned = service.tty
+                ? await spawnPtyProcess({ ...options, size: this._size })
+                : this._host.spawnPipe
+                    ? this._host.spawnPipe(this.name, options)
+                    : spawnPipeProcess(options);
         } catch (error) {
             this._onSpawnFailed(_message(error));
             return;

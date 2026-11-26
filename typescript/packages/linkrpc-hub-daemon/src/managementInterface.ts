@@ -121,6 +121,12 @@ export const hubDaemonManagementInterface = defineInterface(
         watchCalls: requestType(z.object({ filter: CallFilterSchema.optional() }), z.object({}))
             .withStream({ server: CallRecordSchema }),
         /** Stop all services and exit. Intentional: autostart managers do not restart it. */
-        shutdown: requestType(z.object({}), z.object({})),
+        shutdown: requestType(
+            z.object({
+                /** Leave out-of-process managed services running for the next daemon instance to adopt. */
+                preserveServices: z.boolean().optional(),
+            }),
+            z.object({}),
+        ),
     },
 );
