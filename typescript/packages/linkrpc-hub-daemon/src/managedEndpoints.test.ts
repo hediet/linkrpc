@@ -424,7 +424,7 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
 
         // Allows ancestor namespace prefix (e.g. "hediet" for hubServiceId "hediet/devbox", used by devtunnel).
         fs.writeFileSync(f.home.configFile, JSON.stringify({ hubServiceId: 'org/box' }));
-        await f.daemon.reload();
+        client = await f.restart();
         const ancestor = await client.create({
             ...defaults,
             id: 'uplink',
