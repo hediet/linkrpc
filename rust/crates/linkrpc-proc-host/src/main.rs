@@ -268,7 +268,6 @@ impl HostState {
         proc.stdin_tx = None;
         if let Some(tree) = proc.tree.take() {
             tree.kill();
-            drop(tree);
         }
         Ok(json!({}))
     }
@@ -304,7 +303,6 @@ impl HostState {
                 proc.stdin_tx = None;
                 if let Some(tree) = proc.tree.take() {
                     tree.kill();
-                    drop(tree);
                 }
             }
             guard.clear();
