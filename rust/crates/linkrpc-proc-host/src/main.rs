@@ -6,16 +6,16 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
-use tokio::sync::{Notify, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, Notify};
 
 use crate::job::ProcessTreeHandle;
 use crate::protocol::{
-    ExitSummary, HelloParams, IdParams, Notification, OutputChunk, ProcessSummary, RemoveParams,
-    Request, Response, RpcError, ShutdownParams, SignalParams, SpawnParams, WriteParams,
-    decode_base64, encode_base64,
+    decode_base64, encode_base64, ExitSummary, HelloParams, IdParams, Notification, OutputChunk,
+    ProcessSummary, RemoveParams, Request, Response, RpcError, ShutdownParams, SignalParams,
+    SpawnParams, WriteParams,
 };
 
 const DEFAULT_RING_BYTES: usize = 256 * 1024;
@@ -355,12 +355,7 @@ async fn pump_output<R: AsyncRead + Unpin>(
     }
 }
 
-async fn watch_exit(
-    state: Arc<HostState>,
-    id: String,
-    pid: u32,
-    mut child: tokio::process::Child,
-) {
+async fn watch_exit(state: Arc<HostState>, id: String, pid: u32, mut child: tokio::process::Child) {
     let status = child.wait().await;
     let (code, signal) = match status {
         Ok(st) => {
@@ -626,7 +621,13 @@ mod tests {
 
     #[test]
     fn base64_roundtrip() {
-        for sample in [b"".as_slice(), b"a", b"ab", b"abc", b"hello world!\n\x00\xff"] {
+        for sample in [
+            b"".as_slice(),
+            b"a",
+            b"ab",
+            b"abc",
+            b"hello world!\n\x00\xff",
+        ] {
             let enc = encode_base64(sample);
             let dec = decode_base64(&enc).unwrap();
             assert_eq!(dec, sample);

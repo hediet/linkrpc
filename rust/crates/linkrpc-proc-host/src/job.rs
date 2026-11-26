@@ -61,7 +61,11 @@ mod platform {
             lp_info: *const c_void,
             cb_info_len: u32,
         ) -> i32;
-        fn OpenProcess(dw_desired_access: u32, b_inherit_handle: i32, dw_process_id: u32) -> *mut c_void;
+        fn OpenProcess(
+            dw_desired_access: u32,
+            b_inherit_handle: i32,
+            dw_process_id: u32,
+        ) -> *mut c_void;
         fn AssignProcessToJobObject(h_job: *mut c_void, h_process: *mut c_void) -> i32;
         fn TerminateJobObject(h_job: *mut c_void, u_exit_code: u32) -> i32;
         fn CloseHandle(h_object: *mut c_void) -> i32;
@@ -80,7 +84,10 @@ mod platform {
         pub fn attach(pid: u32) -> Self {
             let job = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
             if job.is_null() {
-                return Self { job: std::ptr::null_mut(), pid };
+                return Self {
+                    job: std::ptr::null_mut(),
+                    pid,
+                };
             }
             let mut info: JobObjectExtendedLimitInformation = unsafe { zeroed() };
             info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
@@ -94,18 +101,27 @@ mod platform {
             };
             if set_ok == 0 {
                 unsafe { CloseHandle(job) };
-                return Self { job: std::ptr::null_mut(), pid };
+                return Self {
+                    job: std::ptr::null_mut(),
+                    pid,
+                };
             }
             let proc = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid) };
             if proc.is_null() {
                 unsafe { CloseHandle(job) };
-                return Self { job: std::ptr::null_mut(), pid };
+                return Self {
+                    job: std::ptr::null_mut(),
+                    pid,
+                };
             }
             let assign_ok = unsafe { AssignProcessToJobObject(job, proc) };
             unsafe { CloseHandle(proc) };
             if assign_ok == 0 {
                 unsafe { CloseHandle(job) };
-                return Self { job: std::ptr::null_mut(), pid };
+                return Self {
+                    job: std::ptr::null_mut(),
+                    pid,
+                };
             }
             Self { job, pid }
         }

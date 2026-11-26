@@ -126,15 +126,23 @@ pub fn encode_base64(input: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(B64_TABLE[((n >> 18) & 63) as usize] as char);
         out.push(B64_TABLE[((n >> 12) & 63) as usize] as char);
-        out.push(if chunk.len() > 1 { B64_TABLE[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { B64_TABLE[(n & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            B64_TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64_TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
 
 pub fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
     let bytes: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err("invalid base64 length".into());
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
