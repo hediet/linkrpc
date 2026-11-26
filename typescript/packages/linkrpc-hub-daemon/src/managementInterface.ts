@@ -88,7 +88,10 @@ export const ConfigDocumentSchema = z.object({
 });
 export type ConfigDocument = z.infer<typeof ConfigDocumentSchema>;
 
-/** Management API of the local hub daemon, served on its management endpoint. */
+/**
+ * API of the hub daemon. Served on its private management endpoint and, under
+ * the hub's forwarded-call checks, at `<hubServiceId>/daemon` (without `shutdown`).
+ */
 export const hubDaemonManagementInterface = defineInterface(
     { id: 'linkrpc.hubDaemon', description: 'Manage the local LinkRPC hub daemon.' },
     {
@@ -105,6 +108,20 @@ export const hubDaemonManagementInterface = defineInterface(
         ),
         /** Persistently enable or disable a service in the config file. */
         setServiceEnabled: requestType(z.object({ name: z.string(), enabled: z.boolean() }), z.object({})),
+        /**
+         * Add, replace, or (with `definition: null`) remove one `services` entry
+         * of the config file and apply it, keeping the file's other content and
+         * comments. `definition` is a service definition as in the config file.
+         * Rejects invalid results, and when the file changed since `expectedRevision`.
+         */
+        setService: requestType(
+            z.object({
+                name: z.string(),
+                definition: z.record(z.string(), z.unknown()).nullable(),
+                expectedRevision: z.string().optional(),
+            }),
+            z.object({ revision: z.string() }),
+        ),
         restartService: requestType(z.object({ name: z.string() }), z.object({})),
         getServiceLogs: requestType(
             z.object({ name: z.string(), limit: z.number().int().positive().optional() }),
@@ -120,7 +137,10 @@ export const hubDaemonManagementInterface = defineInterface(
         /** Streams matching records as they are written, until cancelled. */
         watchCalls: requestType(z.object({ filter: CallFilterSchema.optional() }), z.object({}))
             .withStream({ server: CallRecordSchema }),
-        /** Stop all services and exit. Intentional: autostart managers do not restart it. */
+        /**
+         * Stop all services and exit. Intentional: autostart managers do not restart it.
+         * Only on the local management endpoint: nothing could start the daemon again remotely.
+         */
         shutdown: requestType(z.object({}), z.object({})),
     },
 );

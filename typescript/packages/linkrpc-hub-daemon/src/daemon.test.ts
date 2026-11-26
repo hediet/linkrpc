@@ -3,10 +3,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
+import { createSeededMemoryPrincipal, issueCapability } from '@hediet/linkrpc';
 import { connectToHub, formatEndpointUri } from '@hediet/linkrpc/node';
 import { loggingInterface } from '@hediet/linkrpc-infra/logging';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type CallRecord, connectToHubManagement, connectToLocalHub, type DaemonStatus, type ServiceStatus } from './client';
+import { type CallRecord, connectToHubManagement, connectToLocalHub, type DaemonStatus, hubDaemonManagementInterface, type ServiceStatus } from './client';
 import { HubDaemon } from './daemon';
 import { cliScript } from './packageInfo';
 import { HubHome } from './paths';
@@ -17,7 +18,7 @@ import { echoInterface } from './test/echoInterface.mjs';
 
 const echoService = fileURLToPath(new URL('./test/echoService.mjs', import.meta.url));
 
-function service(env: Record<string, string>, extra: object = {}): object {
+function service(env: Record<string, string>, extra: object = {}): Record<string, unknown> {
     return { command: [process.execPath, echoService], env, ...extra };
 }
 
@@ -236,6 +237,63 @@ describe('HubDaemon', () => {
             await watchEnded;
         } finally {
             connection.close();
+        }
+    });
+
+    it('serves the management API to authorized hub clients at <hubServiceId>/daemon', async () => {
+        const root = await createSeededMemoryPrincipal({ seed: 4101 });
+        const stranger = await createSeededMemoryPrincipal({ seed: 4102 });
+        await root.capBag.add(await issueCapability(root.identity, {
+            audience: root.identity.publicSigningIdentity,
+            expiresAtMs: Date.now() + 60_000,
+            permissions: [{
+                target: {
+                    serviceId: { exact: 'hub/daemon' },
+                    interfaceId: { exact: hubDaemonManagementInterface.info.id },
+                    members: [{ prefix: '' }],
+                },
+                canInvoke: true,
+            }],
+        }));
+        writeConfig({ forwardChecking: true, consentApprover: false, rootPrincipalIds: [root.id], services: { a: service({}) } });
+        const a = await running('a');
+
+        const rejections: string[] = [];
+        for (const principal of [undefined, stranger]) {
+            const hub = await connectToLocalHub({ home, principal });
+            try {
+                await hub.connection.service('hub/daemon').get(hubDaemonManagementInterface).getConfig({})
+                    .then(() => rejections.push('accepted'), (error: Error) => rejections.push(error.message));
+            } finally {
+                hub.close();
+            }
+        }
+        expect(rejections).toMatchInlineSnapshot(`
+          [
+            "missing $hubrpc envelope",
+            "capability required but none provided",
+          ]
+        `);
+
+        const hub = await connectToLocalHub({ home, principal: root });
+        try {
+            const management = hub.connection.service('hub/daemon').get(hubDaemonManagementInterface);
+            const document = await management.getConfig({});
+            expect(document.path).toBe(home.configFile);
+            await expect(management.setService({ name: 'b', definition: service({}), expectedRevision: 'stale' }))
+                .rejects.toThrow(/changed since/);
+            const { revision } = await management.setService({ name: 'b', definition: service({}), expectedRevision: document.revision });
+            expect(await running('b')).toMatchObject({ serviceId: 'hub/b' });
+            expect(JSON.parse(fs.readFileSync(home.configFile, 'utf8')).rootPrincipalIds).toEqual([root.id]);
+
+            await management.restartService({ name: 'a' });
+            expect((await running('a')).pid).not.toBe(a.pid);
+
+            await management.setService({ name: 'b', definition: null, expectedRevision: revision });
+            expect(serviceStatus('b')).toBeUndefined();
+            await expect(management.shutdown({})).rejects.toThrow('only available on the local management endpoint');
+        } finally {
+            hub.close();
         }
     });
 

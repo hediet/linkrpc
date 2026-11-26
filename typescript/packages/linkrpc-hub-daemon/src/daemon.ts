@@ -1,9 +1,9 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs';
-import { LinkRpcConnection } from '@hediet/linkrpc';
+import { type InterfaceHandlers, LinkRpcConnection } from '@hediet/linkrpc';
 import { type HubConfig, runHub, type RunningHub } from '@hediet/linkrpc-hub';
 import { type NodeSocketTransport, SocketServer } from '@hediet/linkrpc-hub/hub/server/node';
-import { classifyServiceChange, type DaemonConfig, type ManagedService, parseDaemonConfig, parseDaemonConfigText, setCallLogLevelInText, setServiceEnabledInText, stableKey } from './config';
+import { classifyServiceChange, type DaemonConfig, type ManagedService, parseDaemonConfig, parseDaemonConfigText, setCallLogLevelInText, setServiceEnabledInText, setServiceInText, stableKey } from './config';
 import { CallLog } from './callLog/callLog';
 import type { CallLogLevel } from './callLog/callRecord';
 import { ConfigFile } from './configFile';
@@ -155,6 +155,14 @@ export class HubDaemon {
         await this.reload();
     }
 
+    /** Add, replace, or (with `undefined`) remove one service in the config file and apply it. */
+    public async setService(name: string, definition: Readonly<Record<string, unknown>> | undefined, expectedRevision?: string): Promise<string> {
+        const document = this._configFile.read();
+        const revision = this._configFile.write(setServiceInText(document.text, name, definition), expectedRevision ?? document.revision);
+        await this.reload();
+        return revision;
+    }
+
     /** Persist `callLog.level` in the config file and apply it; the hub keeps running. */
     public async setCallLogLevel(level: CallLogLevel): Promise<void> {
         const document = this._configFile.read();
@@ -254,6 +262,7 @@ export class HubDaemon {
                 const link = this._hub.hub.attachOut({ routePrefixes: [serviceId] });
                 const connection = LinkRpcConnection.fromTransport(link.transport);
                 this._endpoints.register(connection, serviceId);
+                connection.register(hubDaemonManagementInterface, this._managementHandlers('routed'), { serviceId });
                 connection.enableReflection({ serviceId });
                 this._managementLink = { dispose: () => { connection.close(); link.dispose(); } };
                 this._callLogAttachment = this._callLog.attach(this._hub.inspection, connection, serviceId);
@@ -370,7 +379,16 @@ export class HubDaemon {
 
     private _registerManagement(connection: LinkRpcConnection): void {
         this._endpointRegistrations.set(connection, this._endpoints?.register(connection));
-        connection.register(hubDaemonManagementInterface, {
+        connection.register(hubDaemonManagementInterface, this._managementHandlers('local'));
+        connection.enableReflection();
+    }
+
+    /**
+     * `local` serves the private management endpoint; `routed` serves
+     * `<hubServiceId>/daemon`, which the hub's forwarded-call checks guard.
+     */
+    private _managementHandlers(access: 'local' | 'routed'): InterfaceHandlers<typeof hubDaemonManagementInterface> {
+        return {
             getStatus: () => this.status(),
             watchStatus: async (_params, _ctx, stream) => {
                 await stream.send(this.status());
@@ -397,6 +415,8 @@ export class HubDaemon {
                 await this.setServiceEnabled(name, enabled);
                 return {};
             },
+            setService: async ({ name, definition, expectedRevision }) =>
+                ({ revision: await this.setService(name, definition ?? undefined, expectedRevision) }),
             restartService: async ({ name }) => {
                 await this.restartService(name);
                 return {};
@@ -425,11 +445,11 @@ export class HubDaemon {
                 return {};
             },
             shutdown: () => {
+                if (access === 'routed') throw new Error('shutdown is only available on the local management endpoint');
                 setTimeout(() => void this.shutdown(), 0);
                 return {};
             },
-        });
-        connection.enableReflection();
+        };
     }
 
     private _service(name: string): ServiceSupervisor | ConnectionSupervisor {

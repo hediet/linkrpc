@@ -154,6 +154,17 @@ export const computeNodeFileSystemInterface = defineInterface(
             z.object({ path: z.string().min(1), contentBase64: base64, createNew: z.boolean().optional() }),
             z.object({ path: z.string(), bytesWritten: z.number().int().nonnegative() }),
         ),
+        /** Deletes a file or a symbolic link (not its target). Rejects directories. */
+        deleteFile: requestType(z.object({ path: z.string().min(1) }), z.object({ path: z.string() })),
+        /**
+         * Deletes a directory: only an empty one unless `recursive`. Recursive
+         * deletion removes links inside it (including Windows junctions), never
+         * their targets. Rejects links, files, and filesystem roots.
+         */
+        deleteDirectory: requestType(
+            z.object({ path: z.string().min(1), recursive: z.boolean().optional() }),
+            z.object({ path: z.string() }),
+        ),
     },
 );
 

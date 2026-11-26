@@ -10,6 +10,7 @@ export {
     parseDaemonConfigText,
     type ServiceChange,
     setServiceEnabledInText,
+    setServiceInText,
 } from './config';
 export { ConfigConflictError, ConfigFile } from './configFile';
 export { HubDaemon, type StartHubDaemonOptions } from './daemon';
