@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { JsonRpcMessage } from '../protocol/jsonRpc';
+import { isRequest, type JsonRpcMessage, type RequestId } from '../protocol/jsonRpc';
 import { TransportPair } from '../transport/messageTransport';
+import type { IncomingStream, Result } from './channel';
 import { JsonRpcChannel } from './jsonRpcChannel';
 
 describe('JsonRpcChannel deferred request handling', () => {
@@ -150,6 +151,193 @@ describe('JsonRpcChannel streaming call lifecycle', () => {
             close();
             pair.b.dispose();
             vi.useRealTimers();
+        }
+    });
+
+    it('keeps outbound stream alive when an inbound streaming call with the same id completes', async () => {
+        const pair = new TransportPair();
+        const peerA = JsonRpcChannel.createWithClose(pair.a);
+        const peerB = JsonRpcChannel.createWithClose(pair.b);
+
+        let outboundRequestId: RequestId | undefined;
+        let inboundRequestId: RequestId | undefined;
+        peerA.channel.setWireMessageObserver((dir, msg) => {
+            if (!isRequest(msg)) return;
+            if (dir === 'outbound' && msg.method === 'agent.sessions::sync') outboundRequestId = msg.id;
+            if (dir === 'inbound' && msg.method === 'agent.toolProvider::call') inboundRequestId = msg.id;
+        });
+
+        let syncStream!: IncomingStream;
+        let resolveSync!: (result: Result) => void;
+        const syncReady = new Promise<void>(resolve => {
+            peerB.channel.setRequestHandler({
+                handleRequest: call => {
+                    syncStream = call.stream;
+                    resolve();
+                    return new Promise<Result>(res => { resolveSync = res; });
+                },
+                handleNotification: () => {},
+            });
+        });
+
+        const inboundPayloads: unknown[] = [];
+        peerA.channel.setRequestHandler({
+            handleRequest: call => new Promise<Result>(resolve => {
+                call.stream.onMessage(payload => {
+                    inboundPayloads.push(payload);
+                    if (payload === 'input-2') {
+                        void call.stream.send('tool-progress');
+                        resolve({ result: 'tool-done' });
+                    }
+                });
+            }),
+            handleNotification: () => {},
+        });
+
+        try {
+            const syncEvents: unknown[] = [];
+            const syncCall = peerA.channel.sender.sendRequestWithStream('agent.sessions::sync', {}, {
+                onStreamMessage: payload => syncEvents.push(payload),
+            });
+            await syncReady;
+            await syncStream.send('event-1');
+
+            const toolProgress: unknown[] = [];
+            const toolCall = peerB.channel.sender.sendRequestWithStream('agent.toolProvider::call', {}, {
+                onStreamMessage: payload => toolProgress.push(payload),
+            });
+            await toolCall.send('input-1');
+            await toolCall.send('input-2');
+            expect(await toolCall.result).toBe('tool-done');
+
+            expect(inboundRequestId).toBeDefined();
+            expect(inboundRequestId).toBe(outboundRequestId);
+
+            // Outbound stream on peerA must keep delivering after the same-id inbound stream finishes.
+            await syncStream.send('event-2');
+            await syncStream.send('event-3');
+            resolveSync({ result: 'sync-done' });
+
+            expect(await syncCall.result).toBe('sync-done');
+            expect(syncEvents).toEqual(['event-1', 'event-2', 'event-3']);
+            expect(inboundPayloads).toEqual(['input-1', 'input-2']);
+            expect(toolProgress).toEqual(['tool-progress']);
+        } finally {
+            peerA.close();
+            peerB.close();
+        }
+    });
+
+    it('keeps outbound stream and control alive when a non-streaming inbound call with the same id completes', async () => {
+        const pair = new TransportPair();
+        const peerA = JsonRpcChannel.createWithClose(pair.a);
+        const peerB = JsonRpcChannel.createWithClose(pair.b);
+
+        let syncStream!: IncomingStream;
+        let resolveSync!: (result: Result) => void;
+        const syncReady = new Promise<void>(resolve => {
+            peerB.channel.setRequestHandler({
+                handleRequest: call => {
+                    syncStream = call.stream;
+                    resolve();
+                    return new Promise<Result>(res => { resolveSync = res; });
+                },
+                handleNotification: () => {},
+            });
+        });
+
+        peerA.channel.setRequestHandler({
+            handleRequest: async () => ({ result: 'ok' }),
+            handleNotification: () => {},
+        });
+
+        try {
+            const syncEvents: unknown[] = [];
+            const syncCall = peerA.channel.sender.sendRequestWithStream('agent.sessions::sync', {}, {
+                onStreamMessage: payload => syncEvents.push(payload),
+            });
+            await syncReady;
+            await syncStream.send('before');
+
+            // Non-streaming inbound call with identical id=1 completes on peerA.
+            expect(await peerB.channel.sender.sendRequest('agent.toolProvider::call', {})).toBe('ok');
+
+            // Both control (ping/pong) and data delivery on peerA's outbound stream must survive.
+            await syncCall.ping();
+            await syncStream.send('after');
+            resolveSync({ result: 'done' });
+
+            expect(await syncCall.result).toBe('done');
+            expect(syncEvents).toEqual(['before', 'after']);
+        } finally {
+            peerA.close();
+            peerB.close();
+        }
+    });
+
+    it('isolates cancel, ping, and outbound completion for same-id bidirectional streams', async () => {
+        const pair = new TransportPair();
+        const peerA = JsonRpcChannel.createWithClose(pair.a);
+        const peerB = JsonRpcChannel.createWithClose(pair.b);
+
+        let bSyncStream!: IncomingStream;
+        let resolveBSync!: (result: Result) => void;
+        const bSyncReady = new Promise<void>(resolve => {
+            peerB.channel.setRequestHandler({
+                handleRequest: call => {
+                    bSyncStream = call.stream;
+                    resolve();
+                    return new Promise<Result>(res => { resolveBSync = res; });
+                },
+                handleNotification: () => {},
+            });
+        });
+
+        let aInboundAborted = false;
+        const aInboundPayloads: unknown[] = [];
+        let resolveAInbound!: (result: Result) => void;
+        const aInboundReady = new Promise<void>(resolve => {
+            peerA.channel.setRequestHandler({
+                handleRequest: call => {
+                    call.stream.onMessage(payload => aInboundPayloads.push(payload));
+                    call.signal.addEventListener('abort', () => {
+                        aInboundAborted = true;
+                        resolveAInbound({ error: { code: -32800, message: 'aborted' } });
+                    }, { once: true });
+                    resolve();
+                    return new Promise<Result>(res => { resolveAInbound = res; });
+                },
+                handleNotification: () => {},
+            });
+        });
+
+        try {
+            const aOutboundEvents: unknown[] = [];
+            const aOutbound = peerA.channel.sender.sendRequestWithStream('sync', {}, {
+                onStreamMessage: payload => aOutboundEvents.push(payload),
+            });
+            const bOutbound = peerB.channel.sender.sendRequestWithStream('worker', {});
+            await Promise.all([bSyncReady, aInboundReady]);
+
+            // Both calls share numeric id=1 in opposite directions.
+            await aOutbound.ping();
+            await bOutbound.ping();
+            await bSyncStream.send('from-b-1');
+            await bOutbound.send('to-a-1');
+
+            // Complete A's outbound call (id=1) first; B's inbound call on A (id=1) must stay intact.
+            resolveBSync({ result: 'sync-finished' });
+            expect(await aOutbound.result).toBe('sync-finished');
+            expect(aOutboundEvents).toEqual(['from-b-1']);
+
+            await bOutbound.send('to-a-2');
+            await bOutbound.cancel('stop worker');
+            await expect(bOutbound.result).rejects.toThrow('aborted');
+            expect(aInboundAborted).toBe(true);
+            expect(aInboundPayloads).toEqual(['to-a-1', 'to-a-2']);
+        } finally {
+            peerA.close();
+            peerB.close();
         }
     });
 });

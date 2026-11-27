@@ -89,19 +89,20 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     }>();
     /**
      * Per-request callbacks invoked when a {@link STREAM_METHOD}
-     * notification arrives with a matching `requestId`. Used in both
-     * directions: outgoing-request callers register here keyed by the
-     * id they sent; per-call incoming-request stream handles register
-     * keyed by the id they observed. Entries are removed when the
-     * corresponding request completes (response received for outgoing,
-     * response sent for incoming).
+     * notification arrives with a matching `(dir, requestId)`. Keyed by
+     * {@link _streamKey}: outgoing-request callers register under
+     * `StreamDir.toCaller` (frames arriving from the callee); incoming-request
+     * handlers register under `StreamDir.toCallee` (frames arriving from the
+     * caller). Entries are removed when the corresponding request completes
+     * (response received for outgoing, response sent for incoming).
      */
     private readonly _streamListeners = new Map<string, (payload: JsonValue) => void>();
 
     /**
-     * Per-incoming-request handlers for reserved `control` messages
-     * (cancel / ping / pong) arriving as stream notifications. Keyed
-     * by the id observed; removed when the request settles.
+     * Per-request handlers for reserved `control` messages (cancel / ping /
+     * pong) arriving as stream notifications. Keyed by {@link _streamKey}
+     * (`StreamDir.toCaller` for outgoing requests, `StreamDir.toCallee` for
+     * incoming requests); removed when the request settles.
      */
     private readonly _streamControl = new Map<
         string,
@@ -159,18 +160,19 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     ): Promise<JsonValue> {
         this._throwIfClosed();
         const id = this._nextId++;
+        const key = _requestKey(id);
         const req: JsonRpcRequest = { jsonrpc: '2.0', id, method };
         if (params !== undefined) req.params = params;
         const promise = new Promise<JsonValue>((resolve, reject) => {
-            this._pending.set(String(id), { resolve, reject });
+            this._pending.set(key, { resolve, reject });
         });
         this._observeOutbound(req, opts);
         void (async () => {
             try {
                 await this._transport.send(req);
             } catch (error) {
-                const pending = this._pending.get(String(id));
-                this._pending.delete(String(id));
+                const pending = this._pending.get(key);
+                this._pending.delete(key);
                 this._observeSendFailure(id, error);
                 pending?.reject(error instanceof Error ? error : new Error(String(error)));
             }
@@ -197,7 +199,8 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     ): RawStreamingCall {
         this._throwIfClosed();
         const id = this._nextId++;
-        const key = String(id);
+        const key = _requestKey(id);
+        const streamKey = _streamKey(StreamDir.toCaller, id);
         let resolveResult!: (v: JsonValue) => void;
         let rejectResult!: (err: Error) => void;
         const result = new Promise<JsonValue>((resolve, reject) => {
@@ -206,12 +209,12 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         });
         this._pending.set(key, { resolve: resolveResult, reject: rejectResult });
         if (opts?.onStreamMessage) {
-            this._streamListeners.set(key, opts.onStreamMessage);
+            this._streamListeners.set(streamKey, opts.onStreamMessage);
         }
         // Symmetric ping/pong for this call. We emit controls `toCallee`,
-        // so an inbound ping is answered with a `toCallee` pong.
+        // so an inbound `toCaller` ping is answered with a `toCallee` pong.
         const pinger = this._makePinger(id, StreamDir.toCallee);
-        this._streamControl.set(key, pinger.onControl);
+        this._streamControl.set(streamKey, pinger.onControl);
         // Keepalive: a streaming-enabled call emits a periodic `toCallee`
         // ping so the hub's per-request idle timer never reaps it. Cleared
         // once the call settles (in either direction). Fire-and-forget: the
@@ -225,11 +228,11 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         const stopPing = (): void => {
             clearInterval(ping);
             pinger.dispose();
-            this._streamControl.delete(key);
+            this._streamControl.delete(streamKey);
         };
         const dispose = (reason = 'streaming request disposed'): void => {
             if (!this._pending.delete(key)) return;
-            this._streamListeners.delete(key);
+            this._streamListeners.delete(streamKey);
             stopPing();
             rejectResult(new RpcError(reason, ErrorCode.cancelled));
         };
@@ -242,7 +245,7 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         })().catch((err) => {
             // Send-time failure: clear bookkeeping and surface on result.
             this._pending.delete(key);
-            this._streamListeners.delete(key);
+            this._streamListeners.delete(streamKey);
             this._observeSendFailure(id, err);
             stopPing();
             rejectResult(err instanceof Error ? err : new Error(String(err)));
@@ -371,13 +374,15 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
         const ctx = (m as { context?: TInCtx; }).context as TInCtx;
         if (isResponse(m)) {
             if (m.id === null) return;
-            const key = String(m.id);
+            const key = _requestKey(m.id);
             const pending = this._pending.get(key);
             if (!pending) return;
             this._pending.delete(key);
-            // Outgoing-request stream listener (if any) is scoped to the
+            // Outgoing-request stream state (if any) is scoped to the
             // request's lifetime; drop it when the response arrives.
-            this._streamListeners.delete(key);
+            const streamKey = _streamKey(StreamDir.toCaller, m.id);
+            this._streamListeners.delete(streamKey);
+            this._streamControl.delete(streamKey);
             if ('error' in m) {
                 const e = m.error;
                 const err = new RpcError(
@@ -412,11 +417,12 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
 
     private _handleStreamNotification(m: JsonRpcNotification): void {
         const params = m.params as StreamSendParams | undefined;
-        if (!params) return;
-        const requestId = params.requestId;
-        if (requestId === undefined) return;
-        const key = String(requestId);
-        // Reserved control (cancel / ping): routed to the per-request
+        if (!params || typeof params !== 'object') return;
+        const { requestId, dir } = params;
+        if (typeof requestId !== 'number' && typeof requestId !== 'string') return;
+        if (dir !== StreamDir.toCaller && dir !== StreamDir.toCallee) return;
+        const key = _streamKey(dir, requestId);
+        // Reserved control (cancel / ping / pong): routed to the per-request
         // control handler, never to the app payload listener.
         if (params.control) {
             this._streamControl.get(key)?.(params.control);
@@ -428,23 +434,26 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
     }
 
     private async _handleRequest(m: JsonRpcRequest, context: TInCtx): Promise<void> {
-        const key = String(m.id);
+        const requestKey = _requestKey(m.id);
+        const streamKey = _streamKey(StreamDir.toCallee, m.id);
+        let settled = false;
         // Symmetric ping/pong for this call. The handler emits controls
-        // `toCaller`, so an inbound ping is answered with a `toCaller` pong.
+        // `toCaller`, so an inbound `toCallee` ping is answered with a `toCaller` pong.
         const pinger = this._makePinger(m.id, StreamDir.toCaller);
         const stream: IncomingStream = {
             send: (payload) => observedStreamOperation(this._sendStream(m.id, StreamDir.toCaller, { payload })),
             onMessage: (listener) => {
-                if (listener) this._streamListeners.set(key, listener);
-                else this._streamListeners.delete(key);
+                if (settled) return;
+                if (listener) this._streamListeners.set(streamKey, listener);
+                else this._streamListeners.delete(streamKey);
             },
             ping: pinger.ping,
         };
         // A `toCallee` cancel control trips the handler's AbortSignal;
         // ping/pong are liveness only and handled by the pinger.
         const abort = new AbortController();
-        this._incomingAborts.set(key, abort);
-        this._streamControl.set(key, (control) => {
+        this._incomingAborts.set(requestKey, abort);
+        this._streamControl.set(streamKey, (control) => {
             if (control.type === StreamControlType.cancel) {
                 abort.abort(new RpcError(control.reason ?? 'cancelled', ErrorCode.cancelled));
             } else {
@@ -480,10 +489,11 @@ export class JsonRpcChannel<TInCtx = undefined> implements IRequestSender<unknow
                 }
             }
         } finally {
+            settled = true;
             // Auto-detach the inbound stream listener + control: the handler is done.
-            this._streamListeners.delete(key);
-            this._streamControl.delete(key);
-            this._incomingAborts.delete(key);
+            this._streamListeners.delete(streamKey);
+            this._streamControl.delete(streamKey);
+            this._incomingAborts.delete(requestKey);
             pinger.dispose();
         }
         if ('result' in result) {
@@ -559,3 +569,11 @@ const _NOOP_STREAM: IncomingStream = {
 
 /** A signal that never aborts — handed to notification handlers. */
 const _NEVER_ABORT: AbortSignal = new AbortController().signal;
+
+function _requestKey(requestId: RequestId): string {
+    return `${typeof requestId}:${String(requestId)}`;
+}
+
+function _streamKey(dir: StreamDir, requestId: RequestId): string {
+    return `${dir}:${_requestKey(requestId)}`;
+}
