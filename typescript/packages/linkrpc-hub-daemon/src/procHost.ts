@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { ConsoleSignal } from '@hediet/linkrpc-infra/console';
 import { writePrivateJson } from './discovery';
 import type { HubHome } from './paths';
@@ -53,12 +54,13 @@ export function findProcHostBinary(env: NodeJS.ProcessEnv = process.env): string
     const exe = process.platform === 'win32' ? 'linkrpc-proc-host.exe' : 'linkrpc-proc-host';
     const override = env.LINKRPC_PROC_HOST_BIN;
     if (override && fs.existsSync(override)) return override;
+    const baseDir = path.dirname(fileURLToPath(import.meta.url));
     // When running from the linkrpc monorepo: typescript/packages/linkrpc-hub-daemon/{dist,src}
     const candidates = [
-        path.resolve(__dirname, '../../../../rust/target/release', exe),
-        path.resolve(__dirname, '../../../../rust/target/debug', exe),
-        path.resolve(__dirname, '../../../../../rust/target/release', exe),
-        path.resolve(__dirname, '../../../../../rust/target/debug', exe),
+        path.resolve(baseDir, '../../../../rust/target/release', exe),
+        path.resolve(baseDir, '../../../../rust/target/debug', exe),
+        path.resolve(baseDir, '../../../../../rust/target/release', exe),
+        path.resolve(baseDir, '../../../../../rust/target/debug', exe),
     ];
     for (const candidate of candidates) {
         if (fs.existsSync(candidate)) return candidate;
