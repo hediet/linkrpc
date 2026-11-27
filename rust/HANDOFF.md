@@ -37,7 +37,7 @@ it once M6 lands if you like — it is a scratch handoff, not permanent docs.
 | M3 | connection + reflection + `#[link_rpc_interface]` macro | ✅ done |
 | M3 | NDJSON socket transport (`linkrpc-tokio`) | ✅ done |
 | **M6** | **WebSocket transport + env-var connector (endpoint layer)** | ✅ done |
-| M4 | identity core (Ed25519, optional but native) | pending |
+| **M4** | **identity core (Ed25519, optional but native)** | ✅ done |
 | M5 | capability gate + consent (hubAccess) | pending |
 | M7 | end-to-end north-star scenario | pending |
 | M8 | Rust hub server (optional) | pending |
@@ -47,6 +47,18 @@ Typed input/output/bidirectional streaming is implemented in the macro and runti
 carries provider-to-caller payloads.
 
 ## Current crate layout
+- `crates/linkrpc/src/protocol/` — `jcs.rs`, `json_value.rs`, `jsonrpc.rs`, `method_name.rs`,
+  `signed_object.rs` (`$hubrpc` / `$hubrpcSignature` / `$hubrpcUnsigned`, `KeyId`, `PrincipalId`,
+  `signing_input`, `signed_hash`, `strip_linkrpc_wire_meta`).
+- `crates/linkrpc/src/identity/` — `keys.rs` (`SigningIdentity`, `KeypairSigningIdentity`,
+  `KeyStore` / `InMemoryKeyStore` / `FileKeyStore`, `IdentityStorage` / `InMemoryIdentityStorage` /
+  `FileIdentityStorage`), `signed_envelope.rs` (`sign_object`, `verify_object_by_principal`,
+  `sign_rpc_call`, `verify_rpc_call`), `capability.rs` (`Capability`, `SignedCapability`,
+  `Permission`, `CapBag`, `issue_capability`, `permits`), `principal.rs` (`Principal`,
+  `ManagedIdentity`, `create_managed_principal`), `grants.rs` (`HubAccessRequest`,
+  `HubAccessDuration`, `GrantsSummary`, `summarize_grants`), `signing_channel.rs`
+  (`SigningClient`, `SigningClient::create_managed`, `request_access`, `grants`,
+  `call_with_permission`, `VerifyingRequestHandler`, `VerifiedSignatureTransport`).
 - `crates/linkrpc/src/connection/` — `channel.rs`, `dispatch.rs`,
   `hub_connection.rs` (the `LinkRpcConnection` runtime), `interface_def.rs`,
   `reflection.rs`, `mod.rs`.
@@ -54,7 +66,7 @@ carries provider-to-caller payloads.
   `unix.rs` (`#[cfg(unix)]` `connect_unix` / `UnixHubListener` — **now compiles
   on Linux**), `lib.rs`.
 - `crates/linkrpc-macros/src/lib.rs` — `#[link_rpc_interface]`.
-- `../conformance/generate/{gen.mjs,gen-pizza-ref.mjs}` → `../conformance/vectors/`.
+- `../conformance/generate/{gen.mjs,gen-endpoint.mjs,gen-signed-envelope.mjs,gen-pizza-ref.mjs}` → `../conformance/vectors/`.
 
 ## NEXT TASK — M6 endpoint connector
 

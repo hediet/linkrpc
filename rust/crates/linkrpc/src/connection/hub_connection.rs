@@ -251,6 +251,36 @@ impl LinkRpcConnection {
         &self.channel
     }
 
+    /// Wrap this connection in a [`SigningClient`](crate::identity::SigningClient) bound to
+    /// `principal`. Every outbound call through the returned client is Ed25519-signed and presents
+    /// the principal's capabilities automatically; the original connection stays usable unsigned.
+    pub fn signing(
+        &self,
+        principal: crate::identity::Principal,
+    ) -> crate::identity::SigningClient<Self> {
+        crate::identity::SigningClient::new(self.clone(), principal)
+    }
+
+    /// Wrap this connection in a [`SigningClient`](crate::identity::SigningClient) with custom
+    /// [`SigningConfig`](crate::identity::SigningConfig).
+    pub fn signing_with_config(
+        &self,
+        config: crate::identity::SigningConfig,
+    ) -> crate::identity::SigningClient<Self> {
+        crate::identity::SigningClient::with_config(self.clone(), config)
+    }
+
+    /// Bootstrap an executor-managed signing client over this connection (`identity::*` + optional
+    /// auto-negotiated capabilities), mirroring TypeScript `createManagedSigningChannel`.
+    ///
+    /// Note: drive `self.run()` on your executor before awaiting this method.
+    pub async fn create_managed_signing(
+        &self,
+        options: crate::identity::ManagedSigningOptions,
+    ) -> Result<crate::identity::SigningClient<Self>, crate::identity::IdentityError> {
+        crate::identity::SigningClient::create_managed(self.clone(), options).await
+    }
+
     /// Drive the inbound read loop until the transport closes. Spawn on your executor.
     pub async fn run(&self) {
         self.channel.run().await;
@@ -314,10 +344,11 @@ impl InterfaceRouter {
         ) {
             return Ok(false);
         }
+        let user_params = crate::protocol::signed_object::strip_linkrpc_wire_meta(&params);
         routed
             .entry
             .handler
-            .dispatch_notification(&routed.member, params, ctx)
+            .dispatch_notification(&routed.member, user_params, ctx)
             .await
     }
 
@@ -755,10 +786,11 @@ impl RequestHandler for InterfaceRouter {
                 return Err(not_found("unknown-method", &method))
             }
         }
+        let user_params = crate::protocol::signed_object::strip_linkrpc_wire_meta(&params);
         routed
             .entry
             .handler
-            .handle_request(&routed.member, params, ctx)
+            .handle_request(&routed.member, user_params, ctx)
             .await
     }
 
@@ -782,10 +814,11 @@ impl RequestHandler for InterfaceRouter {
         ) {
             return;
         }
+        let user_params = crate::protocol::signed_object::strip_linkrpc_wire_meta(&params);
         routed
             .entry
             .handler
-            .handle_notification(&routed.member, params, ctx)
+            .handle_notification(&routed.member, user_params, ctx)
             .await;
     }
 }

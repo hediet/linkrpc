@@ -1,0 +1,1228 @@
+{
+  "identities": [
+    {
+      "seed": 0,
+      "privateKey": "fbhKPusVar_w_zwd3Nib02eAmMaYZEWVjUVbKWKYFpQ",
+      "publicKey": "mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+      "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+      "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+    },
+    {
+      "seed": 1,
+      "privateKey": "YkS4jQ8nEFI9_a3__RFdh1CqF6dQr4dA35748SD8y88",
+      "publicKey": "oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+      "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+      "principal": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+    },
+    {
+      "seed": 2,
+      "privateKey": "ERPG_5b2ADbVo39MIXyI2ZkUSt5yJRrC_tRsjfVP_9A",
+      "publicKey": "d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+      "keyId": "key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+      "principal": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I"
+    }
+  ],
+  "signedObjects": [
+    {
+      "name": "simple-example",
+      "seed": 0,
+      "domain": "example",
+      "object": {
+        "action": "read",
+        "count": 3,
+        "nested": {
+          "b": true,
+          "a": "hi"
+        },
+        "$hubrpcUnsigned": {
+          "traceId": "trace-1"
+        }
+      },
+      "signingInput": "{\"hubrpc-sig/v1/example\":{\"action\":\"read\",\"count\":3,\"nested\":{\"a\":\"hi\",\"b\":true}}}",
+      "signedHash": "woBGqK8uZZys3rAJpgsaLghoVyH3pVBmUthXWhZUEsI",
+      "signed": {
+        "action": "read",
+        "count": 3,
+        "nested": {
+          "b": true,
+          "a": "hi"
+        },
+        "$hubrpcUnsigned": {
+          "traceId": "trace-1"
+        },
+        "$hubrpcSignature": {
+          "example": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "Ba_7ILn9-qhJ6MnvzR2PdGzAOmQHpfvECWmNLx1WK0jMQpw3v2V8YyQ8xBEJ62GPQMBX3XWG0J5PT8rbEuyQCw"
+          }
+        }
+      }
+    },
+    {
+      "name": "unicode-and-escapes",
+      "seed": 1,
+      "domain": "custom.domain",
+      "object": {
+        "note": "café ☕ \"quoted\"\nline2",
+        "empty": {},
+        "list": [
+          1,
+          null,
+          false
+        ]
+      },
+      "signingInput": "{\"hubrpc-sig/v1/custom.domain\":{\"empty\":{},\"list\":[1,null,false],\"note\":\"café ☕ \\\"quoted\\\"\\nline2\"}}",
+      "signedHash": "jNGnq_tv7SCFIjetw-zxHo_y-8IGclwvWZsS6jUUSvQ",
+      "signed": {
+        "note": "café ☕ \"quoted\"\nline2",
+        "empty": {},
+        "list": [
+          1,
+          null,
+          false
+        ],
+        "$hubrpcSignature": {
+          "custom.domain": {
+            "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+            "sig": "S8_szk4uQoBUEboO1Ly47YQQp8kIni8ezuyWLiYaqOnhrANyiyR1gKDceik5LQ-BIl2jfGTkGA0k7p17wqPyAA"
+          }
+        }
+      }
+    }
+  ],
+  "signedCalls": [
+    {
+      "name": "basic-call",
+      "seed": 0,
+      "method": "hello::greeter::hello",
+      "params": {
+        "name": "world"
+      },
+      "paramsOmitted": false,
+      "nowMs": 1700000000000,
+      "nonceB64": "AAECAwQFBgcICQoLDA0ODw",
+      "interfaceHash": null,
+      "callMeta": {
+        "method": "hello::greeter::hello",
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+      },
+      "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        }
+      }
+    },
+    {
+      "name": "call-with-interface-hash",
+      "seed": 0,
+      "method": "acme::com.acme.pizza::order",
+      "params": {
+        "kind": "margherita",
+        "size": "large",
+        "quantity": 2
+      },
+      "paramsOmitted": false,
+      "nowMs": 1700000000500,
+      "nonceB64": "EBESExQVFhcYGRobHB0eHw",
+      "interfaceHash": "0123456789abcdef",
+      "callMeta": {
+        "method": "acme::com.acme.pizza::order",
+        "nonce": "EBESExQVFhcYGRobHB0eHw",
+        "signedAtMs": 1700000000500,
+        "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "interfaceHash": "0123456789abcdef"
+      },
+      "callHash": "oRthOdQyrf83jCrSJjkSdLczibg9ybxq5x-bbOK8nZk",
+      "wireParams": {
+        "kind": "margherita",
+        "size": "large",
+        "quantity": 2,
+        "$hubrpc": {
+          "method": "acme::com.acme.pizza::order",
+          "nonce": "EBESExQVFhcYGRobHB0eHw",
+          "signedAtMs": 1700000000500,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "interfaceHash": "0123456789abcdef"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "KkZ043DVTQAlMcFKdUWIz5pGSqsKZOUnSmmccstdvT4KrH-KgHqzVfdKbPNbqlaP5ZrP10KBp-lYUpyVAGMQDA"
+          }
+        }
+      }
+    },
+    {
+      "name": "call-with-no-params",
+      "seed": 1,
+      "method": "hub::hubrpc.directory::list",
+      "params": null,
+      "paramsOmitted": true,
+      "nowMs": 1700000001000,
+      "nonceB64": "AAECAwQFBgcICQoLDA0ODw",
+      "interfaceHash": null,
+      "callMeta": {
+        "method": "hub::hubrpc.directory::list",
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000001000,
+        "principal": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      },
+      "callHash": "iY3AaZaR0f-VLIsXYgooMB0xYoZV7NptG_uE9iHeT1w",
+      "wireParams": {
+        "$hubrpc": {
+          "method": "hub::hubrpc.directory::list",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000001000,
+          "principal": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+            "sig": "hi74hqokOZ2GVPcyQRNHZ8MHpOK4mEqFeNicjoRHpbu7Z4E2dspffftL49UBW-r5Qz28N5hZS-xJqSxYT3S5AQ"
+          }
+        }
+      }
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "root-greeter",
+      "seed": 1,
+      "unsigned": {
+        "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+        "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "exact": "hello"
+              },
+              "interfaceId": {
+                "exact": "greeter"
+              },
+              "members": [
+                {
+                  "exact": "hello"
+                }
+              ]
+            },
+            "canInvoke": true
+          }
+        ],
+        "expiresAtMs": 1700000060000,
+        "nonce": "cap-root-nonce-1"
+      },
+      "signed": {
+        "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+        "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "exact": "hello"
+              },
+              "interfaceId": {
+                "exact": "greeter"
+              },
+              "members": [
+                {
+                  "exact": "hello"
+                }
+              ]
+            },
+            "canInvoke": true
+          }
+        ],
+        "expiresAtMs": 1700000060000,
+        "nonce": "cap-root-nonce-1",
+        "$hubrpcSignature": {
+          "capability": {
+            "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+            "sig": "Qm3HONw_6evSkdnPxLu79ye-K8RKy2kd_yXq5kkX0V2feqSlNLZ6owat2b5enIpEoNRKleqB6rPRKnmJsyVdAw"
+          }
+        }
+      },
+      "hash": "ciumhr2mtLZX-jcJr0yCwqPt-X3YO77IONrz1rtD_AQ"
+    },
+    {
+      "name": "delegating-parent",
+      "seed": 1,
+      "unsigned": {
+        "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+        "audience": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "prefix": "hello"
+              },
+              "interfaceId": {
+                "prefix": "greeter"
+              },
+              "members": [
+                {
+                  "prefix": ""
+                }
+              ]
+            },
+            "canDelegate": true
+          }
+        ],
+        "expiresAtMs": 1700000120000,
+        "nonce": "cap-parent-nonce-1"
+      },
+      "signed": {
+        "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+        "audience": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "prefix": "hello"
+              },
+              "interfaceId": {
+                "prefix": "greeter"
+              },
+              "members": [
+                {
+                  "prefix": ""
+                }
+              ]
+            },
+            "canDelegate": true
+          }
+        ],
+        "expiresAtMs": 1700000120000,
+        "nonce": "cap-parent-nonce-1",
+        "$hubrpcSignature": {
+          "capability": {
+            "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+            "sig": "3es0GUFYc7yM7TxBctot6AeSkz5BbHya6aCpPmTsxV6R-uO9zibnXn4EoS31dj_9y-vxZQ202m-VILHBKavKCg"
+          }
+        }
+      },
+      "hash": "AfNVMPctDIlNswA1zcWPvcbiB0SUZwSrnAKzqGg2UB0"
+    },
+    {
+      "name": "delegated-leaf",
+      "seed": 2,
+      "unsigned": {
+        "issuer": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+        "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "exact": "hello/sub"
+              },
+              "interfaceId": {
+                "exact": "greeter.v2"
+              },
+              "members": [
+                {
+                  "exact": "wave"
+                }
+              ]
+            },
+            "canInvoke": true,
+            "params": {
+              "name": {
+                "prefix": "a"
+              }
+            }
+          }
+        ],
+        "expiresAtMs": 1700000060000,
+        "parentHash": "AfNVMPctDIlNswA1zcWPvcbiB0SUZwSrnAKzqGg2UB0",
+        "nonce": "cap-leaf-nonce-1"
+      },
+      "signed": {
+        "issuer": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+        "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "exact": "hello/sub"
+              },
+              "interfaceId": {
+                "exact": "greeter.v2"
+              },
+              "members": [
+                {
+                  "exact": "wave"
+                }
+              ]
+            },
+            "canInvoke": true,
+            "params": {
+              "name": {
+                "prefix": "a"
+              }
+            }
+          }
+        ],
+        "expiresAtMs": 1700000060000,
+        "parentHash": "AfNVMPctDIlNswA1zcWPvcbiB0SUZwSrnAKzqGg2UB0",
+        "nonce": "cap-leaf-nonce-1",
+        "$hubrpcSignature": {
+          "capability": {
+            "keyId": "key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+            "sig": "Ms_JF9Nu94AyzZEWCbhuAai8_plDJt9UySesWL-A_kVprvkDYJ-3-yZTnZ-1Ydy7P14n9uLFI0m70d16pnB5DQ"
+          }
+        }
+      },
+      "hash": "gJLNXRnR5_jauxtWg4Yn88i0Pp6scO9H_4f4Lqqq_Hs"
+    },
+    {
+      "name": "call-bound-once",
+      "seed": 1,
+      "unsigned": {
+        "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+        "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "exact": "hello"
+              },
+              "interfaceId": {
+                "exact": "greeter"
+              },
+              "members": [
+                {
+                  "exact": "hello"
+                }
+              ]
+            },
+            "canInvoke": true,
+            "callBind": {
+              "alg": "sha256",
+              "payloadHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+            }
+          }
+        ],
+        "expiresAtMs": 1700000060000,
+        "nonce": "cap-once-nonce-1"
+      },
+      "signed": {
+        "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+        "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "permissions": [
+          {
+            "target": {
+              "serviceId": {
+                "exact": "hello"
+              },
+              "interfaceId": {
+                "exact": "greeter"
+              },
+              "members": [
+                {
+                  "exact": "hello"
+                }
+              ]
+            },
+            "canInvoke": true,
+            "callBind": {
+              "alg": "sha256",
+              "payloadHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+            }
+          }
+        ],
+        "expiresAtMs": 1700000060000,
+        "nonce": "cap-once-nonce-1",
+        "$hubrpcSignature": {
+          "capability": {
+            "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+            "sig": "T_I14yoiQSigEAgu9dGfve7hhr8eGJn9qyfGEVpG9lxwA4kUYsAJkAyWjRz9lo5wFbES7aAnKFt4Q5i9ImCsDg"
+          }
+        }
+      },
+      "hash": "KSkkeQYz_FuyTmo9l51lYmt4PjTzIWeOZFGBmecdGpY"
+    }
+  ],
+  "verifyRpcCalls": [
+    {
+      "name": "valid-signed-call",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        }
+      },
+      "nowMs": 1700000001000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": true,
+      "expectedSigned": true,
+      "expectedSigner": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+      "expectedCallHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA",
+      "expectedParams": {
+        "name": "world"
+      },
+      "expectedCapCount": 0,
+      "expectedReason": null
+    },
+    {
+      "name": "valid-with-unsigned-capabilities-attached",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        },
+        "$hubrpcUnsigned": {
+          "capabilities": [
+            {
+              "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+              "permissions": [
+                {
+                  "target": {
+                    "serviceId": {
+                      "exact": "hello"
+                    },
+                    "interfaceId": {
+                      "exact": "greeter"
+                    },
+                    "members": [
+                      {
+                        "exact": "hello"
+                      }
+                    ]
+                  },
+                  "canInvoke": true
+                }
+              ],
+              "expiresAtMs": 1700000060000,
+              "nonce": "cap-root-nonce-1",
+              "$hubrpcSignature": {
+                "capability": {
+                  "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+                  "sig": "Qm3HONw_6evSkdnPxLu79ye-K8RKy2kd_yXq5kkX0V2feqSlNLZ6owat2b5enIpEoNRKleqB6rPRKnmJsyVdAw"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "nowMs": 1700000001000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": true,
+      "expectedSigned": true,
+      "expectedSigner": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+      "expectedCallHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA",
+      "expectedParams": {
+        "name": "world"
+      },
+      "expectedCapCount": 1,
+      "expectedReason": null
+    },
+    {
+      "name": "tampered-user-param",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "mallory",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        }
+      },
+      "nowMs": 1700000001000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": false,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": null,
+      "expectedCapCount": 0,
+      "expectedReason": "bad signature"
+    },
+    {
+      "name": "outer-method-mismatch",
+      "wireMethod": "hello::greeter::other",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        }
+      },
+      "nowMs": 1700000001000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": false,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": null,
+      "expectedCapCount": 0,
+      "expectedReason": "method mismatch"
+    },
+    {
+      "name": "timestamp-skew-exceeded",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        }
+      },
+      "nowMs": 1700000400000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": false,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": null,
+      "expectedCapCount": 0,
+      "expectedReason": "timestamp skew > 300000ms"
+    },
+    {
+      "name": "mismatched-key-id",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "AAECAwQFBgcICQoLDA0ODw",
+          "signedAtMs": 1700000000000,
+          "principal": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+        },
+        "$hubrpcSignature": {
+          "call": {
+            "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+            "sig": "uFiWQ6wrFMXDQFHI232ui2PnvRSzi4Wn8pLhA80_Rz1jeO6s3eWfrQWCpHcT5N3wQMvjsjrHWnTY7ClwphfIAw"
+          }
+        }
+      },
+      "nowMs": 1700000001000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": false,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": null,
+      "expectedCapCount": 0,
+      "expectedReason": "unresolvable signing key for principal id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8"
+    },
+    {
+      "name": "missing-envelope-allowed-when-optional",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world"
+      },
+      "nowMs": 1700000000000,
+      "maxSkewMs": 300000,
+      "requireSigned": false,
+      "expectedOk": true,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": {
+        "name": "world"
+      },
+      "expectedCapCount": 0,
+      "expectedReason": null
+    },
+    {
+      "name": "missing-envelope-rejected-when-required",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world"
+      },
+      "nowMs": 1700000000000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": false,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": null,
+      "expectedCapCount": 0,
+      "expectedReason": "missing $hubrpc envelope"
+    },
+    {
+      "name": "unsigned-meta-allowed-when-optional",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "n1",
+          "signedAtMs": 1700000000000
+        }
+      },
+      "nowMs": 1700000000000,
+      "maxSkewMs": 300000,
+      "requireSigned": false,
+      "expectedOk": true,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": {
+        "name": "world"
+      },
+      "expectedCapCount": 0,
+      "expectedReason": null
+    },
+    {
+      "name": "unsigned-meta-rejected-when-required",
+      "wireMethod": "hello::greeter::hello",
+      "wireParams": {
+        "name": "world",
+        "$hubrpc": {
+          "method": "hello::greeter::hello",
+          "nonce": "n1",
+          "signedAtMs": 1700000000000
+        }
+      },
+      "nowMs": 1700000000000,
+      "maxSkewMs": 300000,
+      "requireSigned": true,
+      "expectedOk": false,
+      "expectedSigned": false,
+      "expectedSigner": null,
+      "expectedCallHash": null,
+      "expectedParams": null,
+      "expectedCapCount": 0,
+      "expectedReason": "unsigned call"
+    }
+  ],
+  "permitVerdicts": [
+    {
+      "name": "root-cap-allows",
+      "call": {
+        "target": {
+          "serviceId": "hello",
+          "interfaceId": "greeter",
+          "member": "hello"
+        },
+        "params": {
+          "name": "world"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello"
+                },
+                "interfaceId": {
+                  "exact": "greeter"
+                },
+                "members": [
+                  {
+                    "exact": "hello"
+                  }
+                ]
+              },
+              "canInvoke": true
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "nonce": "cap-root-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "Qm3HONw_6evSkdnPxLu79ye-K8RKy2kd_yXq5kkX0V2feqSlNLZ6owat2b5enIpEoNRKleqB6rPRKnmJsyVdAw"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      ],
+      "nowMs": 1700000001000,
+      "expectedOk": true,
+      "expectedRootIssuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+      "expectedReason": null
+    },
+    {
+      "name": "root-cap-expired",
+      "call": {
+        "target": {
+          "serviceId": "hello",
+          "interfaceId": "greeter",
+          "member": "hello"
+        },
+        "params": {
+          "name": "world"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello"
+                },
+                "interfaceId": {
+                  "exact": "greeter"
+                },
+                "members": [
+                  {
+                    "exact": "hello"
+                  }
+                ]
+              },
+              "canInvoke": true
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "nonce": "cap-root-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "Qm3HONw_6evSkdnPxLu79ye-K8RKy2kd_yXq5kkX0V2feqSlNLZ6owat2b5enIpEoNRKleqB6rPRKnmJsyVdAw"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      ],
+      "nowMs": 1700000120000,
+      "expectedOk": false,
+      "expectedRootIssuer": null,
+      "expectedReason": "expired"
+    },
+    {
+      "name": "root-cap-unaccepted-issuer",
+      "call": {
+        "target": {
+          "serviceId": "hello",
+          "interfaceId": "greeter",
+          "member": "hello"
+        },
+        "params": {
+          "name": "world"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello"
+                },
+                "interfaceId": {
+                  "exact": "greeter"
+                },
+                "members": [
+                  {
+                    "exact": "hello"
+                  }
+                ]
+              },
+              "canInvoke": true
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "nonce": "cap-root-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "Qm3HONw_6evSkdnPxLu79ye-K8RKy2kd_yXq5kkX0V2feqSlNLZ6owat2b5enIpEoNRKleqB6rPRKnmJsyVdAw"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I"
+      ],
+      "nowMs": 1700000001000,
+      "expectedOk": false,
+      "expectedRootIssuer": null,
+      "expectedReason": "capability root issuer id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0 is not accepted for service \"hello\"; accepted root issuer(s): id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I"
+    },
+    {
+      "name": "delegated-chain-allows",
+      "call": {
+        "target": {
+          "serviceId": "hello/sub",
+          "interfaceId": "greeter.v2",
+          "member": "wave"
+        },
+        "params": {
+          "name": "alice"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello/sub"
+                },
+                "interfaceId": {
+                  "exact": "greeter.v2"
+                },
+                "members": [
+                  {
+                    "exact": "wave"
+                  }
+                ]
+              },
+              "canInvoke": true,
+              "params": {
+                "name": {
+                  "prefix": "a"
+                }
+              }
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "parentHash": "AfNVMPctDIlNswA1zcWPvcbiB0SUZwSrnAKzqGg2UB0",
+          "nonce": "cap-leaf-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+              "sig": "Ms_JF9Nu94AyzZEWCbhuAai8_plDJt9UySesWL-A_kVprvkDYJ-3-yZTnZ-1Ydy7P14n9uLFI0m70d16pnB5DQ"
+            }
+          }
+        },
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "prefix": "hello"
+                },
+                "interfaceId": {
+                  "prefix": "greeter"
+                },
+                "members": [
+                  {
+                    "prefix": ""
+                  }
+                ]
+              },
+              "canDelegate": true
+            }
+          ],
+          "expiresAtMs": 1700000120000,
+          "nonce": "cap-parent-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "3es0GUFYc7yM7TxBctot6AeSkz5BbHya6aCpPmTsxV6R-uO9zibnXn4EoS31dj_9y-vxZQ202m-VILHBKavKCg"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      ],
+      "nowMs": 1700000001000,
+      "expectedOk": true,
+      "expectedRootIssuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+      "expectedReason": null
+    },
+    {
+      "name": "delegated-chain-param-mismatch",
+      "call": {
+        "target": {
+          "serviceId": "hello/sub",
+          "interfaceId": "greeter.v2",
+          "member": "wave"
+        },
+        "params": {
+          "name": "bob"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello/sub"
+                },
+                "interfaceId": {
+                  "exact": "greeter.v2"
+                },
+                "members": [
+                  {
+                    "exact": "wave"
+                  }
+                ]
+              },
+              "canInvoke": true,
+              "params": {
+                "name": {
+                  "prefix": "a"
+                }
+              }
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "parentHash": "AfNVMPctDIlNswA1zcWPvcbiB0SUZwSrnAKzqGg2UB0",
+          "nonce": "cap-leaf-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+              "sig": "Ms_JF9Nu94AyzZEWCbhuAai8_plDJt9UySesWL-A_kVprvkDYJ-3-yZTnZ-1Ydy7P14n9uLFI0m70d16pnB5DQ"
+            }
+          }
+        },
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:d0-paFY1nVozLvGePrCrEX5BVVpx4AXJCLZTLbUa87I",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "prefix": "hello"
+                },
+                "interfaceId": {
+                  "prefix": "greeter"
+                },
+                "members": [
+                  {
+                    "prefix": ""
+                  }
+                ]
+              },
+              "canDelegate": true
+            }
+          ],
+          "expiresAtMs": 1700000120000,
+          "nonce": "cap-parent-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "3es0GUFYc7yM7TxBctot6AeSkz5BbHya6aCpPmTsxV6R-uO9zibnXn4EoS31dj_9y-vxZQ202m-VILHBKavKCg"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      ],
+      "nowMs": 1700000001000,
+      "expectedOk": false,
+      "expectedRootIssuer": null,
+      "expectedReason": "params: param \"name\" does not match"
+    },
+    {
+      "name": "call-bind-allows-exact-hash",
+      "call": {
+        "target": {
+          "serviceId": "hello",
+          "interfaceId": "greeter",
+          "member": "hello"
+        },
+        "params": {
+          "name": "world"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello"
+                },
+                "interfaceId": {
+                  "exact": "greeter"
+                },
+                "members": [
+                  {
+                    "exact": "hello"
+                  }
+                ]
+              },
+              "canInvoke": true,
+              "callBind": {
+                "alg": "sha256",
+                "payloadHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+              }
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "nonce": "cap-once-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "T_I14yoiQSigEAgu9dGfve7hhr8eGJn9qyfGEVpG9lxwA4kUYsAJkAyWjRz9lo5wFbES7aAnKFt4Q5i9ImCsDg"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      ],
+      "nowMs": 1700000001000,
+      "expectedOk": true,
+      "expectedRootIssuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+      "expectedReason": null
+    },
+    {
+      "name": "call-bind-rejects-different-hash",
+      "call": {
+        "target": {
+          "serviceId": "hello",
+          "interfaceId": "greeter",
+          "member": "hello"
+        },
+        "params": {
+          "name": "world"
+        },
+        "nonce": "AAECAwQFBgcICQoLDA0ODw",
+        "signedAtMs": 1700000000000,
+        "signer": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+        "callHash": "different-hash"
+      },
+      "capabilities": [
+        {
+          "issuer": "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+          "audience": "id:key:mx3wi1wn_P8F3Cd-s6dnch4dczAwXL47uHfF5tNpla8",
+          "permissions": [
+            {
+              "target": {
+                "serviceId": {
+                  "exact": "hello"
+                },
+                "interfaceId": {
+                  "exact": "greeter"
+                },
+                "members": [
+                  {
+                    "exact": "hello"
+                  }
+                ]
+              },
+              "canInvoke": true,
+              "callBind": {
+                "alg": "sha256",
+                "payloadHash": "KNVDdKO8S9cZllu8ANoAbLwD_0SFWmEA1u09fgr5wFA"
+              }
+            }
+          ],
+          "expiresAtMs": 1700000060000,
+          "nonce": "cap-once-nonce-1",
+          "$hubrpcSignature": {
+            "capability": {
+              "keyId": "key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0",
+              "sig": "T_I14yoiQSigEAgu9dGfve7hhr8eGJn9qyfGEVpG9lxwA4kUYsAJkAyWjRz9lo5wFbES7aAnKFt4Q5i9ImCsDg"
+            }
+          }
+        }
+      ],
+      "acceptedRoots": [
+        "id:key:oeTtmG8LwI6ohMQF8HAJP_77U8CKg4OEppqx8DFlyX0"
+      ],
+      "nowMs": 1700000001000,
+      "expectedOk": false,
+      "expectedRootIssuer": null,
+      "expectedReason": "callBind: payload hash mismatch"
+    }
+  ]
+}

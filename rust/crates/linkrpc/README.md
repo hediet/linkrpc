@@ -398,8 +398,51 @@ This is a port-in-progress of the TypeScript `@hediet/linkrpc` framework. The **
 hashing, connection runtime, reflection, typed streaming, and the `#[link_rpc_interface]` macro are
 implemented and interop-tested** against the TS reference. Streaming methods use
 `#[input_stream(T)]` for caller-to-provider payloads and `#[output_stream(T)]` for
-provider-to-caller payloads. Identity (Ed25519) and capabilities are specified and on the roadmap
-— see [`executionPlan.md`](../../executionPlan.md).
+provider-to-caller payloads.
+
+## Identity & hub capability grants (optional)
+
+Identity is optional: plain `LinkRpcConnection` and `Channel` connections continue to speak
+unsigned JSON-RPC unchanged. When connecting to a gated hub, layer Ed25519 signing and
+capability grants on top via [`identity`](src/identity/mod.rs):
+
+- **Pluggable key & capability storage**: `InMemoryKeyStore` / `FileKeyStore` (compatible with
+  TypeScript's `loadOrCreateIdentity` JSON format) and `InMemoryIdentityStorage` /
+  `FileIdentityStorage` backing `CapBag` (or `Principal::from_file(path)` with a sibling
+  `.caps.json`).
+- **Signing & grant flow**: wrap any `RpcCall` (including `LinkRpcConnection`) with
+  `conn.signing(principal)` (or `conn.create_managed_signing(...)` for hub-managed `identity::*`
+  overlays). `SigningClient` implements `RpcCall` — so generated typed clients work unchanged —
+  and exposes `grants()`, `list_grants()`, `request_access(...)`, and `call_with_permission(...)`:
+
+```rust,no_run
+use linkrpc::prelude::*;
+
+# async fn call_gated(conn: LinkRpcConnection) -> Result<(), Box<dyn std::error::Error>> {
+let principal = Principal::from_file("/path/to/agent.json").await?;
+let client = conn.signing(principal);
+
+// Inspect currently held durable grants (mirrors `@hediet/linkrpc-mcp`'s `con.grants()`).
+let current = client.grants();
+assert_eq!(current.count, 0);
+
+// Ask the hub for permission (mirrors `con.requestAccess({ permissions, duration })`).
+client
+    .request_access(HubAccessRequest::new(
+        HubAccessConsumer::new("my-rust-client").with_purpose("call greeter"),
+        vec![HubAccessPermission::invoke("hello", "greeter", ["hello"])],
+        Some(HubAccessDuration::Persistent),
+    ))
+    .await?;
+
+// Outbound calls are Ed25519-signed and present granted capabilities automatically.
+let reply = client
+    .call_detailed("hello::greeter::hello", serde_json::json!({ "name": "world" }))
+    .await?;
+# let _ = reply;
+# Ok(())
+# }
+```
 
 ## License
 
