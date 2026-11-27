@@ -1,9 +1,9 @@
 //! linkrpc — a Rust port of the `@hediet/linkrpc` JSON-RPC dialect.
 //!
-//! This crate is built in phases (see `executionPlan.md`). Phase 1 (current) is the
-//! wire core: JSON values, the JSON-RPC 2.0 message types, the `::` method-name grammar,
-//! JCS canonicalization, a `MessageTransport` seam with an in-memory pair, and a `Channel`
-//! that correlates requests/responses and dispatches inbound calls.
+//! Includes the wire core (JSON-RPC 2.0, `::` method-name grammar, RFC 8785 JCS), content-hashed
+//! interface schemas (`id@hash`), typed `#[link_rpc_interface]` macros, streaming, reflection,
+//! endpoint URI parsing, and optional Ed25519 identity / signed envelopes / hub capability grants
+//! (see [`identity`]).
 
 // Lets the `#[link_rpc_interface]` macro's absolute `::linkrpc::…` paths resolve when the macro is
 // used *within* this crate (e.g. the built-in reflection interfaces).
@@ -13,6 +13,7 @@ pub mod application_error;
 pub mod binding;
 pub mod client;
 pub mod connection;
+pub mod identity;
 pub mod protocol;
 pub mod schema;
 pub mod transport;
@@ -50,6 +51,31 @@ pub mod prelude {
     pub use crate::connection::streaming::{
         CallControl, CallResult, NoStream, RawStreamingCall, StreamReceiver, StreamSender,
         StreamingCall, TypedCallResult, TypedStreamingCall,
+    };
+    pub use crate::identity::{
+        attach_capabilities, capability_fresh_at, capability_permits, create_managed_principal,
+        current_time_ms, issue_capability, match_params, permission_matches_target,
+        permission_permits, permits, resolve_signing_key, sign_capability, sign_object,
+        sign_rpc_call, summarize_grants, verify_ed25519, verify_object, verify_object_by_principal,
+        verify_rpc_call, Ability, AcceptedRootIssuer, Call, CallBind, CallIntent, CallTarget,
+        CapBag, CapProvider, CapProviderRequest, CapProviderResult, Capability,
+        FileIdentityStorage, FileKeyStore, GrantPermissionSummary, GrantSummary, GrantsSummary,
+        HubAccessConsumer, HubAccessDuration, HubAccessPermission, HubAccessRequest,
+        HubAccessResult, IdentityError, IdentityStorage, InMemoryIdentityStorage, InMemoryKeyStore,
+        IssueCapabilityOptions, KeyStore, KeypairSigningIdentity, ManagedIdentity,
+        ManagedIdentityStorageClient, ManagedSigningOptions, OneShotCapStaging, ParamMatcher,
+        Pattern, Permission, PermitResult, Principal, PublicSigningIdentity,
+        SerializedKeypairSigningIdentity, SignRpcCallOptions, SignedCapability, SignedRpcCall,
+        SigningCallCtx, SigningClient, SigningConfig, SigningIdentity, TargetPattern,
+        VerifiedCallIdentity, VerifiedSignatureTransport, VerifyRpcCallError, VerifyRpcCallOptions,
+        VerifyRpcCallResult, VerifyingRequestHandler,
+    };
+    pub use crate::protocol::signed_object::{
+        base64url_decode, base64url_encode, get_key_id, read_signature, require_object_params,
+        signed_hash, signing_domain_value, signing_input, strip_linkrpc_wire_meta, with_signature,
+        CallMeta, KeyId, LinkRpcUnsigned, PrincipalId, SignatureEnvelope, Signatures,
+        HUBRPC_META_KEY, HUBRPC_SIGNATURE_KEY, HUBRPC_UNSIGNED_KEY, KEY_ID_PREFIX,
+        PRINCIPAL_PREFIX,
     };
     pub use crate::schema::contract::{
         BareInterfaceContract, ContractError, InterfaceAddress, InterfaceRef, LinkRpcContract,

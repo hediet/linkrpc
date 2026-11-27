@@ -23,6 +23,9 @@ thiserror = "1"
 async-trait = "0.1"
 futures = "0.3"
 sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+base64 = "0.22"
+rand = "0.8"
 schemars = "0.8"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
 syn = { version = "2", features = ["full"] }

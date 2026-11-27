@@ -1,6 +1,7 @@
-//! Wire protocol: JSON values, JSON-RPC 2.0 messages, method-name grammar, JCS.
+//! Wire protocol: JSON values, JSON-RPC 2.0 messages, method-name grammar, JCS, signed objects.
 
 pub mod jcs;
 pub mod json_value;
 pub mod jsonrpc;
 pub mod method_name;
+pub mod signed_object;

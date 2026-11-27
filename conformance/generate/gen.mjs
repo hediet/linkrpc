@@ -479,3 +479,6 @@ for (const [name, iface] of [
 
 // ── endpoint URIs (delegated to gen-endpoint.mjs) ──────────────────────────────
 await import("./gen-endpoint.mjs");
+
+// ── signed envelopes & capabilities (delegated to gen-signed-envelope.mjs) ─────
+await import("./gen-signed-envelope.mjs");
