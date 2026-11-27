@@ -140,9 +140,13 @@ export class HubDaemon {
                 error: this._hubError,
             },
             callLog: this._callLog.status(),
-            services: [...this._services.values()]
-                .map(service => service.status())
-                .sort((a, b) => a.name.localeCompare(b.name)),
+            services: [
+                ...[...this._services.values()].map(service => ({
+                    ...service.status(),
+                    source: 'config' as const,
+                })),
+                ...(this._endpoints?.serviceStatuses() ?? []),
+            ].sort((a, b) => a.name.localeCompare(b.name)),
         };
     }
 
@@ -161,11 +165,18 @@ export class HubDaemon {
     }
 
     public restartService(name: string): Promise<void> {
+        if (!this._services.has(name) && this._endpoints?.hasService(name)) {
+            return this._endpoints.restartService(name);
+        }
         return this._service(name).restart();
     }
 
-    /** Persist `enabled` in the config file and apply it. */
+    /** Persist `enabled` in the config file and apply it (or start/stop a managed endpoint). */
     public async setServiceEnabled(name: string, enabled: boolean): Promise<void> {
+        if (!this._services.has(name) && this._endpoints?.hasService(name)) {
+            await this._endpoints.setServiceEnabled(name, enabled);
+            return;
+        }
         const document = this._configFile.read();
         this._configFile.write(setServiceEnabledInText(document.text, name, enabled), document.revision);
         await this.reload();
@@ -278,6 +289,7 @@ export class HubDaemon {
                     hubServiceId: config.hub.hubServiceId,
                     host: this._serviceHost,
                     isServiceIdTaken: serviceId => [...this._services.values()].some(s => s.service.serviceId === serviceId),
+                    onDidChange: () => this._changed(),
                 });
                 await this._endpoints.restore(endpointSnapshot);
                 for (const connection of this._endpointRegistrations.keys()) {
@@ -438,7 +450,11 @@ export class HubDaemon {
                 await this.restartService(name);
                 return {};
             },
-            getServiceLogs: ({ name, limit }) => ({ lines: this._service(name).logs(limit) }),
+            getServiceLogs: ({ name, limit }) => ({
+                lines: !this._services.has(name) && this._endpoints?.hasService(name)
+                    ? this._endpoints.getServiceLogs(name, limit)
+                    : this._service(name).logs(limit),
+            }),
             setCallLogLevel: async ({ level }) => {
                 await this.setCallLogLevel(level);
                 return {};

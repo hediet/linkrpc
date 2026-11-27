@@ -434,4 +434,79 @@ describe('managed endpoint RPC', { timeout: 30_000 }, () => {
         expect(ancestor.serviceId).toBe('org');
         await client.stop({ ...defaults, id: 'uplink' });
     });
+
+    it('surfaces managed endpoints in daemon status with logs, restart, and enable/disable', async () => {
+        const f = await fixture();
+        const client = await f.connect();
+        await client.create({
+            ...defaults,
+            id: 'managed-svc',
+            serviceId: 'hub/managed-svc',
+            persistent: true,
+            restart: 'always',
+            source: {
+                kind: 'process',
+                rpc: false,
+                command: [process.execPath, '-e', 'console.log("managed-hello"); setInterval(() => {}, 1000);'],
+            },
+        });
+        await status(client, 'managed-svc', 'running');
+
+        const entry = f.daemon.status().services.find(s => s.name === 'managed-svc');
+        expect(entry).toMatchObject({
+            name: 'managed-svc',
+            serviceId: 'hub/managed-svc',
+            source: 'managed',
+            state: 'running',
+            enabled: true,
+            managed: { namespace: 'test', id: 'managed-svc', persistent: true },
+        });
+        const firstPid = entry!.pid;
+
+        // Restart via daemon management API works on managed services too.
+        await f.daemon.restartService('managed-svc');
+        await vi.waitFor(() => {
+            const after = f.daemon.status().services.find(s => s.name === 'managed-svc');
+            expect(after?.state).toBe('running');
+            expect(after?.pid).not.toBe(firstPid);
+        }, { timeout: 10_000 });
+
+        // Disable and re-enable via daemon management API.
+        await f.daemon.setServiceEnabled('managed-svc', false);
+        await vi.waitFor(() => {
+            expect(f.daemon.status().services.find(s => s.name === 'managed-svc')?.state).toBe('disabled');
+        }, { timeout: 5_000 });
+
+        await f.daemon.setServiceEnabled('managed-svc', true);
+        await vi.waitFor(() => {
+            expect(f.daemon.status().services.find(s => s.name === 'managed-svc')?.state).toBe('running');
+        }, { timeout: 10_000 });
+    });
+
+    it('skips an invalid persisted endpoint on restore without aborting hub startup', async () => {
+        const f = await fixture();
+        let client = await f.connect();
+        await client.create({
+            ...defaults,
+            id: 'good-svc',
+            serviceId: 'hub/good-svc',
+            persistent: true,
+            restart: 'always',
+            source: processSource(),
+        });
+        await status(client, 'good-svc', 'running');
+
+        // Inject an invalid serviceId entry into endpoints.json before restart.
+        const file = path.join(f.home.stateDir, 'endpoints.json');
+        const entries = JSON.parse(fs.readFileSync(file, 'utf8'));
+        entries.unshift({
+            definition: { ...defaults, id: 'bad-svc', serviceId: 'foreign/bad', persistent: true, restart: 'always', source: processSource() },
+            desired: true,
+        });
+        fs.writeFileSync(file, JSON.stringify(entries));
+
+        client = await f.restart();
+        expect(f.daemon.status().hub.error).toBeUndefined();
+        await status(client, 'good-svc', 'running');
+    });
 });
