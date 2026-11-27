@@ -38,6 +38,14 @@ export const ServiceStatusSchema = z.object({
         at: z.number(),
     }).optional(),
     error: z.string().optional(),
+    /** Whether this service comes from the daemon config file or `linkrpc.managedEndpoints`. */
+    source: z.enum(['config', 'managed']).optional(),
+    /** Present when `source` is `'managed'`. */
+    managed: z.object({
+        namespace: z.string(),
+        id: z.string(),
+        persistent: z.boolean(),
+    }).optional(),
 });
 export type ServiceStatus = z.infer<typeof ServiceStatusSchema>;
 

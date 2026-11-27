@@ -18,7 +18,7 @@ export function endpointDescriptor(id: string, namespace: string, serviceId: str
     return { type: ENDPOINT_TYPE, label: id, metadata: { namespace, serviceId } };
 }
 
-/** The configured service a descriptor names, if it is one of ours. */
+/** The configured service or managed endpoint a descriptor names, if it is one of ours. */
 export function serviceNameOf(descriptor: ParticipantDescriptor | undefined): string | undefined {
-    return descriptor?.type === SERVICE_TYPE ? descriptor.label : undefined;
+    return descriptor?.type === SERVICE_TYPE || descriptor?.type === ENDPOINT_TYPE ? descriptor.label : undefined;
 }

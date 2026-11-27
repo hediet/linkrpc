@@ -21,6 +21,7 @@ import { processSignals } from './processIo';
 import { ScreenHistory } from './screenHistory';
 import { ServiceSupervisor, type ServiceHost } from './supervisor';
 import { ConnectionSupervisor } from './connectionSupervisor';
+import type { LogLine, ServiceStatus } from './managementInterface';
 
 const storedEndpoints = z.array(z.object({ definition: endpointDefinition, desired: z.boolean() }));
 const finishedStates = new Set(['failed', 'stopped', 'disabled']);
@@ -46,6 +47,8 @@ export interface ManagedEndpointsOptions {
     readonly host: ServiceHost;
     /** Returns true when `serviceId` is already claimed outside managed endpoints (e.g. static config). */
     readonly isServiceIdTaken?: (serviceId: string) => boolean;
+    /** Called whenever managed endpoints are added, removed, or change runtime state. */
+    readonly onDidChange?: () => void;
 }
 
 export class ManagedEndpoints {
@@ -62,7 +65,9 @@ export class ManagedEndpoints {
 
     async restore(snapshot?: ReturnType<ManagedEndpoints['snapshot']>): Promise<void> {
         if (snapshot !== undefined) {
-            for (const { definition, desired } of snapshot) await this._restoreEntry(definition, desired);
+            for (const { definition, desired } of snapshot) {
+                await this._restoreEntrySafe(definition, desired);
+            }
             return;
         }
         let text: string;
@@ -71,8 +76,26 @@ export class ManagedEndpoints {
             if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
             throw error;
         }
-        for (const { definition, desired } of storedEndpoints.parse(JSON.parse(text))) {
-            await this._restoreEntry(definition, desired && definition.restart !== 'never');
+        let parsed: ReturnType<typeof storedEndpoints.parse>;
+        try {
+            parsed = storedEndpoints.parse(JSON.parse(text));
+        } catch (error) {
+            this._options.host.log('managed', `failed to read ${this._options.file}: ${error instanceof Error ? error.message : String(error)}`);
+            return;
+        }
+        for (const { definition, desired } of parsed) {
+            await this._restoreEntrySafe(definition, desired && definition.restart !== 'never');
+        }
+    }
+
+    private async _restoreEntrySafe(definition: EndpointDefinition, desired: boolean): Promise<void> {
+        try {
+            await this._restoreEntry(definition, desired);
+        } catch (error) {
+            this._options.host.log(
+                'managed',
+                `failed to restore endpoint "${definition.id}" (${definition.namespace}): ${error instanceof Error ? error.message : String(error)}`,
+            );
         }
     }
 
@@ -141,6 +164,70 @@ export class ManagedEndpoints {
     list(namespace?: string): EndpointStatus[] {
         return [...this._entries.values()].filter(entry => namespace === undefined || entry.definition.namespace === namespace)
             .map(entry => this._status(entry));
+    }
+
+    /** Managed endpoints projected as {@link ServiceStatus} rows for daemon status / UIs. */
+    serviceStatuses(): ServiceStatus[] {
+        const idCounts = new Map<string, number>();
+        for (const entry of this._entries.values()) {
+            idCounts.set(entry.definition.id, (idCounts.get(entry.definition.id) ?? 0) + 1);
+        }
+        return [...this._entries.values()].map(entry => {
+            const { namespace, id, persistent } = entry.definition;
+            const displayName = (idCounts.get(id) ?? 0) > 1 ? `${namespace}/${id}` : id;
+            const runtime = entry.supervisor.status();
+            return {
+                ...runtime,
+                name: displayName,
+                source: 'managed' as const,
+                managed: { namespace, id, persistent },
+            };
+        });
+    }
+
+    hasService(name: string): boolean {
+        return this._findByServiceName(name) !== undefined;
+    }
+
+    async setServiceEnabled(name: string, enabled: boolean): Promise<void> {
+        await this._serialize(async () => {
+            const entry = this._findByServiceName(name);
+            if (!entry) throw new Error(`unknown service '${name}'`);
+            if (enabled) {
+                this._setDesired(entry, true);
+                await entry.supervisor.update({ ...entry.supervisor.service, enabled: true });
+            } else {
+                this._setDesired(entry, false);
+                await entry.supervisor.update({ ...entry.supervisor.service, enabled: false });
+            }
+            this._changed(entry);
+        });
+    }
+
+    async restartService(name: string): Promise<void> {
+        await this._serialize(async () => {
+            const entry = this._findByServiceName(name);
+            if (!entry) throw new Error(`unknown service '${name}'`);
+            await entry.supervisor.restart();
+            this._changed(entry);
+        });
+    }
+
+    getServiceLogs(name: string, limit?: number): LogLine[] {
+        const entry = this._findByServiceName(name);
+        if (!entry) throw new Error(`unknown service '${name}'`);
+        return entry.supervisor.logs(limit);
+    }
+
+    private _findByServiceName(name: string): Entry | undefined {
+        for (const entry of this._entries.values()) {
+            const { namespace, id } = entry.definition;
+            if (`${namespace}/${id}` === name) return entry;
+        }
+        for (const entry of this._entries.values()) {
+            if (entry.definition.id === name) return entry;
+        }
+        return undefined;
     }
 
     async dispose(options: { readonly preserveServices?: boolean } = {}): Promise<void> {
@@ -303,11 +390,13 @@ export class ManagedEndpoints {
         }
         entry = { definition, desired, owned: options.owned, supervisor, console, instanceId: randomUUID(), listeners: new Set(), removed: false };
         this._entries.set(key(definition), entry);
+        this._options.onDidChange?.();
         return entry;
     }
 
     private _changed(entry: Entry): void {
         for (const listener of entry.listeners) listener();
+        this._options.onDidChange?.();
         if (!finishedStates.has(entry.supervisor.status().state)) return;
         entry.console?.finish();
         if (!this._closing && !entry.removed && !entry.definition.persistent) this._removeEntry(entry);
@@ -319,6 +408,7 @@ export class ManagedEndpoints {
         entry.removed = true;
         entry.console?.close();
         for (const listener of entry.listeners) listener();
+        this._options.onDidChange?.();
     }
 
     private _get(address: EndpointAddress): Entry {
