@@ -266,12 +266,11 @@ describe('bundle size', () => {
         // eslint-disable-next-line no-console
         console.log(`  written to ${outDir}`);
 
-        // Measured baseline: 283.8 KiB (280.9 KiB when the 283 KiB budget was
-        // set, plus ~3 KiB of core channel and schema code: deferred requests
-        // until handlers are ready, send-failure propagation, closing on
-        // transport errors, and `type`-array normalization). The classic Zod
-        // facade must remain tree-shaken out. Keep roughly 3 KiB of headroom
-        // without changing what this test measures.
+        // Measured baseline: 287.0 KiB (283.8 KiB when the 287 KiB budget was
+        // set, plus core channel/schema additions including direction-scoped
+        // stream keying in JsonRpcChannel). The classic Zod facade must remain
+        // tree-shaken out. Keep roughly 3 KiB of headroom without changing
+        // what this test measures.
         // The example authors with
         // `zod/mini` and linkrpc's internals do too, so only zod's shared *core*
         // (parsing + json-schema, ~75 KiB) is pulled — the classic schema
@@ -281,7 +280,7 @@ describe('bundle size', () => {
         // stack is lazy and tree-shaken out of the stdio path. This is a
         // regression guard, not a target — bump it deliberately when a
         // dependency genuinely grows, and investigate sudden jumps.
-        const BUDGET_KIB = 287;
+        const BUDGET_KIB = 290;
         expect(kib).toBeLessThanOrEqual(BUDGET_KIB);
     }, 60_000);
 });
